@@ -1090,7 +1090,7 @@ impl LeaderSlotMetricsTracker {
 mod tests {
     #[cfg(feature = "alpenglow")]
     use std::sync::atomic::AtomicBool;
-    
+
     use {
         super::*,
         solana_pubkey::Pubkey,
