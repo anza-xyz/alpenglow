@@ -7821,6 +7821,7 @@ dependencies = [
 name = "solana-hash"
 version = "2.2.0"
 dependencies = [
+ "arbitrary",
  "borsh 1.5.5",
  "bs58",
  "bytemuck",
@@ -8648,6 +8649,7 @@ dependencies = [
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-vote-interface",
+ "solana-vote-interface-new",
  "thiserror 2.0.11",
  "wasm-bindgen",
 ]
@@ -9551,6 +9553,8 @@ dependencies = [
  "borsh 1.5.5",
  "rand 0.8.5",
  "serde",
+ "solana-clock",
+ "solana-hash",
  "solana-instruction",
  "solana-pubkey",
  "solana-sanitize",
@@ -10681,6 +10685,36 @@ dependencies = [
  "solana-short-vec",
  "solana-system-interface",
  "solana-vote-interface",
+]
+
+[[package]]
+name = "solana-vote-interface-new"
+version = "2.2.0"
+dependencies = [
+ "arbitrary",
+ "bincode",
+ "itertools 0.12.1",
+ "num-derive",
+ "num-traits",
+ "rand 0.8.5",
+ "serde",
+ "serde_derive",
+ "solana-clock",
+ "solana-decode-error",
+ "solana-epoch-schedule",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-hash",
+ "solana-instruction",
+ "solana-logger",
+ "solana-pubkey",
+ "solana-rent",
+ "solana-sdk-ids",
+ "solana-serde-varint",
+ "solana-serialize-utils",
+ "solana-short-vec",
+ "solana-system-interface",
+ "solana-vote-interface-new",
 ]
 
 [[package]]

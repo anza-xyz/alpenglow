@@ -1,15 +1,14 @@
 use {
-    super::{MAX_EPOCH_CREDITS_HISTORY, MAX_LOCKOUT_HISTORY},
+    super::{MAX_EPOCH_CREDITS_HISTORY, VOTE_CREDITS_GRACE_SLOTS},
     crate::{
         authorized_voters::AuthorizedVoters,
-        state::{BlockTimestamp, LandedVote, Lockout, VoteState, MAX_ITEMS},
+        state::{BlockTimestamp, LandedVote, VoteState, MAX_ITEMS},
     },
     solana_clock::Epoch,
     solana_instruction::error::InstructionError,
     solana_pubkey::Pubkey,
     solana_serialize_utils::cursor::{
-        read_bool, read_i64, read_option_u64, read_pubkey, read_pubkey_into, read_u32, read_u64,
-        read_u8,
+        read_bool, read_i64, read_pubkey, read_pubkey_into, read_u32, read_u64, read_u8,
     },
     std::{collections::VecDeque, io::Cursor, ptr::addr_of_mut},
 };
@@ -17,7 +16,6 @@ use {
 pub(super) fn deserialize_vote_state_into(
     cursor: &mut Cursor<&[u8]>,
     vote_state: *mut VoteState,
-    has_latency: bool,
 ) -> Result<(), InstructionError> {
     // General safety note: we must use add_or_mut! to access the `vote_state` fields as the value
     // is assumed to be _uninitialized_, so creating references to the state or any of its inner
@@ -34,8 +32,7 @@ pub(super) fn deserialize_vote_state_into(
         unsafe { addr_of_mut!((*vote_state).authorized_withdrawer) },
     )?;
     let commission = read_u8(cursor)?;
-    let votes = read_votes(cursor, has_latency)?;
-    let root_slot = read_option_u64(cursor)?;
+    let votes = read_votes(cursor)?;
     let authorized_voters = read_authorized_voters(cursor)?;
     read_prior_voters_into(cursor, vote_state)?;
     let epoch_credits = read_epoch_credits(cursor)?;
@@ -46,11 +43,12 @@ pub(super) fn deserialize_vote_state_into(
     //
     // Heap allocated collections - votes, authorized_voters and epoch_credits -
     // are guaranteed not to leak after this point as the VoteState is fully
-    // initialized and will be regularly dropped.
+    // initialized and will be regularly dropped. If we didn't write these
+    // first to local variables before writing them at the end here,an error
+    // in the middle of the initialization would cause leaks.
     unsafe {
         addr_of_mut!((*vote_state).commission).write(commission);
         addr_of_mut!((*vote_state).votes).write(votes);
-        addr_of_mut!((*vote_state).root_slot).write(root_slot);
         addr_of_mut!((*vote_state).authorized_voters).write(authorized_voters);
         addr_of_mut!((*vote_state).epoch_credits).write(epoch_credits);
     }
@@ -60,18 +58,21 @@ pub(super) fn deserialize_vote_state_into(
 
 fn read_votes<T: AsRef<[u8]>>(
     cursor: &mut Cursor<T>,
-    has_latency: bool,
 ) -> Result<VecDeque<LandedVote>, InstructionError> {
     let vote_count = read_u64(cursor)? as usize;
-    let mut votes = VecDeque::with_capacity(vote_count.min(MAX_LOCKOUT_HISTORY));
-
+    let mut votes = VecDeque::with_capacity(vote_count.min(VOTE_CREDITS_GRACE_SLOTS as usize));
     for _ in 0..vote_count {
-        let latency = if has_latency { read_u8(cursor)? } else { 0 };
-        let slot = read_u64(cursor)?;
-        let confirmation_count = read_u32(cursor)?;
-        let lockout = Lockout::new_with_confirmation_count(slot, confirmation_count);
+        let vote_type = read_u32(cursor)?; // Read the enum discriminant
+        let slot = read_u64(cursor)?; // Read the slot field
 
-        votes.push_back(LandedVote { latency, lockout });
+        let vote = match vote_type {
+            0 => LandedVote::Notarize(slot),
+            1 => LandedVote::Finalize(slot),
+            2 => LandedVote::Skip(slot),
+            _ => return Err(InstructionError::InvalidAccountData), // Handle unknown values
+        };
+
+        votes.push_back(vote);
     }
 
     Ok(votes)

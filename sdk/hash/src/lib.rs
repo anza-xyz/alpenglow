@@ -12,6 +12,7 @@ use serde_derive::{Deserialize, Serialize};
 #[cfg(any(all(feature = "borsh", feature = "std"), target_arch = "wasm32"))]
 use std::string::ToString;
 use {
+    arbitrary::Arbitrary,
     core::{
         convert::TryFrom,
         fmt, mem,
@@ -51,6 +52,14 @@ pub const MAX_BASE58_LEN: usize = 44;
 #[derive(Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct Hash(pub(crate) [u8; HASH_BYTES]);
+
+impl<'a> Arbitrary<'a> for Hash {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut bytes = [0u8; HASH_BYTES]; // Create an empty array.
+        u.fill_buffer(&mut bytes)?; // Fill it with random data.
+        Ok(Hash(bytes)) // Return the `Hash`.
+    }
+}
 
 impl Sanitize for Hash {}
 

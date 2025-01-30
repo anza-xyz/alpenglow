@@ -10,9 +10,11 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+solana-clock = { workspace = true }
 solana-instruction = { workspace = true, default-features = false, features = [
     "std",
 ] }
+solana-hash = { workspace = true }
 solana-pubkey = { workspace = true, default-features = false }
 solana-sanitize = { workspace = true }
 

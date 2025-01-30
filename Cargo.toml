@@ -643,6 +643,7 @@ solana-validator-exit = { path = "sdk/validator-exit", version = "=2.2.0" }
 solana-version = { path = "version", version = "=2.2.0" }
 solana-vote = { path = "vote", version = "=2.2.0" }
 solana-vote-interface = { path = "sdk/vote-interface", version = "=2.2.0" }
+solana-vote-interface-new = { path = "sdk/vote-interface-new", version = "=2.2.0" }
 solana-vote-program = { path = "programs/vote", version = "=2.2.0", default-features = false }
 solana-wen-restart = { path = "wen-restart", version = "=2.2.0" }
 solana-zk-elgamal-proof-program = { path = "programs/zk-elgamal-proof", version = "=2.2.0" }

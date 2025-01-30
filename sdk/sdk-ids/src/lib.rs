@@ -71,6 +71,10 @@ pub mod vote {
     solana_pubkey::declare_id!("Vote111111111111111111111111111111111111111");
 }
 
+pub mod vote_new {
+    solana_pubkey::declare_id!("VoteNew111111111111111111111111111111111111");
+}
+
 pub mod sysvar {
     // Owner pubkey for sysvar accounts
     solana_pubkey::declare_id!("Sysvar1111111111111111111111111111111111111");
