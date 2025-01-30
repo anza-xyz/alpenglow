@@ -47,6 +47,7 @@ pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum LandedVote {
     Notarize(Slot),
     Finalize(Slot),
@@ -60,21 +61,6 @@ pub const NUM_LANDED_VOTE_ENUM: u8 = 3;
 impl Default for LandedVote {
     fn default() -> Self {
         LandedVote::Notarize(Slot::default())
-    }
-}
-
-// Used for fuzzng tests so we don't pick random invalid enums
-#[cfg(test)]
-impl<'a> Arbitrary<'a> for LandedVote {
-    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let slot = u.arbitrary::<Slot>()?;
-        let kind = u.int_in_range(0..=NUM_LANDED_VOTE_ENUM as u8 - 1)?;
-        Ok(match kind {
-            0 => LandedVote::Notarize(slot),
-            1 => LandedVote::Finalize(slot),
-            2 => LandedVote::Skip(slot),
-            _ => unreachable!("Invalid LandedVote variant"),
-        })
     }
 }
 
@@ -282,6 +268,7 @@ impl<I> CircBuf<I> {
 )]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct VoteState {
     /// the node that votes in this account
     pub node_pubkey: Pubkey,
@@ -309,63 +296,6 @@ pub struct VoteState {
 
     /// most recent timestamp submitted with a vote
     pub last_timestamp: BlockTimestamp,
-}
-
-#[cfg(test)]
-impl<'a> Arbitrary<'a> for VoteState {
-    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let node_pubkey = Pubkey::arbitrary(u)?;
-        let authorized_withdrawer = Pubkey::arbitrary(u)?;
-        let commission = u.int_in_range(0..=100)?; // Ensure commission is valid
-
-        // Limit `votes` size
-        let votes_size = u.int_in_range(0..=VOTE_CREDITS_GRACE_SLOTS)? as usize;
-        let mut votes = VecDeque::with_capacity(votes_size);
-        for _ in 0..votes_size {
-            let arbitrary_landed_vote = LandedVote::arbitrary(u)?;
-            votes.push_back(arbitrary_landed_vote);
-        }
-
-        // Limit `AuthorizedVoters` size
-        let authorized_voters_size = u.int_in_range(0..=MAX_ITEMS)? as usize;
-        let mut authorized_voters = AuthorizedVoters::default();
-        for _ in 0..authorized_voters_size {
-            let epoch = u.arbitrary::<Epoch>()?;
-            let voter_pubkey = Pubkey::arbitrary(u)?;
-            authorized_voters.insert(epoch, voter_pubkey);
-        }
-
-        // Limit `prior_voters` size
-        let prior_voters_size = u.int_in_range(0..=MAX_ITEMS)?; // Limit size to prevent excessive growth
-        let mut prior_voters = CircBuf::<(Pubkey, Epoch, Epoch)>::default();
-        for _ in 0..prior_voters_size {
-            let prior_voter = Pubkey::arbitrary(u)?;
-            let from_epoch = u.arbitrary::<Epoch>()?;
-            let until_epoch = from_epoch + u.int_in_range(1..=10)?; // Ensure valid epoch range
-            prior_voters.append((prior_voter, from_epoch, until_epoch));
-        }
-
-        // Limit `epoch_credits` size
-        let epoch_credits_size = u.int_in_range(0..=MAX_EPOCH_CREDITS_HISTORY)?;
-        let mut epoch_credits = Vec::with_capacity(epoch_credits_size);
-        for _ in 0..epoch_credits_size {
-            let epoch = u.arbitrary::<Epoch>()?;
-            let credits = u.arbitrary::<u64>()?;
-            let prev_credits = u.arbitrary::<u64>()?;
-            epoch_credits.push((epoch, credits, prev_credits));
-        }
-
-        Ok(Self {
-            node_pubkey,
-            authorized_withdrawer,
-            commission,
-            votes,
-            authorized_voters,
-            prior_voters,
-            epoch_credits,
-            last_timestamp: BlockTimestamp::arbitrary(u)?,
-        })
-    }
 }
 
 impl VoteState {
