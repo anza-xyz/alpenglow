@@ -679,6 +679,55 @@ impl PohRecorder {
         self.leader_last_tick_height = leader_last_tick_height;
     }
 
+    pub fn alpenglow_set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
+        // must be a sleepy tick producer
+        assert!(bank.hashes_per_tick.is_none());
+        assert!(self.poh.lock().unwrap().hashes_per_tick().is_none());
+        assert!(self.working_bank.is_none());
+        self.leader_bank_notifier.set_in_progress(&bank);
+        let working_bank = WorkingBank {
+            min_tick_height: bank.tick_height(),
+            max_tick_height: bank.max_tick_height(),
+            bank,
+            start: Arc::new(Instant::now()),
+            transaction_index: track_transaction_indexes.then_some(0),
+        };
+        trace!("new working bank");
+        assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
+        if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
+            if self.poh.lock().unwrap().hashes_per_tick() != hashes_per_tick {
+                // We must clear/reset poh when changing hashes per tick because it's
+                // possible there are ticks in the cache created with the old hashes per
+                // tick value that would get flushed later. This would corrupt the leader's
+                // block and it would be disregarded by the network.
+                info!(
+                    "resetting poh due to hashes per tick change detected at {}",
+                    working_bank.bank.slot()
+                );
+                self.reset_poh(working_bank.bank.clone(), false);
+            }
+        }
+        self.working_bank = Some(working_bank);
+
+        // send poh slot start timing point
+        if let Some(ref sender) = self.poh_timing_point_sender {
+            if let Some(slot) = self.working_slot() {
+                send_poh_timing_point(
+                    sender,
+                    SlotPohTimingInfo::new_slot_start_poh_time_point(
+                        slot,
+                        None,
+                        solana_time_utils::timestamp(),
+                    ),
+                );
+            }
+        }
+
+        // TODO: adjust the working_bank.start time based on number of ticks
+        // that have already elapsed based on current tick height.
+        let _ = self.flush_cache(false);
+    }
+    
     pub fn set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
         assert!(self.working_bank.is_none());
         self.leader_bank_notifier.set_in_progress(&bank);
