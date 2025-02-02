@@ -12,6 +12,7 @@
 //!
 #[cfg(feature = "dev-context-only-utils")]
 use solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo};
+use solana_perf::packet::PacketBatch;
 use {
     crate::{leader_bank_notifier::LeaderBankNotifier, poh_service::PohService},
     crossbeam_channel::{
@@ -43,6 +44,8 @@ use {
     thiserror::Error,
 };
 
+pub type VoteCertificate = Vec<PacketBatch>;
+
 pub const GRACE_TICKS_FACTOR: u64 = 2;
 pub const MAX_GRACE_SLOTS: u64 = 2;
 
@@ -66,6 +69,8 @@ pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
 pub struct BankStart {
     pub working_bank: Arc<Bank>,
     pub bank_creation_time: Arc<Instant>,
+    #[cfg(feature = "alpenglow")]
+    pub vote_certificate: Arc<RwLock<Option<VoteCertificate>>>,
 }
 
 impl BankStart {
@@ -265,6 +270,8 @@ pub struct WorkingBank {
     pub min_tick_height: u64,
     pub max_tick_height: u64,
     pub transaction_index: Option<usize>,
+    #[cfg(feature = "alpenglow")]
+    pub vote_certificate: Arc<RwLock<Option<VoteCertificate>>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -399,6 +406,8 @@ impl PohRecorder {
 
     pub fn bank_start(&self) -> Option<BankStart> {
         self.working_bank.as_ref().map(|w| BankStart {
+            #[cfg(feature = "alpenglow")]
+            vote_certificate: w.vote_certificate.clone(),
             working_bank: w.bank.clone(),
             bank_creation_time: w.start.clone(),
         })
@@ -679,13 +688,19 @@ impl PohRecorder {
         self.leader_last_tick_height = leader_last_tick_height;
     }
 
-    pub fn alpenglow_set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
+    #[cfg(feature = "alpenglow")]
+    pub fn alpenglow_set_bank(
+        &mut self,
+        bank: BankWithScheduler,
+        track_transaction_indexes: bool,
+        vote_certificate: VoteCertificate,
+    ) {
         // must be a sleepy tick producer
-        assert!(bank.hashes_per_tick.is_none());
-        assert!(self.poh.lock().unwrap().hashes_per_tick().is_none());
+        assert!(bank.clone_without_scheduler().hashes_per_tick().is_none());
         assert!(self.working_bank.is_none());
         self.leader_bank_notifier.set_in_progress(&bank);
         let working_bank = WorkingBank {
+            vote_certificate: Arc::new(RwLock::new(Some(vote_certificate))),
             min_tick_height: bank.tick_height(),
             max_tick_height: bank.max_tick_height(),
             bank,
@@ -727,51 +742,59 @@ impl PohRecorder {
         // that have already elapsed based on current tick height.
         let _ = self.flush_cache(false);
     }
-    
+
     pub fn set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
-        assert!(self.working_bank.is_none());
-        self.leader_bank_notifier.set_in_progress(&bank);
-        let working_bank = WorkingBank {
-            min_tick_height: bank.tick_height(),
-            max_tick_height: bank.max_tick_height(),
-            bank,
-            start: Arc::new(Instant::now()),
-            transaction_index: track_transaction_indexes.then_some(0),
-        };
-        trace!("new working bank");
-        assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
-        if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
-            if self.poh.lock().unwrap().hashes_per_tick() != hashes_per_tick {
-                // We must clear/reset poh when changing hashes per tick because it's
-                // possible there are ticks in the cache created with the old hashes per
-                // tick value that would get flushed later. This would corrupt the leader's
-                // block and it would be disregarded by the network.
-                info!(
-                    "resetting poh due to hashes per tick change detected at {}",
-                    working_bank.bank.slot()
-                );
-                self.reset_poh(working_bank.bank.clone(), false);
-            }
-        }
-        self.working_bank = Some(working_bank);
-
-        // send poh slot start timing point
-        if let Some(ref sender) = self.poh_timing_point_sender {
-            if let Some(slot) = self.working_slot() {
-                send_poh_timing_point(
-                    sender,
-                    SlotPohTimingInfo::new_slot_start_poh_time_point(
-                        slot,
-                        None,
-                        solana_time_utils::timestamp(),
-                    ),
-                );
-            }
+        #[cfg(feature = "alpenglow")]
+        {
+            self.alpenglow_set_bank(bank, track_transaction_indexes, vec![])
         }
 
-        // TODO: adjust the working_bank.start time based on number of ticks
-        // that have already elapsed based on current tick height.
-        let _ = self.flush_cache(false);
+        #[cfg(not(feature = "alpenglow"))]
+        {
+            assert!(self.working_bank.is_none());
+            self.leader_bank_notifier.set_in_progress(&bank);
+            let working_bank = WorkingBank {
+                min_tick_height: bank.tick_height(),
+                max_tick_height: bank.max_tick_height(),
+                bank,
+                start: Arc::new(Instant::now()),
+                transaction_index: track_transaction_indexes.then_some(0),
+            };
+            trace!("new working bank");
+            assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
+            if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
+                if self.poh.lock().unwrap().hashes_per_tick() != hashes_per_tick {
+                    // We must clear/reset poh when changing hashes per tick because it's
+                    // possible there are ticks in the cache created with the old hashes per
+                    // tick value that would get flushed later. This would corrupt the leader's
+                    // block and it would be disregarded by the network.
+                    info!(
+                        "resetting poh due to hashes per tick change detected at {}",
+                        working_bank.bank.slot()
+                    );
+                    self.reset_poh(working_bank.bank.clone(), false);
+                }
+            }
+            self.working_bank = Some(working_bank);
+
+            // send poh slot start timing point
+            if let Some(ref sender) = self.poh_timing_point_sender {
+                if let Some(slot) = self.working_slot() {
+                    send_poh_timing_point(
+                        sender,
+                        SlotPohTimingInfo::new_slot_start_poh_time_point(
+                            slot,
+                            None,
+                            solana_time_utils::timestamp(),
+                        ),
+                    );
+                }
+            }
+
+            // TODO: adjust the working_bank.start time based on number of ticks
+            // that have already elapsed based on current tick height.
+            let _ = self.flush_cache(false);
+        }
     }
 
     #[cfg(feature = "dev-context-only-utils")]

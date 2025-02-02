@@ -23,7 +23,9 @@ use {
     solana_runtime::bank::Bank,
     solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
     solana_sdk::{
-        clock::FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET, hash::Hash, saturating_add_assign,
+        clock::{Slot, FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET},
+        hash::Hash,
+        saturating_add_assign,
         transaction::SanitizedTransaction,
     },
     solana_svm::transaction_error_metrics::TransactionErrorMetrics,
@@ -53,7 +55,32 @@ pub struct ThreadLocalUnprocessedPackets {
 }
 
 #[derive(Debug)]
+struct UnprocessedVoteCertificate {
+    vote_certificate: Vec<Arc<ImmutableDeserializedPacket>>,
+    slot: Slot,
+}
+
+impl UnprocessedVoteCertificate {
+    pub(crate) fn slot(&self) -> Slot {
+        self.slot
+    }
+
+    fn len(&self) -> usize {
+        self.vote_certificate.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.vote_certificate.is_empty()
+    }
+
+    fn drain_unprocessed(&mut self) -> Vec<Arc<ImmutableDeserializedPacket>> {
+        self.vote_certificate.drain(..).collect()
+    }
+}
+
+#[derive(Debug)]
 pub struct VoteStorage {
+    vote_certificate: Option<UnprocessedVoteCertificate>,
     latest_unprocessed_votes: Arc<LatestUnprocessedVotes>,
     vote_source: VoteSource,
 }
@@ -268,6 +295,7 @@ impl UnprocessedTransactionStorage {
         vote_source: VoteSource,
     ) -> Self {
         Self::VoteStorage(VoteStorage {
+            vote_certificate: None,
             latest_unprocessed_votes,
             vote_source,
         })
@@ -423,13 +451,37 @@ impl UnprocessedTransactionStorage {
     }
 }
 
+enum UnprocessedVotes {
+    VoteCertificate(Vec<Arc<ImmutableDeserializedPacket>>),
+    LatestUnprocessedVotes(Vec<Arc<ImmutableDeserializedPacket>>),
+}
+
+impl UnprocessedVotes {
+    fn packets(&self) -> &[Arc<ImmutableDeserializedPacket>] {
+        match self {
+            UnprocessedVotes::VoteCertificate(votes) => votes,
+            UnprocessedVotes::LatestUnprocessedVotes(votes) => votes,
+        }
+    }
+}
+
 impl VoteStorage {
     fn is_empty(&self) -> bool {
         self.latest_unprocessed_votes.is_empty()
+            && self
+                .vote_certificate
+                .as_ref()
+                .map(|vote_certificate| vote_certificate.is_empty())
+                .unwrap_or(true)
     }
 
     fn len(&self) -> usize {
         self.latest_unprocessed_votes.len()
+            + self
+                .vote_certificate
+                .as_ref()
+                .map(|vote_certificate| vote_certificate.len())
+                .unwrap_or(0)
     }
 
     fn max_receive_size(&self) -> usize {
@@ -443,8 +495,39 @@ impl VoteStorage {
         }
     }
 
+    fn get_unprocessed_votes(&mut self, bank: Arc<Bank>) -> UnprocessedVotes {
+        if let Some(vote_certificate) = &mut self.vote_certificate {
+            if !vote_certificate.is_empty() {
+                return UnprocessedVotes::VoteCertificate(vote_certificate.drain_unprocessed());
+            }
+        }
+
+        // Give all the votes in the vote certificate priority, including retries
+        let latest_unprocessed_votes: Vec<Arc<ImmutableDeserializedPacket>> = self
+            .latest_unprocessed_votes
+            .drain_unprocessed(bank.clone());
+
+        UnprocessedVotes::LatestUnprocessedVotes(latest_unprocessed_votes)
+    }
+
     fn clear_forwarded_packets(&mut self) {
         self.latest_unprocessed_votes.clear_forwarded_packets();
+    }
+
+    pub(crate) fn insert_vote_certificate(
+        &mut self,
+        slot: Slot,
+        vote_certificate: Vec<Arc<ImmutableDeserializedPacket>>,
+    ) {
+        if let Some(existing_vote_certificate) = &self.vote_certificate {
+            if existing_vote_certificate.slot() == slot {
+                warn!("Tried to re-insert vote certificate for existing {slot} into storage, this means transactions need retry")
+            }
+        }
+        self.vote_certificate = Some(UnprocessedVoteCertificate {
+            vote_certificate,
+            slot,
+        });
     }
 
     fn insert_batch(
@@ -507,17 +590,12 @@ impl VoteStorage {
                 consume_scan_should_process_packet(&bank, banking_stage_stats, packet, payload)
             };
 
-        // Based on the stake distribution present in the supplied bank, drain the unprocessed votes
-        // from each validator using a weighted random ordering. Votes from validators with
-        // 0 stake are ignored.
-        let all_vote_packets = self
-            .latest_unprocessed_votes
-            .drain_unprocessed(bank.clone());
+        let unprocessed_vote_packets = self.get_unprocessed_votes(bank.clone());
 
         // vote storage does not have a message hash map, so pass in an empty one
         let mut dummy_message_hash_to_transaction = HashMap::new();
         let mut scanner = create_consume_multi_iterator(
-            &all_vote_packets,
+            unprocessed_vote_packets.packets(),
             slot_metrics_tracker,
             &mut dummy_message_hash_to_transaction,
             should_process_packet,
@@ -530,18 +608,58 @@ impl VoteStorage {
         while let Some((packets, payload)) = scanner.iterate() {
             let vote_packets = packets.iter().map(|p| (*p).clone()).collect_vec();
 
+            // TODO: Add some serious error logging/assertions in `processing_function` for
+            // vote certificates
             if let Some(retryable_vote_indices) = processing_function(&vote_packets, payload) {
-                self.latest_unprocessed_votes.insert_batch(
-                    retryable_vote_indices.iter().filter_map(|i| {
-                        LatestValidatorVotePacket::new_from_immutable(
-                            vote_packets[*i].clone(),
-                            self.vote_source,
-                            deprecate_legacy_vote_ixs,
-                        )
-                        .ok()
-                    }),
-                    true, // should_replenish_taken_votes
-                );
+                match unprocessed_vote_packets {
+                    UnprocessedVotes::VoteCertificate(_) => {
+                        /*
+                        Only possible failure during `processing_function` is if a     duplicate version of the vote transaction has already arrived over the TPU, which is not a  a retryable error so we won't infinitely loop (because the size of the unprocessed vote certificate monotonically goes down).
+
+                        Also, these duplicate failures should be rare and only occur
+                        if the certificate includes votes for blocks other than the direct ancestor. This is because new votes in the certificate are always processed before any other vote transactions. Guaranteed because
+
+                        1) In BankingStage consume we prevent all votes from
+                        being attempted until vote certificate is processed first
+
+                        2) As soon as the working bank is set by Poh, the voting
+                        thread inserts the vote certificate, so there is no race
+                        where a vote is processed before the certificate is set.
+
+                        TBD's:
+                        1. Do we care about differentiating which votes were part
+                        of the intended certificate by the leader, i.e. if later votes
+                        arrive over the TPU, do we want to differentiate them from votes
+                        that leader put in as certificate
+
+                        2. Should the leader certificate be the only votes in the block?
+                        This would prevent cases like leader makes a certificate with a
+                        notarization vote from validator V for slot X, but then later a
+                        skip vote from validator V for slot X also arrives and overwrites
+                        the vote state
+                        */
+                        self.insert_vote_certificate(
+                            bank.slot(),
+                            retryable_vote_indices
+                                .iter()
+                                .map(|i| vote_packets[*i].clone())
+                                .collect(),
+                        );
+                    }
+                    UnprocessedVotes::LatestUnprocessedVotes(_) => {
+                        self.latest_unprocessed_votes.insert_batch(
+                            retryable_vote_indices.iter().filter_map(|i| {
+                                LatestValidatorVotePacket::new_from_immutable(
+                                    vote_packets[*i].clone(),
+                                    self.vote_source,
+                                    deprecate_legacy_vote_ixs,
+                                )
+                                .ok()
+                            }),
+                            true, // should_replenish_taken_votes
+                        );
+                    }
+                }
             } else {
                 self.latest_unprocessed_votes.insert_batch(
                     vote_packets.into_iter().filter_map(|packet| {

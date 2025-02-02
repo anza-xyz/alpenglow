@@ -119,7 +119,6 @@ impl Consumer {
         let mut consumed_buffered_packets_count = 0;
         let mut proc_start = Measure::start("consume_buffered_process");
         let num_packets_to_process = unprocessed_transaction_storage.len();
-
         let reached_end_of_slot = unprocessed_transaction_storage.process_packets(
             bank_start.working_bank.clone(),
             banking_stage_stats,

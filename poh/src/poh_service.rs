@@ -107,6 +107,11 @@ impl PohService {
         let tick_producer = Builder::new()
             .name("solPohTickProd".to_string())
             .spawn(move || {
+                #[cfg(feature = "alpenglow")]
+                // Must be a low power tick producer which only waits for a single tick
+                assert!(
+                    poh_config.hashes_per_tick.is_none() && poh_config.target_tick_count.is_none()
+                );
                 if poh_config.hashes_per_tick.is_none() {
                     if poh_config.target_tick_count.is_none() {
                         Self::low_power_tick_producer(

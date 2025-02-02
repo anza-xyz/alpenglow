@@ -42,6 +42,11 @@ impl DecisionMaker {
         }
     }
 
+    #[cfg(feature = "alpenglow")]
+    pub(crate) fn poh_recorder(&self) -> Arc<RwLock<PohRecorder>> {
+        self.poh_recorder.clone()
+    }
+
     pub(crate) fn make_consume_or_forward_decision(&self) -> BufferedPacketsDecision {
         let decision;
         {
@@ -132,6 +137,8 @@ mod tests {
     fn test_buffered_packet_decision_bank_start() {
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = BankStart {
+            #[cfg(feature = "alpenglow")]
+            vote_certificate: Arc::new(RwLock::new(None)),
             working_bank: bank,
             bank_creation_time: Arc::new(Instant::now()),
         };
@@ -221,6 +228,8 @@ mod tests {
         let my_pubkey1 = solana_pubkey::new_rand();
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = Some(BankStart {
+            #[cfg(feature = "alpenglow")]
+            vote_certificate: Arc::new(RwLock::new(None)),
             working_bank: bank,
             bank_creation_time: Arc::new(Instant::now()),
         });

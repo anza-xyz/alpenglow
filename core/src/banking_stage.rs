@@ -686,11 +686,21 @@ impl BankingStage {
 
         match decision {
             BufferedPacketsDecision::Consume(bank_start) => {
+                #[cfg(feature = "alpenglow")]
+                if slot_metrics_tracker.id() == 1 {
+                    // The tpu vote thread will handle processing the certificate
+                    if bank_start.vote_certificate.read().unwrap().is_some() {
+                        // return so that we can buffer the vote certiciate into the
+                        // storage before processing any other transactions
+                        return;
+                    }
+                }
                 // Take metrics action before consume packets (potentially resetting the
                 // slot metrics tracker to the next slot) so that we don't count the
                 // packet processing metrics from the next slot towards the metrics
                 // of the previous slot
                 slot_metrics_tracker.apply_action(metrics_action);
+
                 let (_, consume_buffered_packets_us) = measure_us!(consumer
                     .consume_buffered_packets(
                         &bank_start,
@@ -756,6 +766,27 @@ impl BankingStage {
                 slot_metrics_tracker
                     .increment_process_buffered_packets_us(process_buffered_packets_us);
                 last_metrics_update = Instant::now();
+            }
+
+            #[cfg(feature = "alpenglow")]
+            {
+                if id == 1 {
+                    // If we're the tpu vote thread
+                    let bank_start = decision_maker.poh_recorder().read().unwrap().bank_start();
+                    if let Some(bank_start) = bank_start {
+                        if let Some(vote_certificate) =
+                            bank_start.vote_certificate.write().unwrap().take()
+                        {
+                            packet_receiver.process_vote_certificate(
+                                bank_start.working_bank.slot(),
+                                vote_certificate,
+                                &mut unprocessed_transaction_storage,
+                                &mut banking_stage_stats,
+                                &mut slot_metrics_tracker,
+                            )
+                        }
+                    }
+                }
             }
 
             match packet_receiver.receive_and_buffer_packets(

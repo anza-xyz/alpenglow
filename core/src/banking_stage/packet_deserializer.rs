@@ -98,7 +98,7 @@ impl PacketDeserializer {
 
     /// Deserialize packet batches, aggregates tracer packet stats, and collect
     /// them into ReceivePacketResults
-    fn deserialize_and_collect_packets(
+    pub(crate) fn deserialize_and_collect_packets(
         packet_count: usize,
         banking_batches: &[BankingPacketBatch],
         packet_filter: impl Fn(

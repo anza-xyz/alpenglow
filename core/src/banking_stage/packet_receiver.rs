@@ -1,3 +1,6 @@
+#[cfg(feature = "alpenglow")]
+use {solana_poh::poh_recorder::VoteCertificate, solana_sdk::clock::Slot, std::sync::Arc};
+
 use {
     super::{
         immutable_deserialized_packet::ImmutableDeserializedPacket,
@@ -66,6 +69,57 @@ impl PacketReceiver {
         slot_metrics_tracker.increment_receive_and_buffer_packets_us(recv_time_us);
 
         result
+    }
+
+    #[cfg(feature = "alpenglow")]
+    pub fn process_vote_certificate(
+        &mut self,
+        slot: Slot,
+        vote_certificate: VoteCertificate,
+        unprocessed_transaction_storage: &mut UnprocessedTransactionStorage,
+        banking_stage_stats: &mut BankingStageStats,
+        slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+    ) {
+        match unprocessed_transaction_storage {
+            UnprocessedTransactionStorage::VoteStorage(_vote_storage) => {
+                if !vote_certificate.is_empty() {
+                    let mut recv_and_buffer_measure = Measure::start("recv_and_buffer_certificate");
+                    let deserialized_certificate =
+                        PacketDeserializer::deserialize_and_collect_packets(
+                            // Each vote in the certificate must be in its own PacketBatch
+                            vote_certificate.len(),
+                            &[Arc::new(vote_certificate)],
+                            |packet| {
+                                // TODO: CHECK WITH TEAM IF THIS IS SAFE
+                                packet
+                                    .check_insufficent_compute_unit_limit()
+                                    .expect("Certificate tx exceeded compute limit");
+                                packet
+                                    .check_excessive_precompiles()
+                                    .expect("Certificate tx excessive precompiles");
+                                Ok(packet)
+                            },
+                        );
+
+                    self.buffer_vote_certificate(
+                        slot,
+                        deserialized_certificate,
+                        unprocessed_transaction_storage,
+                        banking_stage_stats,
+                        slot_metrics_tracker,
+                    );
+                    recv_and_buffer_measure.stop();
+
+                    // Only incremented if packets are received
+                    banking_stage_stats
+                        .receive_and_buffer_packets_elapsed
+                        .fetch_add(recv_and_buffer_measure.as_us(), Ordering::Relaxed);
+                }
+            }
+            UnprocessedTransactionStorage::LocalTransactionStorage(_) => {
+                panic!("should never reach here");
+            }
+        }
     }
 
     fn get_receive_timeout(
@@ -159,6 +213,75 @@ impl PacketReceiver {
                 *dropped_packets_count,
                 insert_packet_batches_summary.total_dropped_packets()
             );
+        }
+    }
+
+    // TODO, merge the *_vote_certificate functions with the functions above
+    // using common functions to make tracking Agave changes easier
+    #[cfg(feature = "alpenglow")]
+    fn buffer_vote_certificate(
+        &self,
+        slot: Slot,
+        ReceivePacketResults {
+            deserialized_packets: vote_certificate,
+            packet_stats,
+        }: ReceivePacketResults,
+        unprocessed_transaction_storage: &mut UnprocessedTransactionStorage,
+        banking_stage_stats: &mut BankingStageStats,
+        slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+    ) {
+        let packet_count = vote_certificate.len();
+        debug!("@{:?} txs: {} id: {}", timestamp(), packet_count, self.id);
+
+        slot_metrics_tracker.increment_received_packet_counts(packet_stats);
+
+        let mut newly_buffered_packets_count = 0;
+        Self::push_vote_certificate(
+            slot,
+            vote_certificate,
+            unprocessed_transaction_storage,
+            &mut newly_buffered_packets_count,
+            banking_stage_stats,
+            slot_metrics_tracker,
+        );
+
+        banking_stage_stats
+            .newly_buffered_packets_count
+            .fetch_add(newly_buffered_packets_count, Ordering::Relaxed);
+        banking_stage_stats
+            .current_buffered_packets_count
+            .swap(unprocessed_transaction_storage.len(), Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "alpenglow")]
+    fn push_vote_certificate(
+        slot: Slot,
+        vote_certificate: Vec<ImmutableDeserializedPacket>,
+        unprocessed_transaction_storage: &mut UnprocessedTransactionStorage,
+        newly_buffered_packets_count: &mut usize,
+        banking_stage_stats: &mut BankingStageStats,
+        slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+    ) {
+        if !vote_certificate.is_empty() {
+            let _ = banking_stage_stats
+                .batch_packet_indexes_len
+                .increment(vote_certificate.len() as u64);
+
+            *newly_buffered_packets_count += vote_certificate.len();
+            slot_metrics_tracker
+                .increment_newly_buffered_packets_count(vote_certificate.len() as u64);
+
+            match unprocessed_transaction_storage {
+                UnprocessedTransactionStorage::VoteStorage(vote_storage) => {
+                    vote_storage.insert_vote_certificate(
+                        slot,
+                        vote_certificate.into_iter().map(Arc::new).collect(),
+                    );
+                }
+                UnprocessedTransactionStorage::LocalTransactionStorage(_) => {
+                    panic!("should never reach here");
+                }
+            }
         }
     }
 }
