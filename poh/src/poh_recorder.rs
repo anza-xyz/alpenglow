@@ -66,6 +66,8 @@ pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
 pub struct BankStart {
     pub working_bank: Arc<Bank>,
     pub bank_creation_time: Arc<Instant>,
+    #[cfg(feature = "alpenglow")]
+    pub contains_valid_certificate: Arc<AtomicBool>,
 }
 
 impl BankStart {
@@ -265,6 +267,8 @@ pub struct WorkingBank {
     pub min_tick_height: u64,
     pub max_tick_height: u64,
     pub transaction_index: Option<usize>,
+    #[cfg(feature = "alpenglow")]
+    pub contains_valid_certificate: Arc<AtomicBool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -401,6 +405,8 @@ impl PohRecorder {
         self.working_bank.as_ref().map(|w| BankStart {
             working_bank: w.bank.clone(),
             bank_creation_time: w.start.clone(),
+            #[cfg(feature = "alpenglow")]
+            contains_valid_certificate: w.contains_valid_certificate.clone(),
         })
     }
 
@@ -688,6 +694,8 @@ impl PohRecorder {
             bank,
             start: Arc::new(Instant::now()),
             transaction_index: track_transaction_indexes.then_some(0),
+            #[cfg(feature = "alpenglow")]
+            contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
@@ -971,6 +979,15 @@ impl PohRecorder {
                 .ok_or(PohRecorderError::MaxHeightReached)?;
             if bank_slot != working_bank.bank.slot() {
                 return Err(PohRecorderError::MaxHeightReached);
+            }
+
+            // TODO: allow certificate through
+            #[cfg(feature = "alpenglow")]
+            if !working_bank
+                .contains_valid_certificate
+                .load(Ordering::Relaxed)
+            {
+                panic!("We should not be recording transactions before the certificate is written");
             }
 
             let (mut poh_lock, poh_lock_us) = measure_us!(self.poh.lock().unwrap());

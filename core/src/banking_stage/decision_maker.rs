@@ -1,3 +1,6 @@
+#[cfg(feature = "alpenglow")]
+use std::sync::atomic::Ordering;
+
 use {
     solana_poh::poh_recorder::{BankStart, PohRecorder},
     solana_sdk::{
@@ -92,9 +95,15 @@ impl DecisionMaker {
     }
 
     fn bank_start(poh_recorder: &PohRecorder) -> Option<BankStart> {
-        poh_recorder
-            .bank_start()
-            .filter(|bank_start| bank_start.should_working_bank_still_be_processing_txs())
+        poh_recorder.bank_start().filter(|bank_start| {
+            #[cfg(feature = "alpenglow")]
+            let contains_valid_certificate = bank_start
+                .contains_valid_certificate
+                .load(Ordering::Relaxed);
+            #[cfg(not(feature = "alpenglow"))]
+            let contains_valid_certificate = true;
+            contains_valid_certificate && bank_start.should_working_bank_still_be_processing_txs()
+        })
     }
 
     fn would_be_leader_shortly(poh_recorder: &PohRecorder) -> bool {
@@ -114,6 +123,8 @@ impl DecisionMaker {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "alpenglow")]
+    use std::sync::atomic::AtomicBool;
     use {
         super::*,
         core::panic,
@@ -132,6 +143,8 @@ mod tests {
     fn test_buffered_packet_decision_bank_start() {
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = BankStart {
+            #[cfg(feature = "alpenglow")]
+            contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: bank,
             bank_creation_time: Arc::new(Instant::now()),
         };
@@ -221,9 +234,31 @@ mod tests {
         let my_pubkey1 = solana_pubkey::new_rand();
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = Some(BankStart {
+            #[cfg(feature = "alpenglow")]
+            contains_valid_certificate: Arc::new(AtomicBool::new(false)),
+            working_bank: bank.clone(),
+            bank_creation_time: Arc::new(Instant::now()),
+        });
+        #[cfg(feature = "alpenglow")]
+        // No valid certificate, so hold
+        assert_matches!(
+            DecisionMaker::consume_or_forward_packets(
+                &my_pubkey,
+                || bank_start.clone(),
+                || panic!("should not be called"),
+                || panic!("should not be called"),
+                || panic!("should not be called")
+            ),
+            BufferedPacketsDecision::Hold
+        );
+
+        #[cfg(feature = "alpenglow")]
+        let bank_start = Some(BankStart {
+            contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: bank,
             bank_creation_time: Arc::new(Instant::now()),
         });
+
         // having active bank allows to consume immediately
         assert_matches!(
             DecisionMaker::consume_or_forward_packets(
