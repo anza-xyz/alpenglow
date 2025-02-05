@@ -119,7 +119,7 @@ solana-cost-model = { workspace = true, features = ["dev-context-only-utils"] }
 solana-ledger = { workspace = true, features = ["dev-context-only-utils"] }
 solana-logger = { workspace = true }
 solana-net-utils = { workspace = true, features = ["dev-context-only-utils"] }
-solana-poh = { workspace = true, features = ["dev-context-only-utils"] }
+solana-poh = { workspace = true, features = [ "dev-context-only-utils"] }
 solana-program-runtime = { workspace = true, features = ["metrics"] }
 solana-rpc = { workspace = true, features = ["dev-context-only-utils"] }
 solana-sdk = { workspace = true, features = ["dev-context-only-utils"] }
@@ -139,6 +139,9 @@ test-case = { workspace = true }
 sysctl = { workspace = true }
 
 [features]
+alpenglow = [
+    "solana-poh/alpenglow"
+]
 dev-context-only-utils = [
     "solana-perf/dev-context-only-utils",
     "solana-runtime/dev-context-only-utils",
