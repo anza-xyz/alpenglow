@@ -53,14 +53,8 @@ impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
     /// Updates a given range `[start, end]` by adding or removing an item `value`
     fn update(&mut self, start: usize, end: usize, new_value: T, add: bool) {
         if add {
-            self.tree
-                .entry(start)
-                .or_insert_with(Vec::new)
-                .push(new_value.clone());
-            self.tree
-                .entry(end)
-                .or_insert_with(Vec::new)
-                .push(new_value);
+            self.tree.entry(start).or_default().push(new_value.clone());
+            self.tree.entry(end).or_default().push(new_value);
         } else {
             if let Some(events) = self.tree.get_mut(&start) {
                 events.retain(|v| v.pubkey() != new_value.pubkey());
@@ -84,14 +78,16 @@ impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
                 let pubkey = item.pubkey();
                 let stake = item.stake_value();
 
-                // If the pubkey is already in active_contributors, it's leaving the range
-                if active_contributors.contains_key(&pubkey) {
-                    accumulated -= active_contributors.remove(&pubkey).unwrap() as f64;
-                } else {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    active_contributors.entry(pubkey)
+                {
                     // First occurrence, adding stake
                     accumulated += stake as f64;
                     contributing_items.push(item.clone());
-                    active_contributors.insert(pubkey, stake);
+                    e.insert(stake);
+                } else {
+                    // If the pubkey is already in active_contributors, it's the end of the range
+                    accumulated -= active_contributors.remove(&pubkey).unwrap() as f64;
                 }
             }
 
@@ -118,6 +114,12 @@ pub struct SkipPool {
     skips: HashMap<Pubkey, SkipVote>, // Stores latest skip range for each validator
     segment_tree: DynamicSegmentTree<(Pubkey, i64)>, // Generic tree tracking validators' stake
     max_skip_certificate_range: RangeInclusive<Slot>, // The largest valid skip range (initialized to 0..=0)
+}
+
+impl Default for SkipPool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SkipPool {

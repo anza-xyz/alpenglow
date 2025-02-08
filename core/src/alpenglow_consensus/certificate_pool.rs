@@ -91,6 +91,12 @@ pub struct CertificatePool {
     highest_finalized_slot: Slot,
 }
 
+impl Default for CertificatePool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CertificatePool {
     pub fn new() -> Self {
         Self {
