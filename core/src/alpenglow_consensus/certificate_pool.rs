@@ -36,6 +36,13 @@ pub enum AddVoteError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewHighestCertificate {
+    Notarize(Slot),
+    Skip(Slot),
+    Finalize(Slot),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vote {
     Notarize(Slot),
     Skip(RangeInclusive<Slot>),
@@ -58,6 +65,10 @@ impl Vote {
             Vote::Finalize(_slot) => CertificateType::Finalize,
         }
     }
+
+    fn is_notarize(&self) -> bool {
+        matches!(self, Vote::Notarize(_slot))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,6 +85,8 @@ pub struct CertificatePool {
     skip_pool: SkipPool,
     // Highest slot with a notarized certificate
     highest_notarized_slot: Slot,
+    // Highest slot with a finalized certificate
+    highest_finalized_slot: Slot,
 }
 
 impl CertificatePool {
@@ -82,6 +95,7 @@ impl CertificatePool {
             certificates: BTreeMap::default(),
             skip_pool: SkipPool::new(),
             highest_notarized_slot: 0,
+            highest_finalized_slot: 0,
         }
     }
 
@@ -92,7 +106,7 @@ impl CertificatePool {
         validator_key: &Pubkey,
         validator_stake: u64,
         total_stake: u64,
-    ) -> Result<(), AddVoteError> {
+    ) -> Result<Option<NewHighestCertificate>, AddVoteError> {
         match vote {
             Vote::Notarize(vote_slot) | Vote::Finalize(vote_slot) => {
                 let certificate = self
@@ -103,18 +117,45 @@ impl CertificatePool {
                 certificate.add_vote(validator_key, transaction, validator_stake, total_stake)?;
 
                 if certificate.is_complete() {
-                    self.highest_notarized_slot = self.highest_notarized_slot.max(vote_slot);
+                    if vote.is_notarize() {
+                        let old_highest_notarized_slot = self.highest_notarized_slot;
+                        self.highest_notarized_slot = self.highest_notarized_slot.max(vote_slot);
+                        if old_highest_notarized_slot != self.highest_notarized_slot {
+                            return Ok(Some(NewHighestCertificate::Notarize(
+                                self.highest_notarized_slot,
+                            )));
+                        }
+                    } else {
+                        let old_highest_finalized_slot = self.highest_finalized_slot;
+                        self.highest_finalized_slot = self.highest_finalized_slot.max(vote_slot);
+                        if old_highest_finalized_slot != self.highest_finalized_slot {
+                            return Ok(Some(NewHighestCertificate::Finalize(
+                                self.highest_finalized_slot,
+                            )));
+                        }
+                    }
                 }
             }
-            Vote::Skip(skip_range) => self.skip_pool.add_vote(
-                validator_key,
-                skip_range,
-                transaction,
-                validator_stake,
-                total_stake,
-            )?,
+            Vote::Skip(skip_range) => {
+                let old_highest_skip_certificate_slot =
+                    *self.skip_pool.max_skip_certificate_range().end();
+                self.skip_pool.add_vote(
+                    validator_key,
+                    skip_range,
+                    transaction,
+                    validator_stake,
+                    total_stake,
+                )?;
+                let highest_skip_certificate_slot =
+                    *self.skip_pool.max_skip_certificate_range().end();
+                if old_highest_skip_certificate_slot != highest_skip_certificate_slot {
+                    return Ok(Some(NewHighestCertificate::Skip(
+                        highest_skip_certificate_slot,
+                    )));
+                }
+            }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
@@ -350,19 +391,25 @@ mod tests {
         let total_stake = 100;
         let my_stake = 67;
 
-        // Notarize slot 5
-        pool.highest_notarized_slot = 5;
+        // Create bank 5
         let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
         bank.freeze();
         bank_forks.write().unwrap().insert(bank);
-        pool.add_vote(
-            Vote::Notarize(5),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
+
+        // Notarize slot 5
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+        assert_eq!(pool.highest_notarized_slot, 5);
 
         // No skip certificate for 6-10
         let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
@@ -381,19 +428,25 @@ mod tests {
         let my_stake = 67;
         let total_stake = 100;
 
-        // Notarize slot 5
-        pool.highest_notarized_slot = 5;
+        // Create bank 5
         let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
         bank.freeze();
         bank_forks.write().unwrap().insert(bank);
-        pool.add_vote(
-            Vote::Notarize(5),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
+
+        // Notarize slot 5
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+        assert_eq!(pool.highest_notarized_slot, 5);
 
         // Leader slot is just +1 from notarized slot (no skip needed)
         let decision = pool.make_start_leader_decision(6, &bank_forks, total_stake);
@@ -412,29 +465,39 @@ mod tests {
         let mut pool = CertificatePool::new();
         let bank_forks = create_bank_forks(vec![my_keypairs]);
 
-        // Notarize slot 5
-        pool.highest_notarized_slot = 5;
+        // Create bank 5
         let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
         bank.freeze();
         bank_forks.write().unwrap().insert(bank);
 
+        // Notarize slot 5
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+        assert_eq!(pool.highest_notarized_slot, 5);
+
         // Valid skip certificate for 6-9 exists
-        pool.add_vote(
-            Vote::Notarize(5),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
-        pool.add_vote(
-            Vote::Skip(6..=9),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
+        assert_eq!(
+            pool.add_vote(
+                Vote::Skip(6..=9),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Skip(9)
+        );
 
         let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
         assert!(
@@ -452,30 +515,41 @@ mod tests {
         let mut pool = CertificatePool::new();
         let bank_forks = create_bank_forks(vec![my_keypairs]);
 
-        // Notarize slot 5
-        pool.highest_notarized_slot = 5;
+        // Create bank 5
         let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
         bank.freeze();
         bank_forks.write().unwrap().insert(bank);
 
-        // Valid skip certificate for 6-9 exists
-        pool.add_vote(
-            Vote::Notarize(5),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
-        // Should start even if the beginning of the range is from before your last notarized slot
-        pool.add_vote(
-            Vote::Skip(4..=9),
-            dummy_transaction(),
-            &my_pubkey,
-            my_stake,
-            total_stake,
-        )
-        .unwrap();
+        // Notarize slot 5
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+        assert_eq!(pool.highest_notarized_slot, 5);
+
+        // Valid skip certificate for 4-9 exists
+        // Should start leader block even if the beginning of the range is from
+        // before your last notarized slot
+        assert_eq!(
+            pool.add_vote(
+                Vote::Skip(4..=9),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Skip(9)
+        );
 
         let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
         assert!(
@@ -488,22 +562,34 @@ mod tests {
     fn test_make_decision_fails_if_parent_not_frozen() {
         let my_keypairs = ValidatorVoteKeypairs::new_rand();
         let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let my_stake = 67;
         let mut pool = CertificatePool::new();
         let bank_forks = create_bank_forks(vec![my_keypairs]);
         let total_stake = 100;
 
-        // Notarize slot 5
-        pool.highest_notarized_slot = 5;
-        let parent_bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
-
+        // Create bank 5
+        let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
         // Ensure parent bank is *not* frozen
         assert!(
-            !parent_bank.is_frozen(),
+            !bank.is_frozen(),
             "Test setup: Parent bank must not be frozen"
         );
+        bank_forks.write().unwrap().insert(bank);
 
-        // Insert parent bank into BankForks
-        bank_forks.write().unwrap().insert(parent_bank);
+        // Notarize slot 5
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+        assert_eq!(pool.highest_notarized_slot, 5);
 
         // Attempt to start leader
         let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
@@ -512,6 +598,87 @@ mod tests {
         assert!(
             decision.is_none(),
             "Leader should not start if parent bank is not frozen"
+        );
+    }
+
+    #[test]
+    fn test_add_vote_new_finalize_certificate() {
+        let mut pool = CertificatePool::new();
+        let pubkey = Pubkey::new_unique();
+        assert!(pool
+            .add_vote(Vote::Finalize(5), dummy_transaction(), &pubkey, 60, 100)
+            .unwrap()
+            .is_none());
+        // Same key voting again shouldn't make a certificate
+        assert_matches!(
+            pool.add_vote(Vote::Finalize(5), dummy_transaction(), &pubkey, 60, 100),
+            Err(AddVoteError::AddVoteCertificateFailed(_))
+        );
+        assert_eq!(
+            pool.add_vote(
+                Vote::Finalize(5),
+                dummy_transaction(),
+                &Pubkey::new_unique(),
+                10,
+                100
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Finalize(5)
+        );
+    }
+
+    #[test]
+    fn test_add_vote_new_notarize_certificate() {
+        let mut pool = CertificatePool::new();
+        let pubkey = Pubkey::new_unique();
+        assert!(pool
+            .add_vote(Vote::Notarize(5), dummy_transaction(), &pubkey, 60, 100)
+            .unwrap()
+            .is_none());
+        // Same key voting again shouldn't make a certificate
+        assert_matches!(
+            pool.add_vote(Vote::Notarize(5), dummy_transaction(), &pubkey, 60, 100),
+            Err(AddVoteError::AddVoteCertificateFailed(_))
+        );
+        assert_eq!(
+            pool.add_vote(
+                Vote::Notarize(5),
+                dummy_transaction(),
+                &Pubkey::new_unique(),
+                10,
+                100
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Notarize(5)
+        );
+    }
+
+    #[test]
+    fn test_add_vote_new_skip_certificate() {
+        let mut pool = CertificatePool::new();
+        let pubkey = Pubkey::new_unique();
+        assert!(pool
+            .add_vote(Vote::Skip(0..=5), dummy_transaction(), &pubkey, 60, 100)
+            .unwrap()
+            .is_none());
+        // Same key voting again shouldn't make a certificate
+        assert_matches!(
+            pool.add_vote(Vote::Skip(0..=5), dummy_transaction(), &pubkey, 60, 100),
+            Err(AddVoteError::AddSkipPoolFailed(_))
+        );
+        assert_eq!(
+            pool.add_vote(
+                Vote::Skip(0..=5),
+                dummy_transaction(),
+                &Pubkey::new_unique(),
+                10,
+                100
+            )
+            .unwrap()
+            .unwrap(),
+            NewHighestCertificate::Skip(5)
         );
     }
 }
