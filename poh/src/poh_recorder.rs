@@ -87,6 +87,17 @@ impl BankStart {
     }
 }
 
+impl From<&WorkingBank> for BankStart {
+    fn from(w: &WorkingBank) -> Self {
+        Self {
+            working_bank: w.bank.clone(),
+            bank_creation_time: w.start.clone(),
+            #[cfg(feature = "alpenglow")]
+            contains_valid_certificate: w.contains_valid_certificate.clone(),
+        }
+    }
+}
+
 // Sends the Result of the record operation, including the index in the slot of the first
 // transaction, if being tracked by WorkingBank
 type RecordResultSender = Sender<Result<Option<usize>>>;
@@ -402,12 +413,7 @@ impl PohRecorder {
     }
 
     pub fn bank_start(&self) -> Option<BankStart> {
-        self.working_bank.as_ref().map(|w| BankStart {
-            working_bank: w.bank.clone(),
-            bank_creation_time: w.start.clone(),
-            #[cfg(feature = "alpenglow")]
-            contains_valid_certificate: w.contains_valid_certificate.clone(),
-        })
+        self.working_bank.as_ref().map(BankStart::from)
     }
 
     pub fn working_bank_end_slot(&self) -> Option<Slot> {
@@ -685,7 +691,11 @@ impl PohRecorder {
         self.leader_last_tick_height = leader_last_tick_height;
     }
 
-    pub fn set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
+    pub fn set_bank(
+        &mut self,
+        bank: BankWithScheduler,
+        track_transaction_indexes: bool,
+    ) -> BankStart {
         assert!(self.working_bank.is_none());
         self.leader_bank_notifier.set_in_progress(&bank);
         let working_bank = WorkingBank {
@@ -697,6 +707,7 @@ impl PohRecorder {
             #[cfg(feature = "alpenglow")]
             contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
+        let bank_start = BankStart::from(&working_bank);
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
         if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
@@ -731,16 +742,17 @@ impl PohRecorder {
         // TODO: adjust the working_bank.start time based on number of ticks
         // that have already elapsed based on current tick height.
         let _ = self.flush_cache(false);
+        bank_start
     }
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false)
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_with_transaction_index_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true)
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -979,15 +991,6 @@ impl PohRecorder {
                 .ok_or(PohRecorderError::MaxHeightReached)?;
             if bank_slot != working_bank.bank.slot() {
                 return Err(PohRecorderError::MaxHeightReached);
-            }
-
-            // TODO: allow certificate through
-            #[cfg(feature = "alpenglow")]
-            if !working_bank
-                .contains_valid_certificate
-                .load(Ordering::Relaxed)
-            {
-                panic!("We should not be recording transactions before the certificate is written");
             }
 
             let (mut poh_lock, poh_lock_us) = measure_us!(self.poh.lock().unwrap());

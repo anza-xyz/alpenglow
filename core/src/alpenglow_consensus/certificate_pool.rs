@@ -1,3 +1,5 @@
+#[cfg(feature = "alpenglow")]
+use std::sync::atomic::Ordering;
 use {
     super::{
         skip_pool::{self, SkipPool},
@@ -233,17 +235,32 @@ impl CertificatePool {
         poh_recorder: &RwLock<PohRecorder>,
         total_stake: u64,
     ) -> Option<Arc<Bank>> {
+        assert!(!poh_recorder.read().unwrap().has_bank());
         let (parent_bank, skip_certificate) =
             self.make_start_leader_decision(my_leader_slot, bank_forks, total_stake)?;
         let parent_slot = parent_bank.slot();
 
         // Create new bank
-        let new_bank = Arc::new(Bank::new_from_parent_with_options(
+        let new_bank = Bank::new_from_parent_with_options(
             parent_bank,
             my_pubkey,
             my_leader_slot,
             NewBankOptions::default(),
-        ));
+        );
+
+        let bank_with_scheduler = bank_forks.write().unwrap().insert(new_bank);
+        let new_bank = bank_with_scheduler.clone_without_scheduler();
+
+        #[cfg(feature = "alpenglow")]
+        let poh_bank_start = poh_recorder
+            .write()
+            .unwrap()
+            .set_bank(bank_with_scheduler, false);
+        #[cfg(not(feature = "alpenglow"))]
+        poh_recorder
+            .write()
+            .unwrap()
+            .set_bank(bank_with_scheduler, false);
 
         // Commit the notarization certificate
         if self.highest_notarized_slot > 0 {
@@ -272,6 +289,14 @@ impl CertificatePool {
                     );
                 return None;
             }
+        }
+
+        #[cfg(feature = "alpenglow")]
+        {
+            // Enable transaction processing
+            poh_bank_start
+                .contains_valid_certificate
+                .store(true, Ordering::Relaxed);
         }
 
         Some(new_bank)
