@@ -192,42 +192,9 @@ impl CertificatePool {
         poh_recorder: &RwLock<PohRecorder>,
         total_stake: u64,
     ) -> Option<Arc<Bank>> {
-        let parent_bank = bank_forks.read().unwrap().get(self.highest_notarized_slot);
-        if let Some(parent_bank) = &parent_bank {
-            // We haven't finished replaying the parent yet
-            // TODO: Note it's also possible you may have a skip certificate for this parent_bank,
-            // and could immediately start building your slot off an earlier parent.
-            if !parent_bank.is_frozen() {
-                return None;
-            }
-        } else {
-            // We haven't started replaying the parent yet
-            return None;
-        }
-
-        let parent_bank = parent_bank.unwrap();
+        let (parent_bank, skip_certificate) =
+            self.make_start_leader_decision(my_leader_slot, bank_forks, total_stake)?;
         let parent_slot = parent_bank.slot();
-        // Check all slots between `my_leader_slot` and `parent_slot` have a Skip certificate
-        let needs_skip_certificate = my_leader_slot != parent_slot + 1;
-
-        let skip_certificate = if needs_skip_certificate {
-            let max_skip_range = self.skip_pool.max_skip_certificate_range();
-            if max_skip_range.contains(&(parent_slot + 1))
-                && max_skip_range.contains(&(my_leader_slot - 1))
-            {
-                Some(
-                    self.skip_pool
-                        .get_skip_certificate(total_stake)
-                        .expect("valid skip certificate must exist")
-                        .1,
-                )
-            } else {
-                // Missing skip certificates, can't start leader
-                return None;
-            }
-        } else {
-            None
-        };
 
         // Create new bank
         let new_bank = Arc::new(Bank::new_from_parent_with_options(
@@ -242,11 +209,10 @@ impl CertificatePool {
             let notarization_certificate = self
                 .get_notarization_certificate(parent_slot)
                 .expect("highest notarized slot's certificate can't be found");
-            // Commit the notarizations
+
             if !Self::commit_certificate(&new_bank, poh_recorder, notarization_certificate) {
-                // commit failed
                 error!(
-                    "Commit certificate (notarize) my leader slot {} with parent {} failed",
+                    "Commit certificate (notarize) for leader slot {} with parent {} failed",
                     new_bank.slot(),
                     parent_slot
                 );
@@ -254,16 +220,61 @@ impl CertificatePool {
             }
         }
 
-        // Commit the skip certificate
+        // Commit the skip certificate if needed
         if let Some(skip_certificate) = skip_certificate {
             if !Self::commit_certificate(&new_bank, poh_recorder, skip_certificate) {
-                error!("Commit Commit certificate (skip) for leader slot {}, skip range {:?} with parent {} failed", new_bank.slot(), self.skip_pool.max_skip_certificate_range(), parent_slot);
+                error!(
+                        "Commit certificate (skip) for leader slot {}, skip range {:?} with parent {} failed",
+                        new_bank.slot(),
+                        self.skip_pool.max_skip_certificate_range(),
+                        parent_slot
+                    );
                 return None;
             }
         }
 
-        // Success!
         Some(new_bank)
+    }
+
+    /// Determines if the leader can start based on notarization and skip certificates.
+    fn make_start_leader_decision(
+        &self,
+        my_leader_slot: Slot,
+        bank_forks: &RwLock<BankForks>,
+        total_stake: u64,
+    ) -> Option<(Arc<Bank>, Option<Vec<VersionedTransaction>>)> {
+        let parent_bank = bank_forks
+            .read()
+            .unwrap()
+            .get(self.highest_notarized_slot)?;
+
+        // Ensure the parent bank is frozen before proceeding.
+        if !parent_bank.is_frozen() {
+            return None;
+        }
+
+        let parent_slot = parent_bank.slot();
+        let needs_skip_certificate = my_leader_slot != parent_slot + 1;
+
+        let skip_certificate = if needs_skip_certificate {
+            let max_skip_range = self.skip_pool.max_skip_certificate_range();
+            if max_skip_range.contains(&(parent_slot + 1))
+                && max_skip_range.contains(&(my_leader_slot - 1))
+            {
+                Some(
+                    self.skip_pool
+                        .get_skip_certificate(total_stake)
+                        .expect("valid skip certificate must exist")
+                        .1,
+                )
+            } else {
+                return None;
+            }
+        } else {
+            None
+        };
+
+        Some((parent_bank, skip_certificate))
     }
 
     /// Cleanup old finalized slots from the certificate pool
@@ -272,5 +283,235 @@ impl CertificatePool {
         self.certificates = self
             .certificates
             .split_off(&(finalized_slot, CertificateType::Notarize));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_runtime::{
+        bank::{Bank, NewBankOptions},
+        bank_forks::BankForks,
+        genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
+    };
+    use solana_sdk::{
+        clock::Slot, pubkey::Pubkey, signer::Signer, transaction::VersionedTransaction,
+    };
+    use std::sync::{Arc, RwLock};
+
+    fn dummy_transaction() -> VersionedTransaction {
+        VersionedTransaction::default()
+    }
+
+    fn create_bank(slot: Slot, parent: Arc<Bank>, pubkey: &Pubkey) -> Bank {
+        Bank::new_from_parent_with_options(parent, pubkey, slot, NewBankOptions::default())
+    }
+
+    fn create_bank_forks(validator_keypairs: Vec<ValidatorVoteKeypairs>) -> Arc<RwLock<BankForks>> {
+        let genesis = create_genesis_config_with_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            vec![100; validator_keypairs.len()],
+        );
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        BankForks::new_rw_arc(bank0)
+    }
+
+    #[test]
+    fn test_make_decision_leader_does_not_start_if_notarization_missing() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+        let total_stake = 100;
+
+        // No notarization set, pool is default
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+        assert!(
+            decision.is_none(),
+            "Leader should not be allowed to start without notarization"
+        );
+
+        // Even in cases where the defualt highest_notarized_slot = 0 is missing, should not panic
+        assert_eq!(pool.highest_notarized_slot, 0);
+        bank_forks.write().unwrap().remove(0);
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+        assert!(
+            decision.is_none(),
+            "Leader should not be allowed to start without notarization"
+        );
+    }
+
+    #[test]
+    fn test_make_decision_leader_does_not_start_if_skip_certificate_missing() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let mut pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+        let total_stake = 100;
+        let my_stake = 67;
+
+        // Notarize slot 5
+        pool.highest_notarized_slot = 5;
+        let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
+        bank.freeze();
+        bank_forks.write().unwrap().insert(bank);
+        pool.add_vote(
+            Vote::Notarize(5),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+
+        // No skip certificate for 6-10
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+        assert!(
+            decision.is_none(),
+            "Leader should not be allowed to start if a skip certificate is missing"
+        );
+    }
+
+    #[test]
+    fn test_make_decision_leader_starts_when_no_skip_required() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let mut pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+        let my_stake = 67;
+        let total_stake = 100;
+
+        // Notarize slot 5
+        pool.highest_notarized_slot = 5;
+        let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
+        bank.freeze();
+        bank_forks.write().unwrap().insert(bank);
+        pool.add_vote(
+            Vote::Notarize(5),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+
+        // Leader slot is just +1 from notarized slot (no skip needed)
+        let decision = pool.make_start_leader_decision(6, &bank_forks, total_stake);
+        assert!(
+            decision.is_some(),
+            "Leader should be allowed to start when no skip certificate is needed"
+        );
+    }
+
+    #[test]
+    fn test_make_decision_leader_starts_if_notarized_and_skips_valid() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let my_stake = 67;
+        let total_stake = 100;
+        let mut pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+
+        // Notarize slot 5
+        pool.highest_notarized_slot = 5;
+        let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
+        bank.freeze();
+        bank_forks.write().unwrap().insert(bank);
+
+        // Valid skip certificate for 6-9 exists
+        pool.add_vote(
+            Vote::Notarize(5),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+        pool.add_vote(
+            Vote::Skip(6..=9),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+        assert!(
+            decision.is_some(),
+            "Leader should be allowed to start when valid skip certificate exists"
+        );
+    }
+
+    #[test]
+    fn test_make_decision_leader_starts_if_skip_range_superset() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let my_stake = 67;
+        let total_stake = 100;
+        let mut pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+
+        // Notarize slot 5
+        pool.highest_notarized_slot = 5;
+        let bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
+        bank.freeze();
+        bank_forks.write().unwrap().insert(bank);
+
+        // Valid skip certificate for 6-9 exists
+        pool.add_vote(
+            Vote::Notarize(5),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+        // Should start even if the beginning of the range is from before your last notarized slot
+        pool.add_vote(
+            Vote::Skip(4..=9),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )
+        .unwrap();
+
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+        assert!(
+            decision.is_some(),
+            "Leader should be allowed to start when valid skip certificate exists"
+        );
+    }
+
+    #[test]
+    fn test_make_decision_fails_if_parent_not_frozen() {
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let mut pool = CertificatePool::new();
+        let bank_forks = create_bank_forks(vec![my_keypairs]);
+        let total_stake = 100;
+
+        // Notarize slot 5
+        pool.highest_notarized_slot = 5;
+        let parent_bank = create_bank(5, bank_forks.read().unwrap().get(0).unwrap(), &my_pubkey);
+
+        // Ensure parent bank is *not* frozen
+        assert!(
+            !parent_bank.is_frozen(),
+            "Test setup: Parent bank must not be frozen"
+        );
+
+        // Insert parent bank into BankForks
+        bank_forks.write().unwrap().insert(parent_bank);
+
+        // Attempt to start leader
+        let decision = pool.make_start_leader_decision(10, &bank_forks, total_stake);
+
+        // Since the parent is not frozen, the decision should be None
+        assert!(
+            decision.is_none(),
+            "Leader should not start if parent bank is not frozen"
+        );
     }
 }
