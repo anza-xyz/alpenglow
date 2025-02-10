@@ -238,6 +238,10 @@ impl CertificatePool {
             .max(*self.skip_pool.max_skip_certificate_range().end())
     }
 
+    pub fn highest_notarized_certificate_slot(&self) -> Slot {
+        self.highest_notarized_slot
+    }
+
     pub fn maybe_start_leader(
         &self,
         my_pubkey: &Pubkey,

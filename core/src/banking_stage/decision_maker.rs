@@ -1,6 +1,5 @@
 #[cfg(feature = "alpenglow")]
 use std::sync::atomic::Ordering;
-
 use {
     solana_poh::poh_recorder::{BankStart, PohRecorder},
     solana_sdk::{

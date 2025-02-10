@@ -1,5 +1,6 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
-
+#[cfg(feature = "alpenglow")]
+use crate::alpenglow_consensus::certificate_pool::CertificatePool;
 use {
     crate::{
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
@@ -596,6 +597,9 @@ impl ReplayStage {
         } = receivers;
 
         trace!("replay stage");
+        #[cfg(feature = "alpenglow")]
+        let mut cert_pool = CertificatePool::default();
+
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
             exit.clone(),
@@ -1164,6 +1168,8 @@ impl ReplayStage {
                         &banking_tracer,
                         has_new_vote_been_rooted,
                         transaction_status_sender.is_some(),
+                        #[cfg(feature = "alpenglow")]
+                        &mut cert_pool,
                     );
 
                     let poh_bank = poh_recorder.read().unwrap().bank();
@@ -2084,34 +2090,54 @@ impl ReplayStage {
         banking_tracer: &Arc<BankingTracer>,
         has_new_vote_been_rooted: bool,
         track_transaction_indexes: bool,
+        #[cfg(feature = "alpenglow")] cert_pool: &mut CertificatePool,
     ) -> bool {
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
-
         assert!(!poh_recorder.read().unwrap().has_bank());
 
-        let (poh_slot, parent_slot) =
+        let parent_slot;
+        let my_leader_slot;
+        #[cfg(not(feature = "alpenglow"))]
+        {
             match poh_recorder.read().unwrap().reached_leader_slot(my_pubkey) {
                 PohLeaderStatus::Reached {
+                    parent_slot: ps,
                     poh_slot,
-                    parent_slot,
-                } => (poh_slot, parent_slot),
+                } => {
+                    parent_slot = ps;
+                    my_leader_slot = poh_slot;
+                }
                 PohLeaderStatus::NotReached => {
                     trace!("{} poh_recorder hasn't reached_leader_slot", my_pubkey);
                     return false;
                 }
             };
 
-        trace!("{} reached_leader_slot", my_pubkey);
+            trace!("{} reached_leader_slot", my_pubkey);
+        }
+
+        #[cfg(feature = "alpenglow")]
+        {
+            parent_slot = cert_pool.highest_notarized_certificate_slot();
+            // maybe my next slot
+            my_leader_slot = cert_pool.highest_certificate_slot() + 1;
+        }
 
         let Some(parent) = bank_forks.read().unwrap().get(parent_slot) else {
+            #[cfg(feature = "alpenglow")]
+            warn!(
+                "We have a certificate for {parent_slot} that is not in bank_forks, we are running behind!"
+            );
+            #[cfg(not(feature = "alpenglow"))]
             warn!(
                 "Poh recorder parent slot {parent_slot} is missing from bank_forks. This \
-                 indicates that we are in the middle of a dump and repair. Unable to start leader"
+                indicates that we are in the middle of a dump and repair. Unable to start leader"
             );
             return false;
         };
 
+        #[cfg(not(feature = "alpenglow"))]
         assert!(parent.is_frozen());
 
         if !parent.is_startup_verification_complete() {
@@ -2119,18 +2145,23 @@ impl ReplayStage {
             return false;
         }
 
-        if bank_forks.read().unwrap().get(poh_slot).is_some() {
-            warn!("{} already have bank in forks at {}?", my_pubkey, poh_slot);
+        if bank_forks.read().unwrap().get(my_leader_slot).is_some() {
+            warn!(
+                "{} already have bank in forks at {}?",
+                my_pubkey, my_leader_slot
+            );
             return false;
         }
         trace!(
             "{} poh_slot {} parent_slot {}",
             my_pubkey,
-            poh_slot,
+            my_leader_slot,
             parent_slot
         );
 
-        if let Some(next_leader) = leader_schedule_cache.slot_leader_at(poh_slot, Some(&parent)) {
+        if let Some(next_leader) =
+            leader_schedule_cache.slot_leader_at(my_leader_slot, Some(&parent))
+        {
             if !has_new_vote_been_rooted {
                 info!("Haven't landed a vote, so skipping my leader slot");
                 return false;
@@ -2140,86 +2171,110 @@ impl ReplayStage {
                 "{} leader {} at poh slot: {}",
                 my_pubkey,
                 next_leader,
-                poh_slot
+                my_leader_slot
             );
 
-            // I guess I missed my slot
+            // Poh: I guess I missed my slot
+            // Alpenglow: It's not my slot yet
             if next_leader != *my_pubkey {
                 return false;
             }
 
             datapoint_info!(
                 "replay_stage-new_leader",
-                ("slot", poh_slot, i64),
+                ("slot", my_leader_slot, i64),
                 ("leader", next_leader.to_string(), String),
             );
 
-            if !Self::check_propagation_for_start_leader(poh_slot, parent_slot, progress_map) {
-                let latest_unconfirmed_leader_slot = progress_map
-                    .get_latest_leader_slot_must_exist(parent_slot)
-                    .expect(
-                        "In order for propagated check to fail, latest leader must exist in \
-                         progress map",
-                    );
-                if poh_slot != skipped_slots_info.last_skipped_slot {
-                    datapoint_info!(
-                        "replay_stage-skip_leader_slot",
-                        ("slot", poh_slot, i64),
-                        ("parent_slot", parent_slot, i64),
-                        (
-                            "latest_unconfirmed_leader_slot",
+            #[cfg(not(feature = "alpenglow"))]
+            {
+                if !Self::check_propagation_for_start_leader(
+                    my_leader_slot,
+                    parent_slot,
+                    progress_map,
+                ) {
+                    let latest_unconfirmed_leader_slot = progress_map
+                        .get_latest_leader_slot_must_exist(parent_slot)
+                        .expect(
+                            "In order for propagated check to fail, latest leader must exist in \
+                            progress map",
+                        );
+                    if my_leader_slot != skipped_slots_info.last_skipped_slot {
+                        datapoint_info!(
+                            "replay_stage-skip_leader_slot",
+                            ("slot", my_leader_slot, i64),
+                            ("parent_slot", parent_slot, i64),
+                            (
+                                "latest_unconfirmed_leader_slot",
+                                latest_unconfirmed_leader_slot,
+                                i64
+                            )
+                        );
+                        progress_map
+                            .log_propagated_stats(latest_unconfirmed_leader_slot, bank_forks);
+                        skipped_slots_info.last_skipped_slot = my_leader_slot;
+                    }
+                    if Self::should_retransmit(
+                        my_leader_slot,
+                        &mut skipped_slots_info.last_retransmit_slot,
+                    ) {
+                        Self::maybe_retransmit_unpropagated_slots(
+                            "replay_stage-retransmit",
+                            retransmit_slots_sender,
+                            progress_map,
                             latest_unconfirmed_leader_slot,
-                            i64
-                        )
-                    );
-                    progress_map.log_propagated_stats(latest_unconfirmed_leader_slot, bank_forks);
-                    skipped_slots_info.last_skipped_slot = poh_slot;
+                        );
+                    }
+                    return false;
                 }
-                if Self::should_retransmit(poh_slot, &mut skipped_slots_info.last_retransmit_slot) {
-                    Self::maybe_retransmit_unpropagated_slots(
-                        "replay_stage-retransmit",
-                        retransmit_slots_sender,
-                        progress_map,
-                        latest_unconfirmed_leader_slot,
-                    );
-                }
-                return false;
+
+                let root_slot = bank_forks.read().unwrap().root();
+                datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
+                info!(
+                    "new fork:{} parent:{} (leader) root:{}",
+                    my_leader_slot, parent_slot, root_slot
+                );
+
+                let root_distance = my_leader_slot - root_slot;
+                let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
+                    datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
+                    true
+                } else {
+                    false
+                };
+
+                let tpu_bank = Self::new_bank_from_parent_with_notify(
+                    parent.clone(),
+                    my_leader_slot,
+                    root_slot,
+                    my_pubkey,
+                    rpc_subscriptions,
+                    slot_status_notifier,
+                    NewBankOptions { vote_only_bank },
+                );
+                // make sure parent is frozen for finalized hashes via the above
+                // new()-ing of its child bank
+                banking_tracer.hash_event(parent.slot(), &parent.last_blockhash(), &parent.hash());
+
+                update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+                    bank_forks,
+                    poh_recorder,
+                    tpu_bank,
+                    track_transaction_indexes,
+                );
             }
-
-            let root_slot = bank_forks.read().unwrap().root();
-            datapoint_info!("replay_stage-my_leader_slot", ("slot", poh_slot, i64),);
-            info!(
-                "new fork:{} parent:{} (leader) root:{}",
-                poh_slot, parent_slot, root_slot
-            );
-
-            let root_distance = poh_slot - root_slot;
-            let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
-                datapoint_info!("vote-only-bank", ("slot", poh_slot, i64));
-                true
-            } else {
-                false
-            };
-
-            let tpu_bank = Self::new_bank_from_parent_with_notify(
-                parent.clone(),
-                poh_slot,
-                root_slot,
+            #[cfg(feature = "alpenglow")]
+            return cert_pool.maybe_start_leader(
                 my_pubkey,
-                rpc_subscriptions,
-                slot_status_notifier,
-                NewBankOptions { vote_only_bank },
-            );
-            // make sure parent is frozen for finalized hashes via the above
-            // new()-ing of its child bank
-            banking_tracer.hash_event(parent.slot(), &parent.last_blockhash(), &parent.hash());
-
-            update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+                my_leader_slot,
                 bank_forks,
                 poh_recorder,
-                tpu_bank,
+                // TODO: Check if this is safe with epoch stake fluctuations
+                parent
+                    .epoch_total_stake(parent.epoch_schedule().get_epoch(my_leader_slot)).expect("my_leader_slot - 1 got a certificate, so we must be in a known epoch range"),
                 track_transaction_indexes,
-            );
+            ).is_some();
+            #[cfg(not(feature = "alpenglow"))]
             true
         } else {
             error!("{} No next leader found", my_pubkey);
@@ -8643,6 +8698,8 @@ pub(crate) mod tests {
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
+            #[cfg(feature = "alpenglow")]
+            &mut CertificatePool::default()
         ));
     }
 
@@ -9313,6 +9370,8 @@ pub(crate) mod tests {
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
+            #[cfg(feature = "alpenglow")]
+            &mut CertificatePool::default()
         ));
 
         // Register another slots worth of ticks  with PoH recorder
@@ -9340,6 +9399,8 @@ pub(crate) mod tests {
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
+            #[cfg(feature = "alpenglow")]
+            &mut CertificatePool::default()
         ));
         // Get the new working bank, which is also the new leader bank/slot
         let working_bank = bank_forks.read().unwrap().working_bank();
