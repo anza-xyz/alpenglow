@@ -233,6 +233,11 @@ impl CertificatePool {
         true
     }
 
+    pub fn highest_certificate_slot(&self) -> Slot {
+        self.highest_notarized_slot
+            .max(*self.skip_pool.max_skip_certificate_range().end())
+    }
+
     pub fn maybe_start_leader(
         &self,
         my_pubkey: &Pubkey,
@@ -361,16 +366,18 @@ impl CertificatePool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use solana_runtime::{
-        bank::{Bank, NewBankOptions},
-        bank_forks::BankForks,
-        genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
+    use {
+        super::*,
+        solana_runtime::{
+            bank::{Bank, NewBankOptions},
+            bank_forks::BankForks,
+            genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
+        },
+        solana_sdk::{
+            clock::Slot, pubkey::Pubkey, signer::Signer, transaction::VersionedTransaction,
+        },
+        std::sync::{Arc, RwLock},
     };
-    use solana_sdk::{
-        clock::Slot, pubkey::Pubkey, signer::Signer, transaction::VersionedTransaction,
-    };
-    use std::sync::{Arc, RwLock};
 
     fn dummy_transaction() -> VersionedTransaction {
         VersionedTransaction::default()
