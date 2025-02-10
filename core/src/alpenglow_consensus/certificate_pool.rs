@@ -240,6 +240,7 @@ impl CertificatePool {
         bank_forks: &RwLock<BankForks>,
         poh_recorder: &RwLock<PohRecorder>,
         total_stake: u64,
+        track_transaction_indexes: bool,
     ) -> Option<Arc<Bank>> {
         assert!(!poh_recorder.read().unwrap().has_bank());
         let (parent_bank, skip_certificate) =
@@ -261,12 +262,12 @@ impl CertificatePool {
         let poh_bank_start = poh_recorder
             .write()
             .unwrap()
-            .set_bank(bank_with_scheduler, false);
+            .set_bank(bank_with_scheduler, track_transaction_indexes);
         #[cfg(not(feature = "alpenglow"))]
         poh_recorder
             .write()
             .unwrap()
-            .set_bank(bank_with_scheduler, false);
+            .set_bank(bank_with_scheduler, track_transaction_indexes);
 
         // Commit the notarization certificate
         if self.highest_notarized_slot > 0 {
