@@ -1,4 +1,5 @@
 use {
+    super::{Stake, SUPERMAJORITY},
     solana_pubkey::Pubkey,
     solana_sdk::{
         clock::Slot,
@@ -17,14 +18,12 @@ pub enum AddVoteError {
     TransactionFailed(#[from] TransactionError),
 }
 
-pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
-
 pub struct VoteCertificate {
     // Must be either all notarization or finalization votes.
     // We keep separate certificates for each type
     certificate: HashMap<Pubkey, VersionedTransaction>,
     // Total stake of all the slots in the certificate
-    stake: u64,
+    stake: Stake,
     // The slot the votes in the certificate are for
     slot: Slot,
     is_complete: bool,
@@ -44,8 +43,8 @@ impl VoteCertificate {
         &mut self,
         validator_key: &Pubkey,
         transaction: VersionedTransaction,
-        validator_stake: u64,
-        total_stake: u64,
+        validator_stake: Stake,
+        total_stake: Stake,
     ) -> Result<(), AddVoteError> {
         // Caller needs to verify that this is the same type (Notarization, Skip) as all the other votes in the current certificate
         if self.certificate.contains_key(validator_key) {
@@ -63,7 +62,7 @@ impl VoteCertificate {
         self.is_complete
     }
 
-    pub fn check_complete(&mut self, total_stake: u64) -> bool {
+    pub fn check_complete(&mut self, total_stake: Stake) -> bool {
         (self.stake as f64 / total_stake as f64) > SUPERMAJORITY
     }
 

@@ -1,4 +1,5 @@
 use {
+    super::{Stake, SUPERMAJORITY},
     solana_pubkey::Pubkey,
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
@@ -11,24 +12,24 @@ use {
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
     #[error("Skip vote {0:?} already exists")]
-    AlreadyExists(RangeInclusive<u64>),
+    AlreadyExists(RangeInclusive<Slot>),
 
     #[error("Newer skip vote {0:?} than {1:?} already exists for this pubkey")]
-    TooOld(RangeInclusive<u64>, RangeInclusive<u64>),
+    TooOld(RangeInclusive<Slot>, RangeInclusive<Slot>),
 
     #[error("Overlapping skip vote old {0:?} and new {1:?}")]
-    Overlapping(RangeInclusive<u64>, RangeInclusive<u64>),
+    Overlapping(RangeInclusive<Slot>, RangeInclusive<Slot>),
 }
 
 /// A trait for objects that provide a stake value.
 pub trait HasStake {
-    fn stake_value(&self) -> i64;
+    fn stake_value(&self) -> Stake;
     fn pubkey(&self) -> Pubkey;
 }
 
-/// Implement `HasStake` for `(Pubkey, i64)`
-impl HasStake for (Pubkey, i64) {
-    fn stake_value(&self) -> i64 {
+/// Implement `HasStake` for `(Pubkey, Stake)`
+impl HasStake for (Pubkey, Stake) {
+    fn stake_value(&self) -> Stake {
         self.1
     }
 
@@ -39,7 +40,7 @@ impl HasStake for (Pubkey, i64) {
 
 /// Dynamic Segment Tree that works with any type implementing `HasStake`
 struct DynamicSegmentTree<T: Ord + Clone + HasStake> {
-    tree: BTreeMap<usize, Vec<T>>, // Single Vec<T> per slot (first occurrence = add, second = remove)
+    tree: BTreeMap<Slot, Vec<T>>, // Single Vec<T> per slot (first occurrence = add, second = remove)
 }
 
 impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
@@ -50,28 +51,29 @@ impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
         }
     }
 
-    /// Updates a given range `[start, end]` by adding or removing an item `value`
-    fn update(&mut self, start: usize, end: usize, new_value: T, add: bool) {
-        if add {
-            self.tree.entry(start).or_default().push(new_value.clone());
-            self.tree.entry(end).or_default().push(new_value);
-        } else {
-            if let Some(events) = self.tree.get_mut(&start) {
-                events.retain(|v| v.pubkey() != new_value.pubkey());
-            }
-            if let Some(events) = self.tree.get_mut(&end) {
-                events.retain(|v| v.pubkey() != new_value.pubkey());
-            }
+    /// Inserts a given range `[start, end]` with an item `value`
+    fn insert(&mut self, start: Slot, end: Slot, new_value: T) {
+        self.tree.entry(start).or_default().push(new_value.clone());
+        self.tree.entry(end).or_default().push(new_value);
+    }
+
+    /// Removes a given range `[start, end]` with an item `value`
+    fn remove(&mut self, start: Slot, end: Slot, new_value: T) {
+        if let Some(events) = self.tree.get_mut(&start) {
+            events.retain(|v| v.pubkey() != new_value.pubkey());
+        }
+        if let Some(events) = self.tree.get_mut(&end) {
+            events.retain(|v| v.pubkey() != new_value.pubkey());
         }
     }
 
     /// Queries the first slot range where the accumulated stake exceeds `threshold`
     /// Returns the range and contributing Pubkeys
-    fn query(&self, threshold: f64) -> Option<(RangeInclusive<Slot>, Vec<T>)> {
+    fn query(&self, threshold_stake: f64) -> Option<(RangeInclusive<Slot>, Vec<T>)> {
         let mut accumulated = 0f64;
         let mut start = None;
         let mut contributing_items: Vec<T> = Vec::new();
-        let mut active_contributors: HashMap<Pubkey, i64> = HashMap::new();
+        let mut active_contributors: HashMap<Pubkey, Stake> = HashMap::new();
 
         for (&slot, events) in &self.tree {
             for item in events {
@@ -91,7 +93,7 @@ impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
                 }
             }
 
-            if accumulated >= threshold {
+            if accumulated >= threshold_stake {
                 if start.is_none() {
                     start = Some(slot as Slot);
                 }
@@ -112,7 +114,7 @@ pub struct SkipVote {
 /// `SkipPool` tracks validator skip votes and aggregates stake using a dynamic segment tree.
 pub struct SkipPool {
     skips: HashMap<Pubkey, SkipVote>, // Stores latest skip range for each validator
-    segment_tree: DynamicSegmentTree<(Pubkey, i64)>, // Generic tree tracking validators' stake
+    segment_tree: DynamicSegmentTree<(Pubkey, Stake)>, // Generic tree tracking validators' stake
     max_skip_certificate_range: RangeInclusive<Slot>, // The largest valid skip range (initialized to 0..=0)
 }
 
@@ -138,8 +140,8 @@ impl SkipPool {
         pubkey: &Pubkey,
         skip_range: RangeInclusive<Slot>,
         skip_transaction: VersionedTransaction,
-        stake: u64,
-        total_stake: u64,
+        stake: Stake,
+        total_stake: Stake,
     ) -> Result<(), AddVoteError> {
         // Remove previous skip vote if it exists
         if let Some(prev_skip_vote) = self.skips.get(pubkey) {
@@ -161,20 +163,18 @@ impl SkipPool {
                 ));
             }
 
-            self.segment_tree.update(
-                *prev_skip_vote.skip_range.start() as usize,
-                *prev_skip_vote.skip_range.end() as usize,
-                (*pubkey, -(stake as i64)), // stake doesn't actually matter here
-                false,
+            self.segment_tree.remove(
+                *prev_skip_vote.skip_range.start(),
+                *prev_skip_vote.skip_range.end(),
+                (*pubkey, (stake as Stake)), // stake doesn't actually matter here
             );
         }
 
         // Add new skip range
-        self.segment_tree.update(
-            *skip_range.start() as usize,
-            *skip_range.end() as usize,
-            (*pubkey, stake as i64), // Add stake
-            true,
+        self.segment_tree.insert(
+            *skip_range.start(),
+            *skip_range.end(),
+            (*pubkey, stake as Stake), // Add stake
         );
 
         // Store the validator's updated skip vote
@@ -203,9 +203,9 @@ impl SkipPool {
     /// Returns the full skip certificate range and contributing `Pubkey -> VersionedTransaction` mappings
     pub fn get_skip_certificate(
         &self,
-        total_stake: u64,
+        total_stake: Stake,
     ) -> Option<(RangeInclusive<Slot>, Vec<VersionedTransaction>)> {
-        let threshold = (2.0 * total_stake as f64) / 3.0;
+        let threshold = SUPERMAJORITY * total_stake as f64;
         self.segment_tree
             .query(threshold)
             .map(|(range, contributors)| {

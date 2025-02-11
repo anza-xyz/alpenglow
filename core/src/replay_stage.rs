@@ -2119,7 +2119,7 @@ impl ReplayStage {
 
         #[cfg(feature = "alpenglow")]
         {
-            parent_slot = cert_pool.highest_notarized_certificate_slot();
+            parent_slot = cert_pool.highest_unskipped_certificate_slot();
             // maybe my next slot
             my_leader_slot = cert_pool.highest_certificate_slot() + 1;
         }

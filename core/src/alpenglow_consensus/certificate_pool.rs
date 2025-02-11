@@ -4,6 +4,7 @@ use {
     super::{
         skip_pool::{self, SkipPool},
         vote_certificate::{self, VoteCertificate},
+        Stake,
     },
     crate::banking_stage::consumer::Consumer,
     solana_poh::poh_recorder::PohRecorder,
@@ -30,11 +31,11 @@ pub type CertificateId = (Slot, CertificateType);
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
-    #[error("Vote already exists for this pubkey")]
-    AddSkipPoolFailed(#[from] skip_pool::AddVoteError),
+    #[error("Add vote to skip pool failed: {0}")]
+    AddToSkipPoolFailed(#[from] skip_pool::AddVoteError),
 
     #[error("Add vote to vote certificate failed: {0}")]
-    AddVoteCertificateFailed(#[from] vote_certificate::AddVoteError),
+    AddToCertificatePool(#[from] vote_certificate::AddVoteError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,9 +112,9 @@ impl CertificatePool {
         &mut self,
         vote: Vote,
         transaction: VersionedTransaction,
-        validator_key: &Pubkey,
-        validator_stake: u64,
-        total_stake: u64,
+        validator_vote_key: &Pubkey,
+        validator_stake: Stake,
+        total_stake: Stake,
     ) -> Result<Option<NewHighestCertificate>, AddVoteError> {
         match vote {
             Vote::Notarize(vote_slot) | Vote::Finalize(vote_slot) => {
@@ -122,7 +123,12 @@ impl CertificatePool {
                     .entry((vote_slot, vote.certificate_type()))
                     .or_insert_with(|| VoteCertificate::new(vote_slot));
 
-                certificate.add_vote(validator_key, transaction, validator_stake, total_stake)?;
+                certificate.add_vote(
+                    validator_vote_key,
+                    transaction,
+                    validator_stake,
+                    total_stake,
+                )?;
 
                 if certificate.is_complete() {
                     if vote.is_notarize() {
@@ -148,7 +154,7 @@ impl CertificatePool {
                 let old_highest_skip_certificate_slot =
                     *self.skip_pool.max_skip_certificate_range().end();
                 self.skip_pool.add_vote(
-                    validator_key,
+                    validator_vote_key,
                     skip_range,
                     transaction,
                     validator_stake,
@@ -168,7 +174,7 @@ impl CertificatePool {
 
     fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
         self.certificates
-            .get(&(slot - 1, CertificateType::Notarize))
+            .get(&(slot, CertificateType::Notarize))
             .map(|certificate| certificate.get_certificate())
     }
 
@@ -182,7 +188,9 @@ impl CertificatePool {
             certificate
                 .into_iter()
                 .map(|versioned_tx| {
-                    // Short circuits on first error
+                    // Short circuits on first error because
+                    // transactions in the certificate need to
+                    // be guaranteed to not fail
                     RuntimeTransaction::try_create(
                         versioned_tx,
                         MessageHash::Compute,
@@ -234,12 +242,14 @@ impl CertificatePool {
     }
 
     pub fn highest_certificate_slot(&self) -> Slot {
-        self.highest_notarized_slot
-            .max(*self.skip_pool.max_skip_certificate_range().end())
+        self.highest_finalized_slot.max(
+            self.highest_notarized_slot
+                .max(*self.skip_pool.max_skip_certificate_range().end())
+        )
     }
 
-    pub fn highest_notarized_certificate_slot(&self) -> Slot {
-        self.highest_notarized_slot
+    pub fn highest_unskipped_certificate_slot(&self) -> Slot {
+        self.highest_finalized_slot.max(self.highest_notarized_slot)
     }
 
     pub fn maybe_start_leader(
@@ -248,7 +258,7 @@ impl CertificatePool {
         my_leader_slot: Slot,
         bank_forks: &RwLock<BankForks>,
         poh_recorder: &RwLock<PohRecorder>,
-        total_stake: u64,
+        total_stake: Stake,
         track_transaction_indexes: bool,
     ) -> Option<Arc<Bank>> {
         assert!(!poh_recorder.read().unwrap().has_bank());
@@ -323,7 +333,7 @@ impl CertificatePool {
         &self,
         my_leader_slot: Slot,
         bank_forks: &RwLock<BankForks>,
-        total_stake: u64,
+        total_stake: Stake,
     ) -> Option<(Arc<Bank>, Option<Vec<VersionedTransaction>>)> {
         let parent_bank = bank_forks
             .read()
@@ -655,7 +665,7 @@ mod tests {
         // Same key voting again shouldn't make a certificate
         assert_matches!(
             pool.add_vote(Vote::Finalize(5), dummy_transaction(), &pubkey, 60, 100),
-            Err(AddVoteError::AddVoteCertificateFailed(_))
+            Err(AddVoteError::AddToCertificatePool(_))
         );
         assert_eq!(
             pool.add_vote(
@@ -682,7 +692,7 @@ mod tests {
         // Same key voting again shouldn't make a certificate
         assert_matches!(
             pool.add_vote(Vote::Notarize(5), dummy_transaction(), &pubkey, 60, 100),
-            Err(AddVoteError::AddVoteCertificateFailed(_))
+            Err(AddVoteError::AddToCertificatePool(_))
         );
         assert_eq!(
             pool.add_vote(
@@ -709,7 +719,7 @@ mod tests {
         // Same key voting again shouldn't make a certificate
         assert_matches!(
             pool.add_vote(Vote::Skip(0..=5), dummy_transaction(), &pubkey, 60, 100),
-            Err(AddVoteError::AddSkipPoolFailed(_))
+            Err(AddVoteError::AddToSkipPoolFailed(_))
         );
         assert_eq!(
             pool.add_vote(
