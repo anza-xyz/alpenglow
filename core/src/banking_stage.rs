@@ -819,6 +819,8 @@ pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
 ) -> bool {
     let tpu_bank = bank_forks.write().unwrap().insert(tpu_bank);
     let parent_slot = tpu_bank.parent_slot();
+
+    // Transaction processing blocked until certificates are committed first
     let poh_bank_start = poh_recorder
         .write()
         .unwrap()

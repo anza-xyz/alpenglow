@@ -113,7 +113,12 @@ impl Consumer {
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
         let committer = Committer::new(None, replay_vote_sender, Arc::default());
         let transaction_recorder: TransactionRecorder = poh_recorder.read().unwrap().new_recorder();
-        Consumer::new(committer, transaction_recorder, QosService::new(0), None)
+        Consumer::new(
+            committer,
+            transaction_recorder,
+            QosService::new(u32::MAX),
+            None,
+        )
     }
 
     pub fn consume_buffered_packets(

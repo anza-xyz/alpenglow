@@ -2272,7 +2272,7 @@ impl ReplayStage {
             return false;
         }
         trace!(
-            "{} poh_slot {} parent_slot {}",
+            "{} my_leader_slot {} parent_slot {}",
             my_pubkey,
             my_leader_slot,
             parent_slot
