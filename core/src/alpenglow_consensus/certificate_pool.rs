@@ -1,28 +1,16 @@
-#[cfg(feature = "alpenglow")]
-use std::sync::atomic::Ordering;
 use {
     super::{
         skip_pool::{self, SkipPool},
         vote_certificate::{self, VoteCertificate},
         Stake,
     },
-    crate::banking_stage::consumer::Consumer,
-    solana_poh::poh_recorder::PohRecorder,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::{Bank, NewBankOptions},
-        bank_forks::BankForks,
-    },
-    solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
-    solana_sdk::{
-        clock::Slot,
-        transaction::{MessageHash, SanitizedTransaction, VersionedTransaction},
-    },
+    solana_runtime::{bank::Bank, bank_forks::BankForks},
+    solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
         collections::BTreeMap,
         ops::RangeInclusive,
         sync::{Arc, RwLock},
-        time::Instant,
     },
     thiserror::Error,
 };
@@ -53,14 +41,6 @@ pub enum Vote {
 }
 
 impl Vote {
-    fn slot(&self) -> Slot {
-        match self {
-            Vote::Notarize(slot) => *slot,
-            Vote::Skip(skip_range) => *skip_range.end(),
-            Vote::Finalize(slot) => *slot,
-        }
-    }
-
     fn certificate_type(&self) -> CertificateType {
         match self {
             Vote::Notarize(_slot) => CertificateType::Notarize,
@@ -172,79 +152,16 @@ impl CertificatePool {
         Ok(None)
     }
 
-    fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
+    pub fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
         self.certificates
             .get(&(slot, CertificateType::Notarize))
             .map(|certificate| certificate.get_certificate())
     }
 
-    fn commit_certificate(
-        bank: &Arc<Bank>,
-        poh_recorder: &RwLock<PohRecorder>,
-        certificate: Vec<VersionedTransaction>,
-    ) -> bool {
-        let consumer = Consumer::create_consumer(poh_recorder);
-        let runtime_transactions: Result<Vec<RuntimeTransaction<SanitizedTransaction>>, _> =
-            certificate
-                .into_iter()
-                .map(|versioned_tx| {
-                    // Short circuits on first error because
-                    // transactions in the certificate need to
-                    // be guaranteed to not fail
-                    RuntimeTransaction::try_create(
-                        versioned_tx,
-                        MessageHash::Compute,
-                        None,
-                        &**bank,
-                        bank.get_reserved_account_keys(),
-                    )
-                })
-                .collect();
-
-        //TODO: guarantee these transactions don't fail
-        if let Err(e) = runtime_transactions {
-            error!(
-                "Error in bank {} creating runtime transaction in certificate {:?}",
-                bank.slot(),
-                e
-            );
-            return false;
-        }
-
-        let runtime_transactions = runtime_transactions.unwrap();
-        let summary = consumer.process_transactions(bank, &Instant::now(), &runtime_transactions);
-
-        if summary.reached_max_poh_height {
-            datapoint_error!(
-                "vote_certiificate_commit_failure",
-                ("error", "slot took too long to ingest votes", String),
-                ("slot", bank.slot(), i64)
-            );
-            // TODO: check if 2/3 of the stake landed, otherwise return false
-            return false;
-        }
-
-        if summary.error_counters.total.0 != 0 {
-            datapoint_error!(
-                "vote_certiificate_commit_failure",
-                (
-                    "error",
-                    format!("{} errors occurred", summary.error_counters.total.0),
-                    String
-                ),
-                ("slot", bank.slot(), i64)
-            );
-            // TODO: check if 2/3 of the stake landed, otherwise return false
-            return false;
-        }
-
-        true
-    }
-
     pub fn highest_certificate_slot(&self) -> Slot {
         self.highest_finalized_slot.max(
             self.highest_notarized_slot
-                .max(*self.skip_pool.max_skip_certificate_range().end())
+                .max(*self.skip_pool.max_skip_certificate_range().end()),
         )
     }
 
@@ -252,84 +169,8 @@ impl CertificatePool {
         self.highest_finalized_slot.max(self.highest_notarized_slot)
     }
 
-    pub fn maybe_start_leader(
-        &self,
-        my_pubkey: &Pubkey,
-        my_leader_slot: Slot,
-        bank_forks: &RwLock<BankForks>,
-        poh_recorder: &RwLock<PohRecorder>,
-        total_stake: Stake,
-        track_transaction_indexes: bool,
-    ) -> Option<Arc<Bank>> {
-        assert!(!poh_recorder.read().unwrap().has_bank());
-        let (parent_bank, skip_certificate) =
-            self.make_start_leader_decision(my_leader_slot, bank_forks, total_stake)?;
-        let parent_slot = parent_bank.slot();
-
-        // Create new bank
-        let new_bank = Bank::new_from_parent_with_options(
-            parent_bank,
-            my_pubkey,
-            my_leader_slot,
-            NewBankOptions::default(),
-        );
-
-        let bank_with_scheduler = bank_forks.write().unwrap().insert(new_bank);
-        let new_bank = bank_with_scheduler.clone_without_scheduler();
-
-        #[cfg(feature = "alpenglow")]
-        let poh_bank_start = poh_recorder
-            .write()
-            .unwrap()
-            .set_bank(bank_with_scheduler, track_transaction_indexes);
-        #[cfg(not(feature = "alpenglow"))]
-        poh_recorder
-            .write()
-            .unwrap()
-            .set_bank(bank_with_scheduler, track_transaction_indexes);
-
-        // Commit the notarization certificate
-        if self.highest_notarized_slot > 0 {
-            let notarization_certificate = self
-                .get_notarization_certificate(parent_slot)
-                .expect("highest notarized slot's certificate can't be found");
-
-            if !Self::commit_certificate(&new_bank, poh_recorder, notarization_certificate) {
-                error!(
-                    "Commit certificate (notarize) for leader slot {} with parent {} failed",
-                    new_bank.slot(),
-                    parent_slot
-                );
-                return None;
-            }
-        }
-
-        // Commit the skip certificate if needed
-        if let Some(skip_certificate) = skip_certificate {
-            if !Self::commit_certificate(&new_bank, poh_recorder, skip_certificate) {
-                error!(
-                        "Commit certificate (skip) for leader slot {}, skip range {:?} with parent {} failed",
-                        new_bank.slot(),
-                        self.skip_pool.max_skip_certificate_range(),
-                        parent_slot
-                    );
-                return None;
-            }
-        }
-
-        #[cfg(feature = "alpenglow")]
-        {
-            // Enable transaction processing
-            poh_bank_start
-                .contains_valid_certificate
-                .store(true, Ordering::Relaxed);
-        }
-
-        Some(new_bank)
-    }
-
     /// Determines if the leader can start based on notarization and skip certificates.
-    fn make_start_leader_decision(
+    pub fn make_start_leader_decision(
         &self,
         my_leader_slot: Slot,
         bank_forks: &RwLock<BankForks>,

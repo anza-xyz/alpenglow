@@ -66,6 +66,10 @@ impl VoteCertificate {
         (self.stake as f64 / total_stake as f64) > SUPERMAJORITY
     }
 
+    pub fn slot(&self) -> Slot {
+        self.slot
+    }
+
     pub fn get_certificate(&self) -> Vec<VersionedTransaction> {
         self.certificate.values().cloned().collect()
     }

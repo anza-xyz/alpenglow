@@ -1,6 +1,96 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
 #[cfg(feature = "alpenglow")]
-use crate::alpenglow_consensus::certificate_pool::CertificatePool;
+use {
+    crate::{
+        alpenglow_consensus::certificate_pool::CertificatePool,
+        banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
+        banking_trace::BankingTracer,
+        cluster_info_vote_listener::{
+            DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
+        },
+        cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
+        commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
+        consensus::{
+            fork_choice::{select_vote_and_reset_forks, ForkChoice, SelectVoteAndResetForkResult},
+            heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
+            latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
+            progress_map::{ForkProgress, ProgressMap, PropagatedStats},
+            tower_storage::{SavedTower, SavedTowerVersions, TowerStorage},
+            BlockhashStatus, ComputedBankState, Stake, SwitchForkDecision, Tower, TowerError,
+            VotedStakes, SWITCH_FORK_THRESHOLD,
+        },
+        cost_update_service::CostUpdate,
+        repair::{
+            ancestor_hashes_service::AncestorHashesReplayUpdateSender,
+            cluster_slot_state_verifier::*,
+            duplicate_repair_status::AncestorDuplicateSlotToRepair,
+            repair_service::{
+                AncestorDuplicateSlotsReceiver, DumpedSlotsSender, PopularPrunedForksReceiver,
+            },
+        },
+        unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
+        voting_service::VoteOp,
+        window_service::DuplicateSlotReceiver,
+    },
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    rayon::{prelude::*, ThreadPool},
+    solana_accounts_db::contains::Contains,
+    solana_entry::entry::VerifyRecyclers,
+    solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::{
+        block_error::BlockError,
+        blockstore::Blockstore,
+        blockstore_processor::{
+            self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
+            ReplaySlotStats, TransactionStatusSender,
+        },
+        entry_notifier_service::EntryNotifierSender,
+        leader_schedule_cache::LeaderScheduleCache,
+        leader_schedule_utils::first_of_consecutive_leader_slots,
+    },
+    solana_measure::measure::Measure,
+    solana_poh::poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
+    solana_rpc::{
+        cache_block_meta_service::CacheBlockMetaSender,
+        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
+        rpc_subscriptions::RpcSubscriptions,
+        slot_status_notifier::SlotStatusNotifier,
+    },
+    solana_rpc_client_api::response::SlotUpdate,
+    solana_runtime::{
+        accounts_background_service::AbsRequestSender,
+        bank::{bank_hash_details, Bank, NewBankOptions},
+        bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
+        commitment::BlockCommitmentCache,
+        installed_scheduler_pool::BankWithScheduler,
+        prioritization_fee_cache::PrioritizationFeeCache,
+        vote_sender_types::ReplayVoteSender,
+    },
+    solana_sdk::{
+        clock::{BankId, Slot},
+        hash::Hash,
+        pubkey::Pubkey,
+        saturating_add_assign,
+        signature::{Keypair, Signature, Signer},
+        timing::timestamp,
+        transaction::Transaction,
+    },
+    solana_timings::ExecuteTimings,
+    solana_vote_program::vote_state::{VoteState, VoteTransaction},
+    std::{
+        collections::{HashMap, HashSet},
+        num::NonZeroUsize,
+        result,
+        sync::{
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            Arc, RwLock,
+        },
+        thread::{self, Builder, JoinHandle},
+        time::{Duration, Instant},
+    },
+};
+#[cfg(not(feature = "alpenglow"))]
 use {
     crate::{
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
@@ -184,6 +274,7 @@ struct LastVoteRefreshTime {
 }
 
 #[derive(Default)]
+#[cfg(not(feature = "alpenglow"))]
 struct SkippedSlotsInfo {
     last_retransmit_slot: u64,
     last_skipped_slot: u64,
@@ -534,6 +625,18 @@ impl ReplayLoopTiming {
     }
 }
 
+#[cfg(not(feature = "alpenglow"))]
+struct MaybeStartLeaderExtraArgs<'a> {
+    progress_map: &'a mut ProgressMap,
+    retransmit_slots_sender: &'a Sender<Slot>,
+    skipped_slots_info: &'a mut SkippedSlotsInfo,
+}
+
+#[cfg(feature = "alpenglow")]
+struct MaybeStartLeaderExtraArgs<'a> {
+    cert_pool: &'a mut CertificatePool,
+}
+
 pub struct ReplayStage {
     t_replay: JoinHandle<()>,
     commitment_service: AggregateCommitmentService,
@@ -648,6 +751,7 @@ impl ReplayStage {
             let mut last_reset = Hash::default();
             let mut last_reset_bank_descendants = Vec::new();
             let mut partition_info = PartitionInfo::new();
+            #[cfg(not(feature = "alpenglow"))]
             let mut skipped_slots_info = SkippedSlotsInfo::default();
             let mut replay_timing = ReplayLoopTiming::default();
             let mut duplicate_slots_tracker = DuplicateSlotsTracker::default();
@@ -1155,6 +1259,16 @@ impl ReplayStage {
                 drop(ancestors);
                 drop(descendants);
                 if !tpu_has_bank {
+                    #[cfg(not(feature = "alpenglow"))]
+                    let extra_args = MaybeStartLeaderExtraArgs {
+                        progress_map: &mut progress,
+                        retransmit_slots_sender: &retransmit_slots_sender,
+                        skipped_slots_info: &mut skipped_slots_info,
+                    };
+                    #[cfg(feature = "alpenglow")]
+                    let extra_args = MaybeStartLeaderExtraArgs {
+                        cert_pool: &mut cert_pool,
+                    };
                     Self::maybe_start_leader(
                         &my_pubkey,
                         &bank_forks,
@@ -1162,14 +1276,10 @@ impl ReplayStage {
                         &leader_schedule_cache,
                         &rpc_subscriptions,
                         &slot_status_notifier,
-                        &mut progress,
-                        &retransmit_slots_sender,
-                        &mut skipped_slots_info,
                         &banking_tracer,
                         has_new_vote_been_rooted,
                         transaction_status_sender.is_some(),
-                        #[cfg(feature = "alpenglow")]
-                        &mut cert_pool,
+                        extra_args,
                     );
 
                     let poh_bank = poh_recorder.read().unwrap().bank();
@@ -2013,6 +2123,7 @@ impl ReplayStage {
         current_leader.replace(new_leader.to_owned());
     }
 
+    #[cfg(not(feature = "alpenglow"))]
     fn check_propagation_for_start_leader(
         poh_slot: Slot,
         parent_slot: Slot,
@@ -2056,6 +2167,7 @@ impl ReplayStage {
             .0
     }
 
+    #[cfg(not(feature = "alpenglow"))]
     fn should_retransmit(poh_slot: Slot, last_retransmit_slot: &mut Slot) -> bool {
         if poh_slot < *last_retransmit_slot
             || poh_slot >= *last_retransmit_slot + NUM_CONSECUTIVE_LEADER_SLOTS
@@ -2084,14 +2196,21 @@ impl ReplayStage {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         slot_status_notifier: &Option<SlotStatusNotifier>,
-        progress_map: &mut ProgressMap,
-        retransmit_slots_sender: &Sender<Slot>,
-        skipped_slots_info: &mut SkippedSlotsInfo,
         banking_tracer: &Arc<BankingTracer>,
         has_new_vote_been_rooted: bool,
         track_transaction_indexes: bool,
-        #[cfg(feature = "alpenglow")] cert_pool: &mut CertificatePool,
+        extra_args: MaybeStartLeaderExtraArgs,
     ) -> bool {
+        #[cfg(not(feature = "alpenglow"))]
+        let MaybeStartLeaderExtraArgs {
+            progress_map,
+            retransmit_slots_sender,
+            skipped_slots_info,
+        } = extra_args;
+
+        #[cfg(feature = "alpenglow")]
+        let MaybeStartLeaderExtraArgs { cert_pool } = extra_args;
+
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
         assert!(!poh_recorder.read().unwrap().has_bank());
@@ -2262,20 +2381,52 @@ impl ReplayStage {
                     tpu_bank,
                     track_transaction_indexes,
                 );
+                true
             }
+
             #[cfg(feature = "alpenglow")]
-            return cert_pool.maybe_start_leader(
-                my_pubkey,
-                my_leader_slot,
-                bank_forks,
-                poh_recorder,
-                // TODO: Check if this is safe with epoch stake fluctuations
-                parent
-                    .epoch_total_stake(parent.epoch_schedule().get_epoch(my_leader_slot)).expect("my_leader_slot - 1 got a certificate, so we must be in a known epoch range"),
-                track_transaction_indexes,
-            ).is_some();
-            #[cfg(not(feature = "alpenglow"))]
-            true
+            {
+                let root_slot = bank_forks.read().unwrap().root();
+                let total_stake = parent
+                    .epoch_total_stake(parent.epoch_schedule().get_epoch(my_leader_slot)).expect("my_leader_slot - 1 got a certificate, so we must be in a known epoch range");
+                if let Some((parent_bank, skip_certificate)) =
+                    cert_pool.make_start_leader_decision(my_leader_slot, bank_forks, total_stake)
+                {
+                    let notarization_certificate = if parent_bank.slot() > 0 {
+                        cert_pool
+                            .get_notarization_certificate(parent_bank.slot())
+                            .expect("highest notarized slot's certificate can't be found")
+                    } else {
+                        vec![]
+                    };
+                    let tpu_bank = Self::new_bank_from_parent_with_notify(
+                        parent_bank,
+                        my_leader_slot,
+                        root_slot,
+                        my_pubkey,
+                        rpc_subscriptions,
+                        slot_status_notifier,
+                        NewBankOptions::default(),
+                    );
+                    // make sure parent is frozen for finalized hashes via the above
+                    // new()-ing of its child bank
+                    banking_tracer.hash_event(
+                        parent.slot(),
+                        &parent.last_blockhash(),
+                        &parent.hash(),
+                    );
+                    update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+                        bank_forks,
+                        poh_recorder,
+                        tpu_bank,
+                        track_transaction_indexes,
+                        notarization_certificate,
+                        skip_certificate,
+                    )
+                } else {
+                    false
+                }
+            }
         } else {
             error!("{} No next leader found", my_pubkey);
             false
@@ -4335,6 +4486,71 @@ impl ReplayStage {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "alpenglow")]
+    use {
+        super::*,
+        crate::{
+            consensus::{
+                progress_map::{ValidatorStakeInfo, RETRANSMIT_BASE_DELAY_MS},
+                tower_storage::{FileTowerStorage, NullTowerStorage},
+                tree_diff::TreeDiff,
+                ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
+            },
+            replay_stage::ReplayStage,
+            vote_simulator::{self, VoteSimulator},
+        },
+        blockstore_processor::{
+            confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
+        },
+        crossbeam_channel::unbounded,
+        itertools::Itertools,
+        solana_client::connection_cache::ConnectionCache,
+        solana_entry::entry::{self, Entry},
+        solana_gossip::{cluster_info::Node, crds::Cursor},
+        solana_ledger::{
+            blockstore::{entries_to_test_shreds, make_slot_entries, BlockstoreError},
+            create_new_tmp_ledger,
+            genesis_utils::{create_genesis_config, create_genesis_config_with_leader},
+            get_tmp_ledger_path, get_tmp_ledger_path_auto_delete,
+            shred::{Shred, ShredFlags, LEGACY_SHRED_DATA_CAPACITY},
+        },
+        solana_poh::poh_recorder::PohLeaderStatus,
+        solana_rpc::{
+            optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
+            rpc::{create_test_transaction_entries, populate_blockstore_for_tests},
+            slot_status_notifier::SlotStatusNotifierInterface,
+        },
+        solana_runtime::{
+            accounts_background_service::AbsRequestSender,
+            commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
+            genesis_utils::{GenesisConfigInfo, ValidatorVoteKeypairs},
+        },
+        solana_sdk::{
+            clock::NUM_CONSECUTIVE_LEADER_SLOTS,
+            hash::{hash, Hash},
+            instruction::InstructionError,
+            poh_config::PohConfig,
+            signature::{Keypair, Signer},
+            system_transaction,
+            transaction::TransactionError,
+        },
+        solana_streamer::socket::SocketAddrSpace,
+        solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
+        solana_transaction_status::VersionedTransactionWithStatusMeta,
+        solana_vote_program::{
+            vote_state::{self, TowerSync, VoteStateVersions},
+            vote_transaction,
+        },
+        std::{
+            fs::remove_dir_all,
+            iter,
+            sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+        },
+        tempfile::tempdir,
+        test_case::test_case,
+        trees::{tr, Tree},
+    };
+    #[cfg(not(feature = "alpenglow"))]
     use {
         super::*,
         crate::{
@@ -5644,6 +5860,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(not(feature = "alpenglow"))]
     #[test]
     fn test_should_retransmit() {
         let poh_slot = 4;
@@ -6102,6 +6319,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(not(feature = "alpenglow"))]
     #[test]
     fn test_check_propagation_for_start_leader() {
         let mut progress_map = ProgressMap::default();
@@ -6209,6 +6427,7 @@ pub(crate) mod tests {
         ));
     }
 
+    #[cfg(not(feature = "alpenglow"))]
     #[test]
     fn test_check_propagation_skip_propagation_check() {
         let mut progress_map = ProgressMap::default();
@@ -8685,6 +8904,28 @@ pub(crate) mod tests {
         let has_new_vote_been_rooted = true;
         let track_transaction_indexes = false;
 
+        let extra_args;
+
+        #[cfg(not(feature = "alpenglow"))]
+        let mut skipped_slots_info = SkippedSlotsInfo::default();
+        #[cfg(not(feature = "alpenglow"))]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                progress_map: &mut progress,
+                retransmit_slots_sender: &retransmit_slots_sender,
+                skipped_slots_info: &mut skipped_slots_info,
+            };
+        }
+
+        #[cfg(feature = "alpenglow")]
+        let mut cert_pool = CertificatePool::default();
+        #[cfg(feature = "alpenglow")]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                cert_pool: &mut cert_pool,
+            };
+        }
+
         assert!(!ReplayStage::maybe_start_leader(
             my_pubkey,
             bank_forks,
@@ -8692,14 +8933,10 @@ pub(crate) mod tests {
             &leader_schedule_cache,
             &rpc_subscriptions,
             &None,
-            &mut progress,
-            &retransmit_slots_sender,
-            &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
-            #[cfg(feature = "alpenglow")]
-            &mut CertificatePool::default()
+            extra_args,
         ));
     }
 
@@ -9299,8 +9536,10 @@ pub(crate) mod tests {
             rpc_subscriptions,
             ..
         } = replay_blockstore_components(None, 1, None);
+
         let VoteSimulator {
             bank_forks,
+            #[cfg(not(feature = "alpenglow"))]
             mut progress,
             ..
         } = vote_simulator;
@@ -9345,6 +9584,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let poh_recorder = Arc::new(poh_recorder);
+        #[cfg(not(feature = "alpenglow"))]
         let (retransmit_slots_sender, _) = unbounded();
         let (banking_tracer, _) = BankingTracer::new(None).unwrap();
         // A vote has not technically been rooted, but it doesn't matter for
@@ -9357,6 +9597,26 @@ pub(crate) mod tests {
             poh_recorder.read().unwrap().reached_leader_slot(&my_pubkey),
             PohLeaderStatus::NotReached
         );
+        let extra_args;
+        #[cfg(not(feature = "alpenglow"))]
+        let mut skipped_slots_info = SkippedSlotsInfo::default();
+        #[cfg(not(feature = "alpenglow"))]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                progress_map: &mut progress,
+                retransmit_slots_sender: &retransmit_slots_sender,
+                skipped_slots_info: &mut skipped_slots_info,
+            };
+        }
+
+        #[cfg(feature = "alpenglow")]
+        let mut cert_pool = CertificatePool::default();
+        #[cfg(feature = "alpenglow")]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                cert_pool: &mut cert_pool,
+            };
+        }
         assert!(!ReplayStage::maybe_start_leader(
             &my_pubkey,
             &bank_forks,
@@ -9364,14 +9624,10 @@ pub(crate) mod tests {
             &leader_schedule_cache,
             &rpc_subscriptions,
             &None,
-            &mut progress,
-            &retransmit_slots_sender,
-            &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
-            #[cfg(feature = "alpenglow")]
-            &mut CertificatePool::default()
+            extra_args,
         ));
 
         // Register another slots worth of ticks  with PoH recorder
@@ -9386,6 +9642,26 @@ pub(crate) mod tests {
 
         // We should now start leader for dummy_slot + 1
         let good_slot = dummy_slot + 1;
+        let extra_args;
+        #[cfg(not(feature = "alpenglow"))]
+        let mut skipped_slots_info = SkippedSlotsInfo::default();
+        #[cfg(not(feature = "alpenglow"))]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                progress_map: &mut progress,
+                retransmit_slots_sender: &retransmit_slots_sender,
+                skipped_slots_info: &mut skipped_slots_info,
+            };
+        }
+
+        #[cfg(feature = "alpenglow")]
+        let mut cert_pool = CertificatePool::default();
+        #[cfg(feature = "alpenglow")]
+        {
+            extra_args = MaybeStartLeaderExtraArgs {
+                cert_pool: &mut cert_pool,
+            };
+        }
         assert!(ReplayStage::maybe_start_leader(
             &my_pubkey,
             &bank_forks,
@@ -9393,14 +9669,10 @@ pub(crate) mod tests {
             &leader_schedule_cache,
             &rpc_subscriptions,
             &None,
-            &mut progress,
-            &retransmit_slots_sender,
-            &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
             track_transaction_indexes,
-            #[cfg(feature = "alpenglow")]
-            &mut CertificatePool::default()
+            extra_args
         ));
         // Get the new working bank, which is also the new leader bank/slot
         let working_bank = bank_forks.read().unwrap().working_bank();
