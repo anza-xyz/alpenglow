@@ -1,6 +1,5 @@
-#[cfg(feature = "alpenglow")]
-use std::sync::atomic::Ordering;
 use {
+    solana_feature_set,
     solana_poh::poh_recorder::{BankStart, PohRecorder},
     solana_sdk::{
         clock::{
@@ -9,7 +8,7 @@ use {
         },
         pubkey::Pubkey,
     },
-    std::sync::{Arc, RwLock},
+    std::sync::{atomic::Ordering, Arc, RwLock},
 };
 
 #[derive(Debug, Clone)]
@@ -95,12 +94,19 @@ impl DecisionMaker {
 
     fn bank_start(poh_recorder: &PohRecorder) -> Option<BankStart> {
         poh_recorder.bank_start().filter(|bank_start| {
-            #[cfg(feature = "alpenglow")]
-            let contains_valid_certificate = bank_start
-                .contains_valid_certificate
-                .load(Ordering::Relaxed);
-            #[cfg(not(feature = "alpenglow"))]
-            let contains_valid_certificate = true;
+            let first_alpenglow_slot = bank_start
+                .working_bank
+                .feature_set
+                .activated_slot(&solana_feature_set::alpenglow::id())
+                .unwrap_or(0);
+            let contains_valid_certificate =
+                if bank_start.working_bank.slot() >= first_alpenglow_slot {
+                    bank_start
+                        .contains_valid_certificate
+                        .load(Ordering::Relaxed)
+                } else {
+                    true
+                };
             contains_valid_certificate && bank_start.should_working_bank_still_be_processing_txs()
         })
     }
@@ -122,8 +128,6 @@ impl DecisionMaker {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "alpenglow")]
-    use std::sync::atomic::AtomicBool;
     use {
         super::*,
         core::panic,
@@ -133,7 +137,10 @@ mod tests {
         solana_sdk::clock::NUM_CONSECUTIVE_LEADER_SLOTS,
         std::{
             env::temp_dir,
-            sync::{atomic::Ordering, Arc},
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc,
+            },
             time::Instant,
         },
     };
@@ -142,7 +149,6 @@ mod tests {
     fn test_buffered_packet_decision_bank_start() {
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = BankStart {
-            #[cfg(feature = "alpenglow")]
             contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: bank,
             bank_creation_time: Arc::new(Instant::now()),
@@ -233,12 +239,10 @@ mod tests {
         let my_pubkey1 = solana_pubkey::new_rand();
         let bank = Arc::new(Bank::default_for_tests());
         let bank_start = Some(BankStart {
-            #[cfg(feature = "alpenglow")]
             contains_valid_certificate: Arc::new(AtomicBool::new(false)),
             working_bank: bank.clone(),
             bank_creation_time: Arc::new(Instant::now()),
         });
-        #[cfg(feature = "alpenglow")]
         // No valid certificate, so hold
         assert_matches!(
             DecisionMaker::consume_or_forward_packets(
@@ -251,7 +255,6 @@ mod tests {
             BufferedPacketsDecision::Hold
         );
 
-        #[cfg(feature = "alpenglow")]
         let bank_start = Some(BankStart {
             contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: bank,

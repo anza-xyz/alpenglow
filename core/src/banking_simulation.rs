@@ -487,21 +487,11 @@ impl SimulatorLoop {
                     logger.log_frozen_bank_cost(&bank);
                 }
                 self.retransmit_slots_sender.send(bank.slot()).unwrap();
-                #[cfg(not(feature = "alpenglow"))]
                 update_bank_forks_and_poh_recorder_for_new_tpu_bank(
                     &self.bank_forks,
                     &self.poh_recorder,
                     new_bank,
                     false,
-                );
-                #[cfg(feature = "alpenglow")]
-                update_bank_forks_and_poh_recorder_for_new_tpu_bank(
-                    &self.bank_forks,
-                    &self.poh_recorder,
-                    new_bank,
-                    false,
-                    vec![],
-                    None,
                 );
                 bank = self
                     .bank_forks

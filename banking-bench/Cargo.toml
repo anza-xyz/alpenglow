@@ -32,7 +32,6 @@ solana-version = { workspace = true }
 
 [features]
 dev-context-only-utils = []
-alpenglow = ["solana-core/alpenglow"]
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

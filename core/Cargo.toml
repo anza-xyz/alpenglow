@@ -139,9 +139,6 @@ test-case = { workspace = true }
 sysctl = { workspace = true }
 
 [features]
-alpenglow = [
-    "solana-poh/alpenglow"
-]
 dev-context-only-utils = [
     "solana-perf/dev-context-only-utils",
     "solana-runtime/dev-context-only-utils",

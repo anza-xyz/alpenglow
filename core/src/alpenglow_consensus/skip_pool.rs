@@ -4,6 +4,7 @@ use {
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
         collections::{BTreeMap, HashMap},
+        fmt::Debug,
         ops::RangeInclusive,
     },
     thiserror::Error,
@@ -43,7 +44,7 @@ struct DynamicSegmentTree<T: Ord + Clone + HasStake> {
     tree: BTreeMap<Slot, Vec<T>>, // Single Vec<T> per slot (first occurrence = add, second = remove)
 }
 
-impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
+impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
     /// Initializes an empty dynamic segment tree
     fn new() -> Self {
         Self {
@@ -91,14 +92,13 @@ impl<T: Ord + Clone + HasStake> DynamicSegmentTree<T> {
                     // If the pubkey is already in active_contributors, it's the end of the range
                     accumulated -= active_contributors.remove(&pubkey).unwrap() as f64;
                 }
-            }
-
-            if accumulated >= threshold_stake {
-                if start.is_none() {
-                    start = Some(slot as Slot);
+                if accumulated >= threshold_stake {
+                    if start.is_none() {
+                        start = Some(slot as Slot);
+                    }
+                } else if start.is_some() {
+                    return Some((start.unwrap()..=slot as Slot, contributing_items));
                 }
-            } else if start.is_some() {
-                return Some((start.unwrap()..=slot as Slot, contributing_items));
             }
         }
         None
@@ -250,6 +250,30 @@ mod tests {
         assert_eq!(stored_vote.skip_range, skip_range);
         assert_eq!(stored_vote.skip_transaction, skip_tx);
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(10, 20));
+    }
+
+    #[test]
+    fn test_add_singleton_range() {
+        let mut pool = SkipPool::new();
+        let validator = Pubkey::new_unique();
+        let skip_range = 1..=1;
+        let skip_tx = dummy_transaction();
+        let stake = 70;
+        let total_stake = 100;
+
+        pool.add_vote(
+            &validator,
+            skip_range.clone(),
+            skip_tx.clone(),
+            stake,
+            total_stake,
+        )
+        .unwrap();
+
+        let stored_vote = pool.skips.get(&validator).unwrap();
+        assert_eq!(stored_vote.skip_range, skip_range);
+        assert_eq!(stored_vote.skip_transaction, skip_tx);
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 1));
     }
 
     #[test]

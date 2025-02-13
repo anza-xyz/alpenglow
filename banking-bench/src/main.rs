@@ -574,21 +574,11 @@ fn main() {
 
             let mut insert_time = Measure::start("insert_time");
             assert_matches!(poh_recorder.read().unwrap().bank(), None);
-            #[cfg(not(feature = "alpenglow"))]
             update_bank_forks_and_poh_recorder_for_new_tpu_bank(
                 &bank_forks,
                 &poh_recorder,
                 new_bank,
                 false,
-            );
-            #[cfg(feature = "alpenglow")]
-            update_bank_forks_and_poh_recorder_for_new_tpu_bank(
-                &bank_forks,
-                &poh_recorder,
-                new_bank,
-                false,
-                vec![],
-                None,
             );
             bank = bank_forks.read().unwrap().working_bank_with_scheduler();
             assert_matches!(poh_recorder.read().unwrap().bank(), Some(_));

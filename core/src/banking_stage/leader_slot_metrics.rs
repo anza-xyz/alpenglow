@@ -1088,13 +1088,14 @@ impl LeaderSlotMetricsTracker {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "alpenglow")]
-    use std::sync::atomic::AtomicBool;
     use {
         super::*,
         solana_pubkey::Pubkey,
         solana_runtime::{bank::Bank, genesis_utils::create_genesis_config},
-        std::{mem, sync::Arc},
+        std::{
+            mem,
+            sync::{atomic::AtomicBool, Arc},
+        },
     };
 
     struct TestSlotBoundaryComponents {
@@ -1109,7 +1110,6 @@ mod tests {
         let genesis = create_genesis_config(10);
         let first_bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
         let first_poh_recorder_bank = BankStart {
-            #[cfg(feature = "alpenglow")]
             contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: first_bank.clone(),
             bank_creation_time: Arc::new(Instant::now()),
@@ -1122,7 +1122,6 @@ mod tests {
             first_bank.slot() + 1,
         ));
         let next_poh_recorder_bank = BankStart {
-            #[cfg(feature = "alpenglow")]
             contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: next_bank.clone(),
             bank_creation_time: Arc::new(Instant::now()),

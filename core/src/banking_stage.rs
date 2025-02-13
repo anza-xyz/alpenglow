@@ -40,7 +40,12 @@ use {
         bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::ReplayVoteSender,
     },
-    solana_sdk::{pubkey::Pubkey, timing::AtomicInterval},
+    solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
+    solana_sdk::{
+        pubkey::Pubkey,
+        timing::AtomicInterval,
+        transaction::{MessageHash, SanitizedTransaction, VersionedTransaction},
+    },
     std::{
         cmp, env,
         ops::Deref,
@@ -58,11 +63,6 @@ use {
         },
         transaction_state_container::TransactionStateContainer,
     },
-};
-#[cfg(feature = "alpenglow")]
-use {
-    solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
-    solana_sdk::transaction::{MessageHash, SanitizedTransaction, VersionedTransaction},
 };
 
 // Below modules are pub to allow use by banking_stage bench
@@ -792,9 +792,7 @@ impl BankingStage {
     }
 }
 
-#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-#[cfg(not(feature = "alpenglow"))]
-pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+pub fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
     bank_forks: &RwLock<BankForks>,
     poh_recorder: &RwLock<PohRecorder>,
     tpu_bank: Bank,
@@ -807,15 +805,13 @@ pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
         .set_bank(tpu_bank, track_transaction_indexes);
 }
 
-#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-#[cfg(feature = "alpenglow")]
-pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+pub fn alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank(
     bank_forks: &RwLock<BankForks>,
     poh_recorder: &RwLock<PohRecorder>,
     tpu_bank: Bank,
     track_transaction_indexes: bool,
     notarization_certificate: Vec<VersionedTransaction>,
-    skip_certificate: Option<Vec<VersionedTransaction>>,
+    skip_certificate: Vec<VersionedTransaction>,
 ) -> bool {
     let tpu_bank = bank_forks.write().unwrap().insert(tpu_bank);
     let parent_slot = tpu_bank.parent_slot();
@@ -838,15 +834,13 @@ pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
     }
 
     // Commit the skip certificate if needed
-    if let Some(skip_certificate) = skip_certificate {
-        if !commit_certificate(&poh_bank, poh_recorder, skip_certificate) {
-            error!(
-                "Commit certificate (skip) for leader slot {} with parent {} failed",
-                poh_bank.slot(),
-                parent_slot
-            );
-            return false;
-        }
+    if !commit_certificate(&poh_bank, poh_recorder, skip_certificate) {
+        error!(
+            "Commit certificate (skip) for leader slot {} with parent {} failed",
+            poh_bank.slot(),
+            parent_slot
+        );
+        return false;
     }
     // Enable transaction processing
     poh_bank_start
@@ -855,12 +849,14 @@ pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
     true
 }
 
-#[cfg(feature = "alpenglow")]
 pub fn commit_certificate(
     bank: &Arc<Bank>,
     poh_recorder: &RwLock<PohRecorder>,
     certificate: Vec<VersionedTransaction>,
 ) -> bool {
+    if certificate.is_empty() {
+        return true;
+    }
     let consumer = Consumer::create_consumer(poh_recorder);
     let runtime_transactions: Result<Vec<RuntimeTransaction<SanitizedTransaction>>, _> =
         certificate

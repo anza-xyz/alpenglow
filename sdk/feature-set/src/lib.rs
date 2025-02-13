@@ -928,6 +928,10 @@ pub mod raise_block_limits_to_50m {
     solana_pubkey::declare_id!("5oMCU3JPaFLr8Zr4ct7yFA7jdk6Mw1RmB8K4u9ZbS42z");
 }
 
+pub mod alpenglow {
+    solana_pubkey::declare_id!("5oMCU3JPaFLr8Zr4ct7yFA7jdk6Mw1RmB8K4u9ZbS42z");
+}
+
 lazy_static! {
     /// Map of feature identifiers to user-visible description
     pub static ref FEATURE_NAMES: AHashMap<Pubkey, &'static str> = [
@@ -1155,6 +1159,7 @@ lazy_static! {
         (reserve_minimal_cus_for_builtin_instructions::id(), "Reserve minimal CUs for builtin instructions SIMD-170 #2562"),
         (raise_block_limits_to_50m::id(), "Raise block limit to 50M SIMD-0207"),
         (fix_alt_bn128_multiplication_input_length::id(), "fix alt_bn128 multiplication input length SIMD-0222 #3686"),
+        (alpenglow::id(), "Alpenglow"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()
