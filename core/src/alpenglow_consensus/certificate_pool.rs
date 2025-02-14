@@ -28,7 +28,7 @@ pub enum NewHighestCertificate {
     Finalize(Slot),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Vote {
     Notarize(Slot),
     Skip(RangeInclusive<Slot>),
@@ -36,11 +36,27 @@ pub enum Vote {
 }
 
 impl Vote {
+    pub fn slot(&self) -> Slot {
+        match self {
+            Vote::Notarize(slot) => *slot,
+            Vote::Skip(skip_range) => *skip_range.end(),
+            Vote::Finalize(slot) => *slot,
+        }
+    }
+
     fn certificate_type(&self) -> CertificateType {
         match self {
             Vote::Notarize(_slot) => CertificateType::Notarize,
             Vote::Skip(_skip_range) => CertificateType::Skip,
             Vote::Finalize(_slot) => CertificateType::Finalize,
+        }
+    }
+
+    pub fn skip_range(&self) -> Option<RangeInclusive<Slot>> {
+        match self {
+            Vote::Notarize(_slot) => None,
+            Vote::Skip(skip_range) => Some(skip_range.clone()),
+            Vote::Finalize(_slot) => None,
         }
     }
 
@@ -152,6 +168,13 @@ impl CertificatePool {
         Ok(None)
     }
 
+    pub fn is_notarization_certificate_complete(&self, slot: Slot) -> bool {
+        self.certificates
+            .get(&(slot, CertificateType::Notarize))
+            .map(|certificate| certificate.is_complete())
+            .unwrap_or(false)
+    }
+
     pub fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
         self.certificates
             .get(&(slot, CertificateType::Notarize))
@@ -185,6 +208,14 @@ impl CertificatePool {
 
     pub fn highest_unskipped_certificate_slot(&self) -> Slot {
         self.highest_finalized_slot.max(self.highest_notarized_slot)
+    }
+
+    pub fn highest_notarized_slot(&self) -> Slot {
+        self.highest_notarized_slot
+    }
+
+    pub fn highest_finalized_slot(&self) -> Slot {
+        self.highest_finalized_slot
     }
 
     /// Determines if the leader can start based on notarization and skip certificates.

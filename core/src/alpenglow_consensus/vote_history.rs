@@ -1,7 +1,6 @@
 use {
+    crate::alpenglow_consensus::certificate_pool::Vote,
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey},
-    solana_vote_program::vote_state::VoteTransaction,
-    std::collections::BTreeMap,
     thiserror::Error,
 };
 
@@ -42,13 +41,67 @@ impl VoteHistoryVersions {
     derive(AbiExample),
     frozen_abi(digest = "8ziHa1vA7WG5RCvXiE3g1f2qjSTNa47FB7e2czo7en7a")
 )]
-#[derive(Clone, Serialize, Default, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct VoteHistory {
     pub node_pubkey: Pubkey,
+    pub latest_notarize_vote: Vote,
     // Important to avoid double voting Skip and Finalization for the
-    // same slot
-    pub votes_since_root: BTreeMap<Slot, VoteTransaction>,
+    // same slot.
+    // Not sufficient to track just the latest skip vote because you
+    // can potentially
+    // 1. Vote skip on block X
+    // 2. block X gets notarized
+    // 3. Vote skip on block X + 1
+    // 4. Now you need the skip vote from 1. to avoid voting to finalize
+    // block X, which you wouldn't have if 3. overwrites 1.
+    pub skip_votes: Vec<Vote>,
+    pub latest_finalize_vote: Vote,
     pub root: Slot,
+}
+
+impl VoteHistory {
+    pub fn new(node_pubkey: Pubkey, root: Slot) -> Self {
+        Self {
+            node_pubkey,
+            latest_notarize_vote: Vote::Notarize(0),
+            skip_votes: vec![],
+            latest_finalize_vote: Vote::Finalize(0),
+            root,
+        }
+    }
+
+    pub fn push_skip_vote(&mut self, new_skip_vote: Vote) {
+        let new_skip_range = new_skip_vote.skip_range().unwrap();
+
+        match self.skip_votes.last_mut() {
+            Some(last_vote)
+                if last_vote.skip_range().unwrap().start() == new_skip_range.start() =>
+            {
+                assert!(new_skip_range.end() >= last_vote.skip_range().unwrap().end());
+                // The new vote is a superset of the last vote, so just replace the last vote
+                *last_vote = new_skip_vote;
+            }
+            Some(last_vote) => {
+                // Skip votes must be monotonically increasing
+                assert!(new_skip_range.start() > last_vote.skip_range().unwrap().end());
+                self.skip_votes.push(new_skip_vote);
+            }
+            None => self.skip_votes.push(new_skip_vote),
+        }
+    }
+
+    pub fn is_slot_skipped(&self, slot: Slot) -> bool {
+        !self.skip_votes.iter().any(|vote| {
+            vote.skip_range()
+                .expect("must be a skip vote")
+                .contains(&slot)
+        })
+    }
+
+    pub fn set_root(&mut self, root: Slot) {
+        self.skip_votes
+            .retain(|skip_vote| *skip_vote.skip_range().expect("must be a skip vote").end() > root)
+    }
 }
 
 #[derive(Error, Debug)]
