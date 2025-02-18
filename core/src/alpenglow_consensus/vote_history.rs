@@ -91,7 +91,7 @@ impl VoteHistory {
     }
 
     pub fn is_slot_skipped(&self, slot: Slot) -> bool {
-        !self.skip_votes.iter().any(|vote| {
+        self.skip_votes.iter().any(|vote| {
             vote.skip_range()
                 .expect("must be a skip vote")
                 .contains(&slot)
