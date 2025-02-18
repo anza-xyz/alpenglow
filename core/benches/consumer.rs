@@ -2,14 +2,12 @@
 #![feature(test)]
 
 use {
-    crossbeam_channel::{unbounded, Receiver},
+    crossbeam_channel::Receiver,
     rayon::{
         iter::IndexedParallelIterator,
         prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     },
-    solana_core::banking_stage::{
-        committer::Committer, consumer::Consumer, qos_service::QosService,
-    },
+    solana_core::banking_stage::consumer::Consumer,
     solana_entry::entry::Entry,
     solana_ledger::{
         blockstore::Blockstore,
@@ -81,13 +79,6 @@ fn create_transactions(bank: &Bank, num: usize) -> Vec<RuntimeTransaction<Saniti
         .collect()
 }
 
-fn create_consumer(poh_recorder: &RwLock<PohRecorder>) -> Consumer {
-    let (replay_vote_sender, _replay_vote_receiver) = unbounded();
-    let committer = Committer::new(None, replay_vote_sender, Arc::default());
-    let transaction_recorder = poh_recorder.read().unwrap().new_recorder();
-    Consumer::new(committer, transaction_recorder, QosService::new(0), None)
-}
-
 struct BenchFrame {
     bank: Arc<Bank>,
     _bank_forks: Arc<RwLock<BankForks>>,
@@ -156,7 +147,7 @@ fn bench_process_and_record_transactions(bencher: &mut Bencher, batch_size: usiz
         poh_service,
         signal_receiver: _signal_receiver,
     } = setup();
-    let consumer = create_consumer(&poh_recorder);
+    let consumer = Consumer::from(&*poh_recorder);
     let transactions = create_transactions(&bank, 2_usize.pow(20));
     let mut transaction_iter = transactions.chunks(batch_size);
 
