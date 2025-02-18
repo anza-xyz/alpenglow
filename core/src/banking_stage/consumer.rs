@@ -11,14 +11,15 @@ use {
         unprocessed_transaction_storage::{ConsumeScannerPayload, UnprocessedTransactionStorage},
         BankingStageStats,
     },
+    crossbeam_channel::unbounded,
     itertools::Itertools,
     solana_feature_set as feature_set,
     solana_fee::FeeFeatures,
     solana_ledger::token_balances::collect_token_balances,
     solana_measure::{measure::Measure, measure_us},
     solana_poh::poh_recorder::{
-        BankStart, PohRecorderError, RecordTransactionsSummary, RecordTransactionsTimings,
-        TransactionRecorder,
+        BankStart, PohRecorder, PohRecorderError, RecordTransactionsSummary,
+        RecordTransactionsTimings, TransactionRecorder,
     },
     solana_runtime::{
         bank::{Bank, LoadAndExecuteTransactionsOutput},
@@ -42,7 +43,7 @@ use {
     solana_timings::ExecuteTimings,
     std::{
         num::Saturating,
-        sync::{atomic::Ordering, Arc},
+        sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
 };
@@ -106,6 +107,18 @@ impl Consumer {
             qos_service,
             log_messages_bytes_limit,
         }
+    }
+
+    pub fn create_consumer(poh_recorder: &RwLock<PohRecorder>) -> Consumer {
+        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let committer = Committer::new(None, replay_vote_sender, Arc::default());
+        let transaction_recorder: TransactionRecorder = poh_recorder.read().unwrap().new_recorder();
+        Consumer::new(
+            committer,
+            transaction_recorder,
+            QosService::new(u32::MAX),
+            None,
+        )
     }
 
     pub fn consume_buffered_packets(
@@ -280,7 +293,7 @@ impl Consumer {
     ///
     /// Returns the number of transactions successfully processed by the bank, which may be less
     /// than the total number if max PoH height was reached and the bank halted
-    fn process_transactions(
+    pub(crate) fn process_transactions(
         &self,
         bank: &Arc<Bank>,
         bank_creation_time: &Instant,
