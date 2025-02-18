@@ -64,6 +64,7 @@ pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
 pub struct BankStart {
     pub working_bank: Arc<Bank>,
     pub bank_creation_time: Arc<Instant>,
+    pub contains_valid_certificate: Arc<AtomicBool>,
 }
 
 impl BankStart {
@@ -72,6 +73,16 @@ impl BankStart {
             &self.bank_creation_time,
             self.working_bank.ns_per_slot,
         )
+    }
+}
+
+impl From<&WorkingBank> for BankStart {
+    fn from(w: &WorkingBank) -> Self {
+        Self {
+            working_bank: w.bank.clone(),
+            bank_creation_time: w.start.clone(),
+            contains_valid_certificate: w.contains_valid_certificate.clone(),
+        }
     }
 }
 
@@ -234,6 +245,7 @@ pub struct WorkingBank {
     pub min_tick_height: u64,
     pub max_tick_height: u64,
     pub transaction_index: Option<usize>,
+    pub contains_valid_certificate: Arc<AtomicBool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -554,7 +566,11 @@ impl PohRecorder {
         }
     }
 
-    pub fn set_bank(&mut self, bank: BankWithScheduler, track_transaction_indexes: bool) {
+    pub fn set_bank(
+        &mut self,
+        bank: BankWithScheduler,
+        track_transaction_indexes: bool,
+    ) -> BankStart {
         assert!(self.working_bank.is_none());
         self.leader_bank_notifier.set_in_progress(&bank);
         let working_bank = WorkingBank {
@@ -563,7 +579,9 @@ impl PohRecorder {
             bank,
             start: Arc::new(Instant::now()),
             transaction_index: track_transaction_indexes.then_some(0),
+            contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
+        let bank_start = BankStart::from(&working_bank);
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
         if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
@@ -598,6 +616,7 @@ impl PohRecorder {
         // TODO: adjust the working_bank.start time based on number of ticks
         // that have already elapsed based on current tick height.
         let _ = self.flush_cache(false);
+        bank_start
     }
 
     fn clear_bank(&mut self) {
@@ -778,10 +797,7 @@ impl PohRecorder {
     }
 
     pub fn bank_start(&self) -> Option<BankStart> {
-        self.working_bank.as_ref().map(|w| BankStart {
-            working_bank: w.bank.clone(),
-            bank_creation_time: w.start.clone(),
-        })
+        self.working_bank.as_ref().map(BankStart::from)
     }
 
     fn working_bank_end_slot(&self) -> Option<Slot> {
@@ -1028,12 +1044,12 @@ impl PohRecorder {
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false)
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_with_transaction_index_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true)
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true);
     }
 
     #[cfg(feature = "dev-context-only-utils")]

@@ -11,14 +11,15 @@ use {
         vote_storage::{ConsumeScannerPayload, VoteStorage},
         BankingStageStats,
     },
+    crossbeam_channel::unbounded,
     itertools::Itertools,
     solana_feature_set as feature_set,
     solana_fee::FeeFeatures,
     solana_ledger::token_balances::collect_token_balances,
     solana_measure::{measure::Measure, measure_us},
     solana_poh::poh_recorder::{
-        BankStart, PohRecorderError, RecordTransactionsSummary, RecordTransactionsTimings,
-        TransactionRecorder,
+        BankStart, PohRecorder, PohRecorderError, RecordTransactionsSummary,
+        RecordTransactionsTimings, TransactionRecorder,
     },
     solana_runtime::{
         bank::{Bank, LoadAndExecuteTransactionsOutput},
@@ -42,7 +43,7 @@ use {
     solana_timings::ExecuteTimings,
     std::{
         num::Saturating,
-        sync::{atomic::Ordering, Arc},
+        sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
 };
@@ -91,6 +92,20 @@ pub struct Consumer {
     transaction_recorder: TransactionRecorder,
     qos_service: QosService,
     log_messages_bytes_limit: Option<usize>,
+}
+
+impl From<&RwLock<PohRecorder>> for Consumer {
+    fn from(poh_recorder: &RwLock<PohRecorder>) -> Self {
+        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let committer = Committer::new(None, replay_vote_sender, Arc::default());
+        let transaction_recorder: TransactionRecorder = poh_recorder.read().unwrap().new_recorder();
+        Self::new(
+            committer,
+            transaction_recorder,
+            QosService::new(u32::MAX),
+            None,
+        )
+    }
 }
 
 impl Consumer {
@@ -281,7 +296,7 @@ impl Consumer {
     ///
     /// Returns the number of transactions successfully processed by the bank, which may be less
     /// than the total number if max PoH height was reached and the bank halted
-    fn process_transactions(
+    pub(crate) fn process_transactions(
         &self,
         bank: &Arc<Bank>,
         bank_creation_time: &Instant,
