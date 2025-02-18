@@ -1501,6 +1501,7 @@ impl Validator {
             ledger_signal_receiver,
             &rpc_subscriptions,
             &poh_recorder,
+            transaction_recorder.clone(),
             tower,
             config.tower_storage.clone(),
             &leader_schedule_cache,

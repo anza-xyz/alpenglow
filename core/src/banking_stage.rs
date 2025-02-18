@@ -1,9 +1,6 @@
 //! The `banking_stage` processes Transaction messages. It is intended to be used
 //! to construct a software pipeline. The stage uses all available CPU cores and
 //! can do its processing in parallel with signature verification on the GPU.
-
-#[cfg(feature = "dev-context-only-utils")]
-use qualifier_attr::qualifiers;
 use {
     self::{
         committer::Committer,
@@ -38,7 +35,12 @@ use {
         bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::ReplayVoteSender,
     },
-    solana_sdk::{pubkey::Pubkey, timing::AtomicInterval},
+    solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
+    solana_sdk::{
+        pubkey::Pubkey,
+        timing::AtomicInterval,
+        transaction::{MessageHash, SanitizedTransaction, VersionedTransaction},
+    },
     std::{
         cmp, env,
         ops::Deref,
@@ -729,8 +731,7 @@ impl BankingStage {
     }
 }
 
-#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+pub fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
     bank_forks: &RwLock<BankForks>,
     poh_recorder: &RwLock<PohRecorder>,
     tpu_bank: Bank,
@@ -741,6 +742,117 @@ pub(crate) fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
         .write()
         .unwrap()
         .set_bank(tpu_bank, track_transaction_indexes);
+}
+
+pub fn alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank(
+    bank_forks: &RwLock<BankForks>,
+    poh_recorder: &RwLock<PohRecorder>,
+    transaction_recorder: &TransactionRecorder,
+    tpu_bank: Bank,
+    track_transaction_indexes: bool,
+    notarization_certificate: Vec<VersionedTransaction>,
+    skip_certificate: Vec<VersionedTransaction>,
+) -> bool {
+    let tpu_bank = bank_forks.write().unwrap().insert(tpu_bank);
+    let parent_slot = tpu_bank.parent_slot();
+
+    // Transaction processing blocked until certificates are committed first
+    let poh_bank_start = poh_recorder
+        .write()
+        .unwrap()
+        .set_bank(tpu_bank, track_transaction_indexes);
+    let poh_bank = poh_bank_start.working_bank;
+
+    // Commit the notarization certificate
+    if !commit_certificate(&poh_bank, transaction_recorder, notarization_certificate) {
+        error!(
+            "Commit certificate (notarize) for leader slot {} with parent {} failed",
+            poh_bank.slot(),
+            parent_slot
+        );
+        return false;
+    }
+
+    // Commit the skip certificate if needed
+    if !commit_certificate(&poh_bank, transaction_recorder, skip_certificate) {
+        error!(
+            "Commit certificate (skip) for leader slot {} with parent {} failed",
+            poh_bank.slot(),
+            parent_slot
+        );
+        return false;
+    }
+    // Enable transaction processing
+    poh_bank_start
+        .contains_valid_certificate
+        .store(true, Ordering::Relaxed);
+    true
+}
+
+pub fn commit_certificate(
+    bank: &Arc<Bank>,
+    transaction_recorder: &TransactionRecorder,
+    certificate: Vec<VersionedTransaction>,
+) -> bool {
+    if certificate.is_empty() {
+        return true;
+    }
+    let consumer = Consumer::from(transaction_recorder);
+    let runtime_transactions: Result<Vec<RuntimeTransaction<SanitizedTransaction>>, _> =
+        certificate
+            .into_iter()
+            .map(|versioned_tx| {
+                // Short circuits on first error because
+                // transactions in the certificate need to
+                // be guaranteed to not fail
+                RuntimeTransaction::try_create(
+                    versioned_tx,
+                    MessageHash::Compute,
+                    None,
+                    &**bank,
+                    bank.get_reserved_account_keys(),
+                )
+            })
+            .collect();
+
+    //TODO: guarantee these transactions don't fail
+    if let Err(e) = runtime_transactions {
+        error!(
+            "Error in bank {} creating runtime transaction in certificate {:?}",
+            bank.slot(),
+            e
+        );
+        return false;
+    }
+
+    let runtime_transactions = runtime_transactions.unwrap();
+    let summary = consumer.process_transactions(bank, &Instant::now(), &runtime_transactions);
+
+    if summary.reached_max_poh_height {
+        datapoint_error!(
+            "vote_certiificate_commit_failure",
+            ("error", "slot took too long to ingest votes", String),
+            ("slot", bank.slot(), i64)
+        );
+        // TODO: check if 2/3 of the stake landed, otherwise return false
+        return false;
+    }
+
+    if summary.error_counters.total.0 != 0 {
+        datapoint_error!(
+            "vote_certiificate_commit_failure",
+            (
+                "error",
+                format!("{} errors occurred", summary.error_counters.total.0),
+                String
+            ),
+            ("slot", bank.slot(), i64)
+        );
+        // TODO: check if 2/3 of the stake landed, otherwise return false
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]

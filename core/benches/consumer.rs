@@ -2,14 +2,12 @@
 #![feature(test)]
 
 use {
-    crossbeam_channel::{unbounded, Receiver},
+    crossbeam_channel::Receiver,
     rayon::{
         iter::IndexedParallelIterator,
         prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     },
-    solana_core::banking_stage::{
-        committer::Committer, consumer::Consumer, qos_service::QosService,
-    },
+    solana_core::banking_stage::consumer::Consumer,
     solana_entry::entry::Entry,
     solana_ledger::{
         blockstore::Blockstore,
