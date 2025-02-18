@@ -7,6 +7,8 @@ use {
     solana_entry::poh::Poh,
     solana_measure::{measure::Measure, measure_us},
     solana_poh_config::PohConfig,
+    solana_runtime::bank::Bank,
+    solana_sdk::clock::DEFAULT_MS_PER_SLOT,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -16,6 +18,11 @@ use {
         time::{Duration, Instant},
     },
 };
+
+pub struct CurrentLeaderBank {
+    bank: Arc<Bank>,
+    start: Instant,
+}
 
 pub struct PohService {
     tick_producer: JoinHandle<()>,
@@ -110,17 +117,17 @@ impl PohService {
                 if poh_config.hashes_per_tick.is_none() {
                     if poh_config.target_tick_count.is_none() {
                         Self::low_power_tick_producer(
-                            poh_recorder,
+                            poh_recorder.clone(),
                             &poh_config,
                             &poh_exit,
-                            record_receiver,
+                            record_receiver.clone(),
                         );
                     } else {
                         Self::short_lived_low_power_tick_producer(
-                            poh_recorder,
+                            poh_recorder.clone(),
                             &poh_config,
                             &poh_exit,
-                            record_receiver,
+                            record_receiver.clone(),
                         );
                     }
                 } else {
@@ -131,17 +138,39 @@ impl PohService {
                         core_affinity::set_for_current(cores[pinned_cpu_core]);
                     }
                     Self::tick_producer(
-                        poh_recorder,
+                        poh_recorder.clone(),
                         &poh_exit,
                         ticks_per_slot,
                         hashes_per_batch,
-                        record_receiver,
+                        record_receiver.clone(),
                         Self::target_ns_per_tick(
                             ticks_per_slot,
                             poh_config.target_tick_duration.as_nanos() as u64,
                         ),
                     );
                 }
+
+                // Migrate to alpenglow PoH
+                if !poh_exit.load(Ordering::Relaxed)
+                    // Should be set by replay_stage after it sees a notarized
+                    // block in the new aspenglow epoch
+                    && poh_recorder.read().unwrap().is_aspenglow_enabled
+                {
+                    info!("Migrating poh service to alpenglow tick producer");
+                    // Important this is called *before* any new aspenglow
+                    // leaders call `set_bank()`, otherwise, the old PoH
+                    // tick producer will still tick in that aspenglow bank
+                    //
+                    // TODO: Can essentailly replace this with no ticks
+                    // once we properly remove poh/entry verification in replay
+                    {
+                        let mut w_poh_recorder = poh_recorder.write().unwrap();
+                        w_poh_recorder.migrate_poh_to_alpenglow();
+                        w_poh_recorder.is_poh_service_migrated = true;
+                    }
+                    Self::alpenglow_tick_producer(poh_recorder, &poh_exit, record_receiver);
+                }
+                //}
                 poh_exit.store(true, Ordering::Relaxed);
             })
             .unwrap();
@@ -158,6 +187,65 @@ impl PohService {
             0
         };
         target_tick_duration_ns.saturating_sub(adjustment_per_tick)
+    }
+
+    fn alpenglow_tick_producer(
+        poh_recorder: Arc<RwLock<PohRecorder>>,
+        poh_exit: &AtomicBool,
+        record_receiver: Receiver<Record>,
+    ) {
+        info!("starting alpenglow tick producer");
+        let mut current_leader_bank = None;
+        let mut current_slot_time = Duration::from_millis(DEFAULT_MS_PER_SLOT);
+        let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
+        while !poh_exit.load(Ordering::Relaxed) {
+            // Wait for a new leader bank to be set in PohRecorder
+            let leader_bank = leader_bank_notifier
+                .get_or_wait_for_in_progress(Duration::from_millis(50))
+                .upgrade();
+
+            if let Some(leader_bank) = leader_bank {
+                // Only start the clock after we set the bank
+                if Some(leader_bank.slot())
+                    != current_leader_bank.as_ref().map(
+                        |current_leader_bank: &CurrentLeaderBank| current_leader_bank.bank.slot(),
+                    )
+                {
+                    current_leader_bank = Some(CurrentLeaderBank {
+                        bank: leader_bank.clone(),
+                        // By this point the leader should have committed their certificates,
+                        // so it's safe to start the timer
+                        start: Instant::now(),
+                    });
+                    info!("current ns per slot: {}", leader_bank.ns_per_slot);
+                    current_slot_time = Duration::from_nanos(leader_bank.ns_per_slot as u64);
+                }
+            }
+
+            if let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank {
+                Self::read_record_receiver_and_process(
+                    &poh_recorder,
+                    &record_receiver,
+                    current_slot_time,
+                );
+                let remaining_slot_time = current_slot_time.saturating_sub(start.elapsed());
+                if remaining_slot_time.is_zero() {
+                    // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
+                    // will properly increment the tick_height to max_tick_height.
+                    // TODO: make sure replay verification can handle not having all the ticks
+                    bank.set_tick_height(bank.max_tick_height() - 1);
+                    // Write the single tick for this slot
+                    // TODO: handle migration slot because we need to provide the PoH
+                    // for slots from the previous epoch, but `tick_alpenglow()` will
+                    // delete those ticks from the cache
+                    poh_recorder
+                        .write()
+                        .unwrap()
+                        .tick_alpenglow(bank.max_tick_height());
+                    current_leader_bank = None;
+                }
+            }
+        }
     }
 
     fn low_power_tick_producer(
@@ -178,7 +266,12 @@ impl PohService {
             );
             if remaining_tick_time.is_zero() {
                 last_tick = Instant::now();
-                poh_recorder.write().unwrap().tick();
+                let mut w_poh_recorder = poh_recorder.write().unwrap();
+                w_poh_recorder.tick();
+                if w_poh_recorder.is_aspenglow_enabled {
+                    info!("exiting tick_producer because alpenglow enabled");
+                    break;
+                }
             }
         }
     }
@@ -352,6 +445,10 @@ impl PohService {
                     let mut poh_recorder_l = poh_recorder.write().unwrap();
                     lock_time.stop();
                     timing.total_lock_time_ns += lock_time.as_ns();
+                    if poh_recorder_l.is_aspenglow_enabled {
+                        info!("exiting tick_producer because alpenglow enabled");
+                        break;
+                    }
                     let mut tick_time = Measure::start("tick");
                     poh_recorder_l.tick();
                     tick_time.stop();

@@ -318,6 +318,8 @@ pub struct PohRecorder {
     delay_leader_block_for_pending_fork: bool,
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
+    pub is_aspenglow_enabled: bool,
+    pub is_poh_service_migrated: bool,
 }
 
 impl PohRecorder {
@@ -632,11 +634,28 @@ impl PohRecorder {
             ))
     }
 
+    pub fn migrate_poh_to_alpenglow(&mut self) {
+        self.tick_cache = vec![];
+        {
+            let mut poh = self.poh.lock().unwrap();
+            // sets PoH to low power mode
+            let hashes_per_tick = None;
+            let current_hash = poh.hash;
+            info!("migrating poh to low power mode");
+            poh.reset(current_hash, hashes_per_tick);
+        }
+    }
+
     fn reset_poh(&mut self, reset_bank: Arc<Bank>, reset_start_bank: bool) {
         let blockhash = reset_bank.last_blockhash();
+        let hashes_per_tick = if self.is_poh_service_migrated {
+            None
+        } else {
+            *reset_bank.hashes_per_tick()
+        };
         let poh_hash = {
             let mut poh = self.poh.lock().unwrap();
-            poh.reset(blockhash, *reset_bank.hashes_per_tick());
+            poh.reset(blockhash, hashes_per_tick);
             poh.hash
         };
         info!(
@@ -879,6 +898,34 @@ impl PohRecorder {
         }
     }
 
+    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
+        let (poh_entry, tick_lock_contention_us) = measure_us!({
+            let mut poh_l = self.poh.lock().unwrap();
+            let poh_entry = poh_l.tick();
+            poh_entry
+        });
+        self.tick_lock_contention_us += tick_lock_contention_us;
+
+        if let Some(poh_entry) = poh_entry {
+            self.tick_height = slot_max_tick_height;
+            self.report_poh_timing_point();
+
+            // Should be empty in most cases, but reset just to be safe
+            self.tick_cache = vec![];
+            self.tick_cache.push((
+                Entry {
+                    num_hashes: poh_entry.num_hashes,
+                    hash: poh_entry.hash,
+                    transactions: vec![],
+                },
+                self.tick_height,
+            ));
+
+            let (_flush_res, flush_cache_and_tick_us) = measure_us!(self.flush_cache(true));
+            self.flush_cache_tick_us += flush_cache_and_tick_us;
+        }
+    }
+
     pub fn tick(&mut self) {
         let ((poh_entry, target_time), tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
@@ -1091,6 +1138,8 @@ impl PohRecorder {
                 delay_leader_block_for_pending_fork,
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
+                is_aspenglow_enabled: false,
+                is_poh_service_migrated: false,
             },
             working_bank_receiver,
             record_receiver,
