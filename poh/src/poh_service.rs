@@ -153,13 +153,13 @@ impl PohService {
                 // Migrate to alpenglow PoH
                 if !poh_exit.load(Ordering::Relaxed)
                     // Should be set by replay_stage after it sees a notarized
-                    // block in the new aspenglow epoch
-                    && poh_recorder.read().unwrap().is_aspenglow_enabled
+                    // block in the new alpenglow epoch
+                    && poh_recorder.read().unwrap().is_alpenglow_enabled
                 {
                     info!("Migrating poh service to alpenglow tick producer");
-                    // Important this is called *before* any new aspenglow
+                    // Important this is called *before* any new alpenglow
                     // leaders call `set_bank()`, otherwise, the old PoH
-                    // tick producer will still tick in that aspenglow bank
+                    // tick producer will still tick in that alpenglow bank
                     //
                     // TODO: Can essentailly replace this with no ticks
                     // once we properly remove poh/entry verification in replay
@@ -223,11 +223,6 @@ impl PohService {
             }
 
             if let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank {
-                Self::read_record_receiver_and_process(
-                    &poh_recorder,
-                    &record_receiver,
-                    current_slot_time,
-                );
                 let remaining_slot_time = current_slot_time.saturating_sub(start.elapsed());
                 if remaining_slot_time.is_zero() {
                     // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
@@ -244,6 +239,11 @@ impl PohService {
                         .tick_alpenglow(bank.max_tick_height());
                     current_leader_bank = None;
                 }
+                Self::read_record_receiver_and_process(
+                    &poh_recorder,
+                    &record_receiver,
+                    remaining_slot_time,
+                );
             }
         }
     }
@@ -268,7 +268,7 @@ impl PohService {
                 last_tick = Instant::now();
                 let mut w_poh_recorder = poh_recorder.write().unwrap();
                 w_poh_recorder.tick();
-                if w_poh_recorder.is_aspenglow_enabled {
+                if w_poh_recorder.is_alpenglow_enabled {
                     info!("exiting tick_producer because alpenglow enabled");
                     break;
                 }
@@ -445,7 +445,7 @@ impl PohService {
                     let mut poh_recorder_l = poh_recorder.write().unwrap();
                     lock_time.stop();
                     timing.total_lock_time_ns += lock_time.as_ns();
-                    if poh_recorder_l.is_aspenglow_enabled {
+                    if poh_recorder_l.is_alpenglow_enabled {
                         info!("exiting tick_producer because alpenglow enabled");
                         break;
                     }

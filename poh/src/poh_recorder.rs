@@ -318,7 +318,7 @@ pub struct PohRecorder {
     delay_leader_block_for_pending_fork: bool,
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
-    pub is_aspenglow_enabled: bool,
+    pub is_alpenglow_enabled: bool,
     pub is_poh_service_migrated: bool,
 }
 
@@ -901,8 +901,7 @@ impl PohRecorder {
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
         let (poh_entry, tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
-            let poh_entry = poh_l.tick();
-            poh_entry
+            poh_l.tick()
         });
         self.tick_lock_contention_us += tick_lock_contention_us;
 
@@ -1138,7 +1137,7 @@ impl PohRecorder {
                 delay_leader_block_for_pending_fork,
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
-                is_aspenglow_enabled: false,
+                is_alpenglow_enabled: false,
                 is_poh_service_migrated: false,
             },
             working_bank_receiver,
