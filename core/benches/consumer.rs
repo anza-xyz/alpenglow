@@ -2,7 +2,7 @@
 #![feature(test)]
 
 use {
-    crossbeam_channel::{unbounded, Receiver},
+    crossbeam_channel::Receiver,
     rayon::{
         iter::IndexedParallelIterator,
         prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
