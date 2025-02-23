@@ -2118,7 +2118,7 @@ impl ReplayStage {
                     PohLeaderStatus::Reached {
                         poh_slot,
                         parent_slot,
-                    } => (poh_slot, parent_slot),
+                    } => (parent_slot, poh_slot),
                     PohLeaderStatus::NotReached => {
                         trace!("{} poh_recorder hasn't reached_leader_slot", my_pubkey);
                         return false;

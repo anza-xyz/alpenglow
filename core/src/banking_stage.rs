@@ -854,7 +854,7 @@ pub fn commit_certificate(
     if certificate.is_empty() {
         return true;
     }
-    let consumer = Consumer::create_consumer(poh_recorder);
+    let consumer = Consumer::from(poh_recorder);
     let runtime_transactions: Result<Vec<RuntimeTransaction<SanitizedTransaction>>, _> =
         certificate
             .into_iter()

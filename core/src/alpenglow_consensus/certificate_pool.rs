@@ -28,6 +28,7 @@ pub enum NewHighestCertificate {
     Finalize(Slot),
 }
 
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Vote {
     Notarize(Slot),

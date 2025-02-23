@@ -98,7 +98,7 @@ impl DecisionMaker {
                 .working_bank
                 .feature_set
                 .activated_slot(&solana_feature_set::alpenglow::id())
-                .unwrap_or(0);
+                .unwrap_or(u64::MAX);
             let contains_valid_certificate =
                 if bank_start.working_bank.slot() >= first_alpenglow_slot {
                     bank_start
@@ -238,23 +238,6 @@ mod tests {
         let my_pubkey = solana_pubkey::new_rand();
         let my_pubkey1 = solana_pubkey::new_rand();
         let bank = Arc::new(Bank::default_for_tests());
-        let bank_start = Some(BankStart {
-            contains_valid_certificate: Arc::new(AtomicBool::new(false)),
-            working_bank: bank.clone(),
-            bank_creation_time: Arc::new(Instant::now()),
-        });
-        // No valid certificate, so hold
-        assert_matches!(
-            DecisionMaker::consume_or_forward_packets(
-                &my_pubkey,
-                || bank_start.clone(),
-                || panic!("should not be called"),
-                || panic!("should not be called"),
-                || panic!("should not be called")
-            ),
-            BufferedPacketsDecision::Hold
-        );
-
         let bank_start = Some(BankStart {
             contains_valid_certificate: Arc::new(AtomicBool::new(true)),
             working_bank: bank,

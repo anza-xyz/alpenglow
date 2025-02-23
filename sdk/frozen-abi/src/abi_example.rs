@@ -617,3 +617,13 @@ impl<T: AbiExample> AbiExample for std::sync::OnceLock<T> {
         Self::from(T::example())
     }
 }
+
+impl<T: AbiExample> AbiExample for std::ops::RangeInclusive<T> {
+    fn example() -> Self {
+        info!(
+            "AbiExample for (RangeInclusive<T>): {}",
+            type_name::<Self>()
+        );
+        T::example()..=T::example()
+    }
+}
