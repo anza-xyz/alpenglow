@@ -1224,6 +1224,8 @@ mod test {
         [
             solana_sdk::feature_set::deprecate_rewards_sysvar::id(),
             solana_sdk::feature_set::disable_fees_sysvar::id(),
+            // TODO: remove this
+            solana_sdk::feature_set::alpenglow::id(),
         ]
         .into_iter()
         .for_each(|feature| {
