@@ -15,7 +15,7 @@ use {
         consensus::tower_storage::TowerStorage,
         validator::{Validator, ValidatorConfig, ValidatorStartProgress, ValidatorTpuConfig},
     },
-    solana_feature_set::FEATURE_NAMES,
+    solana_feature_set::{alpenglow, FEATURE_NAMES},
     solana_geyser_plugin_manager::{
         geyser_plugin_manager::GeyserPluginManager, GeyserPluginManagerRequest,
     },
@@ -866,7 +866,10 @@ impl TestValidator {
             }
         }
         for feature in feature_set {
-            genesis_utils::activate_feature(&mut genesis_config, feature);
+            // TODO remove this
+            if feature != alpenglow::id() {
+                genesis_utils::activate_feature(&mut genesis_config, feature);
+            }
         }
 
         let ledger_path = match &config.ledger_path {
@@ -1221,6 +1224,8 @@ mod test {
         [
             solana_sdk::feature_set::deprecate_rewards_sysvar::id(),
             solana_sdk::feature_set::disable_fees_sysvar::id(),
+            // TODO: remove this
+            solana_sdk::feature_set::alpenglow::id(),
         ]
         .into_iter()
         .for_each(|feature| {

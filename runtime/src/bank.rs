@@ -34,8 +34,6 @@
 //! on behalf of the caller, and a low-level API for when they have
 //! already been signed and verified.
 
-pub static ALPENGLOW: AtomicBool = AtomicBool::new(false);
-
 use {
     crate::{
         account_saver::collect_accounts_to_store,

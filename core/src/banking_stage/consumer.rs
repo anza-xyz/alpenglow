@@ -94,6 +94,20 @@ pub struct Consumer {
     log_messages_bytes_limit: Option<usize>,
 }
 
+impl From<&RwLock<PohRecorder>> for Consumer {
+    fn from(poh_recorder: &RwLock<PohRecorder>) -> Self {
+        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let committer = Committer::new(None, replay_vote_sender, Arc::default());
+        let transaction_recorder: TransactionRecorder = poh_recorder.read().unwrap().new_recorder();
+        Self::new(
+            committer,
+            transaction_recorder,
+            QosService::new(u32::MAX),
+            None,
+        )
+    }
+}
+
 impl Consumer {
     pub fn new(
         committer: Committer,
@@ -107,18 +121,6 @@ impl Consumer {
             qos_service,
             log_messages_bytes_limit,
         }
-    }
-
-    pub fn create_consumer(poh_recorder: &RwLock<PohRecorder>) -> Consumer {
-        let (replay_vote_sender, _replay_vote_receiver) = unbounded();
-        let committer = Committer::new(None, replay_vote_sender, Arc::default());
-        let transaction_recorder: TransactionRecorder = poh_recorder.read().unwrap().new_recorder();
-        Consumer::new(
-            committer,
-            transaction_recorder,
-            QosService::new(u32::MAX),
-            None,
-        )
     }
 
     pub fn consume_buffered_packets(
