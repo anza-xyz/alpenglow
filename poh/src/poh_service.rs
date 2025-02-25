@@ -165,12 +165,11 @@ impl PohService {
                     // once we properly remove poh/entry verification in replay
                     {
                         let mut w_poh_recorder = poh_recorder.write().unwrap();
-                        w_poh_recorder.migrate_poh_to_alpenglow();
-                        w_poh_recorder.is_poh_service_migrated = true;
+                        w_poh_recorder.migrate_to_alpenglow_poh();
+                        w_poh_recorder.use_alpenglow_tick_produer = true;
                     }
                     Self::alpenglow_tick_producer(poh_recorder, &poh_exit, record_receiver);
                 }
-                //}
                 poh_exit.store(true, Ordering::Relaxed);
             })
             .unwrap();
@@ -222,29 +221,31 @@ impl PohService {
                 }
             }
 
-            if let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank {
-                let remaining_slot_time = current_slot_time.saturating_sub(start.elapsed());
-                if remaining_slot_time.is_zero() {
-                    // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
-                    // will properly increment the tick_height to max_tick_height.
-                    // TODO: make sure replay verification can handle not having all the ticks
-                    bank.set_tick_height(bank.max_tick_height() - 1);
-                    // Write the single tick for this slot
-                    // TODO: handle migration slot because we need to provide the PoH
-                    // for slots from the previous epoch, but `tick_alpenglow()` will
-                    // delete those ticks from the cache
-                    poh_recorder
-                        .write()
-                        .unwrap()
-                        .tick_alpenglow(bank.max_tick_height());
-                    current_leader_bank = None;
-                }
-                Self::read_record_receiver_and_process(
-                    &poh_recorder,
-                    &record_receiver,
-                    remaining_slot_time,
-                );
+            let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank else {
+                continue;
+            };
+
+            let remaining_slot_time = current_slot_time.saturating_sub(start.elapsed());
+            if remaining_slot_time.is_zero() {
+                // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
+                // will properly increment the tick_height to max_tick_height.
+                // TODO: make sure replay verification can handle not having all the ticks
+                bank.set_tick_height(bank.max_tick_height() - 1);
+                // Write the single tick for this slot
+                // TODO: handle migration slot because we need to provide the PoH
+                // for slots from the previous epoch, but `tick_alpenglow()` will
+                // delete those ticks from the cache
+                poh_recorder
+                    .write()
+                    .unwrap()
+                    .tick_alpenglow(bank.max_tick_height());
+                current_leader_bank = None;
             }
+            Self::read_record_receiver_and_process(
+                &poh_recorder,
+                &record_receiver,
+                remaining_slot_time,
+            );
         }
     }
 
