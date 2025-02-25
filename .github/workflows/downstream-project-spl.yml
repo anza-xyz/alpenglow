@@ -43,6 +43,7 @@ jobs:
     strategy:
       matrix:
         programs:
+          - alpenglow-vote
           - associated-token-account
           - feature-proposal
           - instruction-padding
