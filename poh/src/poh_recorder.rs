@@ -10,8 +10,6 @@
 //! For Entries:
 //! * recorded entry must be >= WorkingBank::min_tick_height && entry must be < WorkingBank::max_tick_height
 //!
-#[cfg(feature = "dev-context-only-utils")]
-use solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo};
 use {
     crate::{leader_bank_notifier::LeaderBankNotifier, poh_service::PohService},
     crossbeam_channel::{
@@ -36,11 +34,16 @@ use {
         num::Saturating,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Mutex, RwLock,
+            Arc, Mutex,
         },
         time::{Duration, Instant},
     },
     thiserror::Error,
+};
+#[cfg(feature = "dev-context-only-utils")]
+use {
+    solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
+    std::sync::RwLock,
 };
 
 pub const GRACE_TICKS_FACTOR: u64 = 2;
@@ -1087,6 +1090,7 @@ impl PohRecorder {
         poh_config: &PohConfig,
         poh_timing_point_sender: Option<PohTimingSender>,
         is_exited: Arc<AtomicBool>,
+        is_alpenglow_enabled: bool,
     ) -> (Self, Receiver<WorkingBankEntry>, Receiver<Record>) {
         let tick_number = 0;
         let poh = Arc::new(Mutex::new(Poh::new_with_slot_info(
@@ -1137,8 +1141,8 @@ impl PohRecorder {
                 delay_leader_block_for_pending_fork,
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
-                is_alpenglow_enabled: false,
-                use_alpenglow_tick_produer: false,
+                is_alpenglow_enabled,
+                use_alpenglow_tick_produer: is_alpenglow_enabled,
             },
             working_bank_receiver,
             record_receiver,
@@ -1149,6 +1153,7 @@ impl PohRecorder {
     /// * bank - the LastId's queue is updated on `tick` and `record` events
     /// * sender - the Entry channel that outputs to the ledger
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "dev-context-only-utils")]
     pub fn new(
         tick_height: u64,
         last_entry_hash: Hash,
@@ -1161,6 +1166,7 @@ impl PohRecorder {
         is_exited: Arc<AtomicBool>,
     ) -> (Self, Receiver<WorkingBankEntry>, Receiver<Record>) {
         let delay_leader_block_for_pending_fork = false;
+        let is_alpenglow_enabled = false;
         Self::new_with_clear_signal(
             tick_height,
             last_entry_hash,
@@ -1174,6 +1180,7 @@ impl PohRecorder {
             poh_config,
             None,
             is_exited,
+            is_alpenglow_enabled,
         )
     }
 
@@ -1205,6 +1212,7 @@ impl PohRecorder {
     }
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 fn do_create_test_recorder(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1254,6 +1262,7 @@ fn do_create_test_recorder(
     (exit, poh_recorder, poh_service, entry_receiver)
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_test_recorder(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1268,6 +1277,7 @@ pub fn create_test_recorder(
     do_create_test_recorder(bank, blockstore, poh_config, leader_schedule_cache, false)
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_test_recorder_with_index_tracking(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1917,6 +1927,7 @@ mod tests {
                 &PohConfig::default(),
                 None,
                 Arc::new(AtomicBool::default()),
+                false,
             );
         poh_recorder.set_bank_for_test(bank);
         poh_recorder.clear_bank();
