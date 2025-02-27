@@ -808,8 +808,10 @@ impl ClusterInfo {
         let self_pubkey = self.id();
         let mut num_crds_votes = 0;
         let vote_index = {
-            let gossip_crds =
-                self.time_gossip_read_lock("gossip_read_push_vote", &self.stats.push_vote_read);
+            let gossip_crds = self.time_gossip_read_lock(
+                "alpenglow_gossip_read_push_vote",
+                &self.stats.push_vote_read,
+            );
             (0..MAX_LOCKOUT_HISTORY as u8)
                 .filter_map(|ix| {
                     let vote = CrdsValueLabel::Vote(ix, self_pubkey);

@@ -136,7 +136,7 @@ impl VotingService {
             saved_vote_history, ..
         } = &vote_op
         {
-            let mut measure = Measure::start("tower storage save");
+            let mut measure = Measure::start("alpenglow vote history save");
             if let Err(err) = vote_history_storage.store(saved_vote_history) {
                 error!("Unable to save vote history to storage: {:?}", err);
                 std::process::exit(1);
