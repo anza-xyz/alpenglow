@@ -10,6 +10,8 @@
 //! For Entries:
 //! * recorded entry must be >= WorkingBank::min_tick_height && entry must be < WorkingBank::max_tick_height
 //!
+#[cfg(feature = "dev-context-only-utils")]
+use std::sync::RwLock;
 use {
     crate::{leader_bank_notifier::LeaderBankNotifier, poh_service::PohService},
     crossbeam_channel::{
@@ -34,7 +36,7 @@ use {
         num::Saturating,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Mutex, RwLock,
+            Arc, Mutex,
         },
         time::{Duration, Instant},
     },
@@ -334,6 +336,8 @@ pub struct PohRecorder {
     delay_leader_block_for_pending_fork: bool,
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
+    pub is_alpenglow_enabled: bool,
+    pub use_alpenglow_tick_producer: bool,
 }
 
 impl PohRecorder {
@@ -341,6 +345,7 @@ impl PohRecorder {
     /// * bank - the LastId's queue is updated on `tick` and `record` events
     /// * sender - the Entry channel that outputs to the ledger
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "dev-context-only-utils")]
     pub fn new(
         tick_height: u64,
         last_entry_hash: Hash,
@@ -366,6 +371,7 @@ impl PohRecorder {
             poh_config,
             None,
             is_exited,
+            false,
         )
     }
 
@@ -383,6 +389,7 @@ impl PohRecorder {
         poh_config: &PohConfig,
         poh_timing_point_sender: Option<PohTimingSender>,
         is_exited: Arc<AtomicBool>,
+        is_alpenglow_enabled: bool,
     ) -> (Self, Receiver<WorkingBankEntry>, Receiver<Record>) {
         let tick_number = 0;
         let poh = Arc::new(Mutex::new(Poh::new_with_slot_info(
@@ -424,6 +431,8 @@ impl PohRecorder {
                 delay_leader_block_for_pending_fork,
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
+                is_alpenglow_enabled,
+                use_alpenglow_tick_producer: is_alpenglow_enabled,
             },
             working_bank_receiver,
             record_receiver,
@@ -658,9 +667,14 @@ impl PohRecorder {
 
     fn reset_poh(&mut self, reset_bank: Arc<Bank>, reset_start_bank: bool) {
         let blockhash = reset_bank.last_blockhash();
+        let hashes_per_tick = if self.use_alpenglow_tick_producer {
+            None
+        } else {
+            *reset_bank.hashes_per_tick()
+        };
         let poh_hash = {
             let mut poh = self.poh.lock().unwrap();
-            poh.reset(blockhash, *reset_bank.hashes_per_tick());
+            poh.reset(blockhash, hashes_per_tick);
             poh.hash
         };
         info!(
@@ -1112,8 +1126,48 @@ impl PohRecorder {
             self.report_poh_timing_point_by_tick()
         }
     }
+
+    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
+        let (poh_entry, tick_lock_contention_us) = measure_us!({
+            let mut poh_l = self.poh.lock().unwrap();
+            poh_l.tick()
+        });
+        self.metrics.tick_lock_contention_us += tick_lock_contention_us;
+
+        if let Some(poh_entry) = poh_entry {
+            self.tick_height = slot_max_tick_height;
+            self.report_poh_timing_point();
+
+            // Should be empty in most cases, but reset just to be safe
+            self.tick_cache = vec![];
+            self.tick_cache.push((
+                Entry {
+                    num_hashes: poh_entry.num_hashes,
+                    hash: poh_entry.hash,
+                    transactions: vec![],
+                },
+                self.tick_height,
+            ));
+
+            let (_flush_res, flush_cache_and_tick_us) = measure_us!(self.flush_cache(true));
+            self.metrics.flush_cache_tick_us += flush_cache_and_tick_us;
+        }
+    }
+
+    pub fn migrate_to_alpenglow_poh(&mut self) {
+        self.tick_cache = vec![];
+        {
+            let mut poh = self.poh.lock().unwrap();
+            // sets PoH to low power mode
+            let hashes_per_tick = None;
+            let current_hash = poh.hash;
+            info!("migrating poh to low power mode");
+            poh.reset(current_hash, hashes_per_tick);
+        }
+    }
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 fn do_create_test_recorder(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1163,6 +1217,7 @@ fn do_create_test_recorder(
     (exit, poh_recorder, poh_service, entry_receiver)
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_test_recorder(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1177,6 +1232,7 @@ pub fn create_test_recorder(
     do_create_test_recorder(bank, blockstore, poh_config, leader_schedule_cache, false)
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_test_recorder_with_index_tracking(
     bank: Arc<Bank>,
     blockstore: Arc<Blockstore>,
@@ -1829,6 +1885,7 @@ mod tests {
                 &PohConfig::default(),
                 None,
                 Arc::new(AtomicBool::default()),
+                false,
             );
         poh_recorder.set_bank_for_test(bank);
         poh_recorder.clear_bank();
