@@ -376,6 +376,20 @@ impl BankForks {
         Some(bank)
     }
 
+    pub fn highest_frozen_bank(&self) -> Option<Arc<Bank>> {
+        self.banks
+            .values()
+            .filter_map(|bank| {
+                if bank.is_frozen() {
+                    Some(bank.slot())
+                } else {
+                    None
+                }
+            })
+            .max()
+            .and_then(|slot| self.get(slot))
+    }
+
     pub fn highest_slot(&self) -> Slot {
         self.working_slot
     }
