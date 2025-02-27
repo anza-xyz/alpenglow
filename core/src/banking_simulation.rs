@@ -739,6 +739,7 @@ impl BankingSimulator {
             &genesis_config.poh_config,
             None,
             exit.clone(),
+            false,
         );
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let poh_service = PohService::new(
