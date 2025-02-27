@@ -8804,6 +8804,7 @@ dependencies = [
  "solana-poh-config",
  "solana-pubkey",
  "solana-runtime",
+ "solana-sdk",
  "solana-sha256-hasher",
  "solana-signer",
  "solana-system-transaction",
