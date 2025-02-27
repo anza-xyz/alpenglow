@@ -6046,6 +6046,10 @@ impl Bank {
         self.tick_height.load(Relaxed)
     }
 
+    pub fn set_tick_height(&self, tick_height: u64) {
+        self.tick_height.store(tick_height, Relaxed)
+    }
+
     /// Return the inflation parameters of the Bank
     pub fn inflation(&self) -> Inflation {
         *self.inflation.read().unwrap()

@@ -22,6 +22,7 @@ solana-metrics = { workspace = true }
 solana-poh-config = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-runtime = { workspace = true }
+solana-sdk = { workspace = true }
 solana-time-utils = { workspace = true }
 solana-transaction = { workspace = true }
 thiserror = { workspace = true }
