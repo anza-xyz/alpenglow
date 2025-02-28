@@ -1065,10 +1065,7 @@ impl ReplayStage {
                             &mut epoch_slots_frozen_slots,
                             &drop_bank_sender,
                             wait_to_vote_slot,
-                            &mut cert_pool,
-                            &mut vote_history,
                             &mut first_alpenglow_slot,
-                            None,
                         ) {
                             error!("Unable to set root: {e}");
                             return;
@@ -2801,75 +2798,13 @@ impl ReplayStage {
         epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         wait_to_vote_slot: Option<Slot>,
-        cert_pool: &mut CertificatePool,
-        vote_history: &mut VoteHistory,
         first_alpenglow_slot: &mut Option<Slot>,
-        alpenglow_vote: Option<AlpenglowVote>,
     ) -> Result<(), SetRootError> {
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         trace!("handle votable bank {}", bank.slot());
-        let is_alpenglow_vote = bank.slot() >= first_alpenglow_slot.unwrap_or(u64::MAX);
-        let new_root = if is_alpenglow_vote {
-            let vote =
-                alpenglow_vote.expect("If we're in alpenglow mode, a vote must have been passed");
-            let mut generate_time = Measure::start("generate_vote");
-            let vote_tx_result = Self::generate_alpenglow_tx(
-                identity_keypair,
-                bank,
-                vote_account_pubkey,
-                authorized_voter_keypairs,
-                vote.clone(),
-                vote_signatures,
-                *has_new_vote_been_rooted,
-                wait_to_vote_slot,
-            );
-            generate_time.stop();
-            replay_timing.generate_vote_us += generate_time.as_us();
-            let mut new_alpenglow_root = None;
-            if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
-                info!(
-                    "pushing into vote pool {} {}",
-                    bank.epoch_vote_account_stake(vote_account_pubkey),
-                    bank.total_epoch_stake()
-                );
-                if let Ok(maybe_new_cert) = cert_pool.add_vote(
-                    vote.clone(),
-                    vote_tx.clone().into(),
-                    vote_account_pubkey,
-                    bank.epoch_vote_account_stake(vote_account_pubkey),
-                    bank.total_epoch_stake(),
-                ) {
-                    match &vote {
-                        AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
-                        AlpenglowVote::Skip(_) => vote_history.push_skip_vote(vote),
-                        AlpenglowVote::Finalize(_) => vote_history.latest_finalize_vote = vote,
-                    }
-                    let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
-                        .unwrap_or_else(|err| {
-                            error!("Unable to create saved vote history: {:?}", err);
-                            std::process::exit(1);
-                        });
-                    voting_sender
-                        .send(VoteOp::PushAlpenglowVote {
-                            tx: vote_tx,
-                            slot: bank.slot(),
-                            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-                        })
-                        .unwrap_or_else(|err| warn!("Error: {:?}", err));
-                    if let Some(NewHighestCertificate::Finalize(root)) = maybe_new_cert {
-                        vote_history.set_root(root);
-                        new_alpenglow_root = Some(root);
-                    }
-                }
-            }
-            // TODO: Handle that finalization certificate can be received before we
-            // have even frozen/replayed the bank
-            new_alpenglow_root
-        } else {
-            tower.record_bank_vote(bank)
-        };
+        let new_root = tower.record_bank_vote(bank);
 
         if let Some(new_root) = new_root {
             Self::check_and_handle_new_root(
@@ -2894,50 +2829,47 @@ impl ReplayStage {
             )?;
         }
 
-        // TODO: update the commitmment cache
-        if !is_alpenglow_vote {
-            let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
-            // Send (voted) bank along with the updated vote account state for this node, the vote
-            // state is always newer than the one in the bank by definition, because banks can't
-            // contain vote transactions which are voting on its own slot.
-            //
-            // It should be acceptable to aggressively use the vote for our own _local view_ of
-            // commitment aggregation, although it's not guaranteed that the new vote transaction is
-            // observed by other nodes at this point.
-            //
-            // The justification stems from the assumption of the sensible voting behavior from the
-            // consensus subsystem. That's because it means there would be a slashing possibility
-            // otherwise.
-            //
-            // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
-            // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
-            // `finalized` confirmation if a node is materially staked and servicing RPC requests at
-            // the same time for development purposes.
-            let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
-            Self::update_commitment_cache(
-                bank.clone(),
-                bank_forks.read().unwrap().root(),
-                progress.get_fork_stats(bank.slot()).unwrap().total_stake,
-                node_vote_state,
-                lockouts_sender,
-            );
-            update_commitment_cache_time.stop();
-            replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
+        let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
+        // Send (voted) bank along with the updated vote account state for this node, the vote
+        // state is always newer than the one in the bank by definition, because banks can't
+        // contain vote transactions which are voting on its own slot.
+        //
+        // It should be acceptable to aggressively use the vote for our own _local view_ of
+        // commitment aggregation, although it's not guaranteed that the new vote transaction is
+        // observed by other nodes at this point.
+        //
+        // The justification stems from the assumption of the sensible voting behavior from the
+        // consensus subsystem. That's because it means there would be a slashing possibility
+        // otherwise.
+        //
+        // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
+        // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
+        // `finalized` confirmation if a node is materially staked and servicing RPC requests at
+        // the same time for development purposes.
+        let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
+        Self::update_commitment_cache(
+            bank.clone(),
+            bank_forks.read().unwrap().root(),
+            progress.get_fork_stats(bank.slot()).unwrap().total_stake,
+            node_vote_state,
+            lockouts_sender,
+        );
+        update_commitment_cache_time.stop();
+        replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
 
-            Self::push_vote(
-                bank,
-                vote_account_pubkey,
-                identity_keypair,
-                authorized_voter_keypairs,
-                tower,
-                switch_fork_decision,
-                vote_signatures,
-                *has_new_vote_been_rooted,
-                replay_timing,
-                voting_sender,
-                wait_to_vote_slot,
-            );
-        }
+        Self::push_vote(
+            bank,
+            vote_account_pubkey,
+            identity_keypair,
+            authorized_voter_keypairs,
+            tower,
+            switch_fork_decision,
+            vote_signatures,
+            *has_new_vote_been_rooted,
+            replay_timing,
+            voting_sender,
+            wait_to_vote_slot,
+        );
         Ok(())
     }
 
