@@ -159,17 +159,6 @@ impl PohService {
                     && poh_recorder.read().unwrap().is_alpenglow_enabled
                     {
                         info!("Migrating poh service to alpenglow tick producer");
-                        // Important this is called *before* any new alpenglow
-                        // leaders call `set_bank()`, otherwise, the old PoH
-                        // tick producer will still tick in that alpenglow bank
-                        //
-                        // TODO: Can essentailly replace this with no ticks
-                        // once we properly remove poh/entry verification in replay
-                        {
-                            let mut w_poh_recorder = poh_recorder.write().unwrap();
-                            w_poh_recorder.migrate_to_alpenglow_poh();
-                            w_poh_recorder.use_alpenglow_tick_produer = true;
-                        }
                     } else {
                         poh_exit.store(true, Ordering::Relaxed);
                         return;
@@ -177,6 +166,18 @@ impl PohService {
                 }
 
                 // Start alpenglow
+                //
+                // Important this is called *before* any new alpenglow
+                // leaders call `set_bank()`, otherwise, the old PoH
+                // tick producer will still tick in that alpenglow bank
+                //
+                // TODO: Can essentailly replace this with no ticks
+                // once we properly remove poh/entry verification in replay
+                {
+                    let mut w_poh_recorder = poh_recorder.write().unwrap();
+                    w_poh_recorder.migrate_to_alpenglow_poh();
+                    w_poh_recorder.use_alpenglow_tick_producer = true;
+                }
                 Self::alpenglow_tick_producer(poh_recorder, &poh_exit, record_receiver);
                 poh_exit.store(true, Ordering::Relaxed);
             })

@@ -322,7 +322,7 @@ pub struct PohRecorder {
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
     pub is_alpenglow_enabled: bool,
-    pub use_alpenglow_tick_produer: bool,
+    pub use_alpenglow_tick_producer: bool,
 }
 
 impl PohRecorder {
@@ -651,7 +651,7 @@ impl PohRecorder {
 
     fn reset_poh(&mut self, reset_bank: Arc<Bank>, reset_start_bank: bool) {
         let blockhash = reset_bank.last_blockhash();
-        let hashes_per_tick = if self.use_alpenglow_tick_produer {
+        let hashes_per_tick = if self.use_alpenglow_tick_producer {
             None
         } else {
             *reset_bank.hashes_per_tick()
@@ -1142,7 +1142,7 @@ impl PohRecorder {
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
                 is_alpenglow_enabled,
-                use_alpenglow_tick_produer: is_alpenglow_enabled,
+                use_alpenglow_tick_producer: is_alpenglow_enabled,
             },
             working_bank_receiver,
             record_receiver,
