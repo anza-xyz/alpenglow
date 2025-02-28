@@ -1234,7 +1234,12 @@ impl ReplayStage {
                     // Alpenglow specific logic
                     let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
                     assert!(highest_frozen_bank.is_frozen());
-                    if poh_recorder.read().unwrap().start_slot() != highest_frozen_bank.slot() {
+                    let poh_start_slot = poh_recorder.read().unwrap().start_slot();
+                    if poh_start_slot != highest_frozen_bank.slot() {
+                        // It's impossible for start poh_start_slot > highest_frozen_bank
+                        // because we only ever start leader banks from parents that are
+                        // frozen.
+                        assert!(poh_start_slot < highest_frozen_bank.slot());
                         // Important to keep Poh somewhat accurate for
                         // parts of the system relying on PohRecorder::would_be_leader()
 
@@ -2299,9 +2304,13 @@ impl ReplayStage {
             } else {
                 // We are in full alpenglow mode
                 info!(
-                    "maybe_start_leader hucs: {}, hcs: {}",
-                    cert_pool.highest_unskipped_certificate_slot(),
-                    cert_pool.highest_certificate_slot() + 1
+                    "alpenglow maybe_start_leader certficates
+                    higheset notarized slot: {},
+                    highest skip slot: {},
+                    highest finalized slot: {}",
+                    cert_pool.highest_notarized_slot(),
+                    cert_pool.highest_skip_slot(),
+                    cert_pool.highest_finalized_slot(),
                 );
                 (
                     cert_pool.highest_not_skip_certificate_slot(),
