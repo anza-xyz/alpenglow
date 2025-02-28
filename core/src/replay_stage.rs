@@ -88,7 +88,7 @@ use {
     },
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
-    solana_vote_program::vote_state::{TowerSync, VoteState},
+    solana_vote_program::vote_state::TowerSync,
     std::{
         collections::{HashMap, HashSet},
         num::NonZeroUsize,
@@ -691,7 +691,7 @@ impl ReplayStage {
                 .unwrap()
                 .root_bank()
                 .feature_set
-                .activated_slot(&solana_feature_set::alpenglow::id());
+                .activated_slot(&solana_feature_set::secp256k1_program_enabled::id());
 
             let mut is_alpenglow_migration_complete = false;
             if let Some(first_alpenglow_slot) = first_alpenglow_slot {
@@ -2766,7 +2766,7 @@ impl ReplayStage {
                     .unwrap()
                     .root_bank()
                     .feature_set
-                    .activated_slot(&solana_feature_set::alpenglow::id());
+                    .activated_slot(&solana_feature_set::secp256k1_program_enabled::id());
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     info!(
                         "alpenglow feature detected in root bank {}, to be enabled on slot {}",
@@ -5030,10 +5030,8 @@ pub(crate) mod tests {
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         solana_transaction_status::VersionedTransactionWithStatusMeta,
-        solana_vote_program::{
-            vote_state::{self, VoteStateVersions},
-            vote_transaction,
-        },
+        solana_vote::vote_transaction,
+        solana_vote_program::vote_state::{self, TowerSync, VoteStateVersions},
         std::{
             fs::remove_dir_all,
             iter,
