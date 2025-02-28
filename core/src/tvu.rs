@@ -3,6 +3,7 @@
 
 use {
     crate::{
+        alpenglow_consensus::vote_history_storage::FileVoteHistoryStorage,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
@@ -335,6 +336,8 @@ impl Tvu {
             cluster_info.clone(),
             poh_recorder.clone(),
             tower_storage,
+            // TODO: plumb the actual vote history storage,
+            Arc::new(FileVoteHistoryStorage::default()),
             vote_connection_cache.clone(),
         );
 
