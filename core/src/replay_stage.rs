@@ -3558,7 +3558,7 @@ impl ReplayStage {
     ) {
         info!("initiating alpenglow migration from replay");
         poh_recorder.write().unwrap().is_alpenglow_enabled = true;
-        while !poh_recorder.read().unwrap().use_alpenglow_tick_produer {
+        while !poh_recorder.read().unwrap().use_alpenglow_tick_producer {
             // Wait for PohService to migrate to alpenglow tick producer
             thread::sleep(Duration::from_millis(10));
         }
