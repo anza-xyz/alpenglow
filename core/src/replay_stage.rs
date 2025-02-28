@@ -2617,7 +2617,7 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_alpenglow_bank(
-        bank: &Arc<Bank>,
+        vote_bank: &Arc<Bank>,
         bank_forks: &Arc<RwLock<BankForks>>,
         progress: &mut ProgressMap,
         vote_account_pubkey: &Pubkey,
@@ -2648,7 +2648,7 @@ impl ReplayStage {
         let mut generate_time = Measure::start("generate_vote");
         let vote_tx_result = Self::generate_alpenglow_tx(
             identity_keypair,
-            bank,
+            vote_bank,
             vote_account_pubkey,
             authorized_voter_keypairs,
             vote.clone(),
@@ -2662,15 +2662,15 @@ impl ReplayStage {
         if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
             info!(
                 "pushing into vote pool {} {}",
-                bank.epoch_vote_account_stake(vote_account_pubkey),
-                bank.total_epoch_stake()
+                vote_bank.epoch_vote_account_stake(vote_account_pubkey),
+                vote_bank.total_epoch_stake()
             );
             if let Ok(maybe_new_cert) = cert_pool.add_vote(
                 vote.clone(),
                 vote_tx.clone().into(),
                 vote_account_pubkey,
-                bank.epoch_vote_account_stake(vote_account_pubkey),
-                bank.total_epoch_stake(),
+                vote_bank.epoch_vote_account_stake(vote_account_pubkey),
+                vote_bank.total_epoch_stake(),
             ) {
                 match &vote {
                     AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
@@ -2685,7 +2685,7 @@ impl ReplayStage {
                 voting_sender
                     .send(VoteOp::PushAlpenglowVote {
                         tx: vote_tx,
-                        slot: bank.slot(),
+                        slot: vote_bank.slot(),
                         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
                     })
                     .unwrap_or_else(|err| warn!("Error: {:?}", err));
@@ -2698,47 +2698,18 @@ impl ReplayStage {
         // TODO: Handle that finalization certificate can be received before we
         // have even frozen/replayed the bank
         if let Some(new_root) = new_alpenglow_root {
-            // get the root bank before squash
-            let root_bank = bank_forks
-                .read()
-                .unwrap()
-                .get(new_root)
-                .expect("Root bank doesn't exist");
-            let mut rooted_banks = root_bank.parents();
-            let oldest_parent = rooted_banks.last().map(|last| last.parent_slot());
-            rooted_banks.push(root_bank.clone());
-            let rooted_slots: Vec<_> = rooted_banks.iter().map(|bank| bank.slot()).collect();
-            // The following differs from  rooted_slots by including the parent slot of the oldest parent bank.
-            let rooted_slots_with_parents = bank_notification_sender
-                .as_ref()
-                .is_some_and(|sender| sender.should_send_parents)
-                .then(|| {
-                    let mut new_chain = rooted_slots.clone();
-                    new_chain.push(oldest_parent.unwrap_or_else(|| bank.parent_slot()));
-                    new_chain
-                });
-
-            // Call leader schedule_cache.set_root() before blockstore.set_root() because
-            // bank_forks.root is consumed by repair_service to update gossip, so we don't want to
-            // get shreds for repair on gossip before we update leader schedule, otherwise they may
-            // get dropped.
-            leader_schedule_cache.set_root(rooted_banks.last().unwrap());
-            blockstore
-                .set_roots(rooted_slots.iter())
-                .expect("Ledger set roots failed");
-            let highest_super_majority_root = Some(
-                block_commitment_cache
-                    .read()
-                    .unwrap()
-                    .highest_super_majority_root(),
-            );
-            Self::handle_new_root(
+            Self::check_and_handle_new_root(
+                vote_bank,
                 new_root,
                 bank_forks,
                 progress,
+                blockstore,
+                leader_schedule_cache,
                 accounts_background_request_sender,
-                highest_super_majority_root,
+                rpc_subscriptions,
+                block_commitment_cache,
                 heaviest_subtree_fork_choice,
+                bank_notification_sender,
                 duplicate_slots_tracker,
                 duplicate_confirmed_slots,
                 unfrozen_gossip_verified_vote_hashes,
@@ -2747,24 +2718,6 @@ impl ReplayStage {
                 epoch_slots_frozen_slots,
                 drop_bank_sender,
             )?;
-
-            blockstore.slots_stats.mark_rooted(new_root);
-
-            rpc_subscriptions.notify_roots(rooted_slots);
-            if let Some(sender) = bank_notification_sender {
-                sender
-                    .sender
-                    .send(BankNotification::NewRootBank(root_bank))
-                    .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
-
-                if let Some(new_chain) = rooted_slots_with_parents {
-                    sender
-                        .sender
-                        .send(BankNotification::NewRootedChain(new_chain))
-                        .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
-                }
-            }
-            info!("new root {}", new_root);
         }
         // TODO: update the commitmment cache
         Ok(())
@@ -2807,6 +2760,20 @@ impl ReplayStage {
         let new_root = tower.record_bank_vote(bank);
 
         if let Some(new_root) = new_root {
+            if first_alpenglow_slot.is_none() {
+                *first_alpenglow_slot = bank_forks
+                    .read()
+                    .unwrap()
+                    .root_bank()
+                    .feature_set
+                    .activated_slot(&solana_feature_set::alpenglow::id());
+                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
+                    info!(
+                        "alpenglow feature detected in root bank {}, to be enabled on slot {}",
+                        new_root, first_alpenglow_slot
+                    );
+                }
+            }
             Self::check_and_handle_new_root(
                 bank,
                 new_root,
