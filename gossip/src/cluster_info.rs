@@ -768,8 +768,38 @@ impl ClusterInfo {
         }
     }
 
-    /// If there are less than `MAX_LOCKOUT_HISTORY` votes present, returns the next index
-    /// without a vote. If there are `MAX_LOCKOUT_HISTORY` votes:
+    /// Evict the oldest vote if gossip is full
+    fn find_alpenglow_vote_index_to_evict(&self) -> u8 {
+        let self_pubkey = self.id();
+        let mut num_crds_votes = 0;
+        let vote_index = {
+            let gossip_crds = self.time_gossip_read_lock(
+                "alpenglow_gossip_read_push_vote",
+                &self.stats.push_vote_read,
+            );
+            (0..MAX_VOTES)
+                .filter_map(|ix| {
+                    let vote = CrdsValueLabel::Vote(ix, self_pubkey);
+                    let vote: &CrdsData = gossip_crds.get(&vote)?;
+                    num_crds_votes += 1;
+                    match &vote {
+                        CrdsData::Vote(_, vote) => Some((vote.wallclock, ix)),
+                        _ => panic!("this should not happen!"),
+                    }
+                })
+                .min() // Boot the oldest evicted vote by wallclock.
+                .map(|(_ /*wallclock*/, ix)| ix)
+        };
+        if num_crds_votes < MAX_VOTES {
+            // Do not evict if there is space in crds
+            num_crds_votes
+        } else {
+            vote_index.expect("must exist unless CrdsValueLabel was deleted")
+        }
+    }
+
+    /// If there are less than `MAX_VOTES` votes present, returns the next index
+    /// without a vote. If there are `MAX_VOTES` votes:
     /// - Finds the oldest wallclock vote and returns its index
     /// - Otherwise returns the total amount of observed votes
     ///
@@ -810,6 +840,12 @@ impl ClusterInfo {
         } else {
             vote_index
         }
+    }
+
+    pub fn push_alpenglow_vote(&self, vote: Transaction) {
+        let self_keypair = self.keypair();
+        let vote_index = self.find_alpenglow_vote_index_to_evict();
+        self.push_vote_at_index(vote, vote_index, &self_keypair);
     }
 
     pub fn push_vote(&self, tower: &[Slot], vote: Transaction) {

@@ -3,6 +3,7 @@ use {
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
         next_leader::upcoming_leader_tpu_vote_sockets,
     },
+    agave_votor::vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
     bincode::serialize,
     crossbeam_channel::Receiver,
     solana_client::connection_cache::ConnectionCache,
@@ -27,6 +28,11 @@ pub enum VoteOp {
         tower_slots: Vec<Slot>,
         saved_tower: SavedTowerVersions,
     },
+    PushAlpenglowVote {
+        tx: Transaction,
+        slot: Slot,
+        saved_vote_history: SavedVoteHistoryVersions,
+    },
     RefreshVote {
         tx: Transaction,
         last_voted_slot: Slot,
@@ -37,6 +43,7 @@ impl VoteOp {
     fn tx(&self) -> &Transaction {
         match self {
             VoteOp::PushVote { tx, .. } => tx,
+            VoteOp::PushAlpenglowVote { tx, .. } => tx,
             VoteOp::RefreshVote { tx, .. } => tx,
         }
     }
@@ -84,21 +91,21 @@ impl VotingService {
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: Arc<RwLock<PohRecorder>>,
         tower_storage: Arc<dyn TowerStorage>,
+        vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
-            .spawn({
-                move || {
-                    for vote_op in vote_receiver.iter() {
-                        Self::handle_vote(
-                            &cluster_info,
-                            &poh_recorder,
-                            tower_storage.as_ref(),
-                            vote_op,
-                            connection_cache.clone(),
-                        );
-                    }
+            .spawn(move || {
+                for vote_op in vote_receiver.iter() {
+                    Self::handle_vote(
+                        &cluster_info,
+                        &poh_recorder,
+                        tower_storage.as_ref(),
+                        vote_history_storage.as_ref(),
+                        vote_op,
+                        connection_cache.clone(),
+                    );
                 }
             })
             .unwrap();
@@ -109,6 +116,7 @@ impl VotingService {
         cluster_info: &ClusterInfo,
         poh_recorder: &RwLock<PohRecorder>,
         tower_storage: &dyn TowerStorage,
+        vote_history_storage: &dyn VoteHistoryStorage,
         vote_op: VoteOp,
         connection_cache: Arc<ConnectionCache>,
     ) {
@@ -122,6 +130,19 @@ impl VotingService {
             trace!("{measure}");
         }
 
+        if let VoteOp::PushAlpenglowVote {
+            saved_vote_history, ..
+        } = &vote_op
+        {
+            let mut measure = Measure::start("alpenglow vote history save");
+            if let Err(err) = vote_history_storage.store(saved_vote_history) {
+                error!("Unable to save vote history to storage: {err:?}");
+                std::process::exit(1);
+            }
+            measure.stop();
+            trace!("{measure}");
+        }
+
         // Attempt to send our vote transaction to the leaders for the next few
         // slots. From the current slot to the forwarding slot offset
         // (inclusive).
@@ -129,10 +150,21 @@ impl VotingService {
             FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET.saturating_add(1);
         #[cfg(test)]
         static_assertions::const_assert_eq!(UPCOMING_LEADER_FANOUT_SLOTS, 3);
+        const UPCOMING_LEADER_ALPENGLOW_FANOUT_SLOTS: u64 = 20;
+
+        let leader_fanout = {
+            match &vote_op {
+                // Alpenglow relies on leaders to propagate votes otherwise we have to rely
+                // on gossip, especially true for skip votes
+                VoteOp::PushAlpenglowVote { .. } => UPCOMING_LEADER_ALPENGLOW_FANOUT_SLOTS,
+                _ => UPCOMING_LEADER_FANOUT_SLOTS,
+            }
+        };
+
         let upcoming_leader_sockets = upcoming_leader_tpu_vote_sockets(
             cluster_info,
             poh_recorder,
-            UPCOMING_LEADER_FANOUT_SLOTS,
+            leader_fanout,
             connection_cache.protocol(),
         );
 
@@ -155,6 +187,10 @@ impl VotingService {
                 tx, tower_slots, ..
             } => {
                 cluster_info.push_vote(&tower_slots, tx);
+            }
+            VoteOp::PushAlpenglowVote { tx, .. } => {
+                // TODO: Test that no important votes are overwritten
+                cluster_info.push_alpenglow_vote(tx);
             }
             VoteOp::RefreshVote {
                 tx,

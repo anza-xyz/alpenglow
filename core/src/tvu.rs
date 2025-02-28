@@ -28,7 +28,7 @@ use {
         consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
+        vote_history_storage::{FileVoteHistoryStorage, VoteHistoryStorage},
         voting_service::{VotingService as BLSVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
@@ -529,6 +529,8 @@ impl Tvu {
             cluster_info.clone(),
             poh_recorder.clone(),
             tower_storage,
+            // TODO: plumb the actual vote history storage,
+            Arc::new(FileVoteHistoryStorage::default()),
             vote_connection_cache.clone(),
         );
 
