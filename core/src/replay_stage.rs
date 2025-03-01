@@ -2255,6 +2255,10 @@ impl ReplayStage {
             assert!(parent_bank.is_frozen());
         }
 
+        if !parent_bank.is_frozen() {
+            return false;
+        }
+        
         if !parent_bank.is_startup_verification_complete() {
             info!("startup verification incomplete, so skipping my leader slot");
             return false;
