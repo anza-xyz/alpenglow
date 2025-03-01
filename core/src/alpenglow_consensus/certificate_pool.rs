@@ -4,7 +4,6 @@ use {
         vote_certificate::{self, VoteCertificate},
         Stake,
     },
-    solana_frozen_abi::abi_example::AbiExample,
     solana_pubkey::Pubkey,
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{collections::BTreeMap, ops::RangeInclusive},
@@ -12,16 +11,6 @@ use {
 };
 
 pub type CertificateId = (Slot, CertificateType);
-
-impl<T: AbiExample> AbiExample for std::ops::RangeInclusive<T> {
-    fn example() -> Self {
-        info!(
-            "AbiExample for (RangeInclusive<T>): {}",
-            type_name::<Self>()
-        );
-        T::example()..=T::example()
-    }
-}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {

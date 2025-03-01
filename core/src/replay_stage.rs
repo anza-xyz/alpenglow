@@ -2674,7 +2674,7 @@ impl ReplayStage {
             ) {
                 match &vote {
                     AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
-                    AlpenglowVote::Skip(_) => vote_history.push_skip_vote(vote),
+                    AlpenglowVote::Skip(..) => vote_history.push_skip_vote(vote),
                     AlpenglowVote::Finalize(_) => vote_history.latest_finalize_vote = vote,
                 }
                 let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
