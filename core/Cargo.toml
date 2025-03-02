@@ -14,6 +14,7 @@ edition = { workspace = true }
 codecov = { repository = "solana-labs/solana", branch = "master", service = "github" }
 
 [dependencies]
+alpenglow-vote = { workspace = true }
 agave-banking-stage-ingress-types = { workspace = true }
 agave-thread-manager = { workspace = true }
 agave-transaction-view = { workspace = true }

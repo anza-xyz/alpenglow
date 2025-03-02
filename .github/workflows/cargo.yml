@@ -1,4 +1,6 @@
 name: Cargo
+with:
+  token: ${{ secrets.AG_PAT }}
 
 on:
   push:

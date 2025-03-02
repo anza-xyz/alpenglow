@@ -4,9 +4,11 @@ use {
         vote_certificate::{self, VoteCertificate},
         Stake,
     },
+    alpenglow_vote::vote::Vote,
+    itertools::Either,
     solana_pubkey::Pubkey,
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
-    std::{collections::BTreeMap, ops::RangeInclusive},
+    std::collections::BTreeMap,
     thiserror::Error,
 };
 
@@ -28,44 +30,6 @@ pub enum NewHighestCertificate {
     Finalize(Slot),
 }
 
-#[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub enum Vote {
-    Notarize(Slot),
-    Skip(Slot, Slot),
-    Finalize(Slot),
-}
-
-impl Vote {
-    pub fn slot(&self) -> Slot {
-        match self {
-            Vote::Notarize(slot) => *slot,
-            Vote::Skip(_start, end) => *end,
-            Vote::Finalize(slot) => *slot,
-        }
-    }
-
-    fn certificate_type(&self) -> CertificateType {
-        match self {
-            Vote::Notarize(_slot) => CertificateType::Notarize,
-            Vote::Skip(_start, _end) => CertificateType::Skip,
-            Vote::Finalize(_slot) => CertificateType::Finalize,
-        }
-    }
-
-    pub fn skip_range(&self) -> Option<RangeInclusive<Slot>> {
-        match self {
-            Vote::Notarize(_slot) => None,
-            Vote::Skip(start, end) => Some(*start..=*end),
-            Vote::Finalize(_slot) => None,
-        }
-    }
-
-    fn is_notarize(&self) -> bool {
-        matches!(self, Vote::Notarize(_slot))
-    }
-}
-
 pub struct StartLeaderCertificates {
     pub notarization_certificate: Vec<VersionedTransaction>,
     pub skip_certificate: Vec<VersionedTransaction>,
@@ -76,6 +40,17 @@ pub enum CertificateType {
     Notarize,
     Skip,
     Finalize,
+}
+
+impl CertificateType {
+    #[inline]
+    fn get_type(vote: &Vote) -> CertificateType {
+        match vote {
+            Vote::Notarize(_) => CertificateType::Notarize,
+            Vote::Finalize(_) => CertificateType::Finalize,
+            Vote::Skip(_) => CertificateType::Skip,
+        }
+    }
 }
 
 pub struct CertificatePool {
@@ -107,17 +82,17 @@ impl CertificatePool {
 
     pub fn add_vote(
         &mut self,
-        vote: Vote,
+        vote: &Vote,
         transaction: VersionedTransaction,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
         total_stake: Stake,
     ) -> Result<Option<NewHighestCertificate>, AddVoteError> {
-        match vote {
-            Vote::Notarize(vote_slot) | Vote::Finalize(vote_slot) => {
+        match vote.voted_slots() {
+            Either::Left(vote_slot) => {
                 let certificate = self
                     .certificates
-                    .entry((vote_slot, vote.certificate_type()))
+                    .entry((vote_slot, CertificateType::get_type(vote)))
                     .or_insert_with(|| VoteCertificate::new(vote_slot));
 
                 certificate.add_vote(
@@ -128,7 +103,7 @@ impl CertificatePool {
                 )?;
 
                 if certificate.is_complete() {
-                    if vote.is_notarize() {
+                    if vote.is_notarization() {
                         let old_highest_notarized_slot = self.highest_notarized_slot;
                         self.highest_notarized_slot = self.highest_notarized_slot.max(vote_slot);
                         if old_highest_notarized_slot != self.highest_notarized_slot {
@@ -147,11 +122,11 @@ impl CertificatePool {
                     }
                 }
             }
-            Vote::Skip(start, end) => {
+            Either::Right(skip_range) => {
                 let old_highest_skip_certificate_slot = self.highest_skip_slot();
                 self.skip_pool.add_vote(
                     validator_vote_key,
-                    start..=end,
+                    skip_range,
                     transaction,
                     validator_stake,
                     total_stake,
@@ -301,7 +276,8 @@ mod tests {
             genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
         },
         solana_sdk::{
-            clock::Slot, pubkey::Pubkey, signer::Signer, transaction::VersionedTransaction,
+            clock::Slot, hash::Hash, pubkey::Pubkey, signer::Signer,
+            transaction::VersionedTransaction,
         },
         std::sync::{Arc, RwLock},
     };
@@ -395,7 +371,7 @@ mod tests {
         // Add skip certifcate
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(first_alpenglow_slot, first_alpenglow_slot),
+                &Vote::new_skip_vote(first_alpenglow_slot, first_alpenglow_slot),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -464,7 +440,7 @@ mod tests {
         // Add skip certifcate
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(first_alpenglow_slot, first_alpenglow_slot),
+                &Vote::new_skip_vote(first_alpenglow_slot, first_alpenglow_slot),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -499,7 +475,7 @@ mod tests {
         // Valid skip certificate for 1-9 exists
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(1, 9),
+                &Vote::new_skip_vote(1, 9),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -540,7 +516,7 @@ mod tests {
         // Valid skip certificate for 1-9 exists
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(1, 9),
+                &Vote::new_skip_vote(1, 9),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -587,7 +563,7 @@ mod tests {
         // Notarize slot 5
         assert_eq!(
             pool.add_vote(
-                Vote::Notarize(5),
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -625,7 +601,7 @@ mod tests {
         // Notarize slot 5
         assert_eq!(
             pool.add_vote(
-                Vote::Notarize(5),
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -667,7 +643,7 @@ mod tests {
         // Notarize slot 5
         assert_eq!(
             pool.add_vote(
-                Vote::Notarize(5),
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -682,7 +658,7 @@ mod tests {
         // Valid skip certificate for 6-9 exists
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(6, 9),
+                &Vote::new_skip_vote(6, 9),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -722,7 +698,7 @@ mod tests {
         // Notarize slot 5
         assert_eq!(
             pool.add_vote(
-                Vote::Notarize(5),
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -739,7 +715,7 @@ mod tests {
         // before your last notarized slot
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(4, 9),
+                &Vote::new_skip_vote(4, 9),
                 dummy_transaction(),
                 &my_pubkey,
                 my_stake,
@@ -780,17 +756,29 @@ mod tests {
         let mut pool = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
-            .add_vote(Vote::Finalize(5), dummy_transaction(), &pubkey, 60, 100)
+            .add_vote(
+                &Vote::new_finalization_vote(5, Hash::default(), Hash::default()),
+                dummy_transaction(),
+                &pubkey,
+                60,
+                100
+            )
             .unwrap()
             .is_none());
         // Same key voting again shouldn't make a certificate
         assert_matches!(
-            pool.add_vote(Vote::Finalize(5), dummy_transaction(), &pubkey, 60, 100),
+            pool.add_vote(
+                &Vote::new_finalization_vote(5, Hash::default(), Hash::default()),
+                dummy_transaction(),
+                &pubkey,
+                60,
+                100
+            ),
             Err(AddVoteError::AddToCertificatePool(_))
         );
         assert_eq!(
             pool.add_vote(
-                Vote::Finalize(5),
+                &Vote::new_finalization_vote(5, Hash::default(), Hash::default()),
                 dummy_transaction(),
                 &Pubkey::new_unique(),
                 10,
@@ -807,17 +795,29 @@ mod tests {
         let mut pool = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
-            .add_vote(Vote::Notarize(5), dummy_transaction(), &pubkey, 60, 100)
+            .add_vote(
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
+                dummy_transaction(),
+                &pubkey,
+                60,
+                100
+            )
             .unwrap()
             .is_none());
         // Same key voting again shouldn't make a certificate
         assert_matches!(
-            pool.add_vote(Vote::Notarize(5), dummy_transaction(), &pubkey, 60, 100),
+            pool.add_vote(
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
+                dummy_transaction(),
+                &Pubkey::new_unique(),
+                10,
+                100
+            ),
             Err(AddVoteError::AddToCertificatePool(_))
         );
         assert_eq!(
             pool.add_vote(
-                Vote::Notarize(5),
+                &Vote::new_notarization_vote(5, Hash::default(), Hash::default(), None),
                 dummy_transaction(),
                 &Pubkey::new_unique(),
                 10,
@@ -834,17 +834,29 @@ mod tests {
         let mut pool = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
-            .add_vote(Vote::Skip(0, 5), dummy_transaction(), &pubkey, 60, 100)
+            .add_vote(
+                &Vote::new_skip_vote(0, 5),
+                dummy_transaction(),
+                &pubkey,
+                60,
+                100
+            )
             .unwrap()
             .is_none());
         // Same key voting again shouldn't make a certificate
         assert_matches!(
-            pool.add_vote(Vote::Skip(0, 5), dummy_transaction(), &pubkey, 60, 100),
+            pool.add_vote(
+                &Vote::new_skip_vote(0, 5),
+                dummy_transaction(),
+                &pubkey,
+                60,
+                100
+            ),
             Err(AddVoteError::AddToSkipPoolFailed(_))
         );
         assert_eq!(
             pool.add_vote(
-                Vote::Skip(0, 5),
+                &Vote::new_skip_vote(0, 5),
                 dummy_transaction(),
                 &Pubkey::new_unique(),
                 10,

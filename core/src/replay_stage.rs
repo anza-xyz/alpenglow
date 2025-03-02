@@ -2,10 +2,7 @@
 use {
     crate::{
         alpenglow_consensus::{
-            certificate_pool::{
-                CertificatePool, NewHighestCertificate, StartLeaderCertificates,
-                Vote as AlpenglowVote,
-            },
+            certificate_pool::{CertificatePool, NewHighestCertificate, StartLeaderCertificates},
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -42,6 +39,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
+    alpenglow_vote::vote::Vote as AlpenglowVote,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{prelude::*, ThreadPool},
     solana_accounts_db::contains::Contains,
@@ -88,7 +86,6 @@ use {
     },
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
-    solana_vote_program::vote_state::TowerSync,
     std::{
         collections::{HashMap, HashSet},
         num::NonZeroUsize,
@@ -1228,6 +1225,7 @@ impl ReplayStage {
                         retransmit_not_propagated_time.as_us(),
                     );
                 } else {
+                    // TODO(ashwin): refactor this into separate timer loop
                     Self::push_alpenglow_votes(
                         &my_pubkey,
                         &poh_recorder,
@@ -2734,7 +2732,7 @@ impl ReplayStage {
             vote_bank,
             vote_account_pubkey,
             authorized_voter_keypairs,
-            vote.clone(),
+            &vote,
             vote_signatures,
             *has_new_vote_been_rooted,
             wait_to_vote_slot,
@@ -2749,7 +2747,7 @@ impl ReplayStage {
                 vote_bank.total_epoch_stake()
             );
             if let Ok(maybe_new_cert) = cert_pool.add_vote(
-                vote.clone(),
+                &vote,
                 vote_tx.clone().into(),
                 vote_account_pubkey,
                 vote_bank.epoch_vote_account_stake(vote_account_pubkey),
@@ -2928,8 +2926,7 @@ impl ReplayStage {
         bank: &Bank,
         vote_account_pubkey: &Pubkey,
         authorized_voter_keypairs: &[Arc<Keypair>],
-        // TODO: pass in a real vote
-        _alpenglow_vote: AlpenglowVote,
+        vote: &AlpenglowVote,
         vote_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: bool,
         wait_to_vote_slot: Option<Slot>,
@@ -2990,20 +2987,14 @@ impl ReplayStage {
             Some(authorized_voter_keypair) => authorized_voter_keypair,
         };
 
-        // TODO: make a real alpenglow vote transaction
-        let vote = VoteTransaction::from(TowerSync::new_from_slot(bank.slot(), bank.hash()));
-        let vote_ix = SwitchForkDecision::SameFork
-            .to_vote_instruction(
-                vote,
-                vote_account_pubkey,
-                &authorized_voter_keypair.pubkey(),
-            )
-            .expect("Switch failure should not lead to voting");
-
-        let mut vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&node_keypair.pubkey()));
-        let blockhash = bank.last_blockhash();
-        vote_tx.partial_sign(&[node_keypair], blockhash);
-        vote_tx.partial_sign(&[authorized_voter_keypair.as_ref()], blockhash);
+        let vote_ix =
+            vote.to_vote_instruction(*vote_account_pubkey, authorized_voter_keypair.pubkey());
+        let vote_tx = Transaction::new_signed_with_payer(
+            &[vote_ix],
+            Some(&node_keypair.pubkey()),
+            &[node_keypair, authorized_voter_keypair.as_ref()],
+            bank.last_blockhash(),
+        );
 
         if !has_new_vote_been_rooted {
             vote_signatures.push(vote_tx.signatures[0]);
@@ -3402,7 +3393,13 @@ impl ReplayStage {
                 wait_to_vote_slot,
                 cert_pool,
                 vote_history,
-                AlpenglowVote::Notarize(highest_frozen_bank.slot()),
+                // TODO(ashwin): fixup when separating vote loop, use actual timestamp from tracker, check block_id for non leader slots
+                AlpenglowVote::new_notarization_vote(
+                    highest_frozen_bank.slot(),
+                    highest_frozen_bank.block_id().unwrap_or_default(),
+                    highest_frozen_bank.hash(),
+                    None,
+                ),
             ) {
                 error!("Unable to set root: {e}");
                 return;
@@ -3451,7 +3448,12 @@ impl ReplayStage {
                         wait_to_vote_slot,
                         cert_pool,
                         vote_history,
-                        AlpenglowVote::Finalize(highest_notarized_slot),
+                        // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
+                        AlpenglowVote::new_finalization_vote(
+                            highest_frozen_bank.slot(),
+                            highest_frozen_bank.block_id().unwrap(),
+                            highest_frozen_bank.hash(),
+                        ),
                     ) {
                         error!("Unable to set root: {e}");
                         #[allow(unused)]
@@ -3461,7 +3463,7 @@ impl ReplayStage {
             }
         }
 
-        // TODO: handle skip timers and skip votes.
+        // TODO(ashwin): handle skip timers and skip votes.
     }
 
     #[allow(clippy::too_many_arguments)]

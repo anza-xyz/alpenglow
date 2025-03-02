@@ -1,5 +1,5 @@
 use {
-    crate::alpenglow_consensus::certificate_pool::Vote,
+    alpenglow_vote::vote::{FinalizationVote, NotarizationVote, Vote},
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey},
     thiserror::Error,
 };
@@ -63,9 +63,9 @@ impl VoteHistory {
     pub fn new(node_pubkey: Pubkey, root: Slot) -> Self {
         Self {
             node_pubkey,
-            latest_notarize_vote: Vote::Notarize(0),
+            latest_notarize_vote: Vote::from(NotarizationVote::default()),
             skip_votes: vec![],
-            latest_finalize_vote: Vote::Finalize(0),
+            latest_finalize_vote: Vote::from(FinalizationVote::default()),
             root,
         }
     }
