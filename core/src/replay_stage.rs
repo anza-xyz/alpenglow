@@ -770,7 +770,7 @@ impl ReplayStage {
                     let r_bank_forks = bank_forks.read().unwrap();
                     (r_bank_forks.ancestors(), r_bank_forks.descendants())
                 };
-                let did_complete_bank = Self::replay_active_banks(
+                let completed_slots = Self::replay_active_banks(
                     &blockstore,
                     &bank_forks,
                     &my_pubkey,
@@ -805,7 +805,49 @@ impl ReplayStage {
                     first_alpenglow_slot,
                     &mut is_alpenglow_migration_complete,
                 );
+                let did_complete_bank = !completed_slots.is_empty();
                 replay_active_banks_time.stop();
+
+                let new_frozen_root = completed_slots
+                    .into_iter()
+                    .filter(|slot| cert_pool.is_finalized_slot(*slot))
+                    .max();
+                if let Some(new_frozen_root) = new_frozen_root {
+                    let (current_root_slot, new_root_bank) = {
+                        let r_bank_forks = bank_forks.read().unwrap();
+                        (
+                            r_bank_forks.root(),
+                            r_bank_forks.get(new_frozen_root).unwrap(),
+                        )
+                    };
+                    assert!(new_frozen_root > current_root_slot);
+                    if let Err(e) = Self::alpenglow_handle_new_root(
+                        &new_root_bank, // unnecessary here, just filling out a random bank
+                        new_frozen_root,
+                        &bank_forks,
+                        &mut progress,
+                        &blockstore,
+                        &leader_schedule_cache,
+                        &accounts_background_request_sender,
+                        &rpc_subscriptions,
+                        &block_commitment_cache,
+                        &mut heaviest_subtree_fork_choice,
+                        &bank_notification_sender,
+                        &mut duplicate_slots_tracker,
+                        &mut duplicate_confirmed_slots,
+                        &mut unfrozen_gossip_verified_vote_hashes,
+                        &mut has_new_vote_been_rooted,
+                        &mut voted_signatures,
+                        &mut epoch_slots_frozen_slots,
+                        &drop_bank_sender,
+                        &mut cert_pool,
+                    ) {
+                        error!(
+                            "Unable to set alpenglow root {new_frozen_root} after replaying: {e}",
+                        );
+                        return;
+                    }
+                }
 
                 let forks_root = bank_forks.read().unwrap().root();
 
@@ -3799,11 +3841,11 @@ impl ReplayStage {
         first_alpenglow_slot: Option<Slot>,
         poh_recorder: &RwLock<PohRecorder>,
         is_alpenglow_migration_complete: &mut bool,
-    ) -> bool {
+    ) -> Vec<Slot> {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
-        let mut did_complete_bank = false;
         let mut tx_count = 0;
         let mut execute_timings = ExecuteTimings::default();
+        let mut completed_slots = vec![];
         for replay_result in replay_result_vec {
             if replay_result.is_slot_dead {
                 continue;
@@ -3946,7 +3988,7 @@ impl ReplayStage {
                     bank.slot(),
                     r_replay_stats.batch_execute.totals
                 );
-                did_complete_bank = true;
+                completed_slots.push(bank.slot());
                 let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
@@ -4080,7 +4122,7 @@ impl ReplayStage {
             }
         }
 
-        did_complete_bank
+        completed_slots
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4118,7 +4160,7 @@ impl ReplayStage {
         poh_recorder: &RwLock<PohRecorder>,
         first_alpenglow_slot: Option<Slot>,
         is_alpenglow_migration_complete: &mut bool,
-    ) -> bool /* completed a bank */ {
+    ) -> Vec<Slot> /* completed slots */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
         let num_active_banks = active_bank_slots.len();
         trace!(
@@ -4127,7 +4169,7 @@ impl ReplayStage {
             active_bank_slots
         );
         if active_bank_slots.is_empty() {
-            return false;
+            return vec![];
         }
 
         let replay_result_vec = match replay_mode {
