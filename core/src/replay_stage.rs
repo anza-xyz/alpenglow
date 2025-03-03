@@ -2781,6 +2781,7 @@ impl ReplayStage {
         // TODO: Handle that finalization certificate can be received before we
         // have even frozen/replayed the bank
         if let Some(new_root) = new_alpenglow_root {
+            cert_pool.purge(new_root);
             Self::check_and_handle_new_root(
                 vote_bank,
                 new_root,
