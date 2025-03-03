@@ -125,7 +125,7 @@ impl Tvu {
         ledger_signal_receiver: Receiver<bool>,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
-        transaction_recorder: TransactionRecorder,
+        transaction_recorder: &TransactionRecorder,
         tower: Tower,
         tower_storage: Arc<dyn TowerStorage>,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
@@ -501,7 +501,7 @@ pub mod tests {
             .expect("Expected to successfully open ledger");
         let blockstore = Arc::new(blockstore);
         let bank = bank_forks.read().unwrap().working_bank();
-        let (exit, poh_recorder, _transaction_recorder, poh_service, _entry_receiver) =
+        let (exit, poh_recorder, transaction_recorder, poh_service, _entry_receiver) =
             create_test_recorder(bank.clone(), blockstore.clone(), None, None);
         let vote_keypair = Keypair::new();
         let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&bank));
@@ -557,6 +557,7 @@ pub mod tests {
                 OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
             )),
             &poh_recorder,
+            &transaction_recorder,
             Tower::default(),
             Arc::new(FileTowerStorage::default()),
             &leader_schedule_cache,

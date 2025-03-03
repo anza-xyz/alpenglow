@@ -1874,22 +1874,21 @@ mod tests {
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(2);
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
         let (sender, receiver) = bounded(1);
-        let (mut poh_recorder, _entry_receiver) =
-            PohRecorder::new_with_clear_signal(
-                0,
-                Hash::default(),
-                bank.clone(),
-                None,
-                bank.ticks_per_slot(),
-                false,
-                Arc::new(blockstore),
-                Some(sender),
-                &Arc::new(LeaderScheduleCache::default()),
-                &PohConfig::default(),
-                None,
-                Arc::new(AtomicBool::default()),
-                false,
-            );
+        let (mut poh_recorder, _entry_receiver) = PohRecorder::new_with_clear_signal(
+            0,
+            Hash::default(),
+            bank.clone(),
+            None,
+            bank.ticks_per_slot(),
+            false,
+            Arc::new(blockstore),
+            Some(sender),
+            &Arc::new(LeaderScheduleCache::default()),
+            &PohConfig::default(),
+            None,
+            Arc::new(AtomicBool::default()),
+            false,
+        );
         poh_recorder.set_bank_for_test(bank);
         poh_recorder.clear_bank();
         assert!(receiver.try_recv().is_ok());
