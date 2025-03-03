@@ -2781,8 +2781,7 @@ impl ReplayStage {
         // TODO: Handle that finalization certificate can be received before we
         // have even frozen/replayed the bank
         if let Some(new_root) = new_alpenglow_root {
-            cert_pool.purge(new_root);
-            Self::check_and_handle_new_root(
+            Self::alpenglow_handle_new_root(
                 vote_bank,
                 new_root,
                 bank_forks,
@@ -2801,6 +2800,7 @@ impl ReplayStage {
                 vote_signatures,
                 epoch_slots_frozen_slots,
                 drop_bank_sender,
+                cert_pool,
             )?;
         }
         // TODO: update the commitmment cache
@@ -4724,6 +4724,51 @@ impl ReplayStage {
             }
         }
         duplicate_confirmed_forks
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn alpenglow_handle_new_root(
+        vote_bank: &Bank,
+        new_root: Slot,
+        bank_forks: &RwLock<BankForks>,
+        progress: &mut ProgressMap,
+        blockstore: &Blockstore,
+        leader_schedule_cache: &Arc<LeaderScheduleCache>,
+        accounts_background_request_sender: &AbsRequestSender,
+        rpc_subscriptions: &Arc<RpcSubscriptions>,
+        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
+        heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
+        bank_notification_sender: &Option<BankNotificationSenderConfig>,
+        duplicate_slots_tracker: &mut DuplicateSlotsTracker,
+        duplicate_confirmed_slots: &mut DuplicateConfirmedSlots,
+        unfrozen_gossip_verified_vote_hashes: &mut UnfrozenGossipVerifiedVoteHashes,
+        has_new_vote_been_rooted: &mut bool,
+        voted_signatures: &mut Vec<Signature>,
+        epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
+        drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
+        cert_pool: &mut CertificatePool,
+    ) -> Result<(), SetRootError> {
+        cert_pool.purge(new_root);
+        Self::check_and_handle_new_root(
+            vote_bank,
+            new_root,
+            bank_forks,
+            progress,
+            blockstore,
+            leader_schedule_cache,
+            accounts_background_request_sender,
+            rpc_subscriptions,
+            block_commitment_cache,
+            heaviest_subtree_fork_choice,
+            bank_notification_sender,
+            duplicate_slots_tracker,
+            duplicate_confirmed_slots,
+            unfrozen_gossip_verified_vote_hashes,
+            has_new_vote_been_rooted,
+            voted_signatures,
+            epoch_slots_frozen_slots,
+            drop_bank_sender,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
