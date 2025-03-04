@@ -2,7 +2,7 @@ use {
     crate::{
         alpenglow_consensus::vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
-        next_leader::upcoming_leader_tpu_vote_sockets,
+        next_leader::leader_prioritized_tvu_peer_sockets,
     },
     bincode::serialize,
     crossbeam_channel::Receiver,
@@ -145,9 +145,7 @@ impl VotingService {
             trace!("{measure}");
         }
 
-        // Attempt to send our vote transaction to the leaders for the next few
-        // slots. From the current slot to the forwarding slot offset
-        // (inclusive).
+        // Attempt to send our vote transaction to all other validators with valid TPU ports.
         const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
             FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET.saturating_add(1);
         #[cfg(test)]
@@ -163,15 +161,17 @@ impl VotingService {
             }
         };
 
-        let upcoming_leader_sockets = upcoming_leader_tpu_vote_sockets(
+        let tvu_peer_sockets = leader_prioritized_tvu_peer_sockets(
             cluster_info,
             poh_recorder,
+            &connection_cache,
             leader_fanout,
-            connection_cache.protocol(),
         );
 
-        if !upcoming_leader_sockets.is_empty() {
-            for tpu_vote_socket in upcoming_leader_sockets {
+        if tvu_peer_sockets.is_empty() {
+            let _ = send_vote_transaction(cluster_info, vote_op.tx(), None, &connection_cache);
+        } else {
+            for tpu_vote_socket in tvu_peer_sockets {
                 let _ = send_vote_transaction(
                     cluster_info,
                     vote_op.tx(),
@@ -179,9 +179,6 @@ impl VotingService {
                     &connection_cache,
                 );
             }
-        } else {
-            // Send to our own tpu vote socket if we cannot find a leader to send to
-            let _ = send_vote_transaction(cluster_info, vote_op.tx(), None, &connection_cache);
         }
 
         match vote_op {
