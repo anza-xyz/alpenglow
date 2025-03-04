@@ -768,7 +768,7 @@ impl ReplayStage {
                     let r_bank_forks = bank_forks.read().unwrap();
                     (r_bank_forks.ancestors(), r_bank_forks.descendants())
                 };
-                let completed_slots = Self::replay_active_banks(
+                let new_frozen_slots = Self::replay_active_banks(
                     &blockstore,
                     &bank_forks,
                     &my_pubkey,
@@ -803,10 +803,10 @@ impl ReplayStage {
                     first_alpenglow_slot,
                     &mut is_alpenglow_migration_complete,
                 );
-                let did_complete_bank = !completed_slots.is_empty();
+                let did_complete_bank = !new_frozen_slots.is_empty();
                 replay_active_banks_time.stop();
 
-                let new_frozen_finalized_slot = completed_slots
+                let new_frozen_finalized_slot = new_frozen_slots
                     .into_iter()
                     .filter(|slot| cert_pool.is_finalized_slot(*slot))
                     .max();
@@ -3761,7 +3761,7 @@ impl ReplayStage {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
         let mut tx_count = 0;
         let mut execute_timings = ExecuteTimings::default();
-        let mut completed_slots = vec![];
+        let mut new_frozen_slots = vec![];
         for replay_result in replay_result_vec {
             if replay_result.is_slot_dead {
                 continue;
@@ -3904,7 +3904,7 @@ impl ReplayStage {
                     bank.slot(),
                     r_replay_stats.batch_execute.totals
                 );
-                completed_slots.push(bank.slot());
+                new_frozen_slots.push(bank.slot());
                 let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
@@ -4038,7 +4038,7 @@ impl ReplayStage {
             }
         }
 
-        completed_slots
+        new_frozen_slots
     }
 
     #[allow(clippy::too_many_arguments)]
