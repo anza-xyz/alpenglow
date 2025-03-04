@@ -318,26 +318,138 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         BankForks::new_rw_arc(bank0)
     }
-
     #[test]
-    fn test_make_decision_leader_does_not_start_if_notarization_missing() {
-        let pool = CertificatePool::new();
-        let total_stake = 100;
+    fn test_make_decision_direct_child_optimistic() {
+        let cert_pool = CertificatePool::default();
+        let parent_slot = 10;
+        let my_leader_slot = parent_slot + 1; // Direct child
+        let first_alpenglow_slot = 5;
+        let total_stake = 1000;
 
-        // No notarization set, pool is default
-        let parent_slot = 1;
-        let my_leader_slot = 2;
-        let first_alpenglow_slot = 0;
-        let decision = pool.make_start_leader_decision(
+        // Should proceed optimistically without notarization certificate
+        let decision = cert_pool.make_start_leader_decision(
             my_leader_slot,
             parent_slot,
             first_alpenglow_slot,
             total_stake,
         );
-        assert!(
-            decision.is_none(),
-            "Leader should not be allowed to start without notarization"
+
+        assert!(decision.is_some());
+        let certificates = decision.unwrap();
+        assert!(certificates.notarization_certificate.is_empty());
+        assert!(certificates.skip_certificate.is_empty());
+    }
+
+    #[test]
+    fn test_make_decision_non_direct_child_with_skip_cert() -> Result<(), AddVoteError> {
+        let mut cert_pool = CertificatePool::default();
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let parent_slot = 10;
+        let my_leader_slot = parent_slot + 3; // Skip slots in between
+        let first_alpenglow_slot = 5;
+        let total_stake = 1000;
+        let my_stake = 67;
+
+        cert_pool.add_vote(
+            &Vote::new_skip_vote(parent_slot + 1, my_leader_slot - 1),
+            dummy_transaction(),
+            &my_pubkey,
+            my_stake,
+            total_stake,
+        )?;
+
+        // Should proceed with skip certificate even without notarization
+        let decision = cert_pool.make_start_leader_decision(
+            my_leader_slot,
+            parent_slot,
+            first_alpenglow_slot,
+            total_stake,
         );
+
+        assert!(decision.is_some());
+        let certificates = decision.unwrap();
+        assert!(certificates.notarization_certificate.is_empty());
+        assert!(!certificates.skip_certificate.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_decision_non_direct_child_no_certs() {
+        let cert_pool = CertificatePool::default();
+        let parent_slot = 10;
+        let my_leader_slot = parent_slot + 2; // Skip slot in between
+        let first_alpenglow_slot = 5;
+        let total_stake = 1000;
+
+        // Should not proceed without either certificate
+        let decision = cert_pool.make_start_leader_decision(
+            my_leader_slot,
+            parent_slot,
+            first_alpenglow_slot,
+            total_stake,
+        );
+
+        assert!(decision.is_none());
+    }
+
+    #[test]
+    fn test_make_decision_before_alpenglow() {
+        let cert_pool = CertificatePool::default();
+        let parent_slot = 3;
+        let my_leader_slot = parent_slot + 2;
+        let first_alpenglow_slot = 5;
+        let total_stake = 1000;
+
+        // Should proceed with empty certificates before alpenglow
+        let decision = cert_pool.make_start_leader_decision(
+            my_leader_slot,
+            parent_slot,
+            first_alpenglow_slot,
+            total_stake,
+        );
+
+        assert!(decision.is_some());
+        let certificates = decision.unwrap();
+        assert!(certificates.notarization_certificate.is_empty());
+        assert!(certificates.skip_certificate.is_empty());
+    }
+
+    #[test]
+    fn test_make_decision_with_existing_notarization() -> Result<(), AddVoteError> {
+        let mut cert_pool = CertificatePool::default();
+        let my_keypairs = ValidatorVoteKeypairs::new_rand();
+        let my_pubkey = my_keypairs.node_keypair.pubkey();
+        let parent_slot = 10;
+        let my_leader_slot = parent_slot + 1;
+        let first_alpenglow_slot = 5;
+        let total_stake = 1000;
+        let my_stake = 67;
+
+        // Add notarization certificate to the pool
+        cert_pool
+            .add_vote(
+                &Vote::new_notarization_vote(parent_slot, Hash::default(), Hash::default(), None),
+                dummy_transaction(),
+                &my_pubkey,
+                my_stake,
+                total_stake,
+            )
+            .unwrap();
+
+        // Should include existing notarization certificate
+        let decision = cert_pool.make_start_leader_decision(
+            my_leader_slot,
+            parent_slot,
+            first_alpenglow_slot,
+            total_stake,
+        );
+
+        assert!(decision.is_some());
+        let certificates = decision.unwrap();
+        assert!(!certificates.notarization_certificate.is_empty());
+        assert!(certificates.skip_certificate.is_empty());
+        Ok(())
     }
 
     #[test]
