@@ -2,10 +2,7 @@
 use {
     crate::{
         alpenglow_consensus::{
-            certificate_pool::{
-                CertificatePool, NewHighestCertificate, StartLeaderCertificates,
-                Vote as AlpenglowVote,
-            },
+            certificate_pool::{CertificatePool, StartLeaderCertificates, Vote as AlpenglowVote},
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -750,6 +747,7 @@ impl ReplayStage {
                     break;
                 }
 
+                let mut maybe_new_root = None;
                 let mut generate_new_bank_forks_time =
                     Measure::start("generate_new_bank_forks_time");
                 Self::generate_new_bank_forks(
@@ -808,49 +806,16 @@ impl ReplayStage {
                 let did_complete_bank = !completed_slots.is_empty();
                 replay_active_banks_time.stop();
 
-                let new_frozen_root = completed_slots
+                let new_frozen_finalized_slot = completed_slots
                     .into_iter()
                     .filter(|slot| cert_pool.is_finalized_slot(*slot))
                     .max();
-                if let Some(new_frozen_root) = new_frozen_root {
-                    let (current_root_slot, new_root_bank) = {
-                        let r_bank_forks = bank_forks.read().unwrap();
-                        (
-                            r_bank_forks.root(),
-                            r_bank_forks.get(new_frozen_root).unwrap(),
-                        )
-                    };
-                    assert!(new_frozen_root > current_root_slot);
-                    if let Err(e) = Self::alpenglow_handle_new_root(
-                        &new_root_bank, // unnecessary here, just filling out a random bank
-                        new_frozen_root,
-                        &bank_forks,
-                        &mut progress,
-                        &blockstore,
-                        &leader_schedule_cache,
-                        &accounts_background_request_sender,
-                        &rpc_subscriptions,
-                        &block_commitment_cache,
-                        &mut heaviest_subtree_fork_choice,
-                        &bank_notification_sender,
-                        &mut duplicate_slots_tracker,
-                        &mut duplicate_confirmed_slots,
-                        &mut unfrozen_gossip_verified_vote_hashes,
-                        &mut has_new_vote_been_rooted,
-                        &mut voted_signatures,
-                        &mut epoch_slots_frozen_slots,
-                        &drop_bank_sender,
-                        &mut cert_pool,
-                    ) {
-                        error!(
-                            "Unable to set alpenglow root {new_frozen_root} after replaying: {e}",
-                        );
-                        return;
-                    }
+                if let Some(new_frozen_finalized_slot) = new_frozen_finalized_slot {
+                    assert!(new_frozen_finalized_slot > bank_forks.read().unwrap().root());
                 }
+                maybe_new_root = std::cmp::max(maybe_new_root, new_frozen_finalized_slot);
 
                 let forks_root = bank_forks.read().unwrap().root();
-
                 if !is_alpenglow_migration_complete {
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
@@ -1270,38 +1235,69 @@ impl ReplayStage {
                         retransmit_not_propagated_time.as_us(),
                     );
                 } else {
-                    Self::push_alpenglow_votes(
+                    let maybe_finalized_certificate_slot = Self::push_alpenglow_votes(
                         &my_pubkey,
                         &poh_recorder,
                         &bank_forks,
-                        &mut progress,
                         &vote_account,
                         &identity_keypair,
                         &authorized_voter_keypairs,
                         &blockstore,
                         &leader_schedule_cache,
                         &lockouts_sender,
-                        &accounts_background_request_sender,
-                        &rpc_subscriptions,
-                        &block_commitment_cache,
-                        &mut heaviest_subtree_fork_choice,
-                        &bank_notification_sender,
-                        &mut duplicate_slots_tracker,
-                        &mut duplicate_confirmed_slots,
-                        &mut unfrozen_gossip_verified_vote_hashes,
                         &mut voted_signatures,
                         &mut has_new_vote_been_rooted,
                         &mut replay_timing,
                         &voting_sender,
-                        &mut epoch_slots_frozen_slots,
-                        &drop_bank_sender,
                         wait_to_vote_slot,
                         &mut cert_pool,
                         &mut vote_history,
                         &first_alpenglow_slot,
                         is_alpenglow_migration_complete,
                     );
+                    maybe_new_root =
+                        std::cmp::max(maybe_new_root, maybe_finalized_certificate_slot);
                 }
+
+                // Set the new root for alpenglow
+                if let Some(maybe_new_root) = maybe_new_root {
+                    let maybe_new_root_bank = {
+                        let r_bank_forks = bank_forks.read().unwrap();
+                        (maybe_new_root > r_bank_forks.root())
+                            .then_some(r_bank_forks.get(maybe_new_root).unwrap())
+                    };
+                    if let Some(new_root_bank) = maybe_new_root_bank {
+                        if let Err(e) = Self::alpenglow_handle_new_root(
+                            &new_root_bank, // unnecessary here, just filling out a random bank
+                            new_root_bank.slot(),
+                            &bank_forks,
+                            &mut progress,
+                            &blockstore,
+                            &leader_schedule_cache,
+                            &accounts_background_request_sender,
+                            &rpc_subscriptions,
+                            &block_commitment_cache,
+                            &mut heaviest_subtree_fork_choice,
+                            &bank_notification_sender,
+                            &mut duplicate_slots_tracker,
+                            &mut duplicate_confirmed_slots,
+                            &mut unfrozen_gossip_verified_vote_hashes,
+                            &mut has_new_vote_been_rooted,
+                            &mut voted_signatures,
+                            &mut epoch_slots_frozen_slots,
+                            &drop_bank_sender,
+                            &mut cert_pool,
+                            &mut vote_history,
+                        ) {
+                            error!(
+                                "Unable to set alpenglow root {}, error {e}",
+                                new_root_bank.slot()
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 let mut start_leader_time = Measure::start("start_leader_time");
                 if !tpu_has_bank {
                     Self::maybe_start_leader(
@@ -2740,36 +2736,23 @@ impl ReplayStage {
         }
     }
 
+    /// Returns a new root if our vote creates a new finalization certificate
     #[allow(clippy::too_many_arguments)]
     fn handle_votable_alpenglow_bank(
         vote_bank: &Arc<Bank>,
-        bank_forks: &Arc<RwLock<BankForks>>,
-        progress: &mut ProgressMap,
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
-        blockstore: &Blockstore,
-        leader_schedule_cache: &Arc<LeaderScheduleCache>,
         _lockouts_sender: &Sender<CommitmentAggregationData>,
-        accounts_background_request_sender: &AbsRequestSender,
-        rpc_subscriptions: &Arc<RpcSubscriptions>,
-        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
-        heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
-        bank_notification_sender: &Option<BankNotificationSenderConfig>,
-        duplicate_slots_tracker: &mut DuplicateSlotsTracker,
-        duplicate_confirmed_slots: &mut DuplicateConfirmedSlots,
-        unfrozen_gossip_verified_vote_hashes: &mut UnfrozenGossipVerifiedVoteHashes,
         vote_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: &mut bool,
         replay_timing: &mut ReplayLoopTiming,
         voting_sender: &Sender<VoteOp>,
-        epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
-        drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         wait_to_vote_slot: Option<Slot>,
         cert_pool: &mut CertificatePool,
         vote_history: &mut VoteHistory,
         vote: AlpenglowVote,
-    ) -> Result<(), SetRootError> {
+    ) -> Option<Slot> {
         let mut generate_time = Measure::start("generate_vote");
         let vote_tx_result = Self::generate_alpenglow_tx(
             identity_keypair,
@@ -2783,70 +2766,47 @@ impl ReplayStage {
         );
         generate_time.stop();
         replay_timing.generate_vote_us += generate_time.as_us();
-        let mut new_alpenglow_root = None;
-        if let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result {
-            info!(
-                "pushing into vote pool {} {}",
-                vote_bank.epoch_vote_account_stake(vote_account_pubkey),
-                vote_bank.total_epoch_stake()
-            );
-            if let Ok(maybe_new_cert) = cert_pool.add_vote(
-                vote.clone(),
-                vote_tx.clone().into(),
-                vote_account_pubkey,
-                vote_bank.epoch_vote_account_stake(vote_account_pubkey),
-                vote_bank.total_epoch_stake(),
-            ) {
-                match &vote {
-                    AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
-                    AlpenglowVote::Skip(..) => vote_history.push_skip_vote(vote),
-                    AlpenglowVote::Finalize(_) => vote_history.latest_finalize_vote = vote,
-                }
-                let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
-                    .unwrap_or_else(|err| {
-                        error!("Unable to create saved vote history: {:?}", err);
-                        std::process::exit(1);
-                    });
-                voting_sender
-                    .send(VoteOp::PushAlpenglowVote {
-                        tx: vote_tx,
-                        slot: vote_bank.slot(),
-                        saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-                    })
-                    .unwrap_or_else(|err| warn!("Error: {:?}", err));
-                if let Some(NewHighestCertificate::Finalize(root)) = maybe_new_cert {
-                    vote_history.set_root(root);
-                    new_alpenglow_root = Some(root);
-                }
-            }
+        let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result else {
+            return None;
+        };
+        info!(
+            "pushing into vote pool {} {}",
+            vote_bank.epoch_vote_account_stake(vote_account_pubkey),
+            vote_bank.total_epoch_stake()
+        );
+        let Ok(maybe_new_cert) = cert_pool.add_vote(
+            vote.clone(),
+            vote_tx.clone().into(),
+            vote_account_pubkey,
+            vote_bank.epoch_vote_account_stake(vote_account_pubkey),
+            vote_bank.total_epoch_stake(),
+        ) else {
+            return None;
+        };
+
+        // Update and save the vote history
+        match &vote {
+            AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
+            AlpenglowVote::Skip(..) => vote_history.push_skip_vote(vote),
+            AlpenglowVote::Finalize(_) => vote_history.latest_finalize_vote = vote,
         }
-        // TODO: Handle that finalization certificate can be received before we
-        // have even frozen/replayed the bank
-        if let Some(new_root) = new_alpenglow_root {
-            Self::alpenglow_handle_new_root(
-                vote_bank,
-                new_root,
-                bank_forks,
-                progress,
-                blockstore,
-                leader_schedule_cache,
-                accounts_background_request_sender,
-                rpc_subscriptions,
-                block_commitment_cache,
-                heaviest_subtree_fork_choice,
-                bank_notification_sender,
-                duplicate_slots_tracker,
-                duplicate_confirmed_slots,
-                unfrozen_gossip_verified_vote_hashes,
-                has_new_vote_been_rooted,
-                vote_signatures,
-                epoch_slots_frozen_slots,
-                drop_bank_sender,
-                cert_pool,
-            )?;
-        }
+        let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
+            .unwrap_or_else(|err| {
+                error!("Unable to create saved vote history: {:?}", err);
+                std::process::exit(1);
+            });
+
+        // Send the vote over the wire
+        voting_sender
+            .send(VoteOp::PushAlpenglowVote {
+                tx: vote_tx,
+                slot: vote_bank.slot(),
+                saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+            })
+            .unwrap_or_else(|err| warn!("Error: {:?}", err));
+
         // TODO: update the commitmment cache
-        Ok(())
+        maybe_new_cert.and_then(|new_cert| new_cert.is_finalize().then_some(new_cert.slot()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3344,38 +3304,28 @@ impl ReplayStage {
         }
     }
 
+    /// Returns a new root if our vote creates a new finalization certificate
     #[allow(clippy::too_many_arguments)]
     fn push_alpenglow_votes(
         my_pubkey: &Pubkey,
         poh_recorder: &RwLock<PohRecorder>,
         bank_forks: &Arc<RwLock<BankForks>>,
-        progress: &mut ProgressMap,
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &RwLock<Vec<Arc<Keypair>>>,
         blockstore: &Blockstore,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         lockouts_sender: &Sender<CommitmentAggregationData>,
-        accounts_background_request_sender: &AbsRequestSender,
-        rpc_subscriptions: &Arc<RpcSubscriptions>,
-        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
-        heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
-        bank_notification_sender: &Option<BankNotificationSenderConfig>,
-        duplicate_slots_tracker: &mut DuplicateSlotsTracker,
-        duplicate_confirmed_slots: &mut DuplicateConfirmedSlots,
-        unfrozen_gossip_verified_vote_hashes: &mut UnfrozenGossipVerifiedVoteHashes,
         voted_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: &mut bool,
         replay_timing: &mut ReplayLoopTiming,
         voting_sender: &Sender<VoteOp>,
-        epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
-        drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         wait_to_vote_slot: Option<Slot>,
         cert_pool: &mut CertificatePool,
         vote_history: &mut VoteHistory,
         first_alpenglow_slot: &Option<Slot>,
         is_alpenglow_migration_complete: bool,
-    ) {
+    ) -> Option<Slot> {
         // This function should only be called after we've finished alpenglow migration,
         // which means we must have a frozen bank in the new alpenglow epoch
         assert!(is_alpenglow_migration_complete);
@@ -3418,38 +3368,21 @@ impl ReplayStage {
             // Push a notarize vote if we haven't already voted on this slot
             // and we haven't voted to skip it
             info!("pushing notarize for bank: {}", highest_frozen_bank.slot());
-            if let Err(e) = Self::handle_votable_alpenglow_bank(
+            Self::handle_votable_alpenglow_bank(
                 &highest_frozen_bank,
-                bank_forks,
-                progress,
                 vote_account_pubkey,
                 identity_keypair,
                 &authorized_voter_keypairs.read().unwrap(),
-                blockstore,
-                leader_schedule_cache,
                 lockouts_sender,
-                accounts_background_request_sender,
-                rpc_subscriptions,
-                block_commitment_cache,
-                heaviest_subtree_fork_choice,
-                bank_notification_sender,
-                duplicate_slots_tracker,
-                duplicate_confirmed_slots,
-                unfrozen_gossip_verified_vote_hashes,
                 voted_signatures,
                 has_new_vote_been_rooted,
                 replay_timing,
                 voting_sender,
-                epoch_slots_frozen_slots,
-                drop_bank_sender,
                 wait_to_vote_slot,
                 cert_pool,
                 vote_history,
                 AlpenglowVote::Notarize(highest_frozen_bank.slot()),
-            ) {
-                error!("Unable to set root: {e}");
-                return;
-            }
+            );
         }
 
         // Try to finalize the highest notarized block
@@ -3467,44 +3400,27 @@ impl ReplayStage {
                     // and the bank is frozen. This means validators running behind
                     // will not be finalizing until they can catch up to replay
                     info!("pushing finalize for bank: {}", vote_bank.slot());
-                    if let Err(e) = Self::handle_votable_alpenglow_bank(
+                    return Self::handle_votable_alpenglow_bank(
                         &highest_frozen_bank,
-                        bank_forks,
-                        progress,
                         vote_account_pubkey,
                         identity_keypair,
                         &authorized_voter_keypairs.read().unwrap(),
-                        blockstore,
-                        leader_schedule_cache,
                         lockouts_sender,
-                        accounts_background_request_sender,
-                        rpc_subscriptions,
-                        block_commitment_cache,
-                        heaviest_subtree_fork_choice,
-                        bank_notification_sender,
-                        duplicate_slots_tracker,
-                        duplicate_confirmed_slots,
-                        unfrozen_gossip_verified_vote_hashes,
                         voted_signatures,
                         has_new_vote_been_rooted,
                         replay_timing,
                         voting_sender,
-                        epoch_slots_frozen_slots,
-                        drop_bank_sender,
                         wait_to_vote_slot,
                         cert_pool,
                         vote_history,
                         AlpenglowVote::Finalize(highest_notarized_slot),
-                    ) {
-                        error!("Unable to set root: {e}");
-                        #[allow(unused)]
-                        return;
-                    }
+                    );
                 }
             }
         }
 
         // TODO: handle skip timers and skip votes.
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4789,7 +4705,9 @@ impl ReplayStage {
         epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         cert_pool: &mut CertificatePool,
+        vote_history: &mut VoteHistory,
     ) -> Result<(), SetRootError> {
+        vote_history.set_root(new_root);
         cert_pool.purge(new_root);
         Self::check_and_handle_new_root(
             vote_bank,
