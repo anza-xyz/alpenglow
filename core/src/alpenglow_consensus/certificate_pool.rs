@@ -28,6 +28,20 @@ pub enum NewHighestCertificate {
     Finalize(Slot),
 }
 
+impl NewHighestCertificate {
+    pub fn is_finalize(&self) -> bool {
+        matches!(self, NewHighestCertificate::Finalize(_slot))
+    }
+
+    pub fn slot(&self) -> Slot {
+        match self {
+            NewHighestCertificate::Notarize(slot) => *slot,
+            NewHighestCertificate::Skip(slot) => *slot,
+            NewHighestCertificate::Finalize(slot) => *slot,
+        }
+    }
+}
+
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Vote {
@@ -219,6 +233,13 @@ impl CertificatePool {
 
     pub fn highest_finalized_slot(&self) -> Slot {
         self.highest_finalized_slot
+    }
+
+    pub fn is_finalized_slot(&self, slot: Slot) -> bool {
+        self.certificates
+            .get(&(slot, CertificateType::Finalize))
+            .map(|certificate| certificate.is_complete())
+            .unwrap_or(false)
     }
 
     /// Determines if the leader can start based on notarization and skip certificates.
