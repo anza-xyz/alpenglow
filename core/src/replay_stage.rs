@@ -69,7 +69,7 @@ use {
         accounts_background_service::AbsRequestSender,
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
-        commitment::BlockCommitmentCache,
+        commitment::{BlockCommitmentCache, CommitmentSlots},
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::ReplayVoteSender,
@@ -1267,9 +1267,10 @@ impl ReplayStage {
                             .then_some(r_bank_forks.get(maybe_new_root).unwrap())
                     };
                     if let Some(new_root_bank) = maybe_new_root_bank {
+                        let new_root = new_root_bank.slot();
                         if let Err(e) = Self::alpenglow_handle_new_root(
                             &new_root_bank, // unnecessary here, just filling out a random bank
-                            new_root_bank.slot(),
+                            new_root,
                             &bank_forks,
                             &mut progress,
                             &blockstore,
@@ -1294,6 +1295,12 @@ impl ReplayStage {
                             );
                             return;
                         }
+                        rpc_subscriptions.notify_subscribers(CommitmentSlots {
+                            slot: new_root,
+                            root: new_root,
+                            highest_confirmed_slot: new_root,
+                            highest_super_majority_root: new_root,
+                        });
                     }
                 }
 
@@ -2803,8 +2810,6 @@ impl ReplayStage {
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
-
-        // TODO: update the commitmment cache
         maybe_new_cert.and_then(|new_cert| new_cert.is_finalize().then_some(new_cert.slot()))
     }
 
