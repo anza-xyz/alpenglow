@@ -806,7 +806,7 @@ impl ClusterInfo {
                 "alpenglow_gossip_read_push_vote",
                 &self.stats.push_vote_read,
             );
-            (0..MAX_LOCKOUT_HISTORY as u8)
+            (0..MAX_VOTES)
                 .filter_map(|ix| {
                     let vote = CrdsValueLabel::Vote(ix, self_pubkey);
                     let vote: &CrdsData = gossip_crds.get(&vote)?;
@@ -819,7 +819,7 @@ impl ClusterInfo {
                 .min() // Boot the oldest evicted vote by wallclock.
                 .map(|(_ /*wallclock*/, ix)| ix)
         };
-        if num_crds_votes < MAX_LOCKOUT_HISTORY as u8 {
+        if num_crds_votes < MAX_VOTES {
             // Do not evict if there is space in crds
             num_crds_votes
         } else {
@@ -827,8 +827,8 @@ impl ClusterInfo {
         }
     }
 
-    /// If there are less than `MAX_LOCKOUT_HISTORY` votes present, returns the next index
-    /// without a vote. If there are `MAX_LOCKOUT_HISTORY` votes:
+    /// If there are less than `MAX_VOTES` votes present, returns the next index
+    /// without a vote. If there are `MAX_VOTES` votes:
     /// - Finds the oldest wallclock vote and returns its index
     /// - Otherwise returns the total amount of observed votes
     ///
