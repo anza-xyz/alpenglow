@@ -470,6 +470,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 
 [[package]]
+name = "alpenglow-vote"
+version = "0.1.0"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=3c4c514#3c4c514d726891011c60d7576889c56384fd82f7"
+dependencies = [
+ "bincode",
+ "bitflags 2.9.0",
+ "bytemuck",
+ "either",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "serde",
+ "serde_derive",
+ "solana-account",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-hash",
+ "solana-logger",
+ "solana-program",
+ "solana-signature",
+ "solana-vote-interface",
+ "spl-pod",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7407,6 +7433,7 @@ dependencies = [
  "agave-banking-stage-ingress-types",
  "agave-transaction-view",
  "ahash 0.8.11",
+ "alpenglow-vote",
  "anyhow",
  "arrayvec",
  "assert_matches",
