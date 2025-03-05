@@ -17,6 +17,7 @@ codecov = { repository = "solana-labs/solana", branch = "master", service = "git
 agave-banking-stage-ingress-types = { workspace = true }
 agave-transaction-view = { workspace = true }
 ahash = { workspace = true }
+alpenglow-vote = { workspace = true, features = ["serde"] }
 anyhow = { workspace = true }
 arrayvec = { workspace = true }
 assert_matches = { workspace = true }
@@ -145,6 +146,7 @@ dev-context-only-utils = [
 frozen-abi = [
     "dep:solana-frozen-abi",
     "dep:solana-frozen-abi-macro",
+    "alpenglow-vote/frozen-abi",
     "solana-accounts-db/frozen-abi",
     "solana-bloom/frozen-abi",
     "solana-compute-budget/frozen-abi",
