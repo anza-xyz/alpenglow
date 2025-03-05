@@ -95,7 +95,7 @@ if [[ -z "$SOLANA_DOCKER_RUN_NOSETUID" ]]; then
     --user "$(id -u):$(id -g)"
     --volume "/etc/passwd:/etc/passwd:ro"
     --volume "/etc/group:/etc/group:ro"
-    --volume "/var/lib/buildkite-agent/.ssh:/var/lib/buildkite-agent/.ssh:ro"
+    --volume "/var/lib/buildkite-agent:/var/lib/buildkite-agent"
   )
 fi
 
