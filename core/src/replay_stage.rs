@@ -1267,10 +1267,10 @@ impl ReplayStage {
                             .then_some(r_bank_forks.get(maybe_new_root).unwrap())
                     };
                     if let Some(new_root_bank) = maybe_new_root_bank {
-                        let new_root = new_root_bank.slot();
+                        let new_root_slot = new_root_bank.slot();
                         if let Err(e) = Self::alpenglow_handle_new_root(
                             &new_root_bank, // unnecessary here, just filling out a random bank
-                            new_root,
+                            new_root_slot,
                             &bank_forks,
                             &mut progress,
                             &blockstore,
@@ -1296,10 +1296,10 @@ impl ReplayStage {
                             return;
                         }
                         rpc_subscriptions.notify_subscribers(CommitmentSlots {
-                            slot: new_root,
-                            root: new_root,
-                            highest_confirmed_slot: new_root,
-                            highest_super_majority_root: new_root,
+                            slot: new_root_slot,
+                            root: new_root_slot,
+                            highest_confirmed_slot: new_root_slot,
+                            highest_super_majority_root: new_root_slot,
                         });
                     }
                 }
