@@ -72,7 +72,7 @@ use {
         accounts_background_service::AbsRequestSender,
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
-        commitment::BlockCommitmentCache,
+        commitment::{BlockCommitmentCache, CommitmentSlots},
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::ReplayVoteSender,
@@ -1272,16 +1272,16 @@ impl ReplayStage {
                             .then_some(r_bank_forks.get(maybe_new_root).unwrap())
                     };
                     if let Some(new_root_bank) = maybe_new_root_bank {
+                        let new_root_slot = new_root_bank.slot();
                         if let Err(e) = Self::alpenglow_handle_new_root(
                             &new_root_bank, // unnecessary here, just filling out a random bank
-                            new_root_bank.slot(),
+                            new_root_slot,
                             &bank_forks,
                             &mut progress,
                             &blockstore,
                             &leader_schedule_cache,
                             &accounts_background_request_sender,
                             &rpc_subscriptions,
-                            &block_commitment_cache,
                             &mut heaviest_subtree_fork_choice,
                             &bank_notification_sender,
                             &mut duplicate_slots_tracker,
@@ -1300,6 +1300,12 @@ impl ReplayStage {
                             );
                             return;
                         }
+                        rpc_subscriptions.notify_subscribers(CommitmentSlots {
+                            slot: new_root_slot,
+                            root: new_root_slot,
+                            highest_confirmed_slot: new_root_slot,
+                            highest_super_majority_root: new_root_slot,
+                        });
                     }
                 }
 
@@ -2814,8 +2820,6 @@ impl ReplayStage {
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
-
-        // TODO: update the commitmment cache
         maybe_new_cert.and_then(|new_cert| new_cert.is_finalize().then_some(new_cert.slot()))
     }
 
@@ -2870,6 +2874,12 @@ impl ReplayStage {
                     );
                 }
             }
+            let highest_super_majority_root = Some(
+                block_commitment_cache
+                    .read()
+                    .unwrap()
+                    .highest_super_majority_root(),
+            );
             Self::check_and_handle_new_root(
                 bank,
                 new_root,
@@ -2879,7 +2889,7 @@ impl ReplayStage {
                 leader_schedule_cache,
                 accounts_background_request_sender,
                 rpc_subscriptions,
-                block_commitment_cache,
+                highest_super_majority_root,
                 heaviest_subtree_fork_choice,
                 bank_notification_sender,
                 duplicate_slots_tracker,
@@ -4709,7 +4719,6 @@ impl ReplayStage {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         accounts_background_request_sender: &AbsRequestSender,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
-        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
@@ -4733,7 +4742,7 @@ impl ReplayStage {
             leader_schedule_cache,
             accounts_background_request_sender,
             rpc_subscriptions,
-            block_commitment_cache,
+            Some(new_root),
             heaviest_subtree_fork_choice,
             bank_notification_sender,
             duplicate_slots_tracker,
@@ -4756,7 +4765,7 @@ impl ReplayStage {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         accounts_background_request_sender: &AbsRequestSender,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
-        block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
+        highest_super_majority_root: Option<Slot>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         duplicate_slots_tracker: &mut DuplicateSlotsTracker,
@@ -4795,12 +4804,6 @@ impl ReplayStage {
         blockstore
             .set_roots(rooted_slots.iter())
             .expect("Ledger set roots failed");
-        let highest_super_majority_root = Some(
-            block_commitment_cache
-                .read()
-                .unwrap()
-                .highest_super_majority_root(),
-        );
         Self::handle_new_root(
             new_root,
             bank_forks,
