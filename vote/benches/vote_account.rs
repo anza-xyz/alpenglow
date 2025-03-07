@@ -44,7 +44,7 @@ fn bench_vote_account_try_from(b: &mut Bencher) {
 
     b.iter(|| {
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
-        let state = vote_account.vote_state();
+        let state = vote_account.vote_state().unwrap();
         assert_eq!(state, &vote_state);
     });
 }

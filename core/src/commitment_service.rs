@@ -203,7 +203,12 @@ impl AggregateCommitmentService {
                 // Override old vote_state in bank with latest one for my own vote pubkey
                 node_vote_state.clone()
             } else {
-                TowerVoteState::from(account.vote_state().clone())
+                TowerVoteState::from(
+                    account
+                        .vote_state()
+                        .expect("should only be called for TowerBFT")
+                        .clone(),
+                )
             };
             Self::aggregate_commitment_for_vote_account(
                 &mut commitment,
@@ -537,7 +542,7 @@ mod tests {
     fn test_highest_super_majority_root_advance() {
         fn get_vote_state(vote_pubkey: Pubkey, bank: &Bank) -> TowerVoteState {
             let vote_account = bank.get_vote_account(&vote_pubkey).unwrap();
-            TowerVoteState::from(vote_account.vote_state().clone())
+            TowerVoteState::from(vote_account.vote_state().expect("Must be tower").clone())
         }
 
         let block_commitment_cache = RwLock::new(BlockCommitmentCache::new_for_tests());

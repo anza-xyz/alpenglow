@@ -1,13 +1,15 @@
 use {
+    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     itertools::Itertools,
     serde::{
         de::{MapAccess, Visitor},
         ser::{Serialize, Serializer},
     },
     solana_account::{AccountSharedData, ReadableAccount},
+    solana_clock::{Epoch, Slot},
     solana_instruction::error::InstructionError,
     solana_pubkey::Pubkey,
-    solana_vote_interface::state::VoteState,
+    solana_vote_interface::state::{BlockTimestamp, VoteState},
     std::{
         cmp::Ordering,
         collections::{hash_map::Entry, HashMap},
@@ -32,11 +34,18 @@ pub enum Error {
     InvalidOwner(/*owner:*/ Pubkey),
 }
 
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+enum VoteAccountState {
+    TowerBFT(VoteState),
+    Alpenglow(AlpenglowVoteState),
+}
+
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug)]
 struct VoteAccountInner {
     account: AccountSharedData,
-    vote_state: VoteState,
+    vote_state: VoteAccountState,
 }
 
 pub type VoteAccountsHashMap = HashMap<Pubkey, (/*stake:*/ u64, VoteAccount)>;
@@ -83,13 +92,58 @@ impl VoteAccount {
         self.0.account.owner()
     }
 
-    pub fn vote_state(&self) -> &VoteState {
-        &self.0.vote_state
+    pub fn vote_state(&self) -> Option<&VoteState> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => Some(vote_state),
+            VoteAccountState::Alpenglow(_) => None,
+        }
     }
 
     /// VoteState.node_pubkey of this vote-account.
     pub fn node_pubkey(&self) -> &Pubkey {
-        &self.0.vote_state.node_pubkey
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => &vote_state.node_pubkey,
+            VoteAccountState::Alpenglow(vote_state) => vote_state.node_pubkey(),
+        }
+    }
+
+    pub fn get_authorized_voter(&self, epoch: Epoch) -> Option<Pubkey> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => {
+                vote_state.authorized_voters().get_authorized_voter(epoch)
+            }
+            VoteAccountState::Alpenglow(vote_state) => vote_state.get_authorized_voter(epoch),
+        }
+    }
+
+    pub fn last_timestamp(&self) -> BlockTimestamp {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state.last_timestamp.clone(),
+            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_timestamp_legacy_format(),
+        }
+    }
+
+    pub fn get_root_slot(&self) -> Option<Slot> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state.root_slot,
+            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_finalized_slot(),
+        }
+    }
+
+    pub fn commission(&self) -> u8 {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state.commission,
+            VoteAccountState::Alpenglow(vote_state) => vote_state.commission(),
+        }
+    }
+
+    pub fn last_voted_slot(&self) -> Option<Slot> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => {
+                vote_state.votes.iter().last().map(|vote| vote.slot())
+            }
+            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_notarized_slot(),
+        }
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -321,15 +375,41 @@ impl From<VoteAccount> for AccountSharedData {
 impl TryFrom<AccountSharedData> for VoteAccount {
     type Error = Error;
     fn try_from(account: AccountSharedData) -> Result<Self, Self::Error> {
-        if !solana_sdk_ids::vote::check_id(account.owner()) {
+        // TODO(wen): this goes into slona_sdk_ids later
+        let is_alpenglow = if alpenglow_vote::check_id(account.owner()) {
+            true
+        } else if solana_sdk_ids::vote::check_id(account.owner()) {
+            false
+        } else {
             return Err(Error::InvalidOwner(*account.owner()));
-        }
+        };
 
         // Allocate as Arc<MaybeUninit<VoteAccountInner>> so we can initialize in place.
-        let mut inner = Arc::new(MaybeUninit::<VoteAccountInner>::uninit());
-        let inner_ptr = Arc::get_mut(&mut inner)
-            .expect("we're the only ref")
-            .as_mut_ptr();
+        let mut inner = Arc::new(VoteAccountInner {
+            account: AccountSharedData::default(),
+            vote_state: if is_alpenglow {
+                VoteAccountState::Alpenglow(AlpenglowVoteState::default())
+            } else {
+                VoteAccountState::TowerBFT(VoteState::default())
+            },
+        });
+        let (inner_account_ptr, inner_tower_state_ptr, _inner_alpenglow_state_ptr) =
+            match Arc::get_mut(&mut inner) {
+                Some(inner_mut) => match &mut inner_mut.vote_state {
+                    VoteAccountState::TowerBFT(state) if !is_alpenglow => (
+                        addr_of_mut!(inner_mut.account),
+                        Some(addr_of_mut!(*state)),
+                        None,
+                    ),
+                    VoteAccountState::Alpenglow(state) if is_alpenglow => (
+                        addr_of_mut!(inner_mut.account),
+                        None,
+                        Some(addr_of_mut!(*state)),
+                    ),
+                    _ => panic!("Mismatched VoteAccountState and is_alpenglow flag"),
+                },
+                None => panic!("Cannot get mutable access to VoteAccountInner"),
+            };
 
         // Safety:
         // - All the addr_of_mut!(...).write(...) calls are valid since we just allocated and so
@@ -337,34 +417,52 @@ impl TryFrom<AccountSharedData> for VoteAccount {
         // - We use write() so that the old values aren't dropped since they're still
         // uninitialized.
         unsafe {
-            let vote_state = addr_of_mut!((*inner_ptr).vote_state);
+            if let Some(inner_state_ptr) = inner_tower_state_ptr {
+                let vote_state = addr_of_mut!((*inner_state_ptr));
+                // Safety:
+                // - vote_state is non-null and MaybeUninit<VoteState> is guaranteed to have same layout
+                // and alignment as VoteState.
+                // - Here it is safe to create a reference to MaybeUninit<VoteState> since the value is
+                // aligned and MaybeUninit<T> is valid for all possible bit values.
+                let vote_state = &mut *(vote_state as *mut MaybeUninit<VoteState>);
+
+                // Try to deserialize in place
+                if let Err(e) = VoteState::deserialize_into_uninit(account.data(), vote_state) {
+                    // Safety:
+                    // - Deserialization failed so at this point vote_state is uninitialized and must
+                    // not be dropped. We're ok since `vote_state` is a subfield of `inner`  which is
+                    // still MaybeUninit - which isn't dropped by definition - and so neither are its
+                    // subfields.
+                    return Err(e.into());
+                }
+            /*             } else if let Some(inner_state_ptr) = inner_alpenglow_state_ptr {
+            let vote_state = addr_of_mut!((*inner_state_ptr));
             // Safety:
-            // - vote_state is non-null and MaybeUninit<VoteState> is guaranteed to have same layout
-            // and alignment as VoteState.
-            // - Here it is safe to create a reference to MaybeUninit<VoteState> since the value is
+            // - vote_state is non-null and MaybeUninit<AlpenglowVoteState> is guaranteed to have same layout
+            // and alignment as AlpenglowVoteState.
+            // - Here it is safe to create a reference to MaybeUninit<AlpenglowVoteState> since the value is
             // aligned and MaybeUninit<T> is valid for all possible bit values.
-            let vote_state = &mut *(vote_state as *mut MaybeUninit<VoteState>);
+            let vote_state = &mut *(vote_state as *mut MaybeUninit<AlpenglowVoteState>);
 
             // Try to deserialize in place
-            if let Err(e) = VoteState::deserialize_into_uninit(account.data(), vote_state) {
+            if let Err(e) = AlpenglowVoteState::deserialize_into_uninit(account.data(), vote_state) {
                 // Safety:
-                // - Deserialization failed so at this point vote_state is uninitialized and must
-                // not be dropped. We're ok since `vote_state` is a subfield of `inner`  which is
-                // still MaybeUninit - which isn't dropped by definition - and so neither are its
-                // subfields.
+                // - Deserialization failed so at this point vote_state is uninitialized and must not be
+                // dropped. We're ok since `vote_state` is a subfield of `inner` which is still MaybeUninit
+                // - which isn't dropped by definition - and so neither are its subfields.
                 return Err(e.into());
+            }*/
+            } else {
+                panic!("Unknown vote state");
             }
 
             // Write the account field which completes the initialization of VoteAccountInner.
-            addr_of_mut!((*inner_ptr).account).write(account);
+            inner_account_ptr.write(account);
 
             // Safety:
             // - At this point both `inner.vote_state` and `inner.account`` are initialized, so it's safe to
             // transmute the MaybeUninit<VoteAccountInner> to VoteAccountInner.
-            Ok(VoteAccount(mem::transmute::<
-                Arc<MaybeUninit<VoteAccountInner>>,
-                Arc<VoteAccountInner>,
-            >(inner)))
+            Ok(VoteAccount(inner))
         }
     }
 }
@@ -553,7 +651,7 @@ mod tests {
         let lamports = account.lamports();
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
         assert_eq!(lamports, vote_account.lamports());
-        assert_eq!(vote_state, *vote_account.vote_state());
+        assert_eq!(vote_state, *vote_account.vote_state().unwrap());
         assert_eq!(&account, vote_account.account());
     }
 
@@ -579,7 +677,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let (account, vote_state) = new_rand_vote_account(&mut rng, None);
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
-        assert_eq!(vote_state, *vote_account.vote_state());
+        assert_eq!(vote_state, *vote_account.vote_state().unwrap());
         // Assert that VoteAccount has the same wire format as Account.
         assert_eq!(
             bincode::serialize(&account).unwrap(),

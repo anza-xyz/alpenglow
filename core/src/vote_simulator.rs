@@ -67,6 +67,7 @@ impl VoteSimulator {
         }
     }
 
+    // TODO(wen): Add a method for Alpenglow.
     pub fn fill_bank_forks(
         &mut self,
         forks: Tree<u64>,
@@ -104,7 +105,7 @@ impl VoteSimulator {
                         parent_bank.get_vote_account(&keypairs.vote_keypair.pubkey())
                     {
                         let mut vote_state =
-                            TowerVoteState::from(vote_account.vote_state().clone());
+                            TowerVoteState::from(vote_account.vote_state().unwrap().clone());
                         vote_state.process_next_vote_slot(parent);
                         TowerSync::new(
                             vote_state.votes,
@@ -136,7 +137,11 @@ impl VoteSimulator {
                         .get_vote_account(&keypairs.vote_keypair.pubkey())
                         .unwrap();
                     let state = vote_account.vote_state();
-                    assert!(state.votes.iter().any(|lockout| lockout.slot() == parent));
+                    assert!(state
+                        .unwrap()
+                        .votes
+                        .iter()
+                        .any(|lockout| lockout.slot() == parent));
                 }
             }
             while new_bank.tick_height() < new_bank.max_tick_height() {

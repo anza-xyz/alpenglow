@@ -2170,7 +2170,7 @@ fn supermajority_root_from_vote_accounts(
                 return None;
             }
 
-            Some((account.vote_state().root_slot?, *stake))
+            Some((account.get_root_slot()?, *stake))
         })
         .collect();
 

@@ -406,92 +406,95 @@ impl Tower {
                 continue;
             }
             trace!("{} {} with stake {}", vote_account_pubkey, key, voted_stake);
-            let mut vote_state = TowerVoteState::from(account.vote_state().clone());
-            for vote in &vote_state.votes {
-                lockout_intervals
-                    .entry(vote.last_locked_out_slot())
-                    .or_default()
-                    .push((vote.slot(), key));
-            }
+            if let Some(vote_state) = account.vote_state() {
+                let mut vote_state = TowerVoteState::from(vote_state.clone());
+                for vote in &vote_state.votes {
+                    lockout_intervals
+                        .entry(vote.last_locked_out_slot())
+                        .or_default()
+                        .push((vote.slot(), key));
+                }
 
-            if key == *vote_account_pubkey {
-                my_latest_landed_vote = vote_state.nth_recent_lockout(0).map(|l| l.slot());
-                debug!("vote state {:?}", vote_state);
-                debug!(
-                    "observed slot {}",
-                    vote_state
-                        .nth_recent_lockout(0)
-                        .map(|l| l.slot())
-                        .unwrap_or(0) as i64
-                );
-                debug!("observed root {}", vote_state.root_slot.unwrap_or(0) as i64);
-                datapoint_info!(
-                    "tower-observed",
-                    (
-                        "slot",
+                if key == *vote_account_pubkey {
+                    my_latest_landed_vote = vote_state.nth_recent_lockout(0).map(|l| l.slot());
+                    debug!("vote state {:?}", vote_state);
+                    debug!(
+                        "observed slot {}",
                         vote_state
                             .nth_recent_lockout(0)
                             .map(|l| l.slot())
-                            .unwrap_or(0),
-                        i64
-                    ),
-                    ("root", vote_state.root_slot.unwrap_or(0), i64)
-                );
-            }
-            let start_root = vote_state.root_slot;
+                            .unwrap_or(0) as i64
+                    );
+                    debug!("observed root {}", vote_state.root_slot.unwrap_or(0) as i64);
+                    datapoint_info!(
+                        "tower-observed",
+                        (
+                            "slot",
+                            vote_state
+                                .nth_recent_lockout(0)
+                                .map(|l| l.slot())
+                                .unwrap_or(0),
+                            i64
+                        ),
+                        ("root", vote_state.root_slot.unwrap_or(0), i64)
+                    );
+                }
+                let start_root = vote_state.root_slot;
 
-            // Add the last vote to update the `heaviest_subtree_fork_choice`
-            if let Some(last_landed_voted_slot) = vote_state.last_voted_slot() {
-                latest_validator_votes_for_frozen_banks.check_add_vote(
-                    key,
-                    last_landed_voted_slot,
-                    get_frozen_hash(last_landed_voted_slot),
-                    true,
-                );
-            }
+                // Add the last vote to update the `heaviest_subtree_fork_choice`
+                if let Some(last_landed_voted_slot) = vote_state.last_voted_slot() {
+                    latest_validator_votes_for_frozen_banks.check_add_vote(
+                        key,
+                        last_landed_voted_slot,
+                        get_frozen_hash(last_landed_voted_slot),
+                        true,
+                    );
+                }
 
-            vote_state.process_next_vote_slot(bank_slot);
+                vote_state.process_next_vote_slot(bank_slot);
 
-            for vote in &vote_state.votes {
-                vote_slots.insert(vote.slot());
-            }
-
-            if start_root != vote_state.root_slot {
-                if let Some(root) = start_root {
-                    let vote =
-                        Lockout::new_with_confirmation_count(root, MAX_LOCKOUT_HISTORY as u32);
-                    trace!("ROOT: {}", vote.slot());
+                for vote in &vote_state.votes {
                     vote_slots.insert(vote.slot());
                 }
-            }
-            if let Some(root) = vote_state.root_slot {
-                let vote = Lockout::new_with_confirmation_count(root, MAX_LOCKOUT_HISTORY as u32);
-                vote_slots.insert(vote.slot());
-            }
 
-            // The last vote in the vote stack is a simulated vote on bank_slot, which
-            // we added to the vote stack earlier in this function by calling process_vote().
-            // We don't want to update the ancestors stakes of this vote b/c it does not
-            // represent an actual vote by the validator.
+                if start_root != vote_state.root_slot {
+                    if let Some(root) = start_root {
+                        let vote =
+                            Lockout::new_with_confirmation_count(root, MAX_LOCKOUT_HISTORY as u32);
+                        trace!("ROOT: {}", vote.slot());
+                        vote_slots.insert(vote.slot());
+                    }
+                }
+                if let Some(root) = vote_state.root_slot {
+                    let vote =
+                        Lockout::new_with_confirmation_count(root, MAX_LOCKOUT_HISTORY as u32);
+                    vote_slots.insert(vote.slot());
+                }
 
-            // Note: It should not be possible for any vote state in this bank to have
-            // a vote for a slot >= bank_slot, so we are guaranteed that the last vote in
-            // this vote stack is the simulated vote, so this fetch should be sufficient
-            // to find the last unsimulated vote.
-            assert_eq!(
-                vote_state.nth_recent_lockout(0).map(|l| l.slot()),
-                Some(bank_slot)
-            );
-            if let Some(vote) = vote_state.nth_recent_lockout(1) {
-                // Update all the parents of this last vote with the stake of this vote account
-                Self::update_ancestor_voted_stakes(
-                    &mut voted_stakes,
-                    vote.slot(),
-                    voted_stake,
-                    ancestors,
+                // The last vote in the vote stack is a simulated vote on bank_slot, which
+                // we added to the vote stack earlier in this function by calling process_vote().
+                // We don't want to update the ancestors stakes of this vote b/c it does not
+                // represent an actual vote by the validator.
+
+                // Note: It should not be possible for any vote state in this bank to have
+                // a vote for a slot >= bank_slot, so we are guaranteed that the last vote in
+                // this vote stack is the simulated vote, so this fetch should be sufficient
+                // to find the last unsimulated vote.
+                assert_eq!(
+                    vote_state.nth_recent_lockout(0).map(|l| l.slot()),
+                    Some(bank_slot)
                 );
+                if let Some(vote) = vote_state.nth_recent_lockout(1) {
+                    // Update all the parents of this last vote with the stake of this vote account
+                    Self::update_ancestor_voted_stakes(
+                        &mut voted_stakes,
+                        vote.slot(),
+                        voted_stake,
+                        ancestors,
+                    );
+                }
+                total_stake += voted_stake;
             }
-            total_stake += voted_stake;
         }
 
         // TODO: populate_ancestor_voted_stakes only adds zeros. Comment why
@@ -608,8 +611,7 @@ impl Tower {
 
     pub fn last_voted_slot_in_bank(bank: &Bank, vote_account_pubkey: &Pubkey) -> Option<Slot> {
         let vote_account = bank.get_vote_account(vote_account_pubkey)?;
-        let vote_state = vote_account.vote_state();
-        vote_state.last_voted_slot()
+        vote_account.last_voted_slot()
     }
 
     pub fn record_bank_vote(&mut self, bank: &Bank) -> Option<Slot> {
@@ -1618,9 +1620,13 @@ impl Tower {
         bank: &Bank,
     ) {
         if let Some(vote_account) = bank.get_vote_account(vote_account_pubkey) {
-            self.vote_state = TowerVoteState::from(vote_account.vote_state().clone());
-            self.initialize_root(root);
-            self.initialize_lockouts(|v| v.slot() > root);
+            if let Some(vote_state) = vote_account.vote_state() {
+                self.vote_state = TowerVoteState::from(vote_state.clone());
+                self.initialize_root(root);
+                self.initialize_lockouts(|v| v.slot() > root);
+            } else {
+                error!("vote account({}) has no TowerBFT info", vote_account_pubkey);
+            }
         } else {
             self.initialize_root(root);
             info!(
@@ -2446,7 +2452,7 @@ pub mod test {
             .unwrap()
             .get_vote_account(&vote_pubkey)
             .unwrap();
-        let state = observed.vote_state();
+        let state = observed.vote_state().unwrap();
         info!("observed tower: {:#?}", state.votes);
 
         let num_slots_to_try = 200;

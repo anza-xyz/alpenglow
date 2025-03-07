@@ -221,16 +221,18 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             .map(|(_, (stake, _))| stake)
             .sum();
         for (stake, vote_account) in bank.vote_accounts().values() {
-            let vote_state = vote_account.vote_state();
-            if let Some(last_vote) = vote_state.votes.iter().last() {
-                let entry = last_votes.entry(vote_state.node_pubkey).or_insert((
-                    last_vote.slot(),
-                    vote_state.clone(),
-                    *stake,
-                    total_stake,
-                ));
-                if entry.0 < last_vote.slot() {
-                    *entry = (last_vote.slot(), vote_state.clone(), *stake, total_stake);
+            // TODO(wen): this doesn't work for Alpenglow
+            if let Some(last_vote) = vote_account.last_voted_slot() {
+                if let Some(vote_state) = vote_account.vote_state() {
+                    let entry = last_votes.entry(*vote_account.node_pubkey()).or_insert((
+                        last_vote,
+                        vote_state.clone(),
+                        *stake,
+                        total_stake,
+                    ));
+                    if entry.0 < last_vote {
+                        *entry = (last_vote, vote_state.clone(), *stake, total_stake);
+                    }
                 }
             }
         }
@@ -262,11 +264,12 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
         loop {
             for (_, vote_account) in bank.vote_accounts().values() {
                 let vote_state = vote_account.vote_state();
-                if let Some(last_vote) = vote_state.votes.iter().last() {
-                    let validator_votes = all_votes.entry(vote_state.node_pubkey).or_default();
+                if let Some(last_vote) = vote_account.last_voted_slot() {
+                    let validator_votes = all_votes.entry(*vote_account.node_pubkey()).or_default();
+                    // TODO(wen): this doesn't work for Alpenglow
                     validator_votes
-                        .entry(last_vote.slot())
-                        .or_insert_with(|| vote_state.clone());
+                        .entry(last_vote)
+                        .or_insert_with(|| vote_state.unwrap().clone());
                 }
             }
 

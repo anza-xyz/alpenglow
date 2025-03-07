@@ -379,7 +379,8 @@ impl Bank {
                     if vote_account.owner() != &solana_vote_program {
                         return None;
                     }
-                    let vote_state = vote_account.vote_state();
+                    // TODO(wen): Make Alpenglow vote state work.
+                    let vote_state = vote_account.vote_state().unwrap();
 
                     let pre_lamport = stake_account.lamports();
 
@@ -504,9 +505,10 @@ impl Bank {
                         return 0;
                     }
 
+                    // TODO(wen): Make Alpenglow vote state work.
                     calculate_points(
                         stake_account.stake_state(),
-                        vote_account.vote_state(),
+                        vote_account.vote_state().unwrap(),
                         stake_history,
                         new_warmup_cooldown_rate_epoch,
                     )
