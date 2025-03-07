@@ -406,6 +406,7 @@ impl Tower {
                 continue;
             }
             trace!("{} {} with stake {}", vote_account_pubkey, key, voted_stake);
+            // Vote lockout is only relevant in TowerBFT
             if let Some(vote_state) = account.vote_state() {
                 let mut vote_state = TowerVoteState::from(vote_state.clone());
                 for vote in &vote_state.votes {

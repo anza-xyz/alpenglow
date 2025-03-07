@@ -1169,21 +1169,8 @@ impl JsonRpcRequestProcessor {
                     }
                 }
 
-                let vote_state = account.vote_state();
-
-                // TODO(wen): make this work for Alpenglow.
-                let epoch_credits = vote_state.unwrap().epoch_credits();
-                let epoch_credits = if epoch_credits.len()
-                    > MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY
-                {
-                    epoch_credits
-                        .iter()
-                        .skip(epoch_credits.len() - MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY)
-                        .cloned()
-                        .collect()
-                } else {
-                    epoch_credits.clone()
-                };
+                let mut epoch_credits = account.epoch_credits();
+                epoch_credits.truncate(MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY);
 
                 Some(RpcVoteAccountInfo {
                     vote_pubkey: vote_pubkey.to_string(),

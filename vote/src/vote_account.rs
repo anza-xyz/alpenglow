@@ -146,6 +146,16 @@ impl VoteAccount {
         }
     }
 
+    pub fn epoch_credits(&self) -> Vec<(u64, u64, u64)> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state.epoch_credits.clone(),
+            VoteAccountState::Alpenglow(vote_state) => {
+                let epoch_credits = vote_state.epoch_credits();
+                vec![(epoch_credits.epoch(), epoch_credits.credits(), epoch_credits.prev_credits())]
+            },
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
@@ -393,7 +403,7 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                 VoteAccountState::TowerBFT(VoteState::default())
             },
         });
-        let (inner_account_ptr, inner_tower_state_ptr, _inner_alpenglow_state_ptr) =
+        let (inner_account_ptr, inner_tower_state_ptr, inner_alpenglow_state_ptr) =
             match Arc::get_mut(&mut inner) {
                 Some(inner_mut) => match &mut inner_mut.vote_state {
                     VoteAccountState::TowerBFT(state) if !is_alpenglow => (
@@ -435,23 +445,8 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                     // subfields.
                     return Err(e.into());
                 }
-            /*             } else if let Some(inner_state_ptr) = inner_alpenglow_state_ptr {
-            let vote_state = addr_of_mut!((*inner_state_ptr));
-            // Safety:
-            // - vote_state is non-null and MaybeUninit<AlpenglowVoteState> is guaranteed to have same layout
-            // and alignment as AlpenglowVoteState.
-            // - Here it is safe to create a reference to MaybeUninit<AlpenglowVoteState> since the value is
-            // aligned and MaybeUninit<T> is valid for all possible bit values.
-            let vote_state = &mut *(vote_state as *mut MaybeUninit<AlpenglowVoteState>);
-
-            // Try to deserialize in place
-            if let Err(e) = AlpenglowVoteState::deserialize_into_uninit(account.data(), vote_state) {
-                // Safety:
-                // - Deserialization failed so at this point vote_state is uninitialized and must not be
-                // dropped. We're ok since `vote_state` is a subfield of `inner` which is still MaybeUninit
-                // - which isn't dropped by definition - and so neither are its subfields.
-                return Err(e.into());
-            }*/
+            } else if let Some(inner_state_ptr) = inner_alpenglow_state_ptr {
+                *inner_state_ptr = *AlpenglowVoteState::deserialize(account.data());
             } else {
                 panic!("Unknown vote state");
             }
@@ -586,6 +581,23 @@ mod tests {
         std::iter::repeat_with,
     };
 
+    fn new_rand_alpenglow_vote_account<R: Rng> (
+        rng: &mut R,
+    ) -> (AccountSharedData, AlpenglowVoteState) {
+        let alpenglow_vote_state = AlpenglowVoteState::default();
+        let account = {
+            let mut buffer = vec![0u8; AlpenglowVoteState::size()];
+            alpenglow_vote_state.serialize_into(&mut buffer);
+            AccountSharedData::new_data(
+                rng.gen(), // lamports
+                &buffer,
+                &alpenglow_vote::id(),
+            )
+            .unwrap()
+        };
+        (account, alpenglow_vote_state)
+    }
+
     fn new_rand_vote_account<R: Rng>(
         rng: &mut R,
         node_pubkey: Option<Pubkey>,
@@ -616,11 +628,16 @@ mod tests {
     fn new_rand_vote_accounts<R: Rng>(
         rng: &mut R,
         num_nodes: usize,
+        num_alpenglow_nodes: usize,
     ) -> impl Iterator<Item = (Pubkey, (/*stake:*/ u64, VoteAccount))> + '_ {
         let nodes: Vec<_> = repeat_with(Pubkey::new_unique).take(num_nodes).collect();
         repeat_with(move || {
-            let node = nodes[rng.gen_range(0..nodes.len())];
-            let (account, _) = new_rand_vote_account(rng, Some(node));
+            let account = if rng.gen_ratio(num_alpenglow_nodes as u32, num_nodes as u32) {
+                new_rand_alpenglow_vote_account(rng).0
+            } else {
+                let node = nodes[rng.gen_range(0..nodes.len())];
+                new_rand_vote_account(rng, Some(node)).0
+            };
             let stake = rng.gen_range(0..997);
             let vote_account = VoteAccount::try_from(account).unwrap();
             (Pubkey::new_unique(), (stake, vote_account))
@@ -689,7 +706,7 @@ mod tests {
     fn test_vote_accounts_serialize() {
         let mut rng = rand::thread_rng();
         let vote_accounts_hash_map: VoteAccountsHashMap =
-            new_rand_vote_accounts(&mut rng, 64).take(1024).collect();
+            new_rand_vote_accounts(&mut rng, 64, 0).take(1024).collect();
         let vote_accounts = VoteAccounts::from(Arc::new(vote_accounts_hash_map.clone()));
         assert!(vote_accounts.staked_nodes().len() > 32);
         assert_eq!(
@@ -708,7 +725,7 @@ mod tests {
     fn test_vote_accounts_deserialize() {
         let mut rng = rand::thread_rng();
         let vote_accounts_hash_map: VoteAccountsHashMap =
-            new_rand_vote_accounts(&mut rng, 64).take(1024).collect();
+            new_rand_vote_accounts(&mut rng, 64, 0).take(1024).collect();
         let data = bincode::serialize(&vote_accounts_hash_map).unwrap();
         let vote_accounts: VoteAccounts = bincode::deserialize(&data).unwrap();
         assert!(vote_accounts.staked_nodes().len() > 32);
@@ -756,7 +773,7 @@ mod tests {
     #[test]
     fn test_staked_nodes() {
         let mut rng = rand::thread_rng();
-        let mut accounts: Vec<_> = new_rand_vote_accounts(&mut rng, 64).take(1024).collect();
+        let mut accounts: Vec<_> = new_rand_vote_accounts(&mut rng, 64, 32).take(1024).collect();
         let mut vote_accounts = VoteAccounts::default();
         // Add vote accounts.
         for (k, (pubkey, (stake, vote_account))) in accounts.iter().enumerate() {
@@ -892,7 +909,7 @@ mod tests {
     #[test]
     fn test_staked_nodes_cow() {
         let mut rng = rand::thread_rng();
-        let mut accounts = new_rand_vote_accounts(&mut rng, 64);
+        let mut accounts = new_rand_vote_accounts(&mut rng, 64, 0);
         // Add vote accounts.
         let mut vote_accounts = VoteAccounts::default();
         for (pubkey, (stake, vote_account)) in (&mut accounts).take(1024) {
@@ -924,7 +941,7 @@ mod tests {
     #[test]
     fn test_vote_accounts_cow() {
         let mut rng = rand::thread_rng();
-        let mut accounts = new_rand_vote_accounts(&mut rng, 64);
+        let mut accounts = new_rand_vote_accounts(&mut rng, 64, 32);
         // Add vote accounts.
         let mut vote_accounts = VoteAccounts::default();
         for (pubkey, (stake, vote_account)) in (&mut accounts).take(1024) {

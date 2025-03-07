@@ -1,15 +1,8 @@
 use {
-    crate::consensus::{tower_vote_state::TowerVoteState, Stake},
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
-    solana_measure::measure::Measure,
-    solana_metrics::datapoint_info,
-    solana_rpc::rpc_subscriptions::RpcSubscriptions,
-    solana_runtime::{
+    crate::consensus::{tower_vote_state::TowerVoteState, Stake}, crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender}, solana_measure::measure::Measure, solana_metrics::datapoint_info, solana_rpc::rpc_subscriptions::RpcSubscriptions, solana_runtime::{
         bank::Bank,
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
-    },
-    solana_sdk::{clock::Slot, pubkey::Pubkey},
-    std::{
+    }, solana_sdk::{clock::Slot, pubkey::Pubkey}, std::{
         cmp::max,
         collections::HashMap,
         sync::{
@@ -18,7 +11,7 @@ use {
         },
         thread::{self, Builder, JoinHandle},
         time::Duration,
-    },
+    }
 };
 
 pub struct CommitmentAggregationData {
@@ -202,13 +195,11 @@ impl AggregateCommitmentService {
             let vote_state = if pubkey == node_vote_pubkey {
                 // Override old vote_state in bank with latest one for my own vote pubkey
                 node_vote_state.clone()
+            } else if let Some(vote_state) = account.vote_state() {
+                TowerVoteState::from(vote_state.clone())
             } else {
-                TowerVoteState::from(
-                    account
-                        .vote_state()
-                        .expect("should only be called for TowerBFT")
-                        .clone(),
-                )
+                // No lockup in AlpenglowVoteAccounts
+                continue;
             };
             Self::aggregate_commitment_for_vote_account(
                 &mut commitment,
