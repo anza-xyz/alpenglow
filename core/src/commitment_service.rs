@@ -1,8 +1,15 @@
 use {
-    crate::consensus::{tower_vote_state::TowerVoteState, Stake}, crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender}, solana_measure::measure::Measure, solana_metrics::datapoint_info, solana_rpc::rpc_subscriptions::RpcSubscriptions, solana_runtime::{
+    crate::consensus::{tower_vote_state::TowerVoteState, Stake},
+    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    solana_measure::measure::Measure,
+    solana_metrics::datapoint_info,
+    solana_rpc::rpc_subscriptions::RpcSubscriptions,
+    solana_runtime::{
         bank::Bank,
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
-    }, solana_sdk::{clock::Slot, pubkey::Pubkey}, std::{
+    },
+    solana_sdk::{clock::Slot, pubkey::Pubkey},
+    std::{
         cmp::max,
         collections::HashMap,
         sync::{
@@ -11,7 +18,7 @@ use {
         },
         thread::{self, Builder, JoinHandle},
         time::Duration,
-    }
+    },
 };
 
 pub struct CommitmentAggregationData {

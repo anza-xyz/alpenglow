@@ -8,6 +8,7 @@ use {
     solana_account::{AccountSharedData, ReadableAccount},
     solana_clock::{Epoch, Slot},
     solana_instruction::error::InstructionError,
+    solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
     solana_vote_interface::state::{BlockTimestamp, VoteState},
     std::{
@@ -30,6 +31,10 @@ pub struct VoteAccount(Arc<VoteAccountInner>);
 pub enum Error {
     #[error(transparent)]
     InstructionError(#[from] InstructionError),
+
+    #[error(transparent)]
+    ProgramError(#[from] ProgramError),
+
     #[error("Invalid vote account owner: {0}")]
     InvalidOwner(/*owner:*/ Pubkey),
 }
@@ -151,8 +156,12 @@ impl VoteAccount {
             VoteAccountState::TowerBFT(vote_state) => vote_state.epoch_credits.clone(),
             VoteAccountState::Alpenglow(vote_state) => {
                 let epoch_credits = vote_state.epoch_credits();
-                vec![(epoch_credits.epoch(), epoch_credits.credits(), epoch_credits.prev_credits())]
-            },
+                vec![(
+                    epoch_credits.epoch(),
+                    epoch_credits.credits(),
+                    epoch_credits.prev_credits(),
+                )]
+            }
         }
     }
 
@@ -446,7 +455,7 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                     return Err(e.into());
                 }
             } else if let Some(inner_state_ptr) = inner_alpenglow_state_ptr {
-                *inner_state_ptr = *AlpenglowVoteState::deserialize(account.data());
+                *inner_state_ptr = *AlpenglowVoteState::deserialize(account.data())?;
             } else {
                 panic!("Unknown vote state");
             }
@@ -581,20 +590,23 @@ mod tests {
         std::iter::repeat_with,
     };
 
-    fn new_rand_alpenglow_vote_account<R: Rng> (
+    fn new_rand_alpenglow_vote_account<R: Rng>(
         rng: &mut R,
+        node_pubkey: Option<Pubkey>,
     ) -> (AccountSharedData, AlpenglowVoteState) {
-        let alpenglow_vote_state = AlpenglowVoteState::default();
-        let account = {
-            let mut buffer = vec![0u8; AlpenglowVoteState::size()];
-            alpenglow_vote_state.serialize_into(&mut buffer);
-            AccountSharedData::new_data(
-                rng.gen(), // lamports
-                &buffer,
-                &alpenglow_vote::id(),
-            )
-            .unwrap()
-        };
+        let alpenglow_vote_state = AlpenglowVoteState::new_for_tests(
+            node_pubkey.unwrap_or_else(Pubkey::new_unique),
+            Pubkey::new_unique(),
+            rng.gen(),
+            Pubkey::new_unique(),
+            rng.gen(),
+        );
+        let mut account = AccountSharedData::new(
+            rng.gen(), // lamports
+            AlpenglowVoteState::size(),
+            &alpenglow_vote::id(),
+        );
+        alpenglow_vote_state.serialize_into(account.data_as_mut_slice());
         (account, alpenglow_vote_state)
     }
 
@@ -632,10 +644,10 @@ mod tests {
     ) -> impl Iterator<Item = (Pubkey, (/*stake:*/ u64, VoteAccount))> + '_ {
         let nodes: Vec<_> = repeat_with(Pubkey::new_unique).take(num_nodes).collect();
         repeat_with(move || {
+            let node = nodes[rng.gen_range(0..nodes.len())];
             let account = if rng.gen_ratio(num_alpenglow_nodes as u32, num_nodes as u32) {
-                new_rand_alpenglow_vote_account(rng).0
+                new_rand_alpenglow_vote_account(rng, Some(node)).0
             } else {
-                let node = nodes[rng.gen_range(0..nodes.len())];
                 new_rand_vote_account(rng, Some(node)).0
             };
             let stake = rng.gen_range(0..997);
@@ -705,8 +717,9 @@ mod tests {
     #[test]
     fn test_vote_accounts_serialize() {
         let mut rng = rand::thread_rng();
-        let vote_accounts_hash_map: VoteAccountsHashMap =
-            new_rand_vote_accounts(&mut rng, 64, 0).take(1024).collect();
+        let vote_accounts_hash_map: VoteAccountsHashMap = new_rand_vote_accounts(&mut rng, 64, 32)
+            .take(1024)
+            .collect();
         let vote_accounts = VoteAccounts::from(Arc::new(vote_accounts_hash_map.clone()));
         assert!(vote_accounts.staked_nodes().len() > 32);
         assert_eq!(
@@ -773,7 +786,9 @@ mod tests {
     #[test]
     fn test_staked_nodes() {
         let mut rng = rand::thread_rng();
-        let mut accounts: Vec<_> = new_rand_vote_accounts(&mut rng, 64, 32).take(1024).collect();
+        let mut accounts: Vec<_> = new_rand_vote_accounts(&mut rng, 64, 32)
+            .take(1024)
+            .collect();
         let mut vote_accounts = VoteAccounts::default();
         // Add vote accounts.
         for (k, (pubkey, (stake, vote_account))) in accounts.iter().enumerate() {
@@ -909,7 +924,7 @@ mod tests {
     #[test]
     fn test_staked_nodes_cow() {
         let mut rng = rand::thread_rng();
-        let mut accounts = new_rand_vote_accounts(&mut rng, 64, 0);
+        let mut accounts = new_rand_vote_accounts(&mut rng, 64, 32);
         // Add vote accounts.
         let mut vote_accounts = VoteAccounts::default();
         for (pubkey, (stake, vote_account)) in (&mut accounts).take(1024) {
