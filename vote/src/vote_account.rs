@@ -39,6 +39,7 @@ pub enum Error {
     InvalidOwner(/*owner:*/ Pubkey),
 }
 
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum VoteAccountState {
