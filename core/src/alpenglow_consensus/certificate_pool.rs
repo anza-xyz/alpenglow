@@ -31,8 +31,11 @@ pub enum NewHighestCertificate {
 }
 
 impl NewHighestCertificate {
-    pub fn is_finalize(&self) -> bool {
-        matches!(self, NewHighestCertificate::Finalize(_slot))
+    pub fn is_notarization_or_skip(&self) -> bool {
+        matches!(
+            self,
+            NewHighestCertificate::Notarize(_) | NewHighestCertificate::Skip(_)
+        )
     }
 
     pub fn slot(&self) -> Slot {
@@ -161,11 +164,11 @@ impl CertificatePool {
         self.skip_pool.update(total_stake);
     }
 
-    pub fn is_notarization_certificate_complete(&self, slot: Slot) -> bool {
+    /// If complete, returns Some(size), the size of the certificate
+    pub fn is_notarization_certificate_complete(&self, slot: Slot) -> Option<usize> {
         self.certificates
             .get(&(slot, CertificateType::Notarize))
-            .map(|certificate| certificate.is_complete())
-            .unwrap_or(false)
+            .and_then(|certificate| certificate.is_complete().then_some(certificate.size()))
     }
 
     pub fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
@@ -222,7 +225,6 @@ impl CertificatePool {
             .unwrap_or(false)
     }
 
-    #[allow(dead_code)]
     pub fn skip_certified(&mut self, slot: Slot, total_stake: Stake) -> bool {
         self.skip_pool.skip_certified(slot, total_stake)
     }
@@ -249,6 +251,7 @@ impl CertificatePool {
                 {
                     finalization_certificate
                 } else {
+                    error!("Missing notarization certificate {parent_slot}");
                     return None;
                 }
             } else {
@@ -277,6 +280,7 @@ impl CertificatePool {
                         .1
                         .clone()
                 } else {
+                    error!("Missing skip certificate certificate for {begin_skip_slot} to {end_skip_slot} have {max_skip_range:?}");
                     return None;
                 }
             } else {
