@@ -585,16 +585,12 @@ mod tests {
         rng: &mut R,
     ) -> (AccountSharedData, AlpenglowVoteState) {
         let alpenglow_vote_state = AlpenglowVoteState::default();
-        let account = {
-            let mut buffer = vec![0u8; AlpenglowVoteState::size()];
-            alpenglow_vote_state.serialize_into(&mut buffer);
-            AccountSharedData::new_data(
-                rng.gen(), // lamports
-                &buffer,
-                &alpenglow_vote::id(),
-            )
-            .unwrap()
-        };
+        let mut account = AccountSharedData::new(
+            rng.gen(), // lamports
+            AlpenglowVoteState::size(),
+            &alpenglow_vote::id(),
+        );
+        alpenglow_vote_state.serialize_into(&mut account.data_as_mut_slice());
         (account, alpenglow_vote_state)
     }
 
