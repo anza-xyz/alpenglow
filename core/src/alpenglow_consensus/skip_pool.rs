@@ -20,6 +20,9 @@ pub enum AddVoteError {
 
     #[error("Overlapping skip vote old {0:?} and new {1:?}")]
     Overlapping(RangeInclusive<Slot>, RangeInclusive<Slot>),
+
+    #[error("Zero stake")]
+    ZeroStake,
 }
 
 /// A trait for objects that provide a stake value.
@@ -147,6 +150,9 @@ impl SkipPool {
         stake: Stake,
         total_stake: Stake,
     ) -> Result<(), AddVoteError> {
+        if stake == 0 {
+            return Err(AddVoteError::ZeroStake);
+        }
         // Remove previous skip vote if it exists
         if let Some(prev_skip_vote) = self.skips.get(pubkey) {
             if prev_skip_vote.skip_range == skip_range {
@@ -262,6 +268,27 @@ mod tests {
     }
 
     #[test]
+    fn test_add_vote_zero_stake() {
+        let mut pool = SkipPool::new();
+        let validator = Pubkey::new_unique();
+        let skip_range = 1..=1;
+        let skip_tx = dummy_transaction();
+        let stake = 0;
+        let total_stake = 100;
+
+        assert_eq!(
+            pool.add_vote(
+                &validator,
+                skip_range.clone(),
+                skip_tx.clone(),
+                stake,
+                total_stake,
+            ),
+            Err(AddVoteError::ZeroStake)
+        );
+    }
+
+    #[test]
     fn test_add_singleton_range() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
@@ -365,7 +392,7 @@ mod tests {
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 6));
     }
-    
+
     #[test]
     fn test_update_existing_vote() {
         let mut pool = SkipPool::new();
