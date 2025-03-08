@@ -105,6 +105,13 @@ impl VoteAccount {
         }
     }
 
+    pub fn alpenglow_vote_state(&self) -> Option<&AlpenglowVoteState> {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(_) => None,
+            VoteAccountState::Alpenglow(vote_state) => Some(vote_state),
+        }
+    }
+
     /// VoteState.node_pubkey of this vote-account.
     pub fn node_pubkey(&self) -> &Pubkey {
         match &self.0.vote_state {
@@ -686,6 +693,17 @@ mod tests {
     }
 
     #[test]
+    fn test_alpenglow_vote_account_try_from() {
+        let mut rng = rand::thread_rng();
+        let (account, alpenglow_vote_state) = new_rand_alpenglow_vote_account(&mut rng, None);
+        let lamports = account.lamports();
+        let vote_account = VoteAccount::try_from(account.clone()).unwrap();
+        assert_eq!(lamports, vote_account.lamports());
+        assert_eq!(alpenglow_vote_state, *vote_account.alpenglow_vote_state().unwrap());
+        assert_eq!(&account, vote_account.account());
+    }
+
+    #[test]
     #[should_panic(expected = "InvalidOwner")]
     fn test_vote_account_try_from_invalid_owner() {
         let mut rng = rand::thread_rng();
@@ -703,11 +721,32 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "InvalidArgument")]
+    fn test_vote_account_try_from_invalid_alpenglow_account() {
+        let mut account = AccountSharedData::default();
+        account.set_owner(alpenglow_vote::id());
+        VoteAccount::try_from(account).unwrap();
+    }
+
+    #[test]
     fn test_vote_account_serialize() {
         let mut rng = rand::thread_rng();
         let (account, vote_state) = new_rand_vote_account(&mut rng, None);
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
         assert_eq!(vote_state, *vote_account.vote_state().unwrap());
+        // Assert that VoteAccount has the same wire format as Account.
+        assert_eq!(
+            bincode::serialize(&account).unwrap(),
+            bincode::serialize(&vote_account).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_alpenglow_vote_account_serialize() {
+        let mut rng = rand::thread_rng();
+        let (account, alpenglow_vote_state) = new_rand_alpenglow_vote_account(&mut rng, None);
+        let vote_account = VoteAccount::try_from(account.clone()).unwrap();
+        assert_eq!(alpenglow_vote_state, *vote_account.alpenglow_vote_state().unwrap());
         // Assert that VoteAccount has the same wire format as Account.
         assert_eq!(
             bincode::serialize(&account).unwrap(),
@@ -739,7 +778,7 @@ mod tests {
     fn test_vote_accounts_deserialize() {
         let mut rng = rand::thread_rng();
         let vote_accounts_hash_map: VoteAccountsHashMap =
-            new_rand_vote_accounts(&mut rng, 64, 0).take(1024).collect();
+            new_rand_vote_accounts(&mut rng, 64, 32).take(1024).collect();
         let data = bincode::serialize(&vote_accounts_hash_map).unwrap();
         let vote_accounts: VoteAccounts = bincode::deserialize(&data).unwrap();
         assert!(vote_accounts.staked_nodes().len() > 32);
@@ -837,14 +876,17 @@ mod tests {
         assert!(vote_accounts.staked_nodes.get().unwrap().is_empty());
     }
 
-    #[test]
-    fn test_staked_nodes_update() {
+    fn test_staked_nodes_update(is_alpenglow: bool) {
         let mut vote_accounts = VoteAccounts::default();
 
         let mut rng = rand::thread_rng();
         let pubkey = Pubkey::new_unique();
         let node_pubkey = Pubkey::new_unique();
-        let (account1, _) = new_rand_vote_account(&mut rng, Some(node_pubkey));
+        let account1 = if is_alpenglow {
+            new_rand_alpenglow_vote_account(&mut rng, Some(node_pubkey)).0
+        } else {
+            new_rand_vote_account(&mut rng, Some(node_pubkey)).0
+        };
         let vote_account1 = VoteAccount::try_from(account1).unwrap();
 
         // first insert
@@ -864,7 +906,11 @@ mod tests {
         assert_eq!(vote_accounts.staked_nodes().get(&node_pubkey), Some(&42));
 
         // update with changed state, same node pubkey
-        let (account2, _) = new_rand_vote_account(&mut rng, Some(node_pubkey));
+        let account2 = if is_alpenglow {
+            new_rand_alpenglow_vote_account(&mut rng, Some(node_pubkey)).0
+        } else {
+            new_rand_vote_account(&mut rng, Some(node_pubkey)).0
+        };
         let vote_account2 = VoteAccount::try_from(account2).unwrap();
         let ret = vote_accounts.insert(pubkey, vote_account2.clone(), || {
             panic!("should not be called")
@@ -877,7 +923,11 @@ mod tests {
 
         // update with new node pubkey, stake must be moved
         let new_node_pubkey = Pubkey::new_unique();
-        let (account3, _) = new_rand_vote_account(&mut rng, Some(new_node_pubkey));
+        let account3 = if is_alpenglow {
+            new_rand_alpenglow_vote_account(&mut rng, Some(new_node_pubkey)).0
+        } else {
+            new_rand_vote_account(&mut rng, Some(new_node_pubkey)).0
+        };
         let vote_account3 = VoteAccount::try_from(account3).unwrap();
         let ret = vote_accounts.insert(pubkey, vote_account3.clone(), || {
             panic!("should not be called")
@@ -891,13 +941,22 @@ mod tests {
     }
 
     #[test]
-    fn test_staked_nodes_zero_stake() {
+    fn test_staked_nodes_updates() {
+        test_staked_nodes_update(false);
+        test_staked_nodes_update(true);
+    }
+
+    fn test_staked_nodes_zero_stake(is_alpenglow: bool) {
         let mut vote_accounts = VoteAccounts::default();
 
         let mut rng = rand::thread_rng();
         let pubkey = Pubkey::new_unique();
         let node_pubkey = Pubkey::new_unique();
-        let (account1, _) = new_rand_vote_account(&mut rng, Some(node_pubkey));
+        let account1 = if is_alpenglow {
+            new_rand_alpenglow_vote_account(&mut rng, Some(node_pubkey)).0
+        } else {
+            new_rand_vote_account(&mut rng, Some(node_pubkey)).0
+        };
         let vote_account1 = VoteAccount::try_from(account1).unwrap();
 
         // we call this here to initialize VoteAccounts::staked_nodes which is a OnceLock
@@ -910,7 +969,11 @@ mod tests {
 
         // update with new node pubkey, stake is 0 and should remain 0
         let new_node_pubkey = Pubkey::new_unique();
-        let (account2, _) = new_rand_vote_account(&mut rng, Some(new_node_pubkey));
+        let account2 = if is_alpenglow {
+            new_rand_alpenglow_vote_account(&mut rng, Some(new_node_pubkey)).0
+        } else {
+            new_rand_vote_account(&mut rng, Some(new_node_pubkey)).0
+        };
         let vote_account2 = VoteAccount::try_from(account2).unwrap();
         let ret = vote_accounts.insert(pubkey, vote_account2.clone(), || {
             panic!("should not be called")
@@ -919,6 +982,12 @@ mod tests {
         assert_eq!(vote_accounts.get_delegated_stake(&pubkey), 0);
         assert_eq!(vote_accounts.staked_nodes().get(&node_pubkey), None);
         assert_eq!(vote_accounts.staked_nodes().get(&new_node_pubkey), None);
+    }
+
+    #[test]
+    fn test_staked_nodes_zero_stakes() {
+        test_staked_nodes_zero_stake(false);
+        test_staked_nodes_zero_stake(true);
     }
 
     // Asserts that returned staked-nodes are copy-on-write references.
