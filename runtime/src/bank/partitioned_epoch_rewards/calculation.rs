@@ -820,7 +820,7 @@ mod tests {
         let rewards = &vote_rewards_accounts.rewards[0];
         let account = &vote_rewards_accounts.accounts_to_store[0];
         let vote_rewards = 0;
-        let commision = 0;
+        let commission = 0;
         _ = vote_account.checked_add_lamports(vote_rewards);
         assert_eq!(
             account.as_ref().unwrap().lamports(),
@@ -833,7 +833,7 @@ mod tests {
                 reward_type: RewardType::Voting,
                 lamports: vote_rewards as i64,
                 post_balance: vote_account.lamports(),
-                commission: Some(commision),
+                commission: Some(commission),
             }
         );
         assert_eq!(&rewards.0, vote_pubkey);
@@ -852,7 +852,7 @@ mod tests {
             reward_type: RewardType::Staking,
             lamports: rewards,
             post_balance: original_stake_lamport + rewards as u64,
-            commission: Some(commision),
+            commission: Some(commission),
         };
         assert_eq!(
             stake_reward_calculation.stake_rewards[0].stake_reward_info,
