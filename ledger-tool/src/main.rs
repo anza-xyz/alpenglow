@@ -83,8 +83,8 @@ use {
     solana_stake_program::stake_state,
     solana_transaction_status::parse_ui_instruction,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
-    solana_vote_program::{self, vote_state::VoteState},
     solana_vote::vote_account::VoteAccount,
+    solana_vote_program::{self, vote_state::VoteState},
     std::{
         collections::{HashMap, HashSet},
         ffi::{OsStr, OsString},
