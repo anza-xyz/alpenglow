@@ -1325,7 +1325,10 @@ fn main() {
                         .value_name("ALPENGLOW_COUNT")
                         .requires("bootstrap_validator")
                         .takes_value(true)
-                        .help("How many bootstrap validators are created as Alpenglow account"),
+                        .help("How many bootstrap validators to creat as Alpenglow account. \
+                               The rest will be created as TowerBFT account. \
+                               Should be less than or equal to the number of bootstrap validators",
+                    ),
                 )
                 .arg(
                     Arg::with_name("bootstrap_stake_authorized_pubkey")
