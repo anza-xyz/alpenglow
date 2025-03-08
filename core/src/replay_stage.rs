@@ -4286,53 +4286,54 @@ impl ReplayStage {
         let Some(vote_account) = bank.get_vote_account(my_vote_pubkey) else {
             return;
         };
-        if let Some(vote_state) = vote_account.vote_state() {
-            let mut bank_vote_state = TowerVoteState::from(vote_state.clone());
-            if bank_vote_state.last_voted_slot() <= tower.vote_state.last_voted_slot() {
-                return;
-            }
-            info!(
-                "Frozen bank vote state slot {:?}
-                is newer than our local vote state slot {:?},
-                adopting the bank vote state as our own.
-                Bank votes: {:?}, root: {:?},
-                Local votes: {:?}, root: {:?}",
-                bank_vote_state.last_voted_slot(),
-                tower.vote_state.last_voted_slot(),
-                bank_vote_state.votes,
-                bank_vote_state.root_slot,
-                tower.vote_state.votes,
-                tower.vote_state.root_slot
-            );
+        let Some(vote_state) = vote_account.vote_state() else {
+            return;
+        };
+        let mut bank_vote_state = TowerVoteState::from(vote_state.clone());
+        if bank_vote_state.last_voted_slot() <= tower.vote_state.last_voted_slot() {
+            return;
+        }
+        info!(
+            "Frozen bank vote state slot {:?}
+            is newer than our local vote state slot {:?},
+            adopting the bank vote state as our own.
+            Bank votes: {:?}, root: {:?},
+            Local votes: {:?}, root: {:?}",
+            bank_vote_state.last_voted_slot(),
+            tower.vote_state.last_voted_slot(),
+            bank_vote_state.votes,
+            bank_vote_state.root_slot,
+            tower.vote_state.votes,
+            tower.vote_state.root_slot
+        );
 
-            if let Some(local_root) = tower.vote_state.root_slot {
-                if bank_vote_state
-                    .root_slot
-                    .map(|bank_root| local_root > bank_root)
-                    .unwrap_or(true)
-                {
-                    // If the local root is larger than this on chain vote state
-                    // root (possible due to supermajority roots being set on
-                    // startup), then we need to adjust the tower
-                    bank_vote_state.root_slot = Some(local_root);
-                    bank_vote_state
-                        .votes
-                        .retain(|lockout| lockout.slot() > local_root);
-                    info!(
-                        "Local root is larger than on chain root,
-                        overwrote bank root {:?} and updated votes {:?}",
-                        bank_vote_state.root_slot, bank_vote_state.votes
-                    );
+        if let Some(local_root) = tower.vote_state.root_slot {
+            if bank_vote_state
+                .root_slot
+                .map(|bank_root| local_root > bank_root)
+                .unwrap_or(true)
+            {
+                // If the local root is larger than this on chain vote state
+                // root (possible due to supermajority roots being set on
+                // startup), then we need to adjust the tower
+                bank_vote_state.root_slot = Some(local_root);
+                bank_vote_state
+                    .votes
+                    .retain(|lockout| lockout.slot() > local_root);
+                info!(
+                    "Local root is larger than on chain root,
+                    overwrote bank root {:?} and updated votes {:?}",
+                    bank_vote_state.root_slot, bank_vote_state.votes
+                );
 
-                    if let Some(first_vote) = bank_vote_state.votes.front() {
-                        assert!(ancestors
-                            .get(&first_vote.slot())
-                            .expect(
-                                "Ancestors map must contain an entry for all slots on this fork \
-                                greater than `local_root` and less than `bank_slot`"
-                            )
-                            .contains(&local_root));
-                    }
+                if let Some(first_vote) = bank_vote_state.votes.front() {
+                    assert!(ancestors
+                        .get(&first_vote.slot())
+                        .expect(
+                            "Ancestors map must contain an entry for all slots on this fork \
+                            greater than `local_root` and less than `bank_slot`"
+                        )
+                        .contains(&local_root));
                 }
             }
 
