@@ -20,6 +20,9 @@ pub enum AddVoteError {
 
     #[error("Overlapping skip vote old {0:?} and new {1:?}")]
     Overlapping(RangeInclusive<Slot>, RangeInclusive<Slot>),
+
+    #[error("Zero stake")]
+    ZeroStake,
 }
 
 /// A trait for objects that provide a stake value.
@@ -73,10 +76,16 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
     fn query(&self, threshold_stake: f64) -> Option<(RangeInclusive<Slot>, Vec<T>)> {
         let mut accumulated = 0f64;
         let mut start = None;
+        let mut prev_slot = None;
         let mut contributing_items: Vec<T> = Vec::new();
         let mut active_contributors: HashMap<Pubkey, Stake> = HashMap::new();
-
         for (&slot, events) in &self.tree {
+            if let Some(start) = start {
+                // Only try to continue if this is a consecutive slot
+                if accumulated < threshold_stake && slot != prev_slot.unwrap() + 1 {
+                    return Some((start..=prev_slot.unwrap(), contributing_items));
+                }
+            }
             for item in events {
                 let pubkey = item.pubkey();
                 let stake = item.stake_value();
@@ -92,16 +101,14 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
                     // If the pubkey is already in active_contributors, it's the end of the range
                     accumulated -= active_contributors.remove(&pubkey).unwrap() as f64;
                 }
-                if accumulated >= threshold_stake {
-                    if start.is_none() {
-                        start = Some(slot as Slot);
-                    }
-                } else if start.is_some() {
-                    return Some((start.unwrap()..=slot as Slot, contributing_items));
+                if accumulated >= threshold_stake && start.is_none() {
+                    start = Some(slot as Slot);
                 }
             }
+            prev_slot = Some(slot);
         }
-        None
+
+        start.map(|start| (start..=prev_slot.unwrap(), contributing_items))
     }
 }
 
@@ -143,6 +150,9 @@ impl SkipPool {
         stake: Stake,
         total_stake: Stake,
     ) -> Result<(), AddVoteError> {
+        if stake == 0 {
+            return Err(AddVoteError::ZeroStake);
+        }
         // Remove previous skip vote if it exists
         if let Some(prev_skip_vote) = self.skips.get(pubkey) {
             if prev_skip_vote.skip_range == skip_range {
@@ -150,13 +160,18 @@ impl SkipPool {
                     prev_skip_vote.skip_range.clone(),
                 ));
             }
-            if prev_skip_vote.skip_range.end() > skip_range.end() {
+            if prev_skip_vote.skip_range.end() >= skip_range.end() {
                 return Err(AddVoteError::TooOld(
                     prev_skip_vote.skip_range.clone(),
                     skip_range,
                 ));
             }
-            if skip_range.start() <= prev_skip_vote.skip_range.end() {
+
+            // Extensions are allowed, i.e. (1..=3) to (1..=5)
+            if skip_range.start() == prev_skip_vote.skip_range.start() {
+                // Guaranteed by above TooOld check
+                assert!(skip_range.end() > prev_skip_vote.skip_range.end());
+            } else if skip_range.start() <= prev_skip_vote.skip_range.end() {
                 return Err(AddVoteError::Overlapping(
                     prev_skip_vote.skip_range.clone(),
                     skip_range,
@@ -253,6 +268,27 @@ mod tests {
     }
 
     #[test]
+    fn test_add_vote_zero_stake() {
+        let mut pool = SkipPool::new();
+        let validator = Pubkey::new_unique();
+        let skip_range = 1..=1;
+        let skip_tx = dummy_transaction();
+        let stake = 0;
+        let total_stake = 100;
+
+        assert_eq!(
+            pool.add_vote(
+                &validator,
+                skip_range.clone(),
+                skip_tx.clone(),
+                stake,
+                total_stake,
+            ),
+            Err(AddVoteError::ZeroStake)
+        );
+    }
+
+    #[test]
     fn test_add_singleton_range() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
@@ -286,8 +322,39 @@ mod tests {
             .unwrap();
         pool.add_vote(&validator2, 20..=30, dummy_transaction(), 50, 100)
             .unwrap();
-
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(0, 0));
+
+        pool.add_vote(&validator1, 5..=30, dummy_transaction(), 50, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(20, 30));
+    }
+
+    #[test]
+    fn test_add_multiple_disjoint_votes() {
+        let mut pool = SkipPool::new();
+        let validator1 = Pubkey::new_unique();
+        let validator2 = Pubkey::new_unique();
+        let validator3 = Pubkey::new_unique();
+        let validator4 = Pubkey::new_unique();
+
+        pool.add_vote(&validator1, 1..=10, dummy_transaction(), 66, 100)
+            .unwrap();
+
+        pool.add_vote(&validator2, 2..=2, dummy_transaction(), 1, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 2));
+
+        pool.add_vote(&validator3, 4..=4, dummy_transaction(), 1, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 2));
+
+        pool.add_vote(&validator4, 3..=3, dummy_transaction(), 1, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 4));
+
+        pool.add_vote(&validator4, 3..=10, dummy_transaction(), 1, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 10));
     }
 
     #[test]
@@ -314,6 +381,19 @@ mod tests {
     }
 
     #[test]
+    fn test_update_existing_singleton_vote() {
+        let mut pool = SkipPool::new();
+        let validator = Pubkey::new_unique();
+        // Range expansion on a singleton vote should be ok
+        assert!(pool
+            .add_vote(&validator, 1..=1, dummy_transaction(), 70, 100)
+            .is_ok());
+        pool.add_vote(&validator, 1..=6, dummy_transaction(), 70, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 6));
+    }
+
+    #[test]
     fn test_update_existing_vote() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
@@ -334,6 +414,12 @@ mod tests {
             Err(AddVoteError::TooOld(10..=20, 15..=17))
         );
 
+        // TooOld falure with same range start but smaller range end
+        assert_eq!(
+            pool.add_vote(&validator, 10..=19, dummy_transaction(), 70, 100),
+            Err(AddVoteError::TooOld(10..=20, 10..=19))
+        );
+
         // Overlapping failures
         assert_eq!(
             pool.add_vote(&validator, 15..=25, dummy_transaction(), 70, 100),
@@ -348,7 +434,11 @@ mod tests {
         // Adding a new, non-overlapping range
         pool.add_vote(&validator, 21..=22, dummy_transaction(), 70, 100)
             .unwrap();
-        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(21, 22));
+
+        // Range extension is allowed
+        pool.add_vote(&validator, 21..=23, dummy_transaction(), 70, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(21, 23));
     }
 
     #[test]
