@@ -372,7 +372,6 @@ impl Bank {
                     if vote_account.owner() != &solana_vote_program {
                         return None;
                     }
-                    let vote_state = vote_account.vote_state();
                     let mut stake_state = *stake_account.stake_state();
 
                     let redeemed = redeem_rewards(
@@ -825,7 +824,7 @@ mod tests {
             let stake_reward = 8_400_000_000_000;
             let stake_state: StakeStateV2 = stake_account.state().unwrap();
             let mut stake = stake_state.stake().unwrap();
-            stake.credits_observed = vote_account.credits();
+            stake.credits_observed = vote_state.credits();
             stake.delegation.stake += stake_reward;
             PartitionedStakeReward {
                 stake,
