@@ -6,10 +6,7 @@ use {
         PointValue, SkippedReason,
     },
     solana_sdk::{
-        account::{state_traits::StateMut, AccountSharedData, WritableAccount},
-        clock::Epoch,
-        instruction::InstructionError,
-        stake::instruction::StakeError,
+        clock::Epoch, instruction::InstructionError, stake::instruction::StakeError,
         sysvar::stake_history::StakeHistory,
     },
     solana_stake_program::stake_state::{Stake, StakeStateV2},
@@ -29,8 +26,7 @@ struct CalculatedStakeRewards {
 #[allow(clippy::too_many_arguments)]
 pub fn redeem_rewards(
     rewarded_epoch: Epoch,
-    stake_state: StakeStateV2,
-    stake_account: &mut AccountSharedData,
+    stake_state: &mut StakeStateV2,
     credits_in_vote: u64,
     epoch_credits: &[(Epoch, u64, u64)],
     commission: u8,
@@ -39,7 +35,7 @@ pub fn redeem_rewards(
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> Result<(u64, u64), InstructionError> {
-    if let StakeStateV2::Stake(meta, mut stake, stake_flags) = stake_state {
+    if let StakeStateV2::Stake(meta, stake, _stake_flags) = stake_state {
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
             inflation_point_calc_tracer(
                 &InflationPointCalculationEvent::EffectiveStakeAtRewardedEpoch(stake.stake(
@@ -56,7 +52,7 @@ pub fn redeem_rewards(
 
         if let Some((stakers_reward, voters_reward)) = redeem_stake_rewards(
             rewarded_epoch,
-            &mut stake,
+            stake,
             point_value,
             credits_in_vote,
             epoch_credits,
@@ -65,9 +61,6 @@ pub fn redeem_rewards(
             inflation_point_calc_tracer,
             new_rate_activation_epoch,
         ) {
-            stake_account.checked_add_lamports(stakers_reward)?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))?;
-
             Ok((stakers_reward, voters_reward))
         } else {
             Err(StakeError::NoCreditsToRedeem.into())

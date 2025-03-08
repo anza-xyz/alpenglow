@@ -26,13 +26,10 @@ use {
     },
     solana_measure::measure_us,
     solana_sdk::{
-        account::{AccountSharedData, ReadableAccount},
-        account_utils::StateMut,
         clock::{Epoch, Slot},
         pubkey::Pubkey,
         reward_info::RewardInfo,
-        reward_type::RewardType,
-        stake::state::{Delegation, StakeStateV2},
+        stake::state::Delegation,
         sysvar::epoch_rewards::EpochRewards,
     },
     std::sync::atomic::{AtomicU64, Ordering::Relaxed},
@@ -370,22 +367,17 @@ impl Bank {
                     });
 
                     let stake_pubkey = **stake_pubkey;
-                    let stake_account = (*stake_account).to_owned();
-
                     let vote_pubkey = stake_account.delegation().voter_pubkey;
-                    let (mut stake_account, stake_state) =
-                        <(AccountSharedData, StakeStateV2)>::from(stake_account);
                     let vote_account = get_vote_account(&vote_pubkey)?;
                     if vote_account.owner() != &solana_vote_program {
                         return None;
                     }
-
-                    let pre_lamport = stake_account.lamports();
+                    let vote_state = vote_account.vote_state();
+                    let mut stake_state = *stake_account.stake_state();
 
                     let redeemed = redeem_rewards(
                         rewarded_epoch,
-                        stake_state,
-                        &mut stake_account,
+                        &mut stake_state,
                         vote_account.credits(),
                         &vote_account.epoch_credits(),
                         vote_account.commission(),
@@ -395,13 +387,7 @@ impl Bank {
                         new_warmup_cooldown_rate_epoch,
                     );
 
-                    let post_lamport = stake_account.lamports();
-
                     if let Ok((stakers_reward, voters_reward)) = redeemed {
-                        debug!(
-                            "calculated reward: {} {} {} {}",
-                            stake_pubkey, pre_lamport, post_lamport, stakers_reward
-                        );
                         let commission = vote_account.commission();
 
                         // track voter rewards
@@ -419,24 +405,17 @@ impl Bank {
                             .vote_rewards
                             .saturating_add(voters_reward);
 
-                        let post_balance = stake_account.lamports();
                         total_stake_rewards.fetch_add(stakers_reward, Relaxed);
 
-                        // Safe to unwrap on the following lines because all
-                        // stake_delegations are type StakeAccount<Delegation>,
-                        // which will always only wrap a `StakeStateV2::Stake`
-                        // variant.
-                        let updated_stake_state: StakeStateV2 = stake_account.state().unwrap();
-                        let stake = updated_stake_state.stake().unwrap();
+                        // Safe to unwrap because all stake_delegations are type
+                        // StakeAccount<Delegation>, which will always only wrap
+                        // a `StakeStateV2::Stake` variant.
+                        let stake = stake_state.stake().unwrap();
                         return Some(PartitionedStakeReward {
                             stake_pubkey,
-                            stake_reward_info: RewardInfo {
-                                reward_type: RewardType::Staking,
-                                lamports: i64::try_from(stakers_reward).unwrap(),
-                                post_balance,
-                                commission: Some(commission),
-                            },
+                            stake_reward: stakers_reward,
                             stake,
+                            commission,
                         });
                     } else {
                         debug!(
@@ -610,11 +589,14 @@ mod tests {
         },
         rayon::ThreadPoolBuilder,
         solana_sdk::{
-            account::{accounts_equal, ReadableAccount, WritableAccount},
+            account::{accounts_equal, ReadableAccount},
+            account_utils::StateMut,
             native_token::{sol_to_lamports, LAMPORTS_PER_SOL},
             reward_type::RewardType,
             stake::state::Delegation,
         },
+        solana_stake_program::stake_state::StakeStateV2,
+        solana_vote_program::vote_state::VoteState,
         std::sync::{Arc, RwLockReadGuard},
     };
 
@@ -780,14 +762,9 @@ mod tests {
         } = create_default_reward_bank(expected_num_delegations, SLOTS_PER_EPOCH);
 
         let vote_pubkey = voters.first().unwrap();
-        let mut vote_account = bank
-            .load_slow_with_fixed_root(&bank.ancestors, vote_pubkey)
-            .unwrap()
-            .0;
-
-        let stake_pubkey = stakers.first().unwrap();
+        let stake_pubkey = *stakers.first().unwrap();
         let stake_account = bank
-            .load_slow_with_fixed_root(&bank.ancestors, stake_pubkey)
+            .load_slow_with_fixed_root(&bank.ancestors, &stake_pubkey)
             .unwrap()
             .0;
 
@@ -812,6 +789,12 @@ mod tests {
             &mut rewards_metrics,
         );
 
+        let vote_account = bank
+            .load_slow_with_fixed_root(&bank.ancestors, vote_pubkey)
+            .unwrap()
+            .0;
+        let vote_state = VoteState::deserialize(vote_account.data()).unwrap();
+
         assert_eq!(
             vote_rewards_accounts.rewards.len(),
             vote_rewards_accounts.accounts_to_store.len()
@@ -820,8 +803,7 @@ mod tests {
         let rewards = &vote_rewards_accounts.rewards[0];
         let account = &vote_rewards_accounts.accounts_to_store[0];
         let vote_rewards = 0;
-        let commission = 0;
-        _ = vote_account.checked_add_lamports(vote_rewards);
+        let commission = vote_state.commission;
         assert_eq!(
             account.as_ref().unwrap().lamports(),
             vote_account.lamports()
@@ -839,25 +821,20 @@ mod tests {
         assert_eq!(&rewards.0, vote_pubkey);
 
         assert_eq!(stake_reward_calculation.stake_rewards.len(), 1);
-        assert_eq!(
-            &stake_reward_calculation.stake_rewards[0].stake_pubkey,
-            stake_pubkey
-        );
-
-        let original_stake_lamport = stake_account.lamports();
-        let rewards = stake_reward_calculation.stake_rewards[0]
-            .stake_reward_info
-            .lamports;
-        let expected_reward_info = RewardInfo {
-            reward_type: RewardType::Staking,
-            lamports: rewards,
-            post_balance: original_stake_lamport + rewards as u64,
-            commission: Some(commission),
+        let expected_reward = {
+            let stake_reward = 8_400_000_000_000;
+            let stake_state: StakeStateV2 = stake_account.state().unwrap();
+            let mut stake = stake_state.stake().unwrap();
+            stake.credits_observed = vote_account.credits();
+            stake.delegation.stake += stake_reward;
+            PartitionedStakeReward {
+                stake,
+                stake_pubkey,
+                stake_reward,
+                commission,
+            }
         };
-        assert_eq!(
-            stake_reward_calculation.stake_rewards[0].stake_reward_info,
-            expected_reward_info,
-        );
+        assert_eq!(stake_reward_calculation.stake_rewards[0], expected_reward);
     }
 
     fn compare_stake_rewards(
