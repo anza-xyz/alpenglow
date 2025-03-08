@@ -154,7 +154,7 @@ impl SkipPool {
                     prev_skip_vote.skip_range.clone(),
                 ));
             }
-            if prev_skip_vote.skip_range.end() > skip_range.end() {
+            if prev_skip_vote.skip_range.end() >= skip_range.end() {
                 return Err(AddVoteError::TooOld(
                     prev_skip_vote.skip_range.clone(),
                     skip_range,
@@ -163,13 +163,9 @@ impl SkipPool {
 
             // Extensions are allowed, i.e. (1..=3) to (1..=5)
             if skip_range.start() == prev_skip_vote.skip_range.start() {
-                if skip_range.end() < prev_skip_vote.skip_range.end() {
-                    return Err(AddVoteError::Overlapping(
-                        prev_skip_vote.skip_range.clone(),
-                        skip_range,
-                    ));
-                }
-            } else if skip_range.start() < prev_skip_vote.skip_range.end() {
+                // Guaranteed by above TooOld check
+                assert!(skip_range.end() > prev_skip_vote.skip_range.end());
+            } else if skip_range.start() <= prev_skip_vote.skip_range.end() {
                 return Err(AddVoteError::Overlapping(
                     prev_skip_vote.skip_range.clone(),
                     skip_range,
@@ -358,16 +354,24 @@ mod tests {
     }
 
     #[test]
+    fn test_update_existing_singleton_vote() {
+        let mut pool = SkipPool::new();
+        let validator = Pubkey::new_unique();
+        // Range expansion on a singleton vote should be ok
+        assert!(pool
+            .add_vote(&validator, 1..=1, dummy_transaction(), 70, 100)
+            .is_ok());
+        pool.add_vote(&validator, 1..=6, dummy_transaction(), 70, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 6));
+    }
+    
+    #[test]
     fn test_update_existing_vote() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
-        let validator2 = Pubkey::new_unique();
 
         pool.add_vote(&validator, 10..=20, dummy_transaction(), 70, 100)
-            .unwrap();
-        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(10, 20));
-
-        pool.add_vote(&validator2, 10..=10, dummy_transaction(), 70, 100)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(10, 20));
 
@@ -383,6 +387,12 @@ mod tests {
             Err(AddVoteError::TooOld(10..=20, 15..=17))
         );
 
+        // TooOld falure with same range start but smaller range end
+        assert_eq!(
+            pool.add_vote(&validator, 10..=19, dummy_transaction(), 70, 100),
+            Err(AddVoteError::TooOld(10..=20, 10..=19))
+        );
+
         // Overlapping failures
         assert_eq!(
             pool.add_vote(&validator, 15..=25, dummy_transaction(), 70, 100),
@@ -394,16 +404,14 @@ mod tests {
             Err(AddVoteError::Overlapping(10..=20, 20..=25))
         );
 
-        // Updating a singleton vote with a start range equal to the old end range
-        // should be fine
-        assert!(pool
-            .add_vote(&validator2, 10..=25, dummy_transaction(), 70, 100)
-            .is_ok());
-
         // Adding a new, non-overlapping range
         pool.add_vote(&validator, 21..=22, dummy_transaction(), 70, 100)
             .unwrap();
-        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(21, 22));
+
+        // Range extension is allowed
+        pool.add_vote(&validator, 21..=23, dummy_transaction(), 70, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(21, 23));
     }
 
     #[test]
