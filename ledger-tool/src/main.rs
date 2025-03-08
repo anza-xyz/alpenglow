@@ -221,18 +221,22 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             .map(|(_, (stake, _))| stake)
             .sum();
         for (stake, vote_account) in bank.vote_accounts().values() {
-            // TODO(wen): this doesn't work for Alpenglow
             if let Some(last_vote) = vote_account.last_voted_slot() {
-                if let Some(vote_state) = vote_account.vote_state() {
-                    let entry = last_votes.entry(*vote_account.node_pubkey()).or_insert((
+                let entry = last_votes.entry(*vote_account.node_pubkey()).or_insert((
+                    last_vote,
+                    vote_account.get_root_slot(),
+                    vote_account.vote_slot_and_confirmation_string(),
+                    *stake,
+                    total_stake,
+                ));
+                if entry.0 < last_vote {
+                    *entry = (
                         last_vote,
-                        vote_state.clone(),
+                        vote_account.get_root_slot(),
+                        vote_account.vote_slot_and_confirmation_string(),
                         *stake,
                         total_stake,
-                    ));
-                    if entry.0 < last_vote {
-                        *entry = (last_vote, vote_state.clone(), *stake, total_stake);
-                    }
+                    );
                 }
             }
         }
@@ -241,7 +245,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     // Figure the stake distribution at all the nodes containing the last vote from each
     // validator
     let mut slot_stake_and_vote_count = HashMap::new();
-    for (last_vote_slot, _, stake, total_stake) in last_votes.values() {
+    for (last_vote_slot, _, _, stake, total_stake) in last_votes.values() {
         let entry = slot_stake_and_vote_count
             .entry(last_vote_slot)
             .or_insert((0, 0, *total_stake));
@@ -256,20 +260,21 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     dot.push("  subgraph cluster_banks {".to_string());
     dot.push("    style=invis".to_string());
     let mut styled_slots = HashSet::new();
-    let mut all_votes: HashMap<Pubkey, HashMap<Slot, VoteState>> = HashMap::new();
+    let mut all_votes: HashMap<Pubkey, HashMap<Slot, (Option<Slot>, String)>> = HashMap::new();
     for fork_slot in &fork_slots {
         let mut bank = bank_forks[*fork_slot].clone();
 
         let mut first = true;
         loop {
             for (_, vote_account) in bank.vote_accounts().values() {
-                let vote_state = vote_account.vote_state();
                 if let Some(last_vote) = vote_account.last_voted_slot() {
                     let validator_votes = all_votes.entry(*vote_account.node_pubkey()).or_default();
-                    // TODO(wen): this doesn't work for Alpenglow
-                    validator_votes
-                        .entry(last_vote)
-                        .or_insert_with(|| vote_state.unwrap().clone());
+                    validator_votes.entry(last_vote).or_insert_with(|| {
+                        (
+                            vote_account.get_root_slot(),
+                            vote_account.vote_slot_and_confirmation_string(),
+                        )
+                    });
                 }
             }
 
@@ -347,7 +352,8 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     let mut absent_votes = 0;
     let mut lowest_last_vote_slot = u64::MAX;
     let mut lowest_total_stake = 0;
-    for (node_pubkey, (last_vote_slot, vote_state, stake, total_stake)) in &last_votes {
+    for (node_pubkey, (last_vote_slot, root_slot, votes_string, stake, total_stake)) in &last_votes
+    {
         all_votes.entry(*node_pubkey).and_modify(|validator_votes| {
             validator_votes.remove(last_vote_slot);
         });
@@ -365,35 +371,16 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
         if config.vote_account_mode.is_enabled() {
             let vote_history =
                 if matches!(config.vote_account_mode, GraphVoteAccountMode::WithHistory) {
-                    format!(
-                        "vote history:\n{}",
-                        vote_state
-                            .votes
-                            .iter()
-                            .map(|vote| format!(
-                                "slot {} (conf={})",
-                                vote.slot(),
-                                vote.confirmation_count()
-                            ))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    )
+                    format!("vote history:\n{}", votes_string)
                 } else {
-                    format!(
-                        "last vote slot: {}",
-                        vote_state
-                            .votes
-                            .back()
-                            .map(|vote| vote.slot().to_string())
-                            .unwrap_or_else(|| "none".to_string())
-                    )
+                    format!("last vote slot: {}", last_vote_slot)
                 };
             dot.push(format!(
                 r#"  "last vote {}"[shape=box,label="Latest validator vote: {}\nstake: {} SOL\nroot slot: {}\n{}"];"#,
                 node_pubkey,
                 node_pubkey,
                 lamports_to_sol(*stake),
-                vote_state.root_slot.unwrap_or(0),
+                root_slot.unwrap_or(0),
                 vote_history,
             ));
 
@@ -422,19 +409,14 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     // Add for vote information from all banks.
     if config.include_all_votes {
         for (node_pubkey, validator_votes) in &all_votes {
-            for (vote_slot, vote_state) in validator_votes {
+            for (vote_slot, (root_slot, vote_string)) in validator_votes {
                 dot.push(format!(
                     r#"  "{} vote {}"[shape=box,style=dotted,label="validator vote: {}\nroot slot: {}\nvote history:\n{}"];"#,
                     node_pubkey,
                     vote_slot,
                     node_pubkey,
-                    vote_state.root_slot.unwrap_or(0),
-                    vote_state
-                        .votes
-                        .iter()
-                        .map(|vote| format!("slot {} (conf={})", vote.slot(), vote.confirmation_count()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    root_slot.unwrap_or(0),
+                    vote_string,
                 ));
 
                 dot.push(format!(
@@ -2279,6 +2261,7 @@ fn main() {
                                 ),
                             );
 
+                            //TODO(wen): make this work for Alpenglow
                             let vote_account = vote_state::create_account_with_authorized(
                                 identity_pubkey,
                                 identity_pubkey,

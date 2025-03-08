@@ -180,6 +180,25 @@ impl VoteAccount {
         }
     }
 
+    pub fn vote_slot_and_confirmation_string(&self) -> String {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state
+                .votes
+                .iter()
+                .map(|vote| format!("slot {} (conf={})", vote.slot(), vote.confirmation_count()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            VoteAccountState::Alpenglow(vote_state) => {
+                format!(
+                    "notarize {:?}\nfinalize {:?}\nskip {:?} {:?}",
+                    vote_state.latest_notarized_slot(),
+                    vote_state.latest_finalized_slot(),
+                    vote_state.latest_skip_start_slot(),
+                    vote_state.latest_skip_end_slot(),
+                )
+            }
+        }
+    }
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
