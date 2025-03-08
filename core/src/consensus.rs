@@ -1626,7 +1626,7 @@ impl Tower {
                 self.initialize_root(root);
                 self.initialize_lockouts(|v| v.slot() > root);
             } else {
-                error!("vote account({}) has no TowerBFT info", vote_account_pubkey);
+                panic!("vote account({}) has no TowerBFT info, should not reach here", vote_account_pubkey);
             }
         } else {
             self.initialize_root(root);
