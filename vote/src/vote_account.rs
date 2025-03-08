@@ -11,6 +11,7 @@ use {
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
     solana_vote_interface::state::{BlockTimestamp, VoteState},
+    solana_vote_program::vote_state,
     std::{
         cmp::Ordering,
         collections::{hash_map::Entry, HashMap},
@@ -199,6 +200,34 @@ impl VoteAccount {
             }
         }
     }
+
+    pub fn create_account_with_authorized(
+        node_pubkey: &Pubkey,
+        authorized_voter: &Pubkey,
+        authorized_withdrawer: &Pubkey,
+        commission: u8,
+        lamports: u64,
+        is_alpenglow: bool,
+    ) -> AccountSharedData {
+        if is_alpenglow {
+            AlpenglowVoteState::create_account_with_authorized(
+                node_pubkey,
+                authorized_voter,
+                authorized_withdrawer,
+                commission,
+                lamports,
+            )
+        } else {
+            vote_state::create_account_with_authorized(
+                node_pubkey,
+                authorized_voter,
+                authorized_withdrawer,
+                commission,
+                lamports,
+            )
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {

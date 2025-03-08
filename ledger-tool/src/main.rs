@@ -83,10 +83,8 @@ use {
     solana_stake_program::stake_state,
     solana_transaction_status::parse_ui_instruction,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
-    solana_vote_program::{
-        self,
-        vote_state::{self, VoteState},
-    },
+    solana_vote::vote_account::VoteAccount,
+    solana_vote_program::{self, vote_state::VoteState},
     std::{
         collections::{HashMap, HashSet},
         ffi::{OsStr, OsString},
@@ -1321,6 +1319,15 @@ fn main() {
                         .help("The bootstrap validator's identity, vote and stake pubkeys"),
                 )
                 .arg(
+                    Arg::with_name("bootstrap_validator_alpenglow_count")
+                        .short("alpenglow")
+                        .long("bootstrap-validator-alpenglow-count")
+                        .value_name("ALPENGLOW_COUNT")
+                        .requires("bootstrap_validator")
+                        .takes_value(true)
+                        .help("How many bootstrap validators are created as Alpenglow account"),
+                )
+                .arg(
                     Arg::with_name("bootstrap_stake_authorized_pubkey")
                         .long("bootstrap-stake-authorized-pubkey")
                         .value_name("BOOTSTRAP STAKE AUTHORIZED PUBKEY")
@@ -1951,6 +1958,9 @@ fn main() {
                     }
                     let bootstrap_validator_pubkeys =
                         pubkeys_of(arg_matches, "bootstrap_validator");
+                    let bootstrap_validator_alpenglow_count =
+                        value_t!(arg_matches, "bootstrap_validator_alpenglow_count", u8)
+                            .unwrap_or(0);
                     let accounts_to_remove =
                         pubkeys_of(arg_matches, "accounts_to_remove").unwrap_or_default();
                     let feature_gates_to_deactivate =
@@ -2244,6 +2254,7 @@ fn main() {
                         // validators
                         let mut bootstrap_validator_pubkeys_iter =
                             bootstrap_validator_pubkeys.iter();
+                        let mut index = 0;
                         loop {
                             let Some(identity_pubkey) = bootstrap_validator_pubkeys_iter.next()
                             else {
@@ -2251,6 +2262,8 @@ fn main() {
                             };
                             let vote_pubkey = bootstrap_validator_pubkeys_iter.next().unwrap();
                             let stake_pubkey = bootstrap_validator_pubkeys_iter.next().unwrap();
+                            let is_alpenglow = index < bootstrap_validator_alpenglow_count;
+                            index += 1;
 
                             bank.store_account(
                                 identity_pubkey,
@@ -2261,14 +2274,15 @@ fn main() {
                                 ),
                             );
 
-                            //TODO(wen): make this work for Alpenglow
-                            let vote_account = vote_state::create_account_with_authorized(
-                                identity_pubkey,
-                                identity_pubkey,
-                                identity_pubkey,
-                                100,
-                                VoteState::get_rent_exempt_reserve(&rent).max(1),
-                            );
+                            let vote_account_shared_data =
+                                VoteAccount::create_account_with_authorized(
+                                    identity_pubkey,
+                                    identity_pubkey,
+                                    identity_pubkey,
+                                    100,
+                                    VoteState::get_rent_exempt_reserve(&rent).max(1),
+                                    is_alpenglow,
+                                );
 
                             bank.store_account(
                                 stake_pubkey,
@@ -2277,12 +2291,12 @@ fn main() {
                                         .as_ref()
                                         .unwrap_or(identity_pubkey),
                                     vote_pubkey,
-                                    &vote_account,
+                                    &vote_account_shared_data,
                                     &rent,
                                     bootstrap_validator_stake_lamports,
                                 ),
                             );
-                            bank.store_account(vote_pubkey, &vote_account);
+                            bank.store_account(vote_pubkey, &vote_account_shared_data);
                         }
 
                         // Warp ahead at least two epochs to ensure that the leader schedule will be

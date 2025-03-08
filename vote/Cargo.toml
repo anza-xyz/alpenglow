@@ -37,6 +37,7 @@ solana-signer = { workspace = true }
 solana-svm-transaction = { workspace = true }
 solana-transaction = { workspace = true, features = ["bincode"] }
 solana-vote-interface = { workspace = true, features = ["bincode"] }
+solana-vote-program = { workspace = true }
 thiserror = { workspace = true }
 
 [lib]

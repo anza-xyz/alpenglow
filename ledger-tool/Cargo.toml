@@ -57,6 +57,7 @@ solana-type-overrides = { workspace = true }
 solana-unified-scheduler-pool = { workspace = true }
 solana-version = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-vote = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
