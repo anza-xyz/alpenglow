@@ -160,15 +160,16 @@ impl SkipPool {
                     skip_range,
                 ));
             }
-            if skip_range.start() < prev_skip_vote.skip_range.end() {
-                return Err(AddVoteError::Overlapping(
-                    prev_skip_vote.skip_range.clone(),
-                    skip_range,
-                ));
-            }
-            if skip_range.start() == prev_skip_vote.skip_range.end()
-                && prev_skip_vote.skip_range.start() != prev_skip_vote.skip_range.end()
-            {
+
+            // Extensions are allowed, i.e. (1..=3) to (1..=5)
+            if skip_range.start() == prev_skip_vote.skip_range.start() {
+                if skip_range.end() < prev_skip_vote.skip_range.end() {
+                    return Err(AddVoteError::Overlapping(
+                        prev_skip_vote.skip_range.clone(),
+                        skip_range,
+                    ));
+                }
+            } else if skip_range.start() < prev_skip_vote.skip_range.end() {
                 return Err(AddVoteError::Overlapping(
                     prev_skip_vote.skip_range.clone(),
                     skip_range,
@@ -298,8 +299,11 @@ mod tests {
             .unwrap();
         pool.add_vote(&validator2, 20..=30, dummy_transaction(), 50, 100)
             .unwrap();
-
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(0, 0));
+
+        pool.add_vote(&validator1, 5..=30, dummy_transaction(), 50, 100)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(20, 30));
     }
 
     #[test]
