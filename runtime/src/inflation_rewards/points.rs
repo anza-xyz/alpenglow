@@ -6,7 +6,6 @@ use {
         clock::Epoch, instruction::InstructionError, sysvar::stake_history::StakeHistory,
     },
     solana_stake_program::stake_state::{Delegation, Stake, StakeStateV2},
-    solana_vote_program::vote_state::VoteState,
     std::cmp::Ordering,
 };
 
@@ -64,14 +63,16 @@ impl From<SkippedReason> for InflationPointCalculationEvent {
 
 pub fn calculate_points(
     stake_state: &StakeStateV2,
-    vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: Vec<(Epoch, u64, u64)>,
     stake_history: &StakeHistory,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> Result<u128, InstructionError> {
     if let StakeStateV2::Stake(_meta, stake, _stake_flags) = stake_state {
         Ok(calculate_stake_points(
             stake,
-            vote_state,
+            credits_in_vote,
+            &epoch_credits,
             stake_history,
             null_tracer(),
             new_rate_activation_epoch,
@@ -83,14 +84,16 @@ pub fn calculate_points(
 
 fn calculate_stake_points(
     stake: &Stake,
-    vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: &[(Epoch, u64, u64)],
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> u128 {
     calculate_stake_points_and_credits(
         stake,
-        vote_state,
+        credits_in_vote,
+        epoch_credits,
         stake_history,
         inflation_point_calc_tracer,
         new_rate_activation_epoch,
@@ -103,13 +106,13 @@ fn calculate_stake_points(
 ///   for credits_observed were the points paid
 pub(crate) fn calculate_stake_points_and_credits(
     stake: &Stake,
-    new_vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: &[(Epoch, u64, u64)],
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> CalculatedStakePoints {
     let credits_in_stake = stake.credits_observed;
-    let credits_in_vote = new_vote_state.credits();
     // if there is no newer credits since observed, return no point
     match credits_in_vote.cmp(&credits_in_stake) {
         Ordering::Less => {
@@ -157,21 +160,19 @@ pub(crate) fn calculate_stake_points_and_credits(
     let mut points = 0;
     let mut new_credits_observed = credits_in_stake;
 
-    for (epoch, final_epoch_credits, initial_epoch_credits) in
-        new_vote_state.epoch_credits().iter().copied()
-    {
+    for (epoch, final_epoch_credits, initial_epoch_credits) in epoch_credits.iter() {
         let stake_amount = u128::from(stake.delegation.stake(
-            epoch,
+            *epoch,
             stake_history,
             new_rate_activation_epoch,
         ));
 
         // figure out how much this stake has seen that
         //   for which the vote account has a record
-        let earned_credits = if credits_in_stake < initial_epoch_credits {
+        let earned_credits = if credits_in_stake < *initial_epoch_credits {
             // the staker observed the entire epoch
             final_epoch_credits - initial_epoch_credits
-        } else if credits_in_stake < final_epoch_credits {
+        } else if credits_in_stake < *final_epoch_credits {
             // the staker registered sometime during the epoch, partial credit
             final_epoch_credits - new_credits_observed
         } else {
@@ -182,7 +183,7 @@ pub(crate) fn calculate_stake_points_and_credits(
         let earned_credits = u128::from(earned_credits);
 
         // don't want to assume anything about order of the iterator...
-        new_credits_observed = new_credits_observed.max(final_epoch_credits);
+        new_credits_observed = new_credits_observed.max(*final_epoch_credits);
 
         // finally calculate points for this epoch
         let earned_points = stake_amount * earned_credits;
@@ -190,7 +191,7 @@ pub(crate) fn calculate_stake_points_and_credits(
 
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
             inflation_point_calc_tracer(&InflationPointCalculationEvent::CalculatedPoints(
-                epoch,
+                *epoch,
                 stake_amount,
                 earned_credits,
                 earned_points,
@@ -212,41 +213,38 @@ mod tests {
     fn new_stake(
         stake: u64,
         voter_pubkey: &Pubkey,
-        vote_state: &VoteState,
+        credits_observed: u64,
         activation_epoch: Epoch,
     ) -> Stake {
         Stake {
             delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
-            credits_observed: vote_state.credits(),
+            credits_observed,
         }
     }
 
     #[test]
     fn test_stake_state_calculate_points_with_typical_values() {
-        let mut vote_state = VoteState::default();
+        let mut credits_observed = 0;
 
         // bootstrap means fully-vested stake at epoch 0 with
         //  10_000_000 SOL is a big but not unreasaonable stake
         let stake = new_stake(
             sol_to_lamports(10_000_000f64),
             &Pubkey::default(),
-            &vote_state,
+            credits_observed,
             u64::MAX,
         );
 
         let epoch_slots: u128 = 14 * 24 * 3600 * 160;
-        // put 193,536,000 credits in at epoch 0, typical for a 14-day epoch
-        //  this loop takes a few seconds...
-        for _ in 0..epoch_slots {
-            vote_state.increment_credits(0, 1);
-        }
+        credits_observed = epoch_slots as u64;
 
         // no overflow on points
         assert_eq!(
             u128::from(stake.delegation.stake) * epoch_slots,
             calculate_stake_points(
                 &stake,
-                &vote_state,
+                credits_observed,
+                &[(0, credits_observed, 0)],
                 &StakeHistory::default(),
                 null_tracer(),
                 None

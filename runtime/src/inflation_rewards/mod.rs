@@ -13,7 +13,6 @@ use {
         sysvar::stake_history::StakeHistory,
     },
     solana_stake_program::stake_state::{Stake, StakeStateV2},
-    solana_vote_program::vote_state::VoteState,
 };
 
 pub mod points;
@@ -27,11 +26,14 @@ struct CalculatedStakeRewards {
 
 // utility function
 // returns a tuple of (stakers_reward,voters_reward)
+#[allow(clippy::too_many_arguments)]
 pub fn redeem_rewards(
     rewarded_epoch: Epoch,
     stake_state: StakeStateV2,
     stake_account: &mut AccountSharedData,
-    vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: &[(Epoch, u64, u64)],
+    commission: u8,
     point_value: &PointValue,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
@@ -49,16 +51,16 @@ pub fn redeem_rewards(
             inflation_point_calc_tracer(&InflationPointCalculationEvent::RentExemptReserve(
                 meta.rent_exempt_reserve,
             ));
-            inflation_point_calc_tracer(&InflationPointCalculationEvent::Commission(
-                vote_state.commission,
-            ));
+            inflation_point_calc_tracer(&InflationPointCalculationEvent::Commission(commission));
         }
 
         if let Some((stakers_reward, voters_reward)) = redeem_stake_rewards(
             rewarded_epoch,
             &mut stake,
             point_value,
-            vote_state,
+            credits_in_vote,
+            epoch_credits,
+            commission,
             stake_history,
             inflation_point_calc_tracer,
             new_rate_activation_epoch,
@@ -79,7 +81,9 @@ fn redeem_stake_rewards(
     rewarded_epoch: Epoch,
     stake: &mut Stake,
     point_value: &PointValue,
-    vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: &[(Epoch, u64, u64)],
+    commission: u8,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
@@ -94,7 +98,9 @@ fn redeem_stake_rewards(
         rewarded_epoch,
         stake,
         point_value,
-        vote_state,
+        credits_in_vote,
+        epoch_credits,
+        commission,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
         new_rate_activation_epoch,
@@ -126,7 +132,9 @@ fn calculate_stake_rewards(
     rewarded_epoch: Epoch,
     stake: &Stake,
     point_value: &PointValue,
-    vote_state: &VoteState,
+    credits_in_vote: u64,
+    epoch_credits: &[(Epoch, u64, u64)],
+    commission: u8,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
@@ -138,7 +146,8 @@ fn calculate_stake_rewards(
         mut force_credits_update_with_skipped_reward,
     } = calculate_stake_points_and_credits(
         stake,
-        vote_state,
+        credits_in_vote,
+        epoch_credits,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
         new_rate_activation_epoch,
@@ -196,8 +205,7 @@ fn calculate_stake_rewards(
         }
         return None;
     }
-    let (voter_rewards, staker_rewards, is_split) =
-        commission_split(vote_state.commission, rewards);
+    let (voter_rewards, staker_rewards, is_split) = commission_split(commission, rewards);
     if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
         inflation_point_calc_tracer(&InflationPointCalculationEvent::SplitRewards(
             rewards,
@@ -263,7 +271,8 @@ fn commission_split(commission: u8, on: u64) -> (u64, u64, bool) {
 mod tests {
     use {
         self::points::null_tracer, super::*, solana_program::stake::state::Delegation,
-        solana_pubkey::Pubkey, solana_sdk::native_token::sol_to_lamports, test_case::test_case,
+        solana_pubkey::Pubkey, solana_sdk::native_token::sol_to_lamports,
+        solana_vote_program::vote_state::VoteState, test_case::test_case,
     };
 
     fn new_stake(
@@ -296,7 +305,9 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -317,7 +328,9 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -348,7 +361,9 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -373,7 +388,9 @@ mod tests {
                     rewards: 2,
                     points: 2 // all his
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -395,7 +412,9 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -420,7 +439,9 @@ mod tests {
                     rewards: 2,
                     points: 2
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -443,7 +464,9 @@ mod tests {
                     rewards: 2,
                     points: 2
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -468,7 +491,9 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -487,7 +512,9 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -503,7 +530,9 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -526,7 +555,9 @@ mod tests {
                     rewards: 0,
                     points: 4
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -549,7 +580,9 @@ mod tests {
                     rewards: 0,
                     points: 4
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -564,7 +597,8 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -583,7 +617,8 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -599,7 +634,8 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -623,7 +659,9 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -647,7 +685,9 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -668,7 +708,9 @@ mod tests {
             0,
             &stake,
             &PointValue { rewards, points: 1 },
-            &vote_state,
+            vote_state.credits(),
+            &vote_state.epoch_credits,
+            vote_state.commission,
             &StakeHistory::default(),
             null_tracer(),
             None,
@@ -698,7 +740,9 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &vote_state,
+                vote_state.credits(),
+                &vote_state.epoch_credits,
+                vote_state.commission,
                 &StakeHistory::default(),
                 null_tracer(),
                 None,

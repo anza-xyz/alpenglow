@@ -173,6 +173,13 @@ impl VoteAccount {
         }
     }
 
+    pub fn credits(&self) -> u64 {
+        match &self.0.vote_state {
+            VoteAccountState::TowerBFT(vote_state) => vote_state.credits(),
+            VoteAccountState::Alpenglow(vote_state) => vote_state.epoch_credits().credits(),
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
@@ -699,7 +706,10 @@ mod tests {
         let lamports = account.lamports();
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
         assert_eq!(lamports, vote_account.lamports());
-        assert_eq!(alpenglow_vote_state, *vote_account.alpenglow_vote_state().unwrap());
+        assert_eq!(
+            alpenglow_vote_state,
+            *vote_account.alpenglow_vote_state().unwrap()
+        );
         assert_eq!(&account, vote_account.account());
     }
 
@@ -746,7 +756,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         let (account, alpenglow_vote_state) = new_rand_alpenglow_vote_account(&mut rng, None);
         let vote_account = VoteAccount::try_from(account.clone()).unwrap();
-        assert_eq!(alpenglow_vote_state, *vote_account.alpenglow_vote_state().unwrap());
+        assert_eq!(
+            alpenglow_vote_state,
+            *vote_account.alpenglow_vote_state().unwrap()
+        );
         // Assert that VoteAccount has the same wire format as Account.
         assert_eq!(
             bincode::serialize(&account).unwrap(),
@@ -777,8 +790,9 @@ mod tests {
     #[test]
     fn test_vote_accounts_deserialize() {
         let mut rng = rand::thread_rng();
-        let vote_accounts_hash_map: VoteAccountsHashMap =
-            new_rand_vote_accounts(&mut rng, 64, 32).take(1024).collect();
+        let vote_accounts_hash_map: VoteAccountsHashMap = new_rand_vote_accounts(&mut rng, 64, 32)
+            .take(1024)
+            .collect();
         let data = bincode::serialize(&vote_accounts_hash_map).unwrap();
         let vote_accounts: VoteAccounts = bincode::deserialize(&data).unwrap();
         assert!(vote_accounts.staked_nodes().len() > 32);
