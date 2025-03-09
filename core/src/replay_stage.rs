@@ -5109,8 +5109,8 @@ pub(crate) mod tests {
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
             replay_stage::ReplayStage,
+            staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
-            voting_service::StakedValidatorsCache,
         },
         blockstore_processor::{
             confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
