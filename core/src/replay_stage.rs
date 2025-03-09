@@ -39,7 +39,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    alpenglow_vote::vote::Vote as AlpenglowVote,
+    alpenglow_vote::{instruction::InitializeAccountInstructionData, vote::Vote as AlpenglowVote},
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{prelude::*, ThreadPool},
     solana_accounts_db::contains::Contains,
@@ -79,11 +79,13 @@ use {
         clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         hash::Hash,
         pubkey::Pubkey,
+        rent::Rent,
         saturating_add_assign,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
         transaction::Transaction,
     },
+    solana_system_program::system_instruction,
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
     std::{
@@ -611,6 +613,35 @@ impl ReplayStage {
 
         trace!("replay stage");
         let mut cert_pool = CertificatePool::default();
+
+        // Create new vote account
+        let seed = "ALPENGLOW";
+        let (alpenglow_vote_account, _bump) =
+            Pubkey::create_with_seed(&vote_account, seed, &alpenglow_vote::id());
+        let create_ix = system_instruction::create_account_with_seed(
+            &node_keypair.pubkey(),
+            &alpenglow_vote_account,
+            &vote_account,
+            seed,
+            Rent::default().minimum_balance(alpenglow_vote::state::VoteState::size()),
+            alpenglow_vote::state::VoteState::size(),
+            &alpenglow_vote::id(),
+        );
+        let initialize_ix = alpenglow_vote::instruction::initialize_account(
+            alpenglow_vote_account,
+            &InitializeAccountInstructionData {
+                node_pubkey: &node_keypair.pubkey(),
+                authorized_voter: authorized_voter_keypair.pubkey(),
+                authorized_withdrawer: &node_keypair.pubkey(),
+                commission: 1,
+            },
+        );
+        let create_tx = Transaction::new_signed_with_payer(
+            &[create_ix, initialize_ix],
+            Some(&node_keypair.pubkey()),
+            &[node_keypair, authorized_voter_keypair.as_ref()],
+            bank.last_blockhash(),
+        );
 
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
@@ -3004,7 +3035,7 @@ impl ReplayStage {
         };
 
         let vote_ix =
-            vote.to_vote_instruction(*vote_account_pubkey, authorized_voter_keypair.pubkey());
+            vote.to_vote_instruction(*alpenglow_vote_account, authorized_voter_keypair.pubkey());
         let vote_tx = Transaction::new_signed_with_payer(
             &[vote_ix],
             Some(&node_keypair.pubkey()),
