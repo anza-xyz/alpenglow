@@ -457,8 +457,8 @@ impl From<VoteAccount> for AccountSharedData {
 impl TryFrom<AccountSharedData> for VoteAccount {
     type Error = Error;
     fn try_from(account: AccountSharedData) -> Result<Self, Self::Error> {
-        // TODO(wen): this goes into slona_sdk_ids later
-        let is_alpenglow = if alpenglow_vote::check_id(account.owner()) {
+        // TODO(wen): we are pretending the following is alpenglow vote program id now.
+        let is_alpenglow = if solana_sdk_ids::secp256k1_program::check_id(account.owner()) {
             true
         } else if solana_sdk_ids::vote::check_id(account.owner()) {
             false
