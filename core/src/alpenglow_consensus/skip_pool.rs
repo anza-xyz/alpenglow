@@ -125,56 +125,53 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
         &self,
         threshold_stake: f64,
     ) -> impl Iterator<Item = (RangeInclusive<Slot>, BTreeSet<Pubkey>)> + use<'_, T> {
-        let certs = self
-            .tree
-            .iter()
-            .scan(
-                (0f64, BTreeSet::default(), None),
-                move |(accumulated, current_contributors, cert), (slot, (starts, ends))| {
-                    let mut new_contributors = vec![];
+        let mut accumulated = 0f64;
+        let mut current_contributors = BTreeSet::new();
+        let mut cert: Option<(Slot, BTreeSet<Pubkey>)> = None;
 
-                    // Add new stakes
-                    for item in starts {
-                        current_contributors.insert(item.pubkey());
-                        new_contributors.push(item.pubkey());
-                        *accumulated += item.stake_value() as f64;
+        let certs = self.tree.iter().filter_map(move |(slot, (starts, ends))| {
+            let mut new_contributors = vec![];
+
+            // Add new stakes
+            for item in starts {
+                current_contributors.insert(item.pubkey());
+                new_contributors.push(item.pubkey());
+                accumulated += item.stake_value() as f64;
+            }
+
+            // Start or increment current cert
+            if accumulated > threshold_stake {
+                match &mut cert {
+                    None => {
+                        // Start a cert
+                        cert = Some((*slot, current_contributors.clone()));
                     }
-
-                    // Start or increment current cert
-                    if *accumulated > threshold_stake {
-                        match cert {
-                            None => {
-                                // Start a cert
-                                *cert = Some((*slot, current_contributors.clone()));
-                            }
-                            Some((_, contributors)) => {
-                                // Active cert, still above threshold, add any new contributors as
-                                // we want to build the maximal certificate
-                                contributors.extend(new_contributors)
-                            }
-                        }
+                    Some((_, ref mut contributors)) => {
+                        // Active cert, still above threshold, add any new contributors as
+                        // we want to build the maximal certificate
+                        contributors.extend(new_contributors)
                     }
+                }
+            }
 
-                    // Subtract stakes that end on this slot
-                    for item in ends {
-                        current_contributors.remove(&item.pubkey());
-                        *accumulated -= item.stake_value() as f64
-                    }
+            // Subtract stakes that end on this slot
+            for item in ends {
+                current_contributors.remove(&item.pubkey());
+                accumulated -= item.stake_value() as f64
+            }
 
-                    // Return cert if it has ended
-                    if *accumulated < threshold_stake {
-                        if let Some((start_slot, contributors)) = cert {
-                            // Skip certificate has ended, reset and publish
-                            let ret = Some(Some(((*start_slot, *slot), contributors.clone())));
-                            *cert = None;
-                            return ret;
-                        }
-                    }
+            // Return cert if it has ended
+            if accumulated <= threshold_stake {
+                if let Some((start_slot, contributors)) = &cert {
+                    // Skip certificate has ended, reset and publish
+                    let ret = Some(((*start_slot, *slot), contributors.clone()));
+                    cert = None;
+                    return ret;
+                }
+            }
 
-                    Some(None)
-                },
-            )
-            .flatten();
+            None
+        });
         MergeConsecutiveSkipRanges::new(certs)
     }
 
