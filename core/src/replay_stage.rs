@@ -4295,10 +4295,10 @@ impl ReplayStage {
         }
         info!(
             "Frozen bank vote state slot {:?}
-            is newer than our local vote state slot {:?},
-            adopting the bank vote state as our own.
-            Bank votes: {:?}, root: {:?},
-            Local votes: {:?}, root: {:?}",
+             is newer than our local vote state slot {:?},
+             adopting the bank vote state as our own.
+             Bank votes: {:?}, root: {:?},
+             Local votes: {:?}, root: {:?}",
             bank_vote_state.last_voted_slot(),
             tower.vote_state.last_voted_slot(),
             bank_vote_state.votes,
