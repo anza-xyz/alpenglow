@@ -83,8 +83,10 @@ use {
     solana_stake_program::stake_state,
     solana_transaction_status::parse_ui_instruction,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
-    solana_vote::vote_account::VoteAccount,
-    solana_vote_program::{self, vote_state::VoteState},
+    solana_vote_program::{
+        self,
+        vote_state::{self, VoteState},
+    },
     std::{
         collections::{HashMap, HashSet},
         ffi::{OsStr, OsString},
@@ -219,22 +221,18 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             .map(|(_, (stake, _))| stake)
             .sum();
         for (stake, vote_account) in bank.vote_accounts().values() {
-            if let Some(last_vote) = vote_account.last_voted_slot() {
-                let entry = last_votes.entry(*vote_account.node_pubkey()).or_insert((
-                    last_vote,
-                    vote_account.get_root_slot(),
-                    vote_account.vote_slot_and_confirmation_string(),
+            let Some(vote_state) = vote_account.vote_state() else {
+                continue;
+            };
+            if let Some(last_vote) = vote_state.votes.iter().last() {
+                let entry = last_votes.entry(vote_state.node_pubkey).or_insert((
+                    last_vote.slot(),
+                    vote_state.clone(),
                     *stake,
                     total_stake,
                 ));
-                if entry.0 < last_vote {
-                    *entry = (
-                        last_vote,
-                        vote_account.get_root_slot(),
-                        vote_account.vote_slot_and_confirmation_string(),
-                        *stake,
-                        total_stake,
-                    );
+                if entry.0 < last_vote.slot() {
+                    *entry = (last_vote.slot(), vote_state.clone(), *stake, total_stake);
                 }
             }
         }
@@ -243,7 +241,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     // Figure the stake distribution at all the nodes containing the last vote from each
     // validator
     let mut slot_stake_and_vote_count = HashMap::new();
-    for (last_vote_slot, _, _, stake, total_stake) in last_votes.values() {
+    for (last_vote_slot, _, stake, total_stake) in last_votes.values() {
         let entry = slot_stake_and_vote_count
             .entry(last_vote_slot)
             .or_insert((0, 0, *total_stake));
@@ -258,21 +256,21 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     dot.push("  subgraph cluster_banks {".to_string());
     dot.push("    style=invis".to_string());
     let mut styled_slots = HashSet::new();
-    let mut all_votes: HashMap<Pubkey, HashMap<Slot, (Option<Slot>, String)>> = HashMap::new();
+    let mut all_votes: HashMap<Pubkey, HashMap<Slot, VoteState>> = HashMap::new();
     for fork_slot in &fork_slots {
         let mut bank = bank_forks[*fork_slot].clone();
 
         let mut first = true;
         loop {
             for (_, vote_account) in bank.vote_accounts().values() {
-                if let Some(last_vote) = vote_account.last_voted_slot() {
-                    let validator_votes = all_votes.entry(*vote_account.node_pubkey()).or_default();
-                    validator_votes.entry(last_vote).or_insert_with(|| {
-                        (
-                            vote_account.get_root_slot(),
-                            vote_account.vote_slot_and_confirmation_string(),
-                        )
-                    });
+                let Some(vote_state) = vote_account.vote_state() else {
+                    continue;
+                };
+                if let Some(last_vote) = vote_state.votes.iter().last() {
+                    let validator_votes = all_votes.entry(vote_state.node_pubkey).or_default();
+                    validator_votes
+                        .entry(last_vote.slot())
+                        .or_insert_with(|| vote_state.clone());
                 }
             }
 
@@ -350,8 +348,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     let mut absent_votes = 0;
     let mut lowest_last_vote_slot = u64::MAX;
     let mut lowest_total_stake = 0;
-    for (node_pubkey, (last_vote_slot, root_slot, votes_string, stake, total_stake)) in &last_votes
-    {
+    for (node_pubkey, (last_vote_slot, vote_state, stake, total_stake)) in &last_votes {
         all_votes.entry(*node_pubkey).and_modify(|validator_votes| {
             validator_votes.remove(last_vote_slot);
         });
@@ -369,16 +366,35 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
         if config.vote_account_mode.is_enabled() {
             let vote_history =
                 if matches!(config.vote_account_mode, GraphVoteAccountMode::WithHistory) {
-                    format!("vote history:\n{}", votes_string)
+                    format!(
+                        "vote history:\n{}",
+                        vote_state
+                            .votes
+                            .iter()
+                            .map(|vote| format!(
+                                "slot {} (conf={})",
+                                vote.slot(),
+                                vote.confirmation_count()
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
                 } else {
-                    format!("last vote slot: {}", last_vote_slot)
+                    format!(
+                        "last vote slot: {}",
+                        vote_state
+                            .votes
+                            .back()
+                            .map(|vote| vote.slot().to_string())
+                            .unwrap_or_else(|| "none".to_string())
+                    )
                 };
             dot.push(format!(
                 r#"  "last vote {}"[shape=box,label="Latest validator vote: {}\nstake: {} SOL\nroot slot: {}\n{}"];"#,
                 node_pubkey,
                 node_pubkey,
                 lamports_to_sol(*stake),
-                root_slot.unwrap_or(0),
+                vote_state.root_slot.unwrap_or(0),
                 vote_history,
             ));
 
@@ -407,14 +423,19 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     // Add for vote information from all banks.
     if config.include_all_votes {
         for (node_pubkey, validator_votes) in &all_votes {
-            for (vote_slot, (root_slot, vote_string)) in validator_votes {
+            for (vote_slot, vote_state) in validator_votes {
                 dot.push(format!(
                     r#"  "{} vote {}"[shape=box,style=dotted,label="validator vote: {}\nroot slot: {}\nvote history:\n{}"];"#,
                     node_pubkey,
                     vote_slot,
                     node_pubkey,
-                    root_slot.unwrap_or(0),
-                    vote_string,
+                    vote_state.root_slot.unwrap_or(0),
+                    vote_state
+                        .votes
+                        .iter()
+                        .map(|vote| format!("slot {} (conf={})", vote.slot(), vote.confirmation_count()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 ));
 
                 dot.push(format!(
@@ -1319,18 +1340,6 @@ fn main() {
                         .help("The bootstrap validator's identity, vote and stake pubkeys"),
                 )
                 .arg(
-                    Arg::with_name("bootstrap_validator_alpenglow_count")
-                        .short("alpenglow")
-                        .long("bootstrap-validator-alpenglow-count")
-                        .value_name("ALPENGLOW_COUNT")
-                        .requires("bootstrap_validator")
-                        .takes_value(true)
-                        .help("How many bootstrap validators to creat as Alpenglow account. \
-                               The rest will be created as TowerBFT account. \
-                               Should be less than or equal to the number of bootstrap validators",
-                    ),
-                )
-                .arg(
                     Arg::with_name("bootstrap_stake_authorized_pubkey")
                         .long("bootstrap-stake-authorized-pubkey")
                         .value_name("BOOTSTRAP STAKE AUTHORIZED PUBKEY")
@@ -1961,9 +1970,6 @@ fn main() {
                     }
                     let bootstrap_validator_pubkeys =
                         pubkeys_of(arg_matches, "bootstrap_validator");
-                    let bootstrap_validator_alpenglow_count =
-                        value_t!(arg_matches, "bootstrap_validator_alpenglow_count", u8)
-                            .unwrap_or(0);
                     let accounts_to_remove =
                         pubkeys_of(arg_matches, "accounts_to_remove").unwrap_or_default();
                     let feature_gates_to_deactivate =
@@ -2257,7 +2263,6 @@ fn main() {
                         // validators
                         let mut bootstrap_validator_pubkeys_iter =
                             bootstrap_validator_pubkeys.iter();
-                        let mut index = 0;
                         loop {
                             let Some(identity_pubkey) = bootstrap_validator_pubkeys_iter.next()
                             else {
@@ -2265,8 +2270,6 @@ fn main() {
                             };
                             let vote_pubkey = bootstrap_validator_pubkeys_iter.next().unwrap();
                             let stake_pubkey = bootstrap_validator_pubkeys_iter.next().unwrap();
-                            let is_alpenglow = index < bootstrap_validator_alpenglow_count;
-                            index += 1;
 
                             bank.store_account(
                                 identity_pubkey,
@@ -2277,15 +2280,13 @@ fn main() {
                                 ),
                             );
 
-                            let vote_account_shared_data =
-                                VoteAccount::create_account_with_authorized(
-                                    identity_pubkey,
-                                    identity_pubkey,
-                                    identity_pubkey,
-                                    100,
-                                    VoteState::get_rent_exempt_reserve(&rent).max(1),
-                                    is_alpenglow,
-                                );
+                            let vote_account = vote_state::create_account_with_authorized(
+                                identity_pubkey,
+                                identity_pubkey,
+                                identity_pubkey,
+                                100,
+                                VoteState::get_rent_exempt_reserve(&rent).max(1),
+                            );
 
                             bank.store_account(
                                 stake_pubkey,
@@ -2294,12 +2295,12 @@ fn main() {
                                         .as_ref()
                                         .unwrap_or(identity_pubkey),
                                     vote_pubkey,
-                                    &vote_account_shared_data,
+                                    &vote_account,
                                     &rent,
                                     bootstrap_validator_stake_lamports,
                                 ),
                             );
-                            bank.store_account(vote_pubkey, &vote_account_shared_data);
+                            bank.store_account(vote_pubkey, &vote_account);
                         }
 
                         // Warp ahead at least two epochs to ensure that the leader schedule will be

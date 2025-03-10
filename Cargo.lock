@@ -238,7 +238,6 @@ dependencies = [
  "solana-type-overrides",
  "solana-unified-scheduler-pool",
  "solana-version",
- "solana-vote",
  "solana-vote-program",
  "thiserror 2.0.11",
  "tikv-jemallocator",
@@ -9380,7 +9379,6 @@ version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
  "ahash 0.8.11",
- "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "assert_matches",

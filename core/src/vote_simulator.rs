@@ -67,7 +67,7 @@ impl VoteSimulator {
         }
     }
 
-    // TODO(wen): Add a method for Alpenglow.
+    // TODO(wen): This can probably be removed after Alpenglow.
     pub fn fill_bank_forks(
         &mut self,
         forks: Tree<u64>,
