@@ -4294,10 +4294,10 @@ impl ReplayStage {
             return;
         }
         info!(
-            "Frozen bank vote state slot {:?}
-             is newer than our local vote state slot {:?},
-             adopting the bank vote state as our own.
-             Bank votes: {:?}, root: {:?},
+            "Frozen bank vote state slot {:?} \
+             is newer than our local vote state slot {:?}, \
+             adopting the bank vote state as our own. \
+             Bank votes: {:?}, root: {:?}, \
              Local votes: {:?}, root: {:?}",
             bank_vote_state.last_voted_slot(),
             tower.vote_state.last_voted_slot(),
@@ -4321,8 +4321,8 @@ impl ReplayStage {
                     .votes
                     .retain(|lockout| lockout.slot() > local_root);
                 info!(
-                    "Local root is larger than on chain root,
-                    overwrote bank root {:?} and updated votes {:?}",
+                    "Local root is larger than on chain root, \
+                     overwrote bank root {:?} and updated votes {:?}",
                     bank_vote_state.root_slot, bank_vote_state.votes
                 );
 
@@ -4331,73 +4331,73 @@ impl ReplayStage {
                         .get(&first_vote.slot())
                         .expect(
                             "Ancestors map must contain an entry for all slots on this fork \
-                            greater than `local_root` and less than `bank_slot`"
+                             greater than `local_root` and less than `bank_slot`"
                         )
                         .contains(&local_root));
                 }
             }
+        }
 
-            // adopt the bank vote state
-            tower.vote_state = bank_vote_state;
+        // adopt the bank vote state
+        tower.vote_state = bank_vote_state;
 
-            let last_voted_slot = tower.vote_state.last_voted_slot().unwrap_or(
-                // If our local root is higher than the highest slot in `bank_vote_state` due to
-                // supermajority roots, then it's expected that the vote state will be empty.
-                // In this case we use the root as our last vote. This root cannot be None, because
-                // `tower.vote_state.last_voted_slot()` is None only if `tower.vote_state.root_slot`
-                // is Some.
-                tower
-                    .vote_state
-                    .root_slot
-                    .expect("root_slot cannot be None here"),
-            );
-            // This is safe because `last_voted_slot` is now equal to
-            // `bank_vote_state.last_voted_slot()` or `local_root`.
-            // Since this vote state is contained in `bank`, which we have frozen,
-            // we must have frozen all slots contained in `bank_vote_state`,
-            // and by definition we must have frozen `local_root`.
-            //
-            // If `bank` is a duplicate, since we are able to replay it successfully, any slots
-            // in its vote state must also be part of the duplicate fork, and thus present in our
-            // progress map.
-            //
-            // Finally if both `bank` and `bank_vote_state.last_voted_slot()` are duplicate,
-            // we must have the compatible versions of both duplicates in order to replay `bank`
-            // successfully, so we are once again guaranteed that `bank_vote_state.last_voted_slot()`
-            // is present in bank forks and progress map.
-            let block_id = {
-                // The block_id here will only be relevant if we need to refresh this last vote.
-                let bank = bank_forks
-                    .read()
-                    .unwrap()
-                    .get(last_voted_slot)
-                    .expect("Last voted slot that we are adopting must exist in bank forks");
-                // Here we don't have to check if this is our leader bank, as since we are adopting this bank,
-                // that means that it was created from a different instance (hot spare setup or a previous restart),
-                // and thus we must have replayed and set the block_id from the shreds.
-                // Note: since the new shred format is not rolled out everywhere, we have to provide a default
-                bank.block_id().unwrap_or_default()
-            };
-            tower.update_last_vote_from_vote_state(
-                progress
-                    .get_hash(last_voted_slot)
-                    .expect("Must exist for us to have frozen descendant"),
-                bank.feature_set
-                    .is_active(&solana_feature_set::enable_tower_sync_ix::id()),
-                block_id,
-            );
-            // Since we are updating our tower we need to update associated caches for previously computed
-            // slots as well.
-            for slot in frozen_banks.iter().map(|b| b.slot()) {
-                if !progress
-                    .get_fork_stats(slot)
-                    .expect("All frozen banks must exist in fork stats")
-                    .computed
-                {
-                    continue;
-                }
-                Self::cache_tower_stats(progress, tower, slot, ancestors);
+        let last_voted_slot = tower.vote_state.last_voted_slot().unwrap_or(
+            // If our local root is higher than the highest slot in `bank_vote_state` due to
+            // supermajority roots, then it's expected that the vote state will be empty.
+            // In this case we use the root as our last vote. This root cannot be None, because
+            // `tower.vote_state.last_voted_slot()` is None only if `tower.vote_state.root_slot`
+            // is Some.
+            tower
+                .vote_state
+                .root_slot
+                .expect("root_slot cannot be None here"),
+        );
+        // This is safe because `last_voted_slot` is now equal to
+        // `bank_vote_state.last_voted_slot()` or `local_root`.
+        // Since this vote state is contained in `bank`, which we have frozen,
+        // we must have frozen all slots contained in `bank_vote_state`,
+        // and by definition we must have frozen `local_root`.
+        //
+        // If `bank` is a duplicate, since we are able to replay it successfully, any slots
+        // in its vote state must also be part of the duplicate fork, and thus present in our
+        // progress map.
+        //
+        // Finally if both `bank` and `bank_vote_state.last_voted_slot()` are duplicate,
+        // we must have the compatible versions of both duplicates in order to replay `bank`
+        // successfully, so we are once again guaranteed that `bank_vote_state.last_voted_slot()`
+        // is present in bank forks and progress map.
+        let block_id = {
+            // The block_id here will only be relevant if we need to refresh this last vote.
+            let bank = bank_forks
+                .read()
+                .unwrap()
+                .get(last_voted_slot)
+                .expect("Last voted slot that we are adopting must exist in bank forks");
+            // Here we don't have to check if this is our leader bank, as since we are adopting this bank,
+            // that means that it was created from a different instance (hot spare setup or a previous restart),
+            // and thus we must have replayed and set the block_id from the shreds.
+            // Note: since the new shred format is not rolled out everywhere, we have to provide a default
+            bank.block_id().unwrap_or_default()
+        };
+        tower.update_last_vote_from_vote_state(
+            progress
+                .get_hash(last_voted_slot)
+                .expect("Must exist for us to have frozen descendant"),
+            bank.feature_set
+                .is_active(&solana_feature_set::enable_tower_sync_ix::id()),
+            block_id,
+        );
+        // Since we are updating our tower we need to update associated caches for previously computed
+        // slots as well.
+        for slot in frozen_banks.iter().map(|b| b.slot()) {
+            if !progress
+                .get_fork_stats(slot)
+                .expect("All frozen banks must exist in fork stats")
+                .computed
+            {
+                continue;
             }
+            Self::cache_tower_stats(progress, tower, slot, ancestors);
         }
     }
 
