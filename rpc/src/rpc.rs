@@ -1181,18 +1181,35 @@ impl JsonRpcRequestProcessor {
                     }
                 }
 
-                let mut epoch_credits = account.epoch_credits();
-                epoch_credits.truncate(MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY);
+                let vote_state = account.vote_state()?;
+                let last_vote = if let Some(vote) = vote_state.votes.iter().last() {
+                    vote.slot()
+                } else {
+                    0
+                };
+
+                let epoch_credits = vote_state.epoch_credits();
+                let epoch_credits = if epoch_credits.len()
+                    > MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY
+                {
+                    epoch_credits
+                        .iter()
+                        .skip(epoch_credits.len() - MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY)
+                        .cloned()
+                        .collect()
+                } else {
+                    epoch_credits.clone()
+                };
 
                 Some(RpcVoteAccountInfo {
                     vote_pubkey: vote_pubkey.to_string(),
-                    node_pubkey: account.node_pubkey().to_string(),
+                    node_pubkey: vote_state.node_pubkey.to_string(),
                     activated_stake: *activated_stake,
-                    commission: account.commission(),
-                    root_slot: account.root_slot().unwrap_or(0),
+                    commission: vote_state.commission,
+                    root_slot: vote_state.root_slot.unwrap_or(0),
                     epoch_credits,
                     epoch_vote_account: epoch_vote_accounts.contains_key(vote_pubkey),
-                    last_vote: account.last_voted_slot().unwrap_or(0),
+                    last_vote,
                 })
             })
             .partition(|vote_account_info| {
