@@ -7,7 +7,7 @@ use {
     alpenglow_vote::vote::Vote,
     itertools::Either,
     solana_pubkey::Pubkey,
-    solana_sdk::{clock::Slot, transaction::VersionedTransaction},
+    solana_sdk::{clock::Slot, hash::Hash, transaction::VersionedTransaction},
     std::collections::BTreeMap,
     thiserror::Error,
 };
@@ -57,7 +57,6 @@ pub enum CertificateType {
 }
 
 impl CertificateType {
-    #[inline]
     fn get_type(vote: &Vote) -> CertificateType {
         match vote {
             Vote::Notarize(_) => CertificateType::Notarize,
@@ -107,7 +106,14 @@ impl CertificatePool {
                 let certificate = self
                     .certificates
                     .entry((vote_slot, CertificateType::get_type(vote)))
-                    .or_insert_with(|| VoteCertificate::new(vote_slot));
+                    .or_insert_with(|| VoteCertificate::new(
+                        vote_slot, 
+                        match vote {
+                            Vote::Notarize(v) => v.block_id().clone(),
+                            Vote::Finalize(v) => v.block_id().clone(),
+                            _ => unreachable!("Already matched on Either::Left"),
+                        }
+                    ));
 
                 certificate.add_vote(
                     validator_vote_key,
@@ -161,6 +167,16 @@ impl CertificatePool {
             .get(&(slot, CertificateType::Notarize))
             .map(|certificate| certificate.is_complete())
             .unwrap_or(false)
+    }
+
+    pub fn has_certificate(&self, slot: Slot) -> bool {
+        self.certificates
+            .iter()
+            .any(|((s, cert_type), certificate)| {
+                *s == slot && 
+                matches!(cert_type, CertificateType::Notarize | CertificateType::Finalize) && 
+                certificate.is_complete()
+            })
     }
 
     pub fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
@@ -217,8 +233,26 @@ impl CertificatePool {
             .unwrap_or(false)
     }
 
+    pub fn get_notarized_block_id(&self, slot: Slot) -> Option<Hash> {
+        self.certificates
+        .get(&(slot, CertificateType::Notarize))
+        .filter(|cert| cert.is_complete())
+        .map(|cert| cert.block_id())
+    }
+
+    pub fn get_finalized_block_id(&self, slot: Slot) -> Option<Hash> {
+        self.certificates
+        .get(&(slot, CertificateType::Finalize))
+        .filter(|cert| cert.is_complete())
+        .map(|cert| cert.block_id())
+    }
+
+    pub fn is_slot_skipped(&self, slot: Slot) -> bool {
+        self.skip_pool.is_slot_skipped(slot)
+    }
+
     /// Determines if the leader can start based on notarization and skip certificates.
-    pub fn make_start_leader_decision(        
+    pub fn make_start_leader_decision(
         &self,
         my_leader_slot: Slot,
         parent_slot: Slot,
@@ -228,7 +262,8 @@ impl CertificatePool {
         // Special case for genesis block (slot 0)
         if parent_slot == 0 {
             // Need skip certificates from first_alpenglow_slot to my_leader_slot - 1
-            let skip_cert = self.get_skip_certificate(first_alpenglow_slot, my_leader_slot - 1, total_stake)?;
+            let skip_cert =
+                self.get_skip_certificate(first_alpenglow_slot, my_leader_slot - 1, total_stake)?;
             return Some(StartLeaderCertificates {
                 notarization_certificate: vec![],
                 skip_certificate: skip_cert,
@@ -238,7 +273,8 @@ impl CertificatePool {
         // When parent_slot < first_alpenglow_slot
         if parent_slot < first_alpenglow_slot {
             // Need skip certificates from first_alpenglow_slot to my_leader_slot - 1
-            let skip_cert = self.get_skip_certificate(first_alpenglow_slot, my_leader_slot - 1, total_stake)?;
+            let skip_cert =
+                self.get_skip_certificate(first_alpenglow_slot, my_leader_slot - 1, total_stake)?;
             return Some(StartLeaderCertificates {
                 notarization_certificate: vec![],
                 skip_certificate: skip_cert,
@@ -260,16 +296,19 @@ impl CertificatePool {
         if is_direct_child {
             // Optimistic case
             return Some(StartLeaderCertificates {
-                notarization_certificate: self.get_notarization_certificate(parent_slot)
+                notarization_certificate: self
+                    .get_notarization_certificate(parent_slot)
                     .unwrap_or_default(),
                 skip_certificate: vec![],
             });
         }
 
         // Non-direct children after first_alpenglow_slot need skip certificates
-        let skip_cert = self.get_skip_certificate(parent_slot + 1, my_leader_slot - 1, total_stake)?;
+        let skip_cert =
+            self.get_skip_certificate(parent_slot + 1, my_leader_slot - 1, total_stake)?;
         Some(StartLeaderCertificates {
-            notarization_certificate: self.get_notarization_certificate(parent_slot)
+            notarization_certificate: self
+                .get_notarization_certificate(parent_slot)
                 .unwrap_or_default(),
             skip_certificate: skip_cert,
         })
@@ -284,15 +323,21 @@ impl CertificatePool {
     }
 
     /// Gets a skip certificate that covers the range from begin_slot to end_slot
-    fn get_skip_certificate(&self, begin_slot: Slot, end_slot: Slot, total_stake: Stake) -> Option<Vec<VersionedTransaction>> {
+    fn get_skip_certificate(
+        &self,
+        begin_slot: Slot,
+        end_slot: Slot,
+        total_stake: Stake,
+    ) -> Option<Vec<VersionedTransaction>> {
         // Check if we have a skip certificate that exactly matches this range
         let max_skip_range = self.skip_pool.max_skip_certificate_range();
         if max_skip_range.contains(&begin_slot) && max_skip_range.contains(&end_slot) {
-            return Some(self
-             .skip_pool
-             .get_skip_certificate(total_stake)
-             .expect("valid skip certificate must exist")
-             .1);
+            return Some(
+                self.skip_pool
+                    .get_skip_certificate(total_stake)
+                    .expect("valid skip certificate must exist")
+                    .1,
+            );
         }
 
         None
@@ -608,7 +653,7 @@ mod tests {
         let my_stake = 67;
         let total_stake = 100;
 
-        // Valid skip certificate for 1-9 exists       
+        // Valid skip certificate for 1-9 exists
         assert_eq!(
             pool.add_vote(
                 &Vote::new_skip_vote(1, 9),

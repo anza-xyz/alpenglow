@@ -218,6 +218,11 @@ impl SkipPool {
                 (range, transactions)
             })
     }
+
+    /// Returns true if the slot is skipped
+    pub fn is_slot_skipped(&self, slot: Slot) -> bool {
+        self.max_skip_certificate_range.contains(&slot)
+    }   
 }
 
 #[cfg(test)]

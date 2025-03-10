@@ -200,6 +200,58 @@ struct SkippedSlotsInfo {
 struct PartitionInfo {
     partition_start_time: Option<Instant>,
 }
+#[derive(Clone)]
+struct OptimisticBlockTracker {
+    // Map of parent slot to child slot and parent blockhash
+    optimistic_blocks: HashMap<Slot, Hash>,
+}
+
+impl OptimisticBlockTracker {
+    fn new() -> Self {
+        Self {
+            optimistic_blocks: HashMap::new(),
+        }
+    }
+
+    fn track_new_optimistic_block(
+        &mut self,
+        parent_slot: Slot,
+        parent_blockhash: Hash,
+    ) {
+        self.optimistic_blocks
+            .insert(parent_slot,  parent_blockhash);
+    }
+
+    fn remove(&mut self, parent_slot: Slot) {
+        self.optimistic_blocks.remove(&parent_slot);
+    }
+
+    fn get_invalid_blocks(&self, cert_pool: &CertificatePool) -> Vec<Slot> {
+        self.optimistic_blocks
+        .iter()
+        .filter_map(|(&parent_slot, & expected_parent_hash)| {
+            // If parent got skipped or a competing block was notarized
+            if cert_pool.is_slot_skipped(parent_slot) {
+                Some(parent_slot)
+            } else if let Some(notarized_hash) = cert_pool.get_notarized_block_id(parent_slot) {
+                if notarized_hash != expected_parent_hash {
+                    Some(parent_slot)
+                } else {
+                    None
+                }
+            } else if let Some(finalized_hash) = cert_pool.get_finalized_block_id(parent_slot) {
+                if finalized_hash != expected_parent_hash {
+                    Some(parent_slot)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+    }
+}
 
 impl PartitionInfo {
     fn new() -> Self {
@@ -611,6 +663,7 @@ impl ReplayStage {
 
         trace!("replay stage");
         let mut cert_pool = CertificatePool::default();
+        let optimistic_block_tracker = OptimisticBlockTracker::new();
 
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
@@ -618,6 +671,8 @@ impl ReplayStage {
             block_commitment_cache.clone(),
             rpc_subscriptions.clone(),
         );
+        let mut loop_optimistic_tracker = optimistic_block_tracker.clone();
+
         let run_replay = move || {
             let verify_recyclers = VerifyRecyclers::default();
             let _exit = Finalizer::new(exit.clone());
@@ -1324,6 +1379,7 @@ impl ReplayStage {
                         &first_alpenglow_slot,
                         &mut is_alpenglow_migration_complete,
                         &blockstore,
+                        &mut loop_optimistic_tracker,
                     );
 
                     let poh_bank = poh_recorder.read().unwrap().bank();
@@ -2368,6 +2424,7 @@ impl ReplayStage {
         track_transaction_indexes: bool,
         banking_tracer: &BankingTracer,
         first_alpenglow_slot: &Option<Slot>,
+        optimistic_block_tracker: &mut OptimisticBlockTracker,
     ) -> bool {
         let parent_slot = parent_bank.slot();
         let first_alpenglow_slot = first_alpenglow_slot.unwrap();
@@ -2392,6 +2449,19 @@ impl ReplayStage {
         else {
             return false;
         };
+
+        // Track optimistic block production in both cases:
+        // 1. Direct child
+        // 2. With skip certificates in between
+        if !cert_pool.has_certificate(parent_slot) {
+            optimistic_block_tracker.track_new_optimistic_block(
+                parent_slot,
+                parent_bank
+                    .block_id()
+                    .expect("Parent bank must be frozen with available block_id"),
+            );
+        }
+
         if poh_recorder.read().unwrap().start_slot() != parent_slot {
             // Important to keep Poh somewhat accurate for
             // parts of the system relying on PohRecorder::would_be_leader()
@@ -2406,6 +2476,7 @@ impl ReplayStage {
                 leader_schedule_cache,
             );
         }
+
         let tpu_bank = Self::new_bank_from_parent_with_notify(
             parent_bank.clone(),
             my_leader_slot,
@@ -2459,6 +2530,7 @@ impl ReplayStage {
         first_alpenglow_slot: &Option<Slot>,
         is_alpenglow_migration_complete: &mut bool,
         blockstore: &Blockstore,
+        optimistic_block_tracker: &mut OptimisticBlockTracker,
     ) -> bool {
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
@@ -2581,6 +2653,7 @@ impl ReplayStage {
                 track_transaction_indexes,
                 banking_tracer,
                 first_alpenglow_slot,
+                optimistic_block_tracker,
             ) {
                 return false;
             }
@@ -9163,7 +9236,7 @@ pub(crate) mod tests {
         let res = retransmit_slots_receiver.recv_timeout(Duration::from_millis(10));
         assert!(
             res.is_err(),
-            "retry_iteration=1, elapsed < 2^1 * RETRY_BASE_DELAY_MS"
+            "retry_iteration=1, elapsed < 2^1 * RETRANSMIT_BASE_DELAY_MS"
         );
 
         progress.get_retransmit_info_mut(0).unwrap().retry_time = Instant::now()
@@ -9452,6 +9525,7 @@ pub(crate) mod tests {
             &None,
             &mut false,
             blockstore,
+            &mut OptimisticBlockTracker::new(),
         ));
     }
 

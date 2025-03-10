@@ -3,6 +3,7 @@ use {
     solana_pubkey::Pubkey,
     solana_sdk::{
         clock::Slot,
+        hash::Hash,
         transaction::{TransactionError, VersionedTransaction},
     },
     std::collections::HashMap,
@@ -26,15 +27,18 @@ pub struct VoteCertificate {
     stake: Stake,
     // The slot the votes in the certificate are for
     slot: Slot,
+    // The hash of the block that the votes in the certificate are for
+    block_id: Hash,
     is_complete: bool,
 }
 
 impl VoteCertificate {
-    pub fn new(slot: Slot) -> Self {
+    pub fn new(slot: Slot, block_id: Hash) -> Self {
         Self {
             certificate: HashMap::new(),
             stake: 0,
             slot,
+            block_id,
             is_complete: false,
         }
     }
@@ -68,6 +72,10 @@ impl VoteCertificate {
 
     pub fn slot(&self) -> Slot {
         self.slot
+    }
+
+    pub fn block_id(&self) -> Hash {
+        self.block_id
     }
 
     pub fn get_certificate(&self) -> Vec<VersionedTransaction> {
