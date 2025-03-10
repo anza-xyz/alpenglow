@@ -467,31 +467,10 @@ impl TryFrom<AccountSharedData> for VoteAccount {
         };
 
         // Allocate as Arc<MaybeUninit<VoteAccountInner>> so we can initialize in place.
-        let mut inner = Arc::new(VoteAccountInner {
-            account: AccountSharedData::default(),
-            vote_state: if is_alpenglow {
-                VoteAccountState::Alpenglow(AlpenglowVoteState::default())
-            } else {
-                VoteAccountState::TowerBFT(VoteState::default())
-            },
-        });
-        let (inner_account_ptr, inner_tower_state_ptr, inner_alpenglow_state_ptr) =
-            match Arc::get_mut(&mut inner) {
-                Some(inner_mut) => match &mut inner_mut.vote_state {
-                    VoteAccountState::TowerBFT(state) if !is_alpenglow => (
-                        addr_of_mut!(inner_mut.account),
-                        Some(addr_of_mut!(*state)),
-                        None,
-                    ),
-                    VoteAccountState::Alpenglow(state) if is_alpenglow => (
-                        addr_of_mut!(inner_mut.account),
-                        None,
-                        Some(addr_of_mut!(*state)),
-                    ),
-                    _ => panic!("Mismatched VoteAccountState and is_alpenglow flag"),
-                },
-                None => panic!("Cannot get mutable access to VoteAccountInner"),
-            };
+        let mut inner = Arc::new(MaybeUninit::<VoteAccountInner>::uninit());
+        let inner_ptr = Arc::get_mut(&mut inner)
+            .expect("we're the only ref")
+            .as_mut_ptr();
 
         // Safety:
         // - All the addr_of_mut!(...).write(...) calls are valid since we just allocated and so
@@ -499,8 +478,21 @@ impl TryFrom<AccountSharedData> for VoteAccount {
         // - We use write() so that the old values aren't dropped since they're still
         // uninitialized.
         unsafe {
-            if let Some(inner_state_ptr) = inner_tower_state_ptr {
-                let vote_state = addr_of_mut!((*inner_state_ptr));
+            if is_alpenglow {
+                addr_of_mut!((*inner_ptr).vote_state).write(VoteAccountState::Alpenglow(
+                    *AlpenglowVoteState::deserialize(account.data())?,
+                ));
+            } else {
+                // Get a place holder so we can set the enum to TowerBFT.
+                let uninit_state = MaybeUninit::<VoteState>::uninit();
+                addr_of_mut!((*inner_ptr).vote_state)
+                    .write(VoteAccountState::TowerBFT(uninit_state.assume_init()));
+
+                // Get the address of vote_state so we can write the deserialized value in place.
+                let vote_state = match &mut (*inner_ptr).vote_state {
+                    VoteAccountState::TowerBFT(ref mut vote_state) => addr_of_mut!(*vote_state),
+                    _ => unreachable!(),
+                };
                 // Safety:
                 // - vote_state is non-null and MaybeUninit<VoteState> is guaranteed to have same layout
                 // and alignment as VoteState.
@@ -517,19 +509,18 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                     // subfields.
                     return Err(e.into());
                 }
-            } else if let Some(inner_state_ptr) = inner_alpenglow_state_ptr {
-                *inner_state_ptr = *AlpenglowVoteState::deserialize(account.data())?;
-            } else {
-                panic!("Unknown vote state");
             }
 
             // Write the account field which completes the initialization of VoteAccountInner.
-            inner_account_ptr.write(account);
+            addr_of_mut!((*inner_ptr).account).write(account);
 
             // Safety:
             // - At this point both `inner.vote_state` and `inner.account`` are initialized, so it's safe to
             // transmute the MaybeUninit<VoteAccountInner> to VoteAccountInner.
-            Ok(VoteAccount(inner))
+            Ok(VoteAccount(mem::transmute::<
+                Arc<MaybeUninit<VoteAccountInner>>,
+                Arc<VoteAccountInner>,
+            >(inner)))
         }
     }
 }
