@@ -483,10 +483,10 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                     *AlpenglowVoteState::deserialize(account.data())?,
                 ));
             } else {
-                // Get a place holder so we can set the enum to TowerBFT.
-                let uninit_state = MaybeUninit::<VoteState>::uninit();
+                // SAFELY initialize `vote_state` in place, we just need some value here to make sure
+                // enum is properly initialized with TowerBFT variant.
                 addr_of_mut!((*inner_ptr).vote_state)
-                    .write(VoteAccountState::TowerBFT(uninit_state.assume_init()));
+                    .write(VoteAccountState::TowerBFT(VoteState::new_rand_for_tests(Pubkey::default(), 0)));
 
                 // Get the address of vote_state so we can write the deserialized value in place.
                 let vote_state = match &mut (*inner_ptr).vote_state {
