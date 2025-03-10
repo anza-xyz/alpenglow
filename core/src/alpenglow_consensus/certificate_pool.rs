@@ -217,6 +217,11 @@ impl CertificatePool {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
+    pub fn skip_certified(&mut self, slot: Slot, total_stake: Stake) -> bool {
+        self.skip_pool.skip_certified(slot, total_stake)
+    }
+
     /// Determines if the leader can start based on notarization and skip certificates.
     pub fn make_start_leader_decision(
         &self,

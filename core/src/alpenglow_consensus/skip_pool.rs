@@ -3,8 +3,9 @@ use {
     solana_pubkey::Pubkey,
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         fmt::Debug,
+        iter::Peekable,
         ops::RangeInclusive,
     },
     thiserror::Error,
@@ -42,9 +43,54 @@ impl HasStake for (Pubkey, Stake) {
     }
 }
 
+struct MergeConsecutiveSkipRanges<I, T>
+where
+    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
+    T: Clone,
+{
+    iter: Peekable<I>,
+}
+
+impl<I, T> MergeConsecutiveSkipRanges<I, T>
+where
+    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
+    T: Clone,
+{
+    fn new(iter: I) -> Self {
+        MergeConsecutiveSkipRanges {
+            iter: iter.peekable(),
+        }
+    }
+}
+
+impl<I, T> Iterator for MergeConsecutiveSkipRanges<I, T>
+where
+    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
+    T: Clone + Ord,
+{
+    type Item = (RangeInclusive<Slot>, BTreeSet<T>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ((start, mut end), mut pubkeys) = self.iter.next()?;
+
+        while let Some(((next_start, next_end), next_pubkeys)) = self.iter.peek_mut() {
+            if end + 1 == *next_start {
+                end = *next_end;
+                pubkeys.append(next_pubkeys);
+                self.iter.next();
+            } else {
+                break;
+            }
+        }
+
+        Some((start..=end, pubkeys))
+    }
+}
+
 /// Dynamic Segment Tree that works with any type implementing `HasStake`
 struct DynamicSegmentTree<T: Ord + Clone + HasStake> {
-    tree: BTreeMap<Slot, Vec<T>>, // Single Vec<T> per slot (first occurrence = add, second = remove)
+    /// (starts, ends) per `slot`, indicating the items that start and end at `slot`
+    tree: BTreeMap<Slot, (Vec<T>, Vec<T>)>,
 }
 
 impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
@@ -57,18 +103,79 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
 
     /// Inserts a given range `[start, end]` with an item `value`
     fn insert(&mut self, start: Slot, end: Slot, new_value: T) {
-        self.tree.entry(start).or_default().push(new_value.clone());
-        self.tree.entry(end).or_default().push(new_value);
+        self.tree
+            .entry(start)
+            .or_default()
+            .0
+            .push(new_value.clone());
+        self.tree.entry(end).or_default().1.push(new_value);
     }
 
     /// Removes a given range `[start, end]` with an item `value`
     fn remove(&mut self, start: Slot, end: Slot, new_value: T) {
-        if let Some(events) = self.tree.get_mut(&start) {
-            events.retain(|v| v.pubkey() != new_value.pubkey());
+        if let Some((starts, _)) = self.tree.get_mut(&start) {
+            starts.retain(|v| v.pubkey() != new_value.pubkey());
         }
-        if let Some(events) = self.tree.get_mut(&end) {
-            events.retain(|v| v.pubkey() != new_value.pubkey());
+        if let Some((_, ends)) = self.tree.get_mut(&end) {
+            ends.retain(|v| v.pubkey() != new_value.pubkey());
         }
+    }
+
+    fn scan_certificates(
+        &self,
+        threshold_stake: f64,
+    ) -> impl Iterator<Item = (RangeInclusive<Slot>, BTreeSet<Pubkey>)> + use<'_, T> {
+        let certs = self
+            .tree
+            .iter()
+            .scan(
+                (0f64, BTreeSet::default(), None),
+                move |(accumulated, current_contributors, cert), (slot, (starts, ends))| {
+                    let mut new_contributors = vec![];
+
+                    // Add new stakes
+                    for item in starts {
+                        current_contributors.insert(item.pubkey());
+                        new_contributors.push(item.pubkey());
+                        *accumulated += item.stake_value() as f64;
+                    }
+
+                    // Start or increment current cert
+                    if *accumulated > threshold_stake {
+                        match cert {
+                            None => {
+                                // Start a cert
+                                *cert = Some((*slot, current_contributors.clone()));
+                            }
+                            Some((_, contributors)) => {
+                                // Active cert, still above threshold, add any new contributors as
+                                // we want to build the maximal certificate
+                                contributors.extend(new_contributors)
+                            }
+                        }
+                    }
+
+                    // Subtract stakes that end on this slot
+                    for item in ends {
+                        current_contributors.remove(&item.pubkey());
+                        *accumulated -= item.stake_value() as f64
+                    }
+
+                    // Return cert if it has ended
+                    if *accumulated < threshold_stake {
+                        if let Some((start_slot, contributors)) = cert {
+                            // Skip certificate has ended, reset and publish
+                            let ret = Some(Some(((*start_slot, *slot), contributors.clone())));
+                            *cert = None;
+                            return ret;
+                        }
+                    }
+
+                    Some(None)
+                },
+            )
+            .flatten();
+        MergeConsecutiveSkipRanges::new(certs)
     }
 
     /// Queries the first slot range where the accumulated stake exceeds `threshold`
@@ -86,7 +193,7 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
                     return Some((start..=prev_slot.unwrap(), contributing_items));
                 }
             }
-            for item in events {
+            for item in events.0.iter().chain(events.1.iter()) {
                 let pubkey = item.pubkey();
                 let stake = item.stake_value();
 
@@ -123,6 +230,10 @@ pub struct SkipPool {
     skips: HashMap<Pubkey, SkipVote>, // Stores latest skip range for each validator
     segment_tree: DynamicSegmentTree<(Pubkey, Stake)>, // Generic tree tracking validators' stake
     max_skip_certificate_range: RangeInclusive<Slot>, // The largest valid skip range (initialized to 0..=0)
+    /// The current ranges of slots that are skip certified
+    certificate_ranges: Vec<RangeInclusive<Slot>>,
+    /// Whether `certificate_ranges` is up to date
+    up_to_date: bool,
 }
 
 impl Default for SkipPool {
@@ -138,6 +249,8 @@ impl SkipPool {
             skips: HashMap::new(),
             segment_tree: DynamicSegmentTree::new(),
             max_skip_certificate_range: 0..=0, // Default range
+            certificate_ranges: Vec::default(),
+            up_to_date: true,
         }
     }
 
@@ -207,6 +320,8 @@ impl SkipPool {
             self.max_skip_certificate_range = max_range; // Update to the full range
         }
 
+        self.up_to_date = false;
+
         Ok(())
     }
 
@@ -233,6 +348,53 @@ impl SkipPool {
                 (range, transactions)
             })
     }
+
+    /// Get all skip certificates
+    pub fn get_skip_certificates(
+        &self,
+        total_stake: Stake,
+    ) -> Vec<(RangeInclusive<Slot>, Vec<VersionedTransaction>)> {
+        let threshold = SUPERMAJORITY * total_stake as f64;
+        self.segment_tree
+            .scan_certificates(threshold)
+            .map(|(range, contributors)| {
+                (
+                    range,
+                    contributors
+                        .iter()
+                        .filter_map(|pk| self.skips.get(pk))
+                        .map(|sv| sv.skip_transaction.clone())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Is `slot` contained in any skip certificates
+    pub fn skip_certified(&mut self, slot: Slot, total_stake: Stake) -> bool {
+        if self
+            .certificate_ranges
+            .iter()
+            .any(|range| range.contains(&slot))
+        {
+            // If we are already have a certificate no reason to rescan (potentially costly)
+            return true;
+        }
+
+        if !self.up_to_date {
+            // No certificate is found and ranges are out of date, rescan and retry
+            let threshold = SUPERMAJORITY * total_stake as f64;
+            self.certificate_ranges = self
+                .segment_tree
+                .scan_certificates(threshold)
+                .map(|(range, _)| range)
+                .collect();
+            self.up_to_date = true;
+            return self.skip_certified(slot, total_stake);
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +403,17 @@ mod tests {
 
     fn dummy_transaction() -> VersionedTransaction {
         VersionedTransaction::default() // Creates a dummy transaction for testing
+    }
+
+    fn assert_single_certificate_range(
+        pool: &SkipPool,
+        total_stake: Stake,
+        exp_range: RangeInclusive<Slot>,
+    ) {
+        let [(ref range, _)] = pool.get_skip_certificates(total_stake)[..] else {
+            panic!("skip cert failure");
+        };
+        assert_eq!(*range, exp_range);
     }
 
     #[test]
@@ -265,6 +438,7 @@ mod tests {
         assert_eq!(stored_vote.skip_range, skip_range);
         assert_eq!(stored_vote.skip_transaction, skip_tx);
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(10, 20));
+        assert_single_certificate_range(&pool, total_stake, 10..=20);
     }
 
     #[test]
@@ -310,6 +484,87 @@ mod tests {
         assert_eq!(stored_vote.skip_range, skip_range);
         assert_eq!(stored_vote.skip_transaction, skip_tx);
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 1));
+        assert_single_certificate_range(&pool, total_stake, 1..=1);
+    }
+
+    #[test]
+    fn test_consecutive_slots() -> Result<(), AddVoteError> {
+        let mut pool = SkipPool::new();
+        let total_stake = 100;
+        let validator1 = Pubkey::new_unique();
+        let single_slot_skippers = [Pubkey::new_unique(); 10];
+
+        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 75, total_stake)?;
+
+        for (i, validator) in single_slot_skippers.into_iter().enumerate() {
+            let slot = i as u64 + 16;
+            // These should not extend the skip range
+            pool.add_vote(&validator, slot..=slot, dummy_transaction(), 1, total_stake)?;
+        }
+
+        // FAILS
+        // assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(5, 15));
+        // assert_eq!(
+        //     pool.get_skip_certificate(total_stake).unwrap().0,
+        //     RangeInclusive::new(5, 15)
+        // );
+
+        assert_single_certificate_range(&pool, total_stake, 5..=15);
+        Ok(())
+    }
+
+    #[test]
+    fn test_contributer_removed() -> Result<(), AddVoteError> {
+        let mut pool = SkipPool::new();
+        let total_stake = 100;
+        let small_non_contributor = Pubkey::new_unique();
+        let validator = Pubkey::new_unique();
+
+        pool.add_vote(
+            &small_non_contributor,
+            5..=5,
+            dummy_transaction(),
+            1,
+            total_stake,
+        )?;
+        pool.add_vote(&validator, 6..=10, dummy_transaction(), 75, total_stake)?;
+
+        // FAILS
+        // let (cert_range, contributors) = pool.get_skip_certificate(total_stake).unwrap();
+        // assert_eq!(cert_range, RangeInclusive::new(6, 10));
+        // assert_eq!(contributors.len(), 1);
+
+        let [(ref range, ref contributors)] = pool.get_skip_certificates(total_stake)[..] else {
+            panic!("skip cert failure");
+        };
+        assert_eq!(*range, RangeInclusive::new(6, 10));
+        assert_eq!(contributors.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_multi_cert() -> Result<(), AddVoteError> {
+        let mut pool = SkipPool::new();
+        let total_stake = 100;
+        let validator1 = Pubkey::new_unique();
+        let validator2 = Pubkey::new_unique();
+        let validator3 = Pubkey::new_unique();
+
+        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 66, total_stake)?;
+        pool.add_vote(&validator2, 5..=8, dummy_transaction(), 1, total_stake)?;
+        pool.add_vote(&validator3, 11..=15, dummy_transaction(), 1, total_stake)?;
+
+        // Max finds the first range
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(5, 8));
+
+        let certificates = pool.get_skip_certificates(total_stake);
+        assert_eq!(certificates.len(), 2);
+        assert_eq!(certificates[0].0, RangeInclusive::new(5, 8));
+        assert_eq!(certificates[1].0, RangeInclusive::new(11, 15));
+        assert!(pool.skip_certified(6, total_stake));
+        assert!(pool.skip_certified(12, total_stake));
+
+        Ok(())
     }
 
     #[test]
@@ -317,16 +572,19 @@ mod tests {
         let mut pool = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
+        let total_stake = 100;
 
-        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 50, 100)
+        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 50, total_stake)
             .unwrap();
-        pool.add_vote(&validator2, 20..=30, dummy_transaction(), 50, 100)
+        pool.add_vote(&validator2, 20..=30, dummy_transaction(), 50, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(0, 0));
+        assert!(pool.get_skip_certificates(total_stake).is_empty());
 
-        pool.add_vote(&validator1, 5..=30, dummy_transaction(), 50, 100)
+        pool.add_vote(&validator1, 5..=30, dummy_transaction(), 50, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(20, 30));
+        assert_single_certificate_range(&pool, total_stake, 20..=30);
     }
 
     #[test]
@@ -336,25 +594,35 @@ mod tests {
         let validator2 = Pubkey::new_unique();
         let validator3 = Pubkey::new_unique();
         let validator4 = Pubkey::new_unique();
+        let total_stake = 100;
 
-        pool.add_vote(&validator1, 1..=10, dummy_transaction(), 66, 100)
+        pool.add_vote(&validator1, 1..=10, dummy_transaction(), 66, total_stake)
             .unwrap();
 
-        pool.add_vote(&validator2, 2..=2, dummy_transaction(), 1, 100)
-            .unwrap();
-        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 2));
-
-        pool.add_vote(&validator3, 4..=4, dummy_transaction(), 1, 100)
+        pool.add_vote(&validator2, 2..=2, dummy_transaction(), 1, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 2));
+        assert_single_certificate_range(&pool, total_stake, 2..=2);
 
-        pool.add_vote(&validator4, 3..=3, dummy_transaction(), 1, 100)
+        pool.add_vote(&validator3, 4..=4, dummy_transaction(), 1, total_stake)
+            .unwrap();
+        assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 2));
+        let certificates = pool.get_skip_certificates(total_stake);
+        assert_eq!(certificates.len(), 2);
+        assert_eq!(certificates[0].0, 2..=2);
+        assert_eq!(certificates[1].0, 4..=4);
+
+        pool.add_vote(&validator4, 3..=3, dummy_transaction(), 1, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 4));
+        assert_single_certificate_range(&pool, total_stake, 2..=4);
+        assert!(pool.skip_certified(3, total_stake));
 
-        pool.add_vote(&validator4, 3..=10, dummy_transaction(), 1, 100)
+        pool.add_vote(&validator4, 3..=10, dummy_transaction(), 1, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(2, 10));
+        assert_single_certificate_range(&pool, total_stake, 2..=10);
+        assert!(pool.skip_certified(7, total_stake));
     }
 
     #[test]
@@ -362,18 +630,20 @@ mod tests {
         let mut pool = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
+        let total_stake = 100;
 
         let tx1 = dummy_transaction();
         let tx2 = dummy_transaction();
 
-        pool.add_vote(&validator1, 10..=20, tx1.clone(), 50, 100)
+        pool.add_vote(&validator1, 10..=20, tx1.clone(), 50, total_stake)
             .unwrap();
-        pool.add_vote(&validator2, 15..=25, tx2.clone(), 50, 100)
+        pool.add_vote(&validator2, 15..=25, tx2.clone(), 50, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, 15..=20);
+        assert_single_certificate_range(&pool, total_stake, 15..=20);
 
         // Test certificate is correct
-        let (range, transactions) = pool.get_skip_certificate(100).unwrap();
+        let (range, transactions) = pool.get_skip_certificate(total_stake).unwrap();
         assert_eq!(range, 15..=20);
         assert_eq!(transactions.len(), 2);
         assert!(transactions.contains(&tx1));
@@ -384,61 +654,66 @@ mod tests {
     fn test_update_existing_singleton_vote() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
+        let total_stake = 100;
         // Range expansion on a singleton vote should be ok
         assert!(pool
-            .add_vote(&validator, 1..=1, dummy_transaction(), 70, 100)
+            .add_vote(&validator, 1..=1, dummy_transaction(), 70, total_stake)
             .is_ok());
-        pool.add_vote(&validator, 1..=6, dummy_transaction(), 70, 100)
+        pool.add_vote(&validator, 1..=6, dummy_transaction(), 70, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(1, 6));
+        assert_single_certificate_range(&pool, total_stake, 1..=6);
     }
 
     #[test]
     fn test_update_existing_vote() {
         let mut pool = SkipPool::new();
         let validator = Pubkey::new_unique();
+        let total_stake = 100;
 
-        pool.add_vote(&validator, 10..=20, dummy_transaction(), 70, 100)
+        pool.add_vote(&validator, 10..=20, dummy_transaction(), 70, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(10, 20));
+        assert_single_certificate_range(&pool, total_stake, 10..=20);
 
         // AlreadyExists failure
         assert_eq!(
-            pool.add_vote(&validator, 10..=20, dummy_transaction(), 70, 100),
+            pool.add_vote(&validator, 10..=20, dummy_transaction(), 70, total_stake),
             Err(AddVoteError::AlreadyExists(10..=20))
         );
 
         // TooOld failure (trying to add 15..=17 when 10..=20 already exists)
         assert_eq!(
-            pool.add_vote(&validator, 15..=17, dummy_transaction(), 70, 100),
+            pool.add_vote(&validator, 15..=17, dummy_transaction(), 70, total_stake),
             Err(AddVoteError::TooOld(10..=20, 15..=17))
         );
 
         // TooOld falure with same range start but smaller range end
         assert_eq!(
-            pool.add_vote(&validator, 10..=19, dummy_transaction(), 70, 100),
+            pool.add_vote(&validator, 10..=19, dummy_transaction(), 70, total_stake),
             Err(AddVoteError::TooOld(10..=20, 10..=19))
         );
 
         // Overlapping failures
         assert_eq!(
-            pool.add_vote(&validator, 15..=25, dummy_transaction(), 70, 100),
+            pool.add_vote(&validator, 15..=25, dummy_transaction(), 70, total_stake),
             Err(AddVoteError::Overlapping(10..=20, 15..=25))
         );
 
         assert_eq!(
-            pool.add_vote(&validator, 20..=25, dummy_transaction(), 70, 100),
+            pool.add_vote(&validator, 20..=25, dummy_transaction(), 70, total_stake),
             Err(AddVoteError::Overlapping(10..=20, 20..=25))
         );
 
         // Adding a new, non-overlapping range
-        pool.add_vote(&validator, 21..=22, dummy_transaction(), 70, 100)
+        pool.add_vote(&validator, 21..=22, dummy_transaction(), 70, total_stake)
             .unwrap();
 
         // Range extension is allowed
-        pool.add_vote(&validator, 21..=23, dummy_transaction(), 70, 100)
+        pool.add_vote(&validator, 21..=23, dummy_transaction(), 70, total_stake)
             .unwrap();
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(21, 23));
+        assert_single_certificate_range(&pool, total_stake, 21..=23);
     }
 
     #[test]
@@ -446,10 +721,11 @@ mod tests {
         let mut pool = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
+        let total_stake = 100;
 
-        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 30, 100)
+        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 30, total_stake)
             .unwrap();
-        pool.add_vote(&validator2, 20..=30, dummy_transaction(), 30, 100)
+        pool.add_vote(&validator2, 20..=30, dummy_transaction(), 30, total_stake)
             .unwrap();
 
         assert_eq!(pool.max_skip_certificate_range, RangeInclusive::new(0, 0));
