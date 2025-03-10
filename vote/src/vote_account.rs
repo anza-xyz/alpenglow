@@ -137,7 +137,7 @@ impl VoteAccount {
         }
     }
 
-    pub fn get_root_slot(&self) -> Option<Slot> {
+    pub fn root_slot(&self) -> Option<Slot> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.root_slot,
             VoteAccountState::Alpenglow(vote_state) => vote_state.latest_finalized_slot(),

@@ -1189,7 +1189,7 @@ impl JsonRpcRequestProcessor {
                     node_pubkey: account.node_pubkey().to_string(),
                     activated_stake: *activated_stake,
                     commission: account.commission(),
-                    root_slot: account.get_root_slot().unwrap_or(0),
+                    root_slot: account.root_slot().unwrap_or(0),
                     epoch_credits,
                     epoch_vote_account: epoch_vote_accounts.contains_key(vote_pubkey),
                     last_vote: account.last_voted_slot().unwrap_or(0),
