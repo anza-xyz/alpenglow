@@ -143,8 +143,9 @@ impl CertificatePool {
                     skip_range,
                     transaction,
                     validator_stake,
-                    total_stake,
                 )?;
+                // TODO(ashwin): figure out batching, this is expensive to call everytime
+                self.skip_pool.update(total_stake);
                 let highest_skip_certificate_slot = self.highest_skip_slot();
                 if old_highest_skip_certificate_slot != highest_skip_certificate_slot {
                     return Ok(Some(NewHighestCertificate::Skip(
@@ -154,6 +155,10 @@ impl CertificatePool {
             }
         }
         Ok(None)
+    }
+
+    pub fn update(&mut self, total_stake: Stake) {
+        self.skip_pool.update(total_stake);
     }
 
     pub fn is_notarization_certificate_complete(&self, slot: Slot) -> bool {
@@ -217,6 +222,11 @@ impl CertificatePool {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
+    pub fn skip_certified(&mut self, slot: Slot, total_stake: Stake) -> bool {
+        self.skip_pool.skip_certified(slot, total_stake)
+    }
+
     /// Determines if the leader can start based on notarization and skip certificates.
     pub fn make_start_leader_decision(
         &self,
@@ -261,9 +271,11 @@ impl CertificatePool {
                     && max_skip_range.contains(&end_skip_slot)
                 {
                     self.skip_pool
-                        .get_skip_certificate(total_stake)
+                        .get_skip_certificates(total_stake)
+                        .last()
                         .expect("valid skip certificate must exist")
                         .1
+                        .clone()
                 } else {
                     return None;
                 }
