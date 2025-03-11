@@ -9,6 +9,7 @@ use {
         resolved_transaction_view::ResolvedTransactionView, transaction_data::TransactionData,
         transaction_version::TransactionVersion, transaction_view::SanitizedTransactionView,
     },
+    alpenglow_vote::{id as AlpenglowProgramId, vote::Vote as AlpenglowVote},
     solana_message::{
         compiled_instruction::CompiledInstruction,
         v0::{LoadedAddresses, LoadedMessage, MessageAddressTableLookup},
@@ -35,7 +36,16 @@ fn is_simple_vote_transaction<D: TransactionData>(
         .program_instructions_iter()
         .map(|(program_id, _ix)| program_id);
 
-    is_simple_vote_transaction_impl(signatures, is_legacy_message, instruction_programs)
+    if is_simple_vote_transaction_impl(signatures, is_legacy_message, instruction_programs) {
+        return true;
+    }
+    if transaction
+        .program_instructions_iter()
+        .any(|(program_id, _)| program_id == &AlpenglowProgramId())
+    {
+        return Ok(true) == AlpenglowVote::is_simple_vote(transaction.data());
+    }
+    false
 }
 
 impl<D: TransactionData> RuntimeTransaction<SanitizedTransactionView<D>> {

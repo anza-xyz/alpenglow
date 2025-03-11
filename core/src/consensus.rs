@@ -146,6 +146,11 @@ impl SwitchForkDecision {
                 v,
                 *switch_proof_hash,
             )),
+            // For now Alpenglow votes don't go through the switch proof process, so we
+            // should not generate transactions here.
+            (_, VoteTransaction::AlpenglowNotarization(_)) => None,
+            (_, VoteTransaction::AlpenglowFinalization(_)) => None,
+            (_, VoteTransaction::AlpenglowSkip(_)) => None,
         }
     }
 
