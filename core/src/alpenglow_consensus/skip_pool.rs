@@ -134,6 +134,8 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
             }
         }
 
+        debug_assert_eq!(accumulated, 0f64);
+        debug_assert!(current_cert.is_none());
         certs
     }
 }
