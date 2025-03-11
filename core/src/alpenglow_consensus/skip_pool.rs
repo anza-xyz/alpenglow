@@ -5,7 +5,6 @@ use {
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
         fmt::Debug,
-        iter::Peekable,
         ops::RangeInclusive,
     },
     thiserror::Error,
@@ -43,50 +42,6 @@ impl HasStake for (Pubkey, Stake) {
     }
 }
 
-struct MergeConsecutiveSkipRanges<I, T>
-where
-    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
-    T: Clone,
-{
-    iter: Peekable<I>,
-}
-
-impl<I, T> MergeConsecutiveSkipRanges<I, T>
-where
-    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
-    T: Clone,
-{
-    fn new(iter: I) -> Self {
-        MergeConsecutiveSkipRanges {
-            iter: iter.peekable(),
-        }
-    }
-}
-
-impl<I, T> Iterator for MergeConsecutiveSkipRanges<I, T>
-where
-    I: Iterator<Item = ((Slot, Slot), BTreeSet<T>)>,
-    T: Clone + Ord,
-{
-    type Item = (RangeInclusive<Slot>, BTreeSet<T>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ((start, mut end), mut pubkeys) = self.iter.next()?;
-
-        while let Some(((next_start, next_end), next_pubkeys)) = self.iter.peek_mut() {
-            if end + 1 == *next_start {
-                end = *next_end;
-                pubkeys.append(next_pubkeys);
-                self.iter.next();
-            } else {
-                break;
-            }
-        }
-
-        Some((start..=end, pubkeys))
-    }
-}
-
 /// Dynamic Segment Tree that works with any type implementing `HasStake`
 struct DynamicSegmentTree<T: Ord + Clone + HasStake> {
     /// (starts, ends) per `slot`, indicating the items that start and end at `slot`
@@ -121,15 +76,13 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
         }
     }
 
-    fn scan_certificates(
-        &self,
-        threshold_stake: f64,
-    ) -> impl Iterator<Item = (RangeInclusive<Slot>, BTreeSet<Pubkey>)> + use<'_, T> {
+    fn scan_certificates(&self, threshold_stake: f64) -> Vec<((Slot, Slot), BTreeSet<Pubkey>)> {
         let mut accumulated = 0f64;
         let mut current_contributors = BTreeSet::new();
-        let mut cert: Option<(Slot, BTreeSet<Pubkey>)> = None;
+        let mut current_cert: Option<(Slot, BTreeSet<Pubkey>)> = None;
+        let mut certs: Vec<((Slot, Slot), BTreeSet<Pubkey>)> = vec![];
 
-        let certs = self.tree.iter().filter_map(move |(slot, (starts, ends))| {
+        for (slot, (starts, ends)) in self.tree.iter() {
             let mut new_contributors = vec![];
 
             // Add new stakes
@@ -141,10 +94,21 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
 
             // Start or increment current cert
             if accumulated > threshold_stake {
-                match &mut cert {
+                match &mut current_cert {
                     None => {
                         // Start a cert
-                        cert = Some((*slot, current_contributors.clone()));
+                        current_cert = Some((*slot, current_contributors.clone()));
+                        // Check if the previous cert is consecutive
+                        if let Some(((_, prev_end), _)) = certs.last() {
+                            if prev_end + 1 == *slot {
+                                // Overwrite the newly started cert with an extension of the previous
+                                let ((prev_start, _), mut prev_contributors) = certs
+                                    .pop()
+                                    .expect("`certs` has at least one element checked above");
+                                prev_contributors.extend(current_contributors.clone());
+                                current_cert = Some((prev_start, prev_contributors));
+                            }
+                        }
                     }
                     Some((_, ref mut contributors)) => {
                         // Active cert, still above threshold, add any new contributors as
@@ -162,17 +126,15 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
 
             // Return cert if it has ended
             if accumulated <= threshold_stake {
-                if let Some((start_slot, contributors)) = &cert {
+                if let Some((start_slot, contributors)) = &current_cert {
                     // Skip certificate has ended, reset and publish
-                    let ret = Some(((*start_slot, *slot), contributors.clone()));
-                    cert = None;
-                    return ret;
+                    certs.push(((*start_slot, *slot), contributors.clone()));
+                    current_cert = None;
                 }
             }
+        }
 
-            None
-        });
-        MergeConsecutiveSkipRanges::new(certs)
+        certs
     }
 
     /// Queries the first slot range where the accumulated stake exceeds `threshold`
@@ -354,9 +316,10 @@ impl SkipPool {
         let threshold = SUPERMAJORITY * total_stake as f64;
         self.segment_tree
             .scan_certificates(threshold)
-            .map(|(range, contributors)| {
+            .into_iter()
+            .map(|((start, end), contributors)| {
                 (
-                    range,
+                    start..=end,
                     contributors
                         .iter()
                         .filter_map(|pk| self.skips.get(pk))
@@ -384,7 +347,8 @@ impl SkipPool {
             self.certificate_ranges = self
                 .segment_tree
                 .scan_certificates(threshold)
-                .map(|(range, _)| range)
+                .into_iter()
+                .map(|((start, end), _)| start..=end)
                 .collect();
             self.up_to_date = true;
             return self.skip_certified(slot, total_stake);
