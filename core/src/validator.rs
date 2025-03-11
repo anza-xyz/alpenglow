@@ -1,14 +1,11 @@
 //! The `validator` module hosts all the validator microservices.
 
-use crate::alpenglow_consensus::vote_history_storage::{
-    FileVoteHistoryStorage, VoteHistoryStorage,
-};
 pub use solana_perf::report_target_features;
-
 use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
+        alpenglow_consensus::vote_history_storage::{FileVoteHistoryStorage, VoteHistoryStorage},
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
