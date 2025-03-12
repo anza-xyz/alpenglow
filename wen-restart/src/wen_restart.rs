@@ -1463,7 +1463,10 @@ mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_time_utils::timestamp,
-        solana_vote::vote_account::VoteAccount,
+        solana_vote::{
+            alpenglow_vote_account::VoteAccountsHashMap as AlpenglowVoteAccountsHashMap,
+            vote_account::VoteAccount,
+        },
         solana_vote_program::vote_state::create_account_with_authorized,
         std::{fs::remove_file, sync::Arc, thread::Builder},
         tempfile::TempDir,
@@ -2022,7 +2025,7 @@ mod tests {
                 )
             })
             .collect();
-        let epoch2_eopch_stakes = EpochStakes::new_for_tests(vote_accounts_hash_map, 2);
+        let epoch2_eopch_stakes = EpochStakes::new_for_tests(vote_accounts_hash_map, AlpenglowVoteAccountsHashMap::new(), 2);
         new_root_bank.set_epoch_stakes_for_test(2, epoch2_eopch_stakes);
         let _ = insert_slots_into_blockstore(
             test_state.blockstore.clone(),

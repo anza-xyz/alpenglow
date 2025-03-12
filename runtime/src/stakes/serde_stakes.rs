@@ -266,8 +266,10 @@ impl Serialize for SerdeStakeAccountMapToStakeFormat {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::stakes::StakesCache, rand::Rng, solana_sdk::rent::Rent,
-        solana_stake_program::stake_state, solana_vote::alpenglow_vote_account,
+        super::*, crate::stakes::StakesCache,
+        alpenglow_vote::state::VoteState as AlpenglowVoteState,
+        rand::Rng, solana_sdk::rent::Rent,
+        solana_stake_program::stake_state,
         solana_vote_program::vote_state,
     };
 
@@ -328,7 +330,7 @@ mod tests {
         for i in 0..num_accounts {
             let vote_pubkey = solana_pubkey::new_rand();
             // Make half the accounts Alpenglow
-            let vote_account = if i % 2 {
+            let vote_account = if i % 2 == 0 {
                 vote_state::create_account(
                     &vote_pubkey,
                     &solana_pubkey::new_rand(),  // node_pubkey
@@ -336,10 +338,11 @@ mod tests {
                     rng.gen_range(0..1_000_000), // lamports
                 )
             } else {
-                alpenglow_vote_account::create_account(
+                AlpenglowVoteState::create_account_with_authorized(
                     &vote_pubkey,
                     &solana_pubkey::new_rand(),  // node_pubkey
-                    rng.gen_range(0..101),       // commission
+                    &solana_pubkey::new_rand(),
+                    rng.gen_range(0..101), // commission
                     rng.gen_range(0..1_000_000), // lamports
                 )
             };

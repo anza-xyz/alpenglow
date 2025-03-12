@@ -257,7 +257,10 @@ mod tests {
         },
         solana_signer::Signer,
         solana_time_utils::timestamp,
-        solana_vote::vote_account::VoteAccount,
+        solana_vote::{
+            alpenglow_vote_account::VoteAccountsHashMap as AlpenglowVoteAccountsHashMap,
+            vote_account::VoteAccount,
+        },
         solana_vote_program::vote_state::create_account_with_authorized,
     };
 
@@ -796,7 +799,7 @@ mod tests {
                 )
             })
             .collect();
-        let epoch1_eopch_stakes = EpochStakes::new_for_tests(vote_accounts_hash_map, 1);
+        let epoch1_eopch_stakes = EpochStakes::new_for_tests(vote_accounts_hash_map, AlpenglowVoteAccountsHashMap::new(), 1);
         new_root_bank.set_epoch_stakes_for_test(1, epoch1_eopch_stakes);
 
         let last_voted_fork_slots = vec![root_bank.slot() + 1, root_bank.get_slots_in_epoch(0) + 1];
