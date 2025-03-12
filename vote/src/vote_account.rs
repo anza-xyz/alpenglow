@@ -105,6 +105,7 @@ impl VoteAccount {
         }
     }
 
+    // This should be really cheap as deserialize is a zero-copy pointer re-cast.
     pub fn alpenglow_vote_state(&self) -> Option<&AlpenglowVoteState> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(_) => None,
