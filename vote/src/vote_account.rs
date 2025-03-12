@@ -497,11 +497,9 @@ impl TryFrom<AccountSharedData> for VoteAccount {
             if is_alpenglow {
                 // Even though we don't need to copy anything, we need to make sure account.data()
                 // can be properly deserialized into AlpenglowVoteState.
-                let mut temp = Arc::new(MaybeUninit::<AlpenglowVoteState>::uninit());
-                let temp_ptr = Arc::get_mut(&mut temp)
-                    .expect("we're the only ref")
-                    .as_mut_ptr();
-                addr_of_mut!((*temp_ptr)).write(*AlpenglowVoteState::deserialize(account.data())?);
+                // Deserialize without allowing it to be dropped, otherwise members in vote_state
+                // will be dropped.
+                let _ = AlpenglowVoteState::deserialize(account.data())?;
                 addr_of_mut!((*inner_ptr).vote_state).write(VoteAccountState::Alpenglow);
             } else {
                 // SAFELY initialize `vote_state` in place, we just need some value here to make sure
