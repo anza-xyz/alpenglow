@@ -5,7 +5,9 @@ use {
     serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer},
     solana_sdk::{clock::Epoch, pubkey::Pubkey, stake::state::Delegation},
     solana_stake_program::stake_state::Stake,
-    solana_vote::vote_account::VoteAccounts,
+    solana_vote::{
+        alpenglow_vote_account::VoteAccounts as AlpenglowVoteAccounts, vote_account::VoteAccounts,
+    },
     std::sync::Arc,
 };
 
@@ -121,6 +123,7 @@ impl From<Stakes<Stake>> for SerdeStakesToDelegationFormat {
     fn from(stakes: Stakes<Stake>) -> Self {
         let Stakes {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations,
             unused,
             epoch,
@@ -129,6 +132,7 @@ impl From<Stakes<Stake>> for SerdeStakesToDelegationFormat {
 
         Self {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations: SerdeStakeMapToDelegationFormat(stake_delegations),
             unused,
             epoch,
@@ -141,6 +145,7 @@ impl From<Stakes<StakeAccount>> for SerdeStakeAccountsToDelegationFormat {
     fn from(stakes: Stakes<StakeAccount>) -> Self {
         let Stakes {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations,
             unused,
             epoch,
@@ -149,6 +154,7 @@ impl From<Stakes<StakeAccount>> for SerdeStakeAccountsToDelegationFormat {
 
         Self {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations: SerdeStakeAccountMapToDelegationFormat(stake_delegations),
             unused,
             epoch,
@@ -161,6 +167,7 @@ impl From<Stakes<StakeAccount>> for SerdeStakeAccountsToStakeFormat {
     fn from(stakes: Stakes<StakeAccount>) -> Self {
         let Stakes {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations,
             unused,
             epoch,
@@ -169,6 +176,7 @@ impl From<Stakes<StakeAccount>> for SerdeStakeAccountsToStakeFormat {
 
         Self {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations: SerdeStakeAccountMapToStakeFormat(stake_delegations),
             unused,
             epoch,
@@ -181,6 +189,7 @@ impl From<Stakes<StakeAccount>> for SerdeStakeAccountsToStakeFormat {
 #[derive(Serialize)]
 struct SerdeStakesToDelegationFormat {
     vote_accounts: VoteAccounts,
+    alpenglow_vote_accounts: AlpenglowVoteAccounts,
     stake_delegations: SerdeStakeMapToDelegationFormat,
     unused: u64,
     epoch: Epoch,
@@ -191,6 +200,7 @@ struct SerdeStakesToDelegationFormat {
 #[derive(Serialize)]
 struct SerdeStakeAccountsToDelegationFormat {
     vote_accounts: VoteAccounts,
+    alpenglow_vote_accounts: AlpenglowVoteAccounts,
     stake_delegations: SerdeStakeAccountMapToDelegationFormat,
     unused: u64,
     epoch: Epoch,
@@ -201,6 +211,7 @@ struct SerdeStakeAccountsToDelegationFormat {
 #[derive(Serialize)]
 struct SerdeStakeAccountsToStakeFormat {
     vote_accounts: VoteAccounts,
+    alpenglow_vote_accounts: AlpenglowVoteAccounts,
     stake_delegations: SerdeStakeAccountMapToStakeFormat,
     unused: u64,
     epoch: Epoch,
@@ -256,7 +267,8 @@ impl Serialize for SerdeStakeAccountMapToStakeFormat {
 mod tests {
     use {
         super::*, crate::stakes::StakesCache, rand::Rng, solana_sdk::rent::Rent,
-        solana_stake_program::stake_state, solana_vote_program::vote_state,
+        solana_stake_program::stake_state, solana_vote::alpenglow_vote_account,
+        solana_vote_program::vote_state,
     };
 
     #[test]
@@ -281,6 +293,7 @@ mod tests {
 
         let stake_account_stakes = Stakes {
             vote_accounts: VoteAccounts::default(),
+            alpenglow_vote_accounts: AlpenglowVoteAccounts::default(),
             stake_delegations,
             unused: 0,
             epoch: 0,
@@ -311,14 +324,25 @@ mod tests {
             epoch: rng.gen(),
             ..Stakes::default()
         });
-        for _ in 0..rng.gen_range(5usize..10) {
+        let num_accounts = 2 * rng.gen_range(5usize..10);
+        for i in 0..num_accounts {
             let vote_pubkey = solana_pubkey::new_rand();
-            let vote_account = vote_state::create_account(
-                &vote_pubkey,
-                &solana_pubkey::new_rand(),  // node_pubkey
-                rng.gen_range(0..101),       // commission
-                rng.gen_range(0..1_000_000), // lamports
-            );
+            // Make half the accounts Alpenglow
+            let vote_account = if i % 2 {
+                vote_state::create_account(
+                    &vote_pubkey,
+                    &solana_pubkey::new_rand(),  // node_pubkey
+                    rng.gen_range(0..101),       // commission
+                    rng.gen_range(0..1_000_000), // lamports
+                )
+            } else {
+                alpenglow_vote_account::create_account(
+                    &vote_pubkey,
+                    &solana_pubkey::new_rand(),  // node_pubkey
+                    rng.gen_range(0..101),       // commission
+                    rng.gen_range(0..1_000_000), // lamports
+                )
+            };
             stakes_cache.check_and_store(&vote_pubkey, &vote_account, None);
             for _ in 0..rng.gen_range(10usize..20) {
                 let stake_pubkey = solana_pubkey::new_rand();
@@ -335,6 +359,7 @@ mod tests {
         }
         let stakes: Stakes<StakeAccount> = stakes_cache.stakes().clone();
         assert!(stakes.vote_accounts.as_ref().len() >= 5);
+        assert!(stakes.alpenglow_vote_accounts.as_ref().len() >= 5);
         assert!(stakes.stake_delegations.len() >= 50);
         let dummy = Dummy {
             head: String::from("dummy-head"),
@@ -342,11 +367,13 @@ mod tests {
             tail: String::from("dummy-tail"),
         };
         assert!(dummy.stakes.vote_accounts().as_ref().len() >= 5);
+        assert!(dummy.stakes.alpenglow_vote_accounts().as_ref().len() >= 5);
         let data = bincode::serialize(&dummy).unwrap();
         let other: Dummy = bincode::deserialize(&data).unwrap();
         assert_eq!(other, dummy);
         let stakes = Stakes::<Delegation>::from(stakes);
         assert!(stakes.vote_accounts.as_ref().len() >= 5);
+        assert!(stakes.alpenglow_vote_accounts.as_ref().len() >= 5);
         assert!(stakes.stake_delegations.len() >= 50);
         let other = match &*other.stakes {
             StakesEnum::Accounts(_) | StakesEnum::Stakes(_) => panic!("wrong type!"),

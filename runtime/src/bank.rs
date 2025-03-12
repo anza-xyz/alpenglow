@@ -3858,6 +3858,13 @@ impl Bank {
             .for_each(|(pubkey, _)| {
                 minimized_account_set.insert(*pubkey);
             });
+        self.stakes_cache
+            .stakes()
+            .alpenglow_staked_nodes()
+            .par_iter()
+            .for_each(|(pubkey, _)| {
+                minimized_account_set.insert(*pubkey);
+            });
     }
 
     /// After deserialize, populate skipped rewrites with accounts that would normally

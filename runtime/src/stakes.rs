@@ -2,6 +2,7 @@
 //! node stakes
 use {
     crate::{stake_account, stake_history::StakeHistory},
+    alpenglow_vote::check_id as alpenglow_vote_check_id,
     im::HashMap as ImHashMap,
     log::error,
     num_derive::ToPrimitive,
@@ -14,7 +15,12 @@ use {
         vote::state::VoteStateVersions,
     },
     solana_stake_program::stake_state::Stake,
-    solana_vote::vote_account::{VoteAccount, VoteAccounts},
+    solana_vote::{
+        alpenglow_vote_account::{
+            VoteAccount as AlpenglowVoteAccount, VoteAccounts as AlpenglowVoteAccounts,
+        },
+        vote_account::{VoteAccount, VoteAccounts},
+    },
     std::{
         collections::HashMap,
         ops::Add,
@@ -120,6 +126,27 @@ impl StakesCache {
                     stakes.remove_vote_account(pubkey)
                 };
             };
+        } else if alpenglow_vote_check_id(owner) {
+            match AlpenglowVoteAccount::try_from(account.to_account_shared_data()) {
+                Ok(vote_account) => {
+                    // drop the old account after releasing the lock
+                    let _old_vote_account = {
+                        let mut stakes = self.0.write().unwrap();
+                        stakes.upsert_alpenglow_vote_account(
+                            pubkey,
+                            vote_account,
+                            new_rate_activation_epoch,
+                        )
+                    };
+                }
+                Err(_) => {
+                    // drop the old account after releasing the lock
+                    let _old_vote_account = {
+                        let mut stakes = self.0.write().unwrap();
+                        stakes.remove_vote_account(pubkey)
+                    };
+                }
+            }
         } else if solana_stake_program::check_id(owner) {
             match StakeAccount::try_from(account.to_account_shared_data()) {
                 Ok(stake_account) => {
@@ -162,6 +189,9 @@ pub struct Stakes<T: Clone> {
     /// vote accounts
     vote_accounts: VoteAccounts,
 
+    /// Alpenglow vote accounts
+    alpenglow_vote_accounts: AlpenglowVoteAccounts,
+
     /// stake_delegations
     stake_delegations: ImHashMap<Pubkey, T>,
 
@@ -196,8 +226,16 @@ impl<T: Clone> Stakes<T> {
         &self.vote_accounts
     }
 
+    pub fn alpenglow_vote_accounts(&self) -> &AlpenglowVoteAccounts {
+        &self.alpenglow_vote_accounts
+    }
+
     pub(crate) fn staked_nodes(&self) -> Arc<HashMap<Pubkey, u64>> {
         self.vote_accounts.staked_nodes()
+    }
+
+    pub(crate) fn alpenglow_staked_nodes(&self) -> Arc<HashMap<Pubkey, u64>> {
+        self.alpenglow_vote_accounts.staked_nodes()
     }
 }
 
@@ -226,14 +264,22 @@ impl Stakes<StakeAccount> {
                 };
 
                 // Assert that all valid vote-accounts referenced in stake delegations are already
-                // contained in `stakes.vote_account`.
+                // contained in `stakes.vote_accounts` or `stakes.alpenglow_vote_accounts`.
                 let voter_pubkey = &delegation.voter_pubkey;
-                if stakes.vote_accounts.get(voter_pubkey).is_none() {
+                if stakes.vote_accounts.get(voter_pubkey).is_none()
+                    && stakes.alpenglow_vote_accounts.get(voter_pubkey).is_none()
+                {
                     if let Some(account) = get_account(voter_pubkey) {
                         if VoteStateVersions::is_correct_size_and_initialized(account.data())
                             && VoteAccount::try_from(account.clone()).is_ok()
                         {
                             error!("vote account not cached: {voter_pubkey}, {account:?}");
+                            return Err(Error::VoteAccountNotCached(*voter_pubkey));
+                        }
+                        if AlpenglowVoteAccount::try_from(account.clone()).is_ok() {
+                            error!(
+                                "alpenglow vote account not cached: {voter_pubkey}, {account:?}"
+                            );
                             return Err(Error::VoteAccountNotCached(*voter_pubkey));
                         }
                     }
@@ -265,9 +311,20 @@ impl Stakes<StakeAccount> {
                 return Err(Error::VoteAccountMismatch(*pubkey));
             }
         }
+        for (pubkey, vote_account) in stakes.alpenglow_vote_accounts.iter() {
+            let Some(account) = get_account(pubkey) else {
+                return Err(Error::VoteAccountNotFound(*pubkey));
+            };
+            let vote_account = vote_account.account();
+            if vote_account != &account {
+                error!("vote account mismatch: {pubkey}, {vote_account:?}, {account:?}");
+                return Err(Error::VoteAccountMismatch(*pubkey));
+            }
+        }
 
         Ok(Self {
             vote_accounts: stakes.vote_accounts.clone(),
+            alpenglow_vote_accounts: stakes.alpenglow_vote_accounts.clone(),
             stake_delegations,
             unused: stakes.unused,
             epoch: stakes.epoch,
@@ -279,10 +336,12 @@ impl Stakes<StakeAccount> {
     pub fn new_for_tests(
         epoch: Epoch,
         vote_accounts: VoteAccounts,
+        alpenglow_vote_accounts: AlpenglowVoteAccounts,
         stake_delegations: ImHashMap<Pubkey, StakeAccount>,
     ) -> Self {
         Self {
             vote_accounts,
+            alpenglow_vote_accounts,
             stake_delegations,
             unused: 0,
             epoch,
@@ -320,14 +379,35 @@ impl Stakes<StakeAccount> {
         self.epoch = next_epoch;
         // Refresh the stake distribution of vote accounts for the next epoch,
         // using new stake history.
-        self.vote_accounts = refresh_vote_accounts(
+        let delegated_stakes = refresh_delegations(
             thread_pool,
             self.epoch,
-            &self.vote_accounts,
             &stake_delegations,
             &self.stake_history,
             new_rate_activation_epoch,
         );
+        self.vote_accounts = self
+            .vote_accounts
+            .iter()
+            .map(|(&vote_pubkey, vote_account)| {
+                let delegated_stake = delegated_stakes
+                    .get(&vote_pubkey)
+                    .copied()
+                    .unwrap_or_default();
+                (vote_pubkey.clone(), (delegated_stake, vote_account.clone()))
+            })
+            .collect();
+        self.alpenglow_vote_accounts = self
+            .alpenglow_vote_accounts
+            .iter()
+            .map(|(&vote_pubkey, vote_account)| {
+                let delegated_stake = delegated_stakes
+                    .get(&vote_pubkey)
+                    .copied()
+                    .unwrap_or_default();
+                (vote_pubkey.clone(), (delegated_stake, vote_account.clone()))
+            })
+            .collect();
     }
 
     /// Sum the stakes that point to the given voter_pubkey
@@ -350,13 +430,29 @@ impl Stakes<StakeAccount> {
     pub(crate) fn vote_balance_and_staked(&self) -> u64 {
         let get_stake = |stake_account: &StakeAccount| stake_account.delegation().stake;
         let get_lamports = |(_, vote_account): (_, &VoteAccount)| vote_account.lamports();
+        let get_alpenglow_lamports =
+            |(_, vote_account): (_, &AlpenglowVoteAccount)| vote_account.lamports();
 
         self.stake_delegations.values().map(get_stake).sum::<u64>()
             + self.vote_accounts.iter().map(get_lamports).sum::<u64>()
+            + self
+                .alpenglow_vote_accounts
+                .iter()
+                .map(get_alpenglow_lamports)
+                .sum::<u64>()
     }
 
     fn remove_vote_account(&mut self, vote_pubkey: &Pubkey) -> Option<VoteAccount> {
         self.vote_accounts.remove(vote_pubkey).map(|(_, a)| a)
+    }
+
+    fn remove_alpenglow_vote_account(
+        &mut self,
+        vote_pubkey: &Pubkey,
+    ) -> Option<AlpenglowVoteAccount> {
+        self.alpenglow_vote_accounts
+            .remove(vote_pubkey)
+            .map(|(_, a)| a)
     }
 
     fn remove_stake_delegation(
@@ -372,6 +468,8 @@ impl Stakes<StakeAccount> {
                 new_rate_activation_epoch,
             );
             self.vote_accounts
+                .sub_stake(&removed_delegation.voter_pubkey, removed_stake);
+            self.alpenglow_vote_accounts
                 .sub_stake(&removed_delegation.voter_pubkey, removed_stake);
         }
     }
@@ -394,6 +492,26 @@ impl Stakes<StakeAccount> {
                 new_rate_activation_epoch,
             )
         })
+    }
+
+    fn upsert_alpenglow_vote_account(
+        &mut self,
+        vote_pubkey: &Pubkey,
+        vote_account: AlpenglowVoteAccount,
+        new_rate_activation_epoch: Option<Epoch>,
+    ) -> Option<AlpenglowVoteAccount> {
+        debug_assert_ne!(vote_account.lamports(), 0u64);
+        let stake_delegations = &self.stake_delegations;
+        self.alpenglow_vote_accounts
+            .insert(*vote_pubkey, vote_account, || {
+                Self::calculate_stake(
+                    stake_delegations,
+                    vote_pubkey,
+                    self.epoch,
+                    &self.stake_history,
+                    new_rate_activation_epoch,
+                )
+            })
     }
 
     fn upsert_stake_delegation(
@@ -443,11 +561,27 @@ impl StakesEnum {
         }
     }
 
+    pub fn alpenglow_vote_accounts(&self) -> &AlpenglowVoteAccounts {
+        match self {
+            StakesEnum::Accounts(stakes) => stakes.alpenglow_vote_accounts(),
+            StakesEnum::Delegations(stakes) => stakes.alpenglow_vote_accounts(),
+            StakesEnum::Stakes(stakes) => stakes.alpenglow_vote_accounts(),
+        }
+    }
+
     pub(crate) fn staked_nodes(&self) -> Arc<HashMap<Pubkey, u64>> {
         match self {
             StakesEnum::Accounts(stakes) => stakes.staked_nodes(),
             StakesEnum::Delegations(stakes) => stakes.staked_nodes(),
             StakesEnum::Stakes(stakes) => stakes.staked_nodes(),
+        }
+    }
+
+    pub(crate) fn alpenglow_staked_nodes(&self) -> Arc<HashMap<Pubkey, u64>> {
+        match self {
+            StakesEnum::Accounts(stakes) => stakes.alpenglow_staked_nodes(),
+            StakesEnum::Delegations(stakes) => stakes.alpenglow_staked_nodes(),
+            StakesEnum::Stakes(stakes) => stakes.alpenglow_staked_nodes(),
         }
     }
 }
@@ -464,6 +598,7 @@ impl From<Stakes<StakeAccount>> for Stakes<Delegation> {
             .collect();
         Self {
             vote_accounts: stakes.vote_accounts,
+            alpenglow_vote_accounts: stakes.alpenglow_vote_accounts,
             stake_delegations,
             unused: stakes.unused,
             epoch: stakes.epoch,
@@ -484,6 +619,7 @@ impl From<Stakes<StakeAccount>> for Stakes<Stake> {
             .collect();
         Self {
             vote_accounts: stakes.vote_accounts,
+            alpenglow_vote_accounts: stakes.alpenglow_vote_accounts,
             stake_delegations,
             unused: stakes.unused,
             epoch: stakes.epoch,
@@ -504,6 +640,7 @@ impl From<Stakes<Stake>> for Stakes<Delegation> {
             .collect();
         Self {
             vote_accounts: stakes.vote_accounts,
+            alpenglow_vote_accounts: stakes.alpenglow_vote_accounts,
             stake_delegations,
             unused: stakes.unused,
             epoch: stakes.epoch,
@@ -558,14 +695,13 @@ impl PartialEq<StakesEnum> for StakesEnum {
     }
 }
 
-fn refresh_vote_accounts(
+fn refresh_delegations(
     thread_pool: &ThreadPool,
     epoch: Epoch,
-    vote_accounts: &VoteAccounts,
     stake_delegations: &[&StakeAccount],
     stake_history: &StakeHistory,
     new_rate_activation_epoch: Option<Epoch>,
-) -> VoteAccounts {
+) -> HashMap<Pubkey, u64> {
     type StakesHashMap = HashMap</*voter:*/ Pubkey, /*stake:*/ u64>;
     fn merge(mut stakes: StakesHashMap, other: StakesHashMap) -> StakesHashMap {
         if stakes.len() < other.len() {
@@ -576,7 +712,7 @@ fn refresh_vote_accounts(
         }
         stakes
     }
-    let delegated_stakes = thread_pool.install(|| {
+    thread_pool.install(|| {
         stake_delegations
             .par_iter()
             .fold(HashMap::default, |mut delegated_stakes, stake_account| {
@@ -586,17 +722,7 @@ fn refresh_vote_accounts(
                 delegated_stakes
             })
             .reduce(HashMap::default, merge)
-    });
-    vote_accounts
-        .iter()
-        .map(|(&vote_pubkey, vote_account)| {
-            let delegated_stake = delegated_stakes
-                .get(&vote_pubkey)
-                .copied()
-                .unwrap_or_default();
-            (vote_pubkey, (delegated_stake, vote_account.clone()))
-        })
-        .collect()
+    })
 }
 
 #[cfg(test)]

@@ -2,7 +2,10 @@ use {
     crate::stakes::{serde_stakes_to_delegation_format, SerdeStakesToStakeFormat, StakesEnum},
     serde::{Deserialize, Serialize},
     solana_sdk::{clock::Epoch, pubkey::Pubkey},
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote::{
+        alpenglow_vote_account::VoteAccountsHashMap as AlpenglowVoteAccountsHashMap,
+        vote_account::VoteAccountsHashMap,
+    },
     std::{collections::HashMap, sync::Arc},
 };
 
@@ -43,12 +46,16 @@ impl EpochStakes {
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_for_tests(
         vote_accounts_hash_map: VoteAccountsHashMap,
+        alpenglow_vote_accounts_hash_map: AlpenglowVoteAccountsHashMap,
         leader_schedule_epoch: Epoch,
     ) -> Self {
         Self::new(
             Arc::new(StakesEnum::Accounts(crate::stakes::Stakes::new_for_tests(
                 0,
                 solana_vote::vote_account::VoteAccounts::from(Arc::new(vote_accounts_hash_map)),
+                solana_vote::alpenglow_vote_account::VoteAccounts::from(Arc::new(
+                    alpenglow_vote_accounts_hash_map,
+                )),
                 im::HashMap::default(),
             ))),
             leader_schedule_epoch,

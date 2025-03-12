@@ -470,7 +470,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=aab69b6#aab69b6bbb9497ce391fdb2383c71150b8fe2325"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=f6a012d#f6a012d6603fbcb78955e7abd1a468fc2ff97b30"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -481,12 +481,14 @@ dependencies = [
  "num_enum",
  "serde",
  "serde_derive",
+ "solana-account",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
  "solana-logger",
  "solana-program",
  "solana-signature",
+ "solana-vote-interface",
  "spl-pod",
  "thiserror 2.0.11",
 ]
@@ -9377,6 +9379,7 @@ version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
  "ahash 0.8.11",
+ "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "assert_matches",
@@ -10837,6 +10840,7 @@ dependencies = [
 name = "solana-vote"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "bincode",
  "itertools 0.12.1",
  "log",
