@@ -42,10 +42,9 @@ pub enum Error {
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
 enum VoteAccountState {
     TowerBFT(VoteState),
-    Alpenglow(AlpenglowVoteState),
+    Alpenglow,
 }
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -102,14 +101,16 @@ impl VoteAccount {
     pub fn vote_state(&self) -> Option<&VoteState> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => Some(vote_state),
-            VoteAccountState::Alpenglow(_) => None,
+            VoteAccountState::Alpenglow => None,
         }
     }
 
     pub fn alpenglow_vote_state(&self) -> Option<&AlpenglowVoteState> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(_) => None,
-            VoteAccountState::Alpenglow(vote_state) => Some(vote_state),
+            VoteAccountState::Alpenglow => {
+                AlpenglowVoteState::deserialize(self.0.account.data()).ok()
+            }
         }
     }
 
@@ -117,7 +118,7 @@ impl VoteAccount {
     pub fn node_pubkey(&self) -> &Pubkey {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => &vote_state.node_pubkey,
-            VoteAccountState::Alpenglow(vote_state) => vote_state.node_pubkey(),
+            VoteAccountState::Alpenglow => self.alpenglow_vote_state().unwrap().node_pubkey(),
         }
     }
 
@@ -126,28 +127,36 @@ impl VoteAccount {
             VoteAccountState::TowerBFT(vote_state) => {
                 vote_state.authorized_voters().get_authorized_voter(epoch)
             }
-            VoteAccountState::Alpenglow(vote_state) => vote_state.get_authorized_voter(epoch),
+            VoteAccountState::Alpenglow => self
+                .alpenglow_vote_state()
+                .unwrap()
+                .get_authorized_voter(epoch),
         }
     }
 
     pub fn last_timestamp(&self) -> BlockTimestamp {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.last_timestamp.clone(),
-            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_timestamp_legacy_format(),
+            VoteAccountState::Alpenglow => self
+                .alpenglow_vote_state()
+                .unwrap()
+                .latest_timestamp_legacy_format(),
         }
     }
 
     pub fn root_slot(&self) -> Option<Slot> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.root_slot,
-            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_finalized_slot(),
+            VoteAccountState::Alpenglow => {
+                self.alpenglow_vote_state().unwrap().latest_finalized_slot()
+            }
         }
     }
 
     pub fn commission(&self) -> u8 {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.commission,
-            VoteAccountState::Alpenglow(vote_state) => vote_state.commission(),
+            VoteAccountState::Alpenglow => self.alpenglow_vote_state().unwrap().commission(),
         }
     }
 
@@ -156,15 +165,17 @@ impl VoteAccount {
             VoteAccountState::TowerBFT(vote_state) => {
                 vote_state.votes.iter().last().map(|vote| vote.slot())
             }
-            VoteAccountState::Alpenglow(vote_state) => vote_state.latest_notarized_slot(),
+            VoteAccountState::Alpenglow => {
+                self.alpenglow_vote_state().unwrap().latest_notarized_slot()
+            }
         }
     }
 
     pub fn epoch_credits(&self) -> Vec<(u64, u64, u64)> {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.epoch_credits.clone(),
-            VoteAccountState::Alpenglow(vote_state) => {
-                let epoch_credits = vote_state.epoch_credits();
+            VoteAccountState::Alpenglow => {
+                let epoch_credits = self.alpenglow_vote_state().unwrap().epoch_credits();
                 vec![(
                     epoch_credits.epoch(),
                     epoch_credits.credits(),
@@ -177,7 +188,11 @@ impl VoteAccount {
     pub fn credits(&self) -> u64 {
         match &self.0.vote_state {
             VoteAccountState::TowerBFT(vote_state) => vote_state.credits(),
-            VoteAccountState::Alpenglow(vote_state) => vote_state.epoch_credits().credits(),
+            VoteAccountState::Alpenglow => self
+                .alpenglow_vote_state()
+                .unwrap()
+                .epoch_credits()
+                .credits(),
         }
     }
 
@@ -189,7 +204,8 @@ impl VoteAccount {
                 .map(|vote| format!("slot {} (conf={})", vote.slot(), vote.confirmation_count()))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            VoteAccountState::Alpenglow(vote_state) => {
+            VoteAccountState::Alpenglow => {
+                let vote_state = self.alpenglow_vote_state().unwrap();
                 format!(
                     "notarize {:?}\nfinalize {:?}\nskip {:?} {:?}",
                     vote_state.latest_notarized_slot(),
@@ -479,9 +495,14 @@ impl TryFrom<AccountSharedData> for VoteAccount {
         // uninitialized.
         unsafe {
             if is_alpenglow {
-                addr_of_mut!((*inner_ptr).vote_state).write(VoteAccountState::Alpenglow(
-                    *AlpenglowVoteState::deserialize(account.data())?,
-                ));
+                // Even though we don't need to copy anything, we need to make sure account.data()
+                // can be properly deserialized into AlpenglowVoteState.
+                let mut temp = Arc::new(MaybeUninit::<AlpenglowVoteState>::uninit());
+                let temp_ptr = Arc::get_mut(&mut temp)
+                    .expect("we're the only ref")
+                    .as_mut_ptr();
+                addr_of_mut!((*temp_ptr)).write(*AlpenglowVoteState::deserialize(account.data())?);
+                addr_of_mut!((*inner_ptr).vote_state).write(VoteAccountState::Alpenglow);
             } else {
                 // SAFELY initialize `vote_state` in place, we just need some value here to make sure
                 // enum is properly initialized with TowerBFT variant.
