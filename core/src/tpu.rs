@@ -10,6 +10,7 @@ pub use solana_sdk::net::DEFAULT_TPU_COALESCE;
 pub use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER as MAX_QUIC_CONNECTIONS_PER_PEER;
 use {
     crate::{
+        alpenglow_consensus::vote_data::AlpenglowVoteData,
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
         cluster_info_vote_listener::{
@@ -127,6 +128,7 @@ impl Tpu {
         transaction_struct: TransactionStructure,
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
+        alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
     ) -> (Self, Vec<Arc<dyn NotifyKeyUpdate + Sync + Send>>) {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -273,6 +275,7 @@ impl Tpu {
             log_messages_bytes_limit,
             bank_forks.clone(),
             prioritization_fee_cache,
+            alpenglow_vote_sender,
         );
 
         let forwarding_stage = ForwardingStage::spawn(

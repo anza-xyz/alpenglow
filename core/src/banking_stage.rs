@@ -13,6 +13,7 @@ use {
         unprocessed_transaction_storage::UnprocessedTransactionStorage,
     },
     crate::{
+        alpenglow_consensus::vote_data::AlpenglowVoteData,
         banking_stage::{
             consume_worker::ConsumeWorker,
             packet_deserializer::PacketDeserializer,
@@ -336,6 +337,7 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
+        alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
     ) -> Self {
         Self::new_num_threads(
             block_production_method,
@@ -351,6 +353,7 @@ impl BankingStage {
             log_messages_bytes_limit,
             bank_forks,
             prioritization_fee_cache,
+            alpenglow_vote_sender,
         )
     }
 
@@ -369,6 +372,7 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
+        alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
     ) -> Self {
         match block_production_method {
             BlockProductionMethod::CentralScheduler
@@ -391,6 +395,7 @@ impl BankingStage {
                     log_messages_bytes_limit,
                     bank_forks,
                     prioritization_fee_cache,
+                    alpenglow_vote_sender,
                 )
             }
         }
@@ -411,6 +416,7 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
+        alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
     ) -> Self {
         assert!(num_threads >= MIN_TOTAL_THREADS);
         // Keeps track of extraneous vote transactions for the vote threads
@@ -446,6 +452,7 @@ impl BankingStage {
                 UnprocessedTransactionStorage::new_vote_storage(
                     latest_unprocessed_votes.clone(),
                     vote_source,
+                    alpenglow_vote_sender.clone(),
                 ),
             ));
         }
@@ -629,6 +636,7 @@ impl BankingStage {
         if unprocessed_transaction_storage.should_not_process() {
             return;
         }
+
         let (decision, make_decision_us) =
             measure_us!(decision_maker.make_consume_or_forward_decision());
         let metrics_action = slot_metrics_tracker.check_leader_slot_boundary(

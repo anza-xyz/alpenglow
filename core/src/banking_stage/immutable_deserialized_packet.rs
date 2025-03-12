@@ -54,6 +54,7 @@ lazy_static::lazy_static! {
 pub struct ImmutableDeserializedPacket {
     original_packet: Packet,
     transaction: SanitizedVersionedTransaction,
+    versioned_transaction: VersionedTransaction,
     message_hash: Hash,
     is_simple_vote: bool,
     compute_unit_price: u64,
@@ -63,7 +64,7 @@ pub struct ImmutableDeserializedPacket {
 impl ImmutableDeserializedPacket {
     pub fn new(packet: Packet) -> Result<Self, DeserializedPacketError> {
         let versioned_transaction: VersionedTransaction = packet.deserialize_slice(..)?;
-        let sanitized_transaction = SanitizedVersionedTransaction::try_from(versioned_transaction)?;
+        let sanitized_transaction = SanitizedVersionedTransaction::try_from(versioned_transaction.clone())?;
         let message_bytes = packet_message(&packet)?;
         let message_hash = Message::hash_raw_message(message_bytes);
         let is_simple_vote = packet.meta().is_simple_vote_tx();
@@ -90,6 +91,7 @@ impl ImmutableDeserializedPacket {
         Ok(Self {
             original_packet: packet,
             transaction: sanitized_transaction,
+            versioned_transaction,
             message_hash,
             is_simple_vote,
             compute_unit_price,
@@ -103,6 +105,10 @@ impl ImmutableDeserializedPacket {
 
     pub fn transaction(&self) -> &SanitizedVersionedTransaction {
         &self.transaction
+    }
+
+    pub fn versioned_transaction(&self) -> &VersionedTransaction {
+        &self.versioned_transaction
     }
 
     pub fn message_hash(&self) -> &Hash {

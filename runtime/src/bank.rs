@@ -6129,7 +6129,18 @@ impl Bank {
         let vote_account = stakes.vote_accounts().get(vote_account)?;
         Some(vote_account.clone())
     }
-
+    
+    pub fn get_vote_account_stake(&self, vote_pubkey: &Pubkey) -> u64 {
+        if let Some(vote_account) = self.get_vote_account(vote_pubkey) {
+            self.current_epoch_staked_nodes()
+                .get(&vote_account.node_pubkey())
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+    
     /// Get the EpochStakes for the current Bank::epoch
     pub fn current_epoch_stakes(&self) -> &EpochStakes {
         // The stakes for a given epoch (E) in self.epoch_stakes are keyed by leader schedule epoch

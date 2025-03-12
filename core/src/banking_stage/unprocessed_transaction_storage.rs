@@ -1,4 +1,5 @@
 use {
+    crate::alpenglow_consensus::vote_data::AlpenglowVoteData,
     super::{
         consumer::Consumer,
         immutable_deserialized_packet::ImmutableDeserializedPacket,
@@ -14,7 +15,7 @@ use {
         },
         BankingStageStats,
     },
-    itertools::Itertools,
+    itertools::{Either, Itertools},
     min_max_heap::MinMaxHeap,
     solana_accounts_db::account_locks::validate_account_locks,
     solana_measure::measure_us,
@@ -24,7 +25,12 @@ use {
     solana_svm::transaction_error_metrics::TransactionErrorMetrics,
     std::{
         collections::HashMap,
+        convert::identity,
         sync::{atomic::Ordering, Arc},
+    },
+    solana_sdk::{
+        pubkey::Pubkey,
+        instruction::CompiledInstruction,
     },
 };
 
@@ -51,6 +57,7 @@ pub struct ThreadLocalUnprocessedPackets {
 pub struct VoteStorage {
     latest_unprocessed_votes: Arc<LatestUnprocessedVotes>,
     vote_source: VoteSource,
+    alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -261,10 +268,12 @@ impl UnprocessedTransactionStorage {
     pub fn new_vote_storage(
         latest_unprocessed_votes: Arc<LatestUnprocessedVotes>,
         vote_source: VoteSource,
+        alpenglow_vote_sender: crossbeam_channel::Sender<AlpenglowVoteData>,
     ) -> Self {
         Self::VoteStorage(VoteStorage {
             latest_unprocessed_votes,
             vote_source,
+            alpenglow_vote_sender,
         })
     }
 
@@ -469,11 +478,55 @@ impl VoteStorage {
         while let Some((packets, payload)) = scanner.iterate() {
             let vote_packets = packets.iter().map(|p| (*p).clone()).collect_vec();
 
-            if let Some(retryable_vote_indices) = processing_function(&vote_packets, payload) {
+            // Process Alpenglow votes before regular vote processing
+            let (alpenglow_votes, regular_votes): (Vec<_>, Vec<_>) = vote_packets
+                .into_iter()
+                .filter_map(|packet| {
+                    let message = packet.transaction().get_message();
+                    let program_instructions: Option<(&Pubkey, &CompiledInstruction)> = 
+                        message.program_instructions_iter().next();
+
+                    if let Some((program_id, instruction)) = program_instructions {
+                        if solana_sdk_ids::vote::check_id(program_id) {
+                            if let Ok(true) = alpenglow_vote::vote::Vote::is_simple_vote(&instruction.data) {
+                                if let Ok(alpenglow_vote) = alpenglow_vote::vote::Vote::deserialize_simple_vote(&instruction.data) {
+                                    let validator_pubkey = message.message.static_account_keys()[0];
+                                    let validator_stake = bank.get_vote_account_stake(&validator_pubkey);
+                                    let total_stake = bank.total_epoch_stake();
+                                    
+                                    Some(Either::Left((AlpenglowVoteData {
+                                        vote: alpenglow_vote,
+                                        transaction: packet.versioned_transaction().clone(),
+                                        validator_pubkey,
+                                        validator_stake,
+                                        total_stake,
+                                    }, packet)))
+                                } else {
+                                    Some(Either::Right(packet))
+                                }
+                            } else {
+                                Some(Either::Right(packet))
+                            }
+                        } else {
+                            Some(Either::Right(packet))
+                        }
+                    } else {
+                        Some(Either::Right(packet))
+                    }
+                })
+                .partition_map(identity);
+
+            // Send Alpenglow votes on channel
+            for (vote_data, _) in alpenglow_votes {
+                let _ = self.alpenglow_vote_sender.send(vote_data);
+            }
+
+            // Continue with regular vote processing using regular_votes
+            if let Some(retryable_vote_indices) = processing_function(&regular_votes, payload) {
                 self.latest_unprocessed_votes.insert_batch(
                     retryable_vote_indices.iter().filter_map(|i| {
                         LatestValidatorVotePacket::new_from_immutable(
-                            vote_packets[*i].clone(),
+                            regular_votes[*i].clone(),
                             self.vote_source,
                             deprecate_legacy_vote_ixs,
                         )
@@ -483,7 +536,7 @@ impl VoteStorage {
                 );
             } else {
                 self.latest_unprocessed_votes.insert_batch(
-                    vote_packets.into_iter().filter_map(|packet| {
+                    regular_votes.into_iter().filter_map(|packet| {
                         LatestValidatorVotePacket::new_from_immutable(
                             packet,
                             self.vote_source,
@@ -804,10 +857,12 @@ mod tests {
             } else {
                 vec![]
             };
+            let (alpenglow_vote_sender, alpenglow_vote_receiver) = crossbeam_channel::unbounded();
             let latest_unprocessed_votes = LatestUnprocessedVotes::new_for_tests(&staked_keys);
             let mut transaction_storage = UnprocessedTransactionStorage::new_vote_storage(
                 Arc::new(latest_unprocessed_votes),
                 vote_source,
+                alpenglow_vote_sender,
             );
             transaction_storage.insert_batch(vec![
                 ImmutableDeserializedPacket::new(small_transfer.clone())?,
@@ -839,12 +894,14 @@ mod tests {
             ),
         )?;
         vote.meta_mut().flags.set(PacketFlags::SIMPLE_VOTE_TX, true);
-
+        
+        let (alpenglow_vote_sender, alpenglow_vote_receiver) = crossbeam_channel::unbounded();
         let latest_unprocessed_votes =
             LatestUnprocessedVotes::new_for_tests(&[vote_keypair.pubkey()]);
         let mut transaction_storage = UnprocessedTransactionStorage::new_vote_storage(
             Arc::new(latest_unprocessed_votes),
             VoteSource::Tpu,
+            alpenglow_vote_sender,
         );
 
         transaction_storage.insert_batch(vec![ImmutableDeserializedPacket::new(vote.clone())?]);

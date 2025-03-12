@@ -460,6 +460,7 @@ fn main() {
         gossip_vote_sender,
         gossip_vote_receiver,
     } = banking_tracer.create_channels(false);
+    let (alpenglow_vote_sender, _alpenglow_vote_receiver) = crossbeam_channel::unbounded();
     let banking_stage = BankingStage::new_num_threads(
         block_production_method,
         transaction_struct,
@@ -474,6 +475,7 @@ fn main() {
         None,
         bank_forks.clone(),
         &prioritization_fee_cache,
+        alpenglow_vote_sender,
     );
 
     // This is so that the signal_receiver does not go out of scope after the closure.

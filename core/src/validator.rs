@@ -5,6 +5,7 @@ use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
+        alpenglow_consensus::vote_data::AlpenglowVoteData,
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
@@ -803,6 +804,9 @@ impl Validator {
         let (poh_timing_point_sender, poh_timing_point_receiver) = unbounded();
         let poh_timing_report_service =
             PohTimingReportService::new(poh_timing_point_receiver, exit.clone());
+
+        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = 
+            unbounded::<AlpenglowVoteData>();
 
         let (
             bank_forks,
@@ -1610,6 +1614,7 @@ impl Validator {
             config.transaction_struct.clone(),
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
+            alpenglow_vote_sender,
         );
 
         datapoint_info!(

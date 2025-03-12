@@ -817,6 +817,7 @@ impl BankingSimulator {
             shred_version,
             sender,
         );
+        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = crossbeam_channel::unbounded();
 
         info!("Start banking stage!...");
         let prioritization_fee_cache = &Arc::new(PrioritizationFeeCache::new(0u64));
@@ -834,6 +835,7 @@ impl BankingSimulator {
             None,
             bank_forks.clone(),
             prioritization_fee_cache,
+            alpenglow_vote_sender,
         );
 
         let (&_slot, &raw_base_event_time) = freeze_time_by_slot
