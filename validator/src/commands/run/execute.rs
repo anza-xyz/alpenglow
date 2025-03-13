@@ -23,6 +23,7 @@ use {
     },
     solana_clap_utils::input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of, values_of},
     solana_core::{
+        alpenglow_consensus::vote_history_storage,
         banking_trace::DISABLED_BAKING_TRACE_DIR,
         consensus::tower_storage,
         system_monitor_service::SystemMonitorService,
@@ -396,6 +397,16 @@ pub fn execute(
             _ => unreachable!(),
         };
 
+    let vote_history_storage: Arc<dyn vote_history_storage::VoteHistoryStorage> = {
+        let vote_history_path = value_t!(matches, "vote_history_path", PathBuf)
+            .ok()
+            .unwrap_or_else(|| ledger_path.clone());
+
+        Arc::new(vote_history_storage::FileVoteHistoryStorage::new(
+            vote_history_path,
+        ))
+    };
+
     let mut accounts_index_config = AccountsIndexConfig {
         started_from_validator: true, // this is the only place this is set
         num_flush_threads: Some(accounts_index_flush_threads),
@@ -628,6 +639,7 @@ pub fn execute(
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
         tower_storage,
+        vote_history_storage,
         halt_at_slot: value_t!(matches, "dev_halt_at_slot", Slot).ok(),
         expected_genesis_hash: matches
             .value_of("expected_genesis_hash")
