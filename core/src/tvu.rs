@@ -3,7 +3,7 @@
 
 use {
     crate::{
-        alpenglow_consensus::vote_history_storage::FileVoteHistoryStorage,
+        alpenglow_consensus::vote_history_storage::VoteHistoryStorage,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
@@ -128,6 +128,7 @@ impl Tvu {
         transaction_recorder: &TransactionRecorder,
         tower: Tower,
         tower_storage: Arc<dyn TowerStorage>,
+        vote_history_storage: Arc<dyn VoteHistoryStorage>,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         exit: Arc<AtomicBool>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
@@ -338,8 +339,7 @@ impl Tvu {
             cluster_info.clone(),
             poh_recorder.clone(),
             tower_storage,
-            // TODO: plumb the actual vote history storage,
-            Arc::new(FileVoteHistoryStorage::default()),
+            vote_history_storage.clone(),
             vote_connection_cache.clone(),
         );
 
@@ -446,6 +446,7 @@ pub mod tests {
     use {
         super::*,
         crate::{
+            alpenglow_consensus::vote_history_storage::FileVoteHistoryStorage,
             consensus::tower_storage::FileTowerStorage,
             repair::quic_endpoint::RepairQuicAsyncSenders,
         },
@@ -560,6 +561,7 @@ pub mod tests {
             &transaction_recorder,
             Tower::default(),
             Arc::new(FileTowerStorage::default()),
+            Arc::new(FileVoteHistoryStorage::default()),
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,
