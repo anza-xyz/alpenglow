@@ -2937,6 +2937,7 @@ impl ReplayStage {
         Ok(())
     }
 
+    // TEST
     fn generate_alpenglow_tx(
         node_keypair: &Keypair,
         bank: &Bank,
