@@ -151,7 +151,6 @@ use {
             MessageHash, Result, SanitizedTransaction, Transaction, TransactionError,
             TransactionVerificationMode, VersionedTransaction, MAX_TX_ACCOUNT_LOCKS,
         },
-        transaction_context::{TransactionAccount, TransactionReturnData},
     },
     solana_svm::{
         account_loader::{collect_rent_from_account, LoadedTransaction},
@@ -173,6 +172,7 @@ use {
     },
     solana_svm_transaction::svm_message::SVMMessage,
     solana_timings::{ExecuteTimingType, ExecuteTimings},
+    solana_transaction_context::{TransactionAccount, TransactionReturnData},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
     std::{
         collections::{HashMap, HashSet},
@@ -2504,17 +2504,11 @@ impl Bank {
         let slots_per_epoch = self.epoch_schedule().slots_per_epoch;
         let vote_accounts = self.vote_accounts();
         let recent_timestamps = vote_accounts.iter().filter_map(|(pubkey, (_, account))| {
-            let vote_state = account.vote_state();
-            let slot_delta = self.slot().checked_sub(vote_state.last_timestamp.slot)?;
-            (slot_delta <= slots_per_epoch).then_some({
-                (
-                    *pubkey,
-                    (
-                        vote_state.last_timestamp.slot,
-                        vote_state.last_timestamp.timestamp,
-                    ),
-                )
-            })
+            let vote_state = account.vote_state_view();
+            let last_timestamp = vote_state.last_timestamp();
+            let slot_delta = self.slot().checked_sub(last_timestamp.slot)?;
+            (slot_delta <= slots_per_epoch)
+                .then_some((*pubkey, (last_timestamp.slot, last_timestamp.timestamp)))
         });
         let slot_duration = Duration::from_nanos(self.ns_per_slot as u64);
         let epoch = self.epoch_schedule().get_epoch(self.slot());
@@ -2749,10 +2743,10 @@ impl Bank {
         #[cfg(feature = "dev-context-only-utils")]
         let genesis_hash = genesis_hash.unwrap_or(genesis_config.hash());
 
-        self.blockhash_queue
-            .write()
-            .unwrap()
-            .genesis_hash(&genesis_hash, self.fee_rate_governor.lamports_per_signature);
+        self.blockhash_queue.write().unwrap().genesis_hash(
+            &genesis_hash,
+            genesis_config.fee_rate_governor.lamports_per_signature,
+        );
 
         self.hashes_per_tick = genesis_config.hashes_per_tick();
         self.ticks_per_slot = genesis_config.ticks_per_slot();
@@ -3971,6 +3965,13 @@ impl Bank {
 
     fn collect_rent_eagerly(&self) {
         if self.lazy_rent_collection.load(Relaxed) {
+            return;
+        }
+
+        if self
+            .feature_set
+            .is_active(&feature_set::disable_partitioned_rent_collection::id())
+        {
             return;
         }
 

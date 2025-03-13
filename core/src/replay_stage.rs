@@ -2970,11 +2970,11 @@ impl ReplayStage {
             }
             Some(vote_account) => vote_account,
         };
-        let vote_state = vote_account.vote_state();
-        if vote_state.node_pubkey != node_keypair.pubkey() {
+        let vote_state = vote_account.vote_state_view();
+        if *vote_state.node_pubkey() != node_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
-                vote_state.node_pubkey,
+                vote_state.node_pubkey(),
                 node_keypair.pubkey()
             );
             return GenerateVoteTxResult::HotSpare;
@@ -2991,7 +2991,7 @@ impl ReplayStage {
 
         let authorized_voter_keypair = match authorized_voter_keypairs
             .iter()
-            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
+            .find(|keypair| keypair.pubkey() == *authorized_voter_pubkey)
         {
             None => {
                 warn!(
@@ -3058,17 +3058,18 @@ impl ReplayStage {
             }
             Some(vote_account) => vote_account,
         };
-        let vote_state = vote_account.vote_state();
-        if vote_state.node_pubkey != node_keypair.pubkey() {
+        let vote_state_view = vote_account.vote_state_view();
+        if vote_state_view.node_pubkey() != &node_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
-                vote_state.node_pubkey,
+                vote_state_view.node_pubkey(),
                 node_keypair.pubkey()
             );
             return GenerateVoteTxResult::HotSpare;
         }
 
-        let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
+        let Some(authorized_voter_pubkey) = vote_state_view.get_authorized_voter(bank.epoch())
+        else {
             warn!(
                 "Vote account {} has no authorized voter for epoch {}.  Unable to vote",
                 vote_account_pubkey,
@@ -3079,7 +3080,7 @@ impl ReplayStage {
 
         let authorized_voter_keypair = match authorized_voter_keypairs
             .iter()
-            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
+            .find(|keypair| &keypair.pubkey() == authorized_voter_pubkey)
         {
             None => {
                 warn!(
@@ -4288,7 +4289,7 @@ impl ReplayStage {
         let Some(vote_account) = bank.get_vote_account(my_vote_pubkey) else {
             return;
         };
-        let mut bank_vote_state = TowerVoteState::from(vote_account.vote_state().clone());
+        let mut bank_vote_state = TowerVoteState::from(vote_account.vote_state_view());
         if bank_vote_state.last_voted_slot() <= tower.vote_state.last_voted_slot() {
             return;
         }
@@ -8715,7 +8716,14 @@ pub(crate) mod tests {
         let vote_account = expired_bank_child
             .get_vote_account(&my_vote_pubkey)
             .unwrap();
-        assert_eq!(vote_account.vote_state().tower(), vec![0, 1]);
+        assert_eq!(
+            vote_account
+                .vote_state_view()
+                .votes_iter()
+                .map(|lockout| lockout.slot())
+                .collect_vec(),
+            vec![0, 1]
+        );
         expired_bank_child.fill_bank_with_ticks_for_tests();
         expired_bank_child.freeze();
 
@@ -9962,7 +9970,8 @@ pub(crate) mod tests {
             &recyclers,
             None,
             None,
-        );
+        )
+        .unwrap();
 
         // Mark block 1, 3, 4, 5 as duplicate
         blockstore.store_duplicate_slot(1, vec![], vec![]).unwrap();

@@ -140,7 +140,7 @@ dependencies = [
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -234,12 +234,14 @@ dependencies = [
  "solana-stake-program",
  "solana-storage-bigtable",
  "solana-streamer",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-status",
  "solana-type-overrides",
  "solana-unified-scheduler-pool",
  "solana-version",
+ "solana-vote",
  "solana-vote-program",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
 ]
@@ -378,7 +380,7 @@ dependencies = [
  "spl-token-2022 7.0.0",
  "symlink",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
 ]
@@ -470,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=aab69b6#aab69b6bbb9497ce391fdb2383c71150b8fe2325"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=3c4c514#3c4c514d726891011c60d7576889c56384fd82f7"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -481,14 +483,16 @@ dependencies = [
  "num_enum",
  "serde",
  "serde_derive",
+ "solana-account",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
  "solana-logger",
  "solana-program",
  "solana-signature",
+ "solana-vote-interface",
  "spl-pod",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -545,6 +549,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.99",
+]
+
+[[package]]
+name = "arbitrary"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dde20b3d026af13f561bdd0f15edf01fc734f0dafcedbaf42bba506a9517f223"
+dependencies = [
+ "derive_arbitrary",
 ]
 
 [[package]]
@@ -1312,9 +1325,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.10.0"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f61dac84819c6588b558454b194026eb1f09c293b9036ae9b159e74e73ab6cf9"
+checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "bytesize"
@@ -2054,6 +2067,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30542c1ad912e0e3d22a1935c290e12e8a29d704a420177a31faad4a601a0800"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2213,9 +2237,9 @@ checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 
 [[package]]
 name = "dyn-clone"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feeef44e73baff3a26d371801df019877a9866a8c493d315ab00177843314f35"
+checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "eager"
@@ -2856,7 +2880,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http 0.2.12",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "slab",
  "tokio",
  "tokio-util 0.7.13",
@@ -3447,9 +3471,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.7.1"
+version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9c992b02b5b4c94ea26e32fe5bccb7aa7d9f390ab5c1221ff895bc7ea8b652"
+checksum = "3954d50fe15b02142bf25d3b8bdadb634ec3948f103d04ffe3031bc8fe9d7058"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.1",
@@ -3740,9 +3764,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.170"
+version = "0.2.171"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875b3680cb2f8f71bdcf9a30f38d48282f5d3c95cbf9b3fa57269bb5d5c06828"
+checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
 
 [[package]]
 name = "libloading"
@@ -4965,7 +4989,7 @@ dependencies = [
  "rustc-hash 2.0.0",
  "rustls 0.23.23",
  "socket2",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
 ]
@@ -4985,7 +5009,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-platform-verifier",
  "slab",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tinyvec",
  "tracing",
  "web-time",
@@ -5846,7 +5870,7 @@ version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "itoa",
  "ryu",
  "serde",
@@ -6160,7 +6184,7 @@ dependencies = [
  "spl-token-2022 7.0.0",
  "spl-token-group-interface",
  "spl-token-metadata-interface",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "zstd",
 ]
 
@@ -6255,7 +6279,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dashmap",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "itertools 0.12.1",
  "lazy_static",
  "libsecp256k1",
@@ -6312,7 +6336,7 @@ dependencies = [
  "solana-sysvar",
  "solana-time-utils",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
  "solana-vote-program",
  "static_assertions",
@@ -6321,7 +6345,7 @@ dependencies = [
  "tar",
  "tempfile",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6360,8 +6384,8 @@ dependencies = [
  "solana-program-runtime",
  "solana-pubkey",
  "solana-system-interface",
- "solana-transaction-context",
- "thiserror 2.0.11",
+ "solana-transaction-context 2.3.0",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6429,8 +6453,9 @@ dependencies = [
  "solana-program",
  "solana-runtime",
  "solana-sdk",
+ "solana-transaction-context 2.3.0",
  "tarpc",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-serde",
 ]
@@ -6442,6 +6467,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-sdk",
+ "solana-transaction-context 2.3.0",
  "tarpc",
 ]
 
@@ -6520,7 +6546,7 @@ dependencies = [
  "solana-version",
  "spl-instruction-padding",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6606,7 +6632,7 @@ dependencies = [
  "ark-serialize",
  "bytemuck",
  "solana-define-syscall",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6672,11 +6698,11 @@ dependencies = [
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-timings",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-type-overrides",
  "static_assertions",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6813,7 +6839,7 @@ dependencies = [
  "solana-signer",
  "solana-system-interface",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
  "uriparse",
  "url 2.5.4",
@@ -6845,7 +6871,7 @@ dependencies = [
  "solana-system-interface",
  "solana-zk-token-sdk",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
  "uriparse",
  "url 2.5.4",
@@ -6942,7 +6968,7 @@ dependencies = [
  "spl-memo",
  "tempfile",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
 ]
 
@@ -6999,7 +7025,7 @@ dependencies = [
  "solana-system-interface",
  "solana-sysvar",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
  "solana-transaction-status",
  "solana-vote-program",
@@ -7016,7 +7042,7 @@ dependencies = [
  "dashmap",
  "futures 0.3.31",
  "futures-util",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "indicatif",
  "log",
  "quinn",
@@ -7048,7 +7074,7 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-error",
  "solana-udp-client",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -7174,7 +7200,7 @@ dependencies = [
  "solana-system-interface",
  "solana-transaction",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7235,7 +7261,7 @@ dependencies = [
  "solana-signer",
  "solana-stake-interface",
  "solana-system-interface",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
 ]
 
 [[package]]
@@ -7246,7 +7272,7 @@ dependencies = [
  "bincode",
  "crossbeam-channel",
  "futures-util",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "indicatif",
  "log",
  "rand 0.8.5",
@@ -7259,7 +7285,7 @@ dependencies = [
  "solana-net-utils",
  "solana-time-utils",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -7367,7 +7393,7 @@ dependencies = [
  "sysctl",
  "tempfile",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "trees",
 ]
@@ -7442,7 +7468,7 @@ dependencies = [
  "curve25519-dalek 4.1.3",
  "solana-define-syscall",
  "subtle",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7645,7 +7671,7 @@ dependencies = [
  "solana-pubkey",
  "solana-sdk-ids",
  "solana-system-interface",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7675,7 +7701,7 @@ dependencies = [
  "solana-transaction",
  "solana-version",
  "spl-memo",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -7689,7 +7715,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "solana-program",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7790,7 +7816,7 @@ dependencies = [
  "serde_with",
  "sha2 0.10.8",
  "solana-frozen-abi-macro",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7919,7 +7945,7 @@ dependencies = [
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -7927,6 +7953,7 @@ dependencies = [
 name = "solana-gossip"
 version = "2.3.0"
 dependencies = [
+ "arrayvec",
  "assert_matches",
  "bincode",
  "bs58",
@@ -7935,7 +7962,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "flate2",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "itertools 0.12.1",
  "log",
  "lru",
@@ -7995,7 +8022,7 @@ dependencies = [
  "solana-vote-program",
  "static_assertions",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8230,6 +8257,7 @@ dependencies = [
  "solana-svm",
  "solana-svm-transaction",
  "solana-timings",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-status",
  "solana-vote",
  "solana-vote-program",
@@ -8242,7 +8270,7 @@ dependencies = [
  "tar",
  "tempfile",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "trees",
@@ -8315,7 +8343,7 @@ dependencies = [
  "solana-sbpf",
  "solana-sdk-ids",
  "solana-sysvar",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-type-overrides",
 ]
 
@@ -8468,7 +8496,7 @@ dependencies = [
  "solana-cluster-type",
  "solana-sha256-hasher",
  "solana-time-utils",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8668,7 +8696,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8706,7 +8734,7 @@ dependencies = [
  "ark-bn254",
  "light-poseidon",
  "solana-define-syscall",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8825,7 +8853,7 @@ dependencies = [
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-vote-interface",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "wasm-bindgen",
 ]
 
@@ -8922,10 +8950,10 @@ dependencies = [
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-timings",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-type-overrides",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8958,9 +8986,10 @@ dependencies = [
  "solana-stake-program",
  "solana-svm",
  "solana-timings",
+ "solana-transaction-context 2.3.0",
  "solana-vote-program",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -8970,6 +8999,7 @@ version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40db1ff5a0f8aea2c158d78ab5f2cf897848964251d1df42fef78efd3c85b863"
 dependencies = [
+ "arbitrary",
  "borsh 0.10.3",
  "borsh 1.5.5",
  "bs58",
@@ -9012,7 +9042,7 @@ dependencies = [
  "solana-pubkey",
  "solana-rpc-client-api",
  "solana-signature",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
@@ -9049,7 +9079,7 @@ dependencies = [
  "solana-streamer",
  "solana-tls-utils",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -9089,7 +9119,7 @@ dependencies = [
  "solana-pubkey",
  "solana-signature",
  "solana-signer",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "uriparse",
 ]
 
@@ -9222,7 +9252,7 @@ dependencies = [
  "stream-cancel",
  "symlink",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-util 0.7.13",
 ]
@@ -9301,7 +9331,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-transaction-status-client-types",
  "solana-version",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -9329,7 +9359,7 @@ dependencies = [
  "solana-signer",
  "solana-system-interface",
  "solana-transaction",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -9453,6 +9483,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-system-program",
  "solana-timings",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-status-client-types",
  "solana-unified-scheduler-logic",
  "solana-version",
@@ -9465,7 +9496,7 @@ dependencies = [
  "tar",
  "tempfile",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "zstd",
 ]
 
@@ -9497,7 +9528,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -9589,10 +9620,10 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.2.1",
  "solana-transaction-error",
  "solana-validator-exit",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "wasm-bindgen",
 ]
 
@@ -9644,7 +9675,7 @@ dependencies = [
  "borsh 1.5.5",
  "libsecp256k1",
  "solana-define-syscall",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -9902,7 +9933,7 @@ dependencies = [
  "solana-stake-interface",
  "solana-sysvar",
  "solana-sysvar-id",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-type-overrides",
  "solana-vote-interface",
  "solana-vote-program",
@@ -9957,10 +9988,10 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
  "solana-transaction-status",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tonic",
  "zstd",
@@ -9984,7 +10015,7 @@ dependencies = [
  "solana-serde",
  "solana-signature",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
  "solana-transaction-status",
  "tonic-build",
@@ -10003,7 +10034,7 @@ dependencies = [
  "futures-util",
  "governor",
  "histogram",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "itertools 0.12.1",
  "libc",
  "log",
@@ -10033,7 +10064,7 @@ dependencies = [
  "solana-tls-utils",
  "solana-transaction-error",
  "solana-transaction-metrics-tracker",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-util 0.7.13",
  "x509-parser",
@@ -10108,11 +10139,11 @@ dependencies = [
  "solana-sysvar",
  "solana-timings",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
  "solana-type-overrides",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10129,6 +10160,7 @@ name = "solana-svm-rent-collector"
 version = "2.3.0"
 dependencies = [
  "solana-sdk",
+ "solana-transaction-context 2.3.0",
 ]
 
 [[package]]
@@ -10190,7 +10222,7 @@ dependencies = [
  "solana-sha256-hasher",
  "solana-system-interface",
  "solana-sysvar",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-type-overrides",
 ]
 
@@ -10355,7 +10387,7 @@ dependencies = [
  "console",
  "csv",
  "ctrlc",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "indicatif",
  "pickledb",
  "serde",
@@ -10375,7 +10407,7 @@ dependencies = [
  "spl-associated-token-account",
  "spl-token",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10406,7 +10438,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-transaction-status",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10416,7 +10448,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "futures-util",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "indicatif",
  "log",
  "rayon",
@@ -10437,7 +10469,7 @@ dependencies = [
  "solana-signer",
  "solana-transaction",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -10466,7 +10498,7 @@ dependencies = [
  "solana-time-utils",
  "solana-tls-utils",
  "solana-tpu-client",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-util 0.7.13",
 ]
@@ -10516,6 +10548,24 @@ dependencies = [
  "solana-pubkey",
  "solana-rent",
  "solana-signature",
+]
+
+[[package]]
+name = "solana-transaction-context"
+version = "2.3.0"
+dependencies = [
+ "bincode",
+ "serde",
+ "serde_derive",
+ "solana-account",
+ "solana-account-info",
+ "solana-instruction",
+ "solana-pubkey",
+ "solana-rent",
+ "solana-signature",
+ "solana-system-interface",
+ "solana-transaction-context 2.3.0",
+ "static_assertions",
 ]
 
 [[package]]
@@ -10616,7 +10666,7 @@ dependencies = [
  "spl-token-confidential-transfer-proof-extraction",
  "spl-token-group-interface",
  "spl-token-metadata-interface",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10635,9 +10685,9 @@ dependencies = [
  "solana-reward-info",
  "solana-signature",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10680,7 +10730,7 @@ dependencies = [
  "solana-tls-utils",
  "static_assertions",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -10705,7 +10755,7 @@ dependencies = [
  "solana-packet",
  "solana-streamer",
  "solana-transaction-error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -10803,7 +10853,7 @@ dependencies = [
  "futures-util",
  "governor",
  "histogram",
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "itertools 0.12.1",
  "libc",
  "log",
@@ -10828,7 +10878,7 @@ dependencies = [
  "solana-streamer",
  "solana-transaction-metrics-tracker",
  "solana-version",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "x509-parser",
 ]
@@ -10837,6 +10887,7 @@ dependencies = [
 name = "solana-vote"
 version = "2.3.0"
 dependencies = [
+ "arbitrary",
  "bincode",
  "itertools 0.12.1",
  "log",
@@ -10855,13 +10906,15 @@ dependencies = [
  "solana-packet",
  "solana-pubkey",
  "solana-sdk-ids",
+ "solana-serialize-utils",
  "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
  "solana-svm-transaction",
  "solana-transaction",
  "solana-vote-interface",
- "thiserror 2.0.11",
+ "static_assertions",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10870,6 +10923,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1e9f6a1651310a94cd5a1a6b7f33ade01d9e5ea38a2220becb5fd737b756514"
 dependencies = [
+ "arbitrary",
  "bincode",
  "num-derive",
  "num-traits",
@@ -10924,10 +10978,10 @@ dependencies = [
  "solana-signer",
  "solana-slot-hashes",
  "solana-transaction",
- "solana-transaction-context",
+ "solana-transaction-context 2.3.0",
  "solana-vote-interface",
  "test-case",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10994,7 +11048,7 @@ dependencies = [
  "solana-version",
  "solana-zk-token-sdk",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
 ]
 
@@ -11029,7 +11083,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "subtle",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
  "wasm-bindgen",
  "zeroize",
@@ -11103,7 +11157,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "subtle",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tiny-bip39",
  "zeroize",
 ]
@@ -11362,7 +11416,7 @@ dependencies = [
  "spl-token-metadata-interface",
  "spl-transfer-hook-interface",
  "spl-type-length-value",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -11388,7 +11442,7 @@ dependencies = [
  "solana-program",
  "solana-zk-sdk",
  "spl-pod",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -11410,7 +11464,7 @@ checksum = "0e3597628b0d2fe94e7900fd17cdb4cfbb31ee35c66f82809d27d86e44b2848b"
 dependencies = [
  "curve25519-dalek 4.1.3",
  "solana-zk-sdk",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -11825,11 +11879,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.11"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d452f284b73e6d76dd36758a0c8684b1d5be31f92b89d07fd5822175732206fc"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
 dependencies = [
- "thiserror-impl 2.0.11",
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -11845,9 +11899,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.11"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26afc1baea8a989337eeb52b6e72a039780ce45c3edfcc9c5b9d112feeb173c2"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11977,9 +12031,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.43.0"
+version = "1.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d61fa4ffa3de412bfea335c6ecff681de2b609ba3c77ef3e00e521813a9ed9e"
+checksum = "9975ea0f48b5aa3972bf2d888c238182458437cc2a19374b81b25cdf1023fb3a"
 dependencies = [
  "backtrace",
  "bytes",
@@ -12151,7 +12205,7 @@ version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8534fd7f78b5405e860340ad6575217ce99f38d4d5c8f2442cb5ecb50090e1"
 dependencies = [
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "toml_datetime",
  "winnow 0.5.16",
 ]
@@ -12162,7 +12216,7 @@ version = "0.22.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3328d4f68a705b2a4498da1d580585d39a6510f98318a2cec3018a7ec61ddef"
 dependencies = [
- "indexmap 2.7.1",
+ "indexmap 2.8.0",
  "serde",
  "serde_spanned",
  "toml_datetime",
