@@ -100,7 +100,8 @@ impl EpochStakes {
         let epoch_authorized_voters = epoch_vote_accounts
             .iter()
             .filter_map(|(key, (stake, account))| {
-                let vote_state = account.vote_state_view();
+                // TODO(wen): make this work for Alpenglow.
+                let vote_state = account.vote_state_view()?;
 
                 if *stake > 0 {
                     if let Some(authorized_voter) =
