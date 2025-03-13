@@ -2504,7 +2504,8 @@ impl Bank {
         let slots_per_epoch = self.epoch_schedule().slots_per_epoch;
         let vote_accounts = self.vote_accounts();
         let recent_timestamps = vote_accounts.iter().filter_map(|(pubkey, (_, account))| {
-            let vote_state = account.vote_state_view();
+            // TODO(wen): make this work for Alpenglow.
+            let vote_state = account.vote_state_view()?;
             let last_timestamp = vote_state.last_timestamp();
             let slot_delta = self.slot().checked_sub(last_timestamp.slot)?;
             (slot_delta <= slots_per_epoch)

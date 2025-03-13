@@ -10887,6 +10887,7 @@ dependencies = [
 name = "solana-vote"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "arbitrary",
  "bincode",
  "itertools 0.12.1",
@@ -10904,6 +10905,7 @@ dependencies = [
  "solana-keypair",
  "solana-logger",
  "solana-packet",
+ "solana-program",
  "solana-pubkey",
  "solana-sdk-ids",
  "solana-serialize-utils",
