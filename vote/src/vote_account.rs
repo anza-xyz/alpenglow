@@ -1,6 +1,7 @@
 use {
     crate::vote_state_view::VoteStateView,
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
+    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     itertools::Itertools,
     serde::{
         de::{MapAccess, Visitor},
@@ -8,6 +9,7 @@ use {
     },
     solana_account::{AccountSharedData, ReadableAccount},
     solana_instruction::error::InstructionError,
+    solana_program::program_error::ProgramError,
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
     std::{
@@ -37,6 +39,15 @@ pub enum Error {
     InstructionError(#[from] InstructionError),
     #[error("Invalid vote account owner: {0}")]
     InvalidOwner(/*owner:*/ Pubkey),
+    #[error(transparent)]
+    ProgramError(#[from] ProgramError),
+}
+
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Debug)]
+enum VoteAccountState {
+    TowerBFT(VoteStateView),
+    Alpenglow,
     #[error(transparent)]
     ProgramError(#[from] ProgramError),
 }
@@ -122,53 +133,6 @@ impl VoteAccount {
             VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
                 .unwrap()
                 .node_pubkey(),
-        }
-    }
-
-    pub fn commission(&self) -> u8 {
-        match &self.0.vote_state_view {
-            VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.commission(),
-            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
-                .unwrap()
-                .commission(),
-        }
-    }
-
-    pub fn credits(&self) -> u64 {
-        match &self.0.vote_state_view {
-            VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.credits(),
-            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
-                .unwrap()
-                .epoch_credits()
-                .credits(),
-        }
-    }
-
-    pub fn epoch_credits(&self) -> Box<dyn Iterator<Item = (u64, u64, u64)> + '_> {
-        match &self.0.vote_state_view {
-            VoteAccountState::TowerBFT(vote_state_view) => {
-                Box::new(vote_state_view.epoch_credits_iter().map(|epoch_credits| {
-                    (
-                        epoch_credits.epoch(),
-                        epoch_credits.credits(),
-                        epoch_credits.prev_credits(),
-                    )
-                }))
-            }
-            VoteAccountState::Alpenglow => Box::new(
-                std::iter::once(
-                    AlpenglowVoteState::deserialize(self.0.account.data())
-                        .unwrap()
-                        .epoch_credits(),
-                )
-                .map(|epoch_credits| {
-                    (
-                        epoch_credits.epoch(),
-                        epoch_credits.credits(),
-                        epoch_credits.prev_credits(),
-                    )
-                }),
-            ),
         }
     }
 
