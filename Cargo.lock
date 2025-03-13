@@ -7331,6 +7331,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "slab",
+ "solana-account",
  "solana-accounts-db",
  "solana-address-lookup-table-program",
  "solana-bloom",
@@ -9407,6 +9408,7 @@ version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
  "ahash 0.8.11",
+ "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "assert_matches",
@@ -9908,6 +9910,7 @@ dependencies = [
 name = "solana-stake-program"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "criterion",

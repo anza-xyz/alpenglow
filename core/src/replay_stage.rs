@@ -5,6 +5,7 @@ use {
             certificate_pool::{CertificatePool, StartLeaderCertificates},
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
+            SUPERMAJORITY,
         },
         banking_stage::{
             alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank,
@@ -3894,6 +3895,35 @@ impl ReplayStage {
                     }
                 }
 
+                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
+                    if *is_alpenglow_migration_complete {
+                        if let Some(parent_bank) = bank.parent() {
+                            if parent_bank.slot() >= first_alpenglow_slot {
+                                if let Err(e) = Self::alpenglow_check_cert_in_bank(bank) {
+                                    let root = bank_forks.read().unwrap().root();
+                                    Self::mark_dead_slot(
+                                        blockstore,
+                                        bank,
+                                        root,
+                                        &e,
+                                        rpc_subscriptions,
+                                        slot_status_notifier,
+                                        duplicate_slots_tracker,
+                                        duplicate_confirmed_slots,
+                                        epoch_slots_frozen_slots,
+                                        progress,
+                                        heaviest_subtree_fork_choice,
+                                        duplicate_slots_to_repair,
+                                        ancestor_hashes_replay_update_sender,
+                                        purge_repair_slot_counter,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let block_id = if bank.collector_id() != my_pubkey {
                     // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                     // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
@@ -4073,6 +4103,90 @@ impl ReplayStage {
         }
 
         new_frozen_slots
+    }
+
+    // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
+    fn alpenglow_check_cert_in_bank(bank: &Bank) -> Result<(), BlockstoreProcessorError> {
+        if let Some(parent_bank) = bank.parent() {
+            let parent_slot = parent_bank.slot();
+            let parent_epoch_stakes = parent_bank
+                .epoch_stakes(parent_bank.epoch())
+                .expect("epoch stakes must exist");
+            let parent_hash = parent_bank.hash();
+            let mut notarization_stake = 0;
+            let mut skip_stake_map: HashMap<Slot, Stake> = HashMap::new();
+            let must_skip_start = parent_slot + 1;
+            let must_skip_end = bank.slot() - 1;
+            bank.vote_accounts()
+                .iter()
+                .for_each(|(vote_account_pubkey, (stake, account))| {
+                    info!("Checking vote account: {}", vote_account_pubkey);
+                    let Some(vote_state) = account.alpenglow_vote_state() else {
+                        info!("Vote account does not have vote state");
+                        return;
+                    };
+                    let stake_in_parent_epoch =
+                        parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
+                    info!("Stake in parent epoch: {} {:?} {:?}", stake_in_parent_epoch, vote_state.latest_notarized_slot(), vote_state.latest_notarized_bank_hash());
+                    if vote_state.latest_notarized_slot() == Some(parent_slot)
+                        && vote_state.latest_notarized_bank_hash() == &parent_hash
+                    {
+                        notarization_stake += stake_in_parent_epoch;
+                        info!("Adding notarization stake: {}", stake_in_parent_epoch);
+                    }
+                    for slot in must_skip_start.max(vote_state.latest_skip_start_slot())
+                        ..=must_skip_end.min(vote_state.latest_skip_end_slot())
+                    {
+                        let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
+                        assert!(slot_epoch == parent_bank.epoch() || slot_epoch == bank.epoch());
+                        let slot_stake = if slot_epoch == parent_bank.epoch() {
+                            &stake_in_parent_epoch
+                        } else {
+                            stake
+                        };
+                        let entry = skip_stake_map.entry(slot).or_insert(0);
+                        *entry += slot_stake;
+                    }
+                });
+            if (notarization_stake as f64
+                / parent_bank
+                    .epoch_total_stake(parent_bank.epoch())
+                    .expect("stake must exist") as f64)
+                < SUPERMAJORITY
+            {
+                warn!(
+                    "Notarization stake for bank {} parent {} is less than supermajority",
+                    bank.slot(),
+                    parent_slot
+                );
+                return Err(BlockstoreProcessorError::InvalidCert(
+                    bank.slot(),
+                    parent_slot,
+                    "Notarization".to_string(),
+                ));
+            }
+            for slot in must_skip_start..=must_skip_end {
+                let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
+                if (*skip_stake_map.get(&slot).unwrap_or(&0) as f64
+                    / bank
+                        .epoch_total_stake(slot_epoch)
+                        .expect("stake must exist") as f64)
+                    < SUPERMAJORITY
+                {
+                    warn!(
+                        "Skip stake for bank {} should skip {} is less than supermajority",
+                        bank.slot(),
+                        slot
+                    );
+                    return Err(BlockstoreProcessorError::InvalidCert(
+                        bank.slot(),
+                        slot,
+                        "Skip".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5111,11 +5225,13 @@ pub(crate) mod tests {
             replay_stage::ReplayStage,
             vote_simulator::{self, VoteSimulator},
         },
+        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         blockstore_processor::{
             confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
         },
         crossbeam_channel::unbounded,
         itertools::Itertools,
+        solana_account::{ AccountSharedData, WritableAccount },
         solana_client::connection_cache::ConnectionCache,
         solana_entry::entry::{self, Entry},
         solana_gossip::{cluster_info::Node, crds::Cursor},
@@ -5134,23 +5250,20 @@ pub(crate) mod tests {
         solana_runtime::{
             accounts_background_service::AbsRequestSender,
             commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
-            genesis_utils::{GenesisConfigInfo, ValidatorVoteKeypairs},
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, GenesisConfigInfo, ValidatorVoteKeypairs,
+            },
         },
         solana_sdk::{
-            clock::NUM_CONSECUTIVE_LEADER_SLOTS,
-            genesis_config,
-            hash::{hash, Hash},
-            instruction::InstructionError,
-            poh_config::PohConfig,
-            signature::{Keypair, Signer},
-            system_transaction,
-            transaction::TransactionError,
+            clock::NUM_CONSECUTIVE_LEADER_SLOTS, genesis_config, hash::{hash, Hash}, instruction::InstructionError, poh_config::PohConfig, signature::{Keypair, Signer}, system_transaction, transaction::TransactionError
         },
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         solana_transaction_status::VersionedTransactionWithStatusMeta,
-        solana_vote::vote_transaction,
-        solana_vote_program::vote_state::{self, TowerSync, VoteStateVersions},
+        solana_vote::{vote_account::VoteAccount, vote_transaction},
+        solana_vote_program::vote_state::{
+            self, TowerSync, VoteStateVersions,
+        },
         std::{
             fs::remove_dir_all,
             iter,
@@ -10438,5 +10551,90 @@ pub(crate) mod tests {
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
         );
+    }
+
+    fn store_alpenglow_vote_account(
+        bank: &Bank,
+        pubkey: &Pubkey,
+        latest_notarized_slot: Slot,
+        latest_notarized_bank_hash: Hash,
+        latest_skip_start_slot: Option<Slot>,
+        latest_skip_end_slot: Option<Slot>,
+        lamports: u64,
+    ) {
+        solana_logger::setup();
+        let mut account = AccountSharedData::new(lamports, AlpenglowVoteState::size(), &alpenglow_vote::id());
+        let mut vote_state = AlpenglowVoteState::new_for_tests(
+            *pubkey,
+            *pubkey,
+            0,
+            *pubkey,
+            0,
+        );
+        vote_state.set_latest_notarized_slot(latest_notarized_slot);
+        vote_state.set_latest_notarized_bank_hash(latest_notarized_bank_hash);
+        if let Some(slot) = latest_skip_start_slot {
+            vote_state.set_latest_skip_start_slot(slot);
+        }
+        if let Some(slot) = latest_skip_end_slot {
+            vote_state.set_latest_skip_end_slot(slot);
+        }
+        info!("Store account {} {:?} {:?}", pubkey, vote_state.latest_notarized_slot(), vote_state.latest_notarized_bank_hash());
+        vote_state.serialize_into(account.data_as_mut_slice());
+        let vote_account = VoteAccount::try_from(account).unwrap();
+        info!("Store account {} {} {:?}", pubkey, vote_account.owner(), vote_account.alpenglow_vote_state().unwrap().latest_notarized_slot());
+        bank.store_account(pubkey, &vote_account.account());
+    }
+
+    #[test]
+    fn test_alpenglow_check_cert_in_bank() {
+        let validator_voting_keypairs: Vec<_> =
+            (0..4).map(|_| ValidatorVoteKeypairs::new_rand()).collect();
+        let my_keypairs = &validator_voting_keypairs[0];
+        let lamports = 10_000;
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config_with_alpenglow_vote_accounts(
+            lamports,
+            &validator_voting_keypairs,
+            vec![100; validator_voting_keypairs.len()],
+        );
+        let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
+        bank0.freeze();
+        // Test on bank0 should always succeed
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0).is_ok());
+        let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 1);
+        // Test on empty bank1 should fail
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank1)
+        {
+            assert_eq!(slot, 1);
+            assert_eq!(cert_slot, 0);
+            assert_eq!(cert, "Notarization");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        // We have 4 validators, let's add my own vote in there, it's < 2/3 so verification should fail
+        info!("Check vote accounts");
+        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
+            info!("{}: {} {} {:?}", pubkey, stake, account.lamports(), account.owner());
+        }
+        store_alpenglow_vote_account(&bank1, &my_keypairs.vote_keypair.pubkey(), 0, bank0.hash(), None, None, lamports);
+        info!("Check vote accounts 2");
+        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
+            info!("{}: {} {} {:?}", pubkey, stake, account.lamports(), account.owner());
+        }
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank1)
+        {
+            assert_eq!(slot, 1);
+            assert_eq!(cert_slot, 0);
+            assert_eq!(cert, "Notarization");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        // Now let's add two more votes, this should get us over 2/3 so verification should succeed
+        for keypair in &validator_voting_keypairs[1..3] {
+            store_alpenglow_vote_account(&bank1, &keypair.vote_keypair.pubkey(), 0, bank0.hash(), None, None, lamports);
+        }
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1).is_ok());
     }
 }

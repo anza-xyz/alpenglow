@@ -120,6 +120,27 @@ impl StakesCache {
                     stakes.remove_vote_account(pubkey)
                 };
             };
+        } else if alpenglow_vote::check_id(owner) {
+            match VoteAccount::try_from(account.to_account_shared_data()) {
+                Ok(vote_account) => {
+                    // drop the old account after releasing the lock
+                    let _old_vote_account = {
+                        let mut stakes = self.0.write().unwrap();
+                        stakes.upsert_vote_account(
+                            pubkey,
+                            vote_account,
+                            new_rate_activation_epoch,
+                        )
+                    };
+                }
+                Err(_) => {
+                    // drop the old account after releasing the lock
+                    let _old_vote_account = {
+                        let mut stakes = self.0.write().unwrap();
+                        stakes.remove_vote_account(pubkey)
+                    };
+                }
+            };
         } else if solana_stake_program::check_id(owner) {
             match StakeAccount::try_from(account.to_account_shared_data()) {
                 Ok(stake_account) => {
