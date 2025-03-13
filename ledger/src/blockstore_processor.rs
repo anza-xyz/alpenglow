@@ -2098,7 +2098,11 @@ fn supermajority_root_from_vote_accounts(
                 return None;
             }
 
-            Some((account.vote_state_view().root_slot()?, *stake))
+            if let Some(vote_state_view) = account.vote_state_view() {
+                Some((vote_state_view.root_slot()?, *stake))
+            } else {
+                None
+            }
         })
         .collect();
 
