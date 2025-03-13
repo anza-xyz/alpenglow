@@ -2979,7 +2979,16 @@ impl ReplayStage {
             }
             Some(vote_account) => vote_account,
         };
-        let vote_state = vote_account.vote_state_view();
+        let vote_state = match vote_account.alpenglow_vote_state() {
+            None => {
+                warn!(
+                    "Vote account {} does not have an Alpenglow vote state.  Unable to vote",
+                    vote_account_pubkey,
+                );
+                return GenerateVoteTxResult::Failed;
+            }
+            Some(vote_state) => vote_state,
+        };
         if *vote_state.node_pubkey() != node_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
@@ -3000,7 +3009,7 @@ impl ReplayStage {
 
         let authorized_voter_keypair = match authorized_voter_keypairs
             .iter()
-            .find(|keypair| keypair.pubkey() == *authorized_voter_pubkey)
+            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
         {
             None => {
                 warn!(
@@ -3067,7 +3076,16 @@ impl ReplayStage {
             }
             Some(vote_account) => vote_account,
         };
-        let vote_state_view = vote_account.vote_state_view();
+        let vote_state_view = match vote_account.vote_state_view() {
+            None => {
+                warn!(
+                    "Vote account {} does not have a vote state.  Unable to vote",
+                    vote_account_pubkey,
+                );
+                return GenerateVoteTxResult::Failed;
+            }
+            Some(vote_state_view) => vote_state_view,
+        };
         if vote_state_view.node_pubkey() != &node_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
@@ -4298,7 +4316,10 @@ impl ReplayStage {
         let Some(vote_account) = bank.get_vote_account(my_vote_pubkey) else {
             return;
         };
-        let mut bank_vote_state = TowerVoteState::from(vote_account.vote_state_view());
+        let Some(vote_state_view) = vote_account.vote_state_view() else {
+            return;
+        };
+        let mut bank_vote_state = TowerVoteState::from(vote_state_view);
         if bank_vote_state.last_voted_slot() <= tower.vote_state.last_voted_slot() {
             return;
         }
@@ -8728,6 +8749,7 @@ pub(crate) mod tests {
         assert_eq!(
             vote_account
                 .vote_state_view()
+                .unwrap()
                 .votes_iter()
                 .map(|lockout| lockout.slot())
                 .collect_vec(),
