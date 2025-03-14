@@ -9407,6 +9407,7 @@ version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
  "ahash 0.8.11",
+ "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "assert_matches",
