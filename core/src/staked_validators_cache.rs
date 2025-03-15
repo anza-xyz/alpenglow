@@ -72,9 +72,12 @@ impl StakedValidatorsCache {
         cluster_info: &ClusterInfo,
         update_time: Instant,
     ) {
-        let bank_forks = self.bank_forks.read().unwrap();
+        let banks = {
+            let bank_forks = self.bank_forks.read().unwrap();
+            [bank_forks.root_bank(), bank_forks.working_bank()]
+        };
 
-        let epoch_staked_nodes = [bank_forks.root_bank(), bank_forks.working_bank()].iter().find_map(|bank| bank.epoch_staked_nodes(epoch)).unwrap_or_else(|| {
+        let epoch_staked_nodes = banks.iter().find_map(|bank| bank.epoch_staked_nodes(epoch)).unwrap_or_else(|| {
             error!("StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: {epoch}");
             Arc::<HashMap<Pubkey, u64>>::default()
         });
