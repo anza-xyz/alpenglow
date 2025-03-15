@@ -1,4 +1,5 @@
 use {
+    lru::LruCache,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::Protocol},
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::BankForks,
@@ -7,17 +8,31 @@ use {
         collections::HashMap,
         net::SocketAddr,
         sync::{Arc, RwLock},
+        time::{Duration, Instant},
     },
 };
 
-/// Maintain `SocketAddr`s associated with all staked validators for a particular epoch and
-/// protocol (e.g., UDP, QUIC).
-pub struct StakedValidatorsCache {
-    /// The epoch for which we have cached our stake validators list
-    cached_epoch: Epoch,
+struct StakedValidatorsCacheEntry {
+    /// Sockets associated with the staked validators
+    validator_sockets: Vec<SocketAddr>,
 
-    /// The staked validators list for `cached_epoch`
-    staked_validator_tpu_sockets: Vec<SocketAddr>,
+    /// The time at which this entry was created
+    creation_time: Instant,
+}
+
+/// Maintain `SocketAddr`s associated with all staked validators for a particular protocol (e.g.,
+/// UDP, QUIC) over number of epochs.
+///
+/// We employ an LRU cache with capped size, mapping Epoch to cache entries that store the socket
+/// information. We also track cache entry times, forcing recalculations of cache entries that are
+/// accessed after a specified TTL.
+pub struct StakedValidatorsCache {
+    /// key: the epoch for which we have cached our stake validators list
+    /// value: the cache entry
+    cache: LruCache<Epoch, StakedValidatorsCacheEntry>,
+
+    /// Time to live for cache entries
+    ttl: Duration,
 
     /// Bank forks
     bank_forks: Arc<RwLock<BankForks>>,
@@ -27,21 +42,40 @@ pub struct StakedValidatorsCache {
 }
 
 impl StakedValidatorsCache {
-    pub fn new(bank_forks: Arc<RwLock<BankForks>>, protocol: Protocol) -> Self {
+    pub fn new(
+        bank_forks: Arc<RwLock<BankForks>>,
+        protocol: Protocol,
+        ttl: Duration,
+        max_cache_size: usize,
+    ) -> Self {
         Self {
-            cached_epoch: 0_u64,
-            staked_validator_tpu_sockets: Vec::default(),
+            cache: LruCache::new(max_cache_size),
+            ttl,
             bank_forks,
             protocol,
         }
     }
 
-    fn refresh(&mut self, slot: Slot, cluster_info: &ClusterInfo) {
+    #[inline]
+    fn cur_epoch(&self, slot: Slot) -> Epoch {
+        self.bank_forks
+            .read()
+            .unwrap()
+            .working_bank()
+            .epoch_schedule()
+            .get_epoch(slot)
+    }
+
+    fn refresh_cache_entry(
+        &mut self,
+        epoch: Epoch,
+        cluster_info: &ClusterInfo,
+        update_time: Instant,
+    ) {
         let bank_forks = self.bank_forks.read().unwrap();
-        let epoch = self.cached_epoch;
 
         let epoch_staked_nodes = [bank_forks.root_bank(), bank_forks.working_bank()].iter().find_map(|bank| bank.epoch_staked_nodes(epoch)).unwrap_or_else(|| {
-            error!("StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: {epoch}, slot: {slot}");
+            error!("StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: {epoch}");
             Arc::<HashMap<Pubkey, u64>>::default()
         });
 
@@ -66,30 +100,65 @@ impl StakedValidatorsCache {
         nodes.dedup_by_key(|node| node.tpu_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        self.staked_validator_tpu_sockets = nodes.into_iter().map(|node| node.tpu_socket).collect();
+        let validator_sockets = nodes.into_iter().map(|node| node.tpu_socket).collect();
+
+        self.cache.push(
+            epoch,
+            StakedValidatorsCacheEntry {
+                validator_sockets,
+                creation_time: update_time,
+            },
+        );
     }
 
-    pub fn update(&mut self, slot: Slot, cluster_info: &ClusterInfo) -> bool {
-        let cur_epoch = self
-            .bank_forks
-            .read()
-            .unwrap()
-            .working_bank()
-            .epoch_schedule()
-            .get_epoch(slot);
+    pub fn get_staked_validators_by_slot(
+        &mut self,
+        slot: Slot,
+        cluster_info: &ClusterInfo,
+        access_time: Instant,
+    ) -> (&[SocketAddr], bool) {
+        self.get_staked_validators_by_epoch(self.cur_epoch(slot), cluster_info, access_time)
+    }
 
-        if cur_epoch == self.cached_epoch {
-            false
-        } else {
-            self.cached_epoch = cur_epoch;
-            self.refresh(slot, cluster_info);
+    pub fn get_staked_validators_by_epoch(
+        &mut self,
+        epoch: Epoch,
+        cluster_info: &ClusterInfo,
+        access_time: Instant,
+    ) -> (&[SocketAddr], bool) {
+        // For a given epoch, if we either:
+        //
+        // (1) have a cache entry that has expired
+        // (2) have no existing cache entry
+        //
+        // then update the cache.
+        let refresh_cache = self
+            .cache
+            .get(&epoch)
+            .map(|v| access_time > v.creation_time + self.ttl)
+            .unwrap_or(true);
 
-            true
+        if refresh_cache {
+            self.refresh_cache_entry(epoch, cluster_info, access_time);
         }
+
+        (
+            // Unwrapping is fine here, since update_cache guarantees that we push a cache entry to
+            // self.cache[epoch].
+            self.cache
+                .get(&epoch)
+                .map(|v| &*v.validator_sockets)
+                .unwrap(),
+            refresh_cache,
+        )
     }
 
-    pub fn get_staked_validators(&self) -> &[SocketAddr] {
-        &self.staked_validator_tpu_sockets
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
     }
 }
 
@@ -108,16 +177,22 @@ mod tests {
         solana_pubkey::Pubkey,
         solana_runtime::{bank::Bank, bank_forks::BankForks, epoch_stakes::EpochStakes},
         solana_sdk::{
-            clock::Slot, genesis_config::GenesisConfig, signature::Keypair, signer::Signer,
+            account::AccountSharedData,
+            clock::{Clock, Slot},
+            genesis_config::GenesisConfig,
+            signature::Keypair,
+            signer::Signer,
             timing::timestamp,
         },
         solana_streamer::socket::SocketAddrSpace,
-        solana_vote::vote_account::{new_rand_vote_account, VoteAccount, VoteAccountsHashMap},
+        solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
+        solana_vote_program::vote_state::{VoteInit, VoteState, VoteStateVersions},
         std::{
             collections::HashMap,
             iter::{repeat, repeat_with},
             net::Ipv4Addr,
             sync::{Arc, RwLock},
+            time::{Duration, Instant},
         },
         test_case::test_case,
     };
@@ -126,11 +201,6 @@ mod tests {
         rng: &mut R,
         node_pubkey: Option<Pubkey>,
     ) -> (AccountSharedData, VoteState) {
-        use {
-            solana_clock::Clock,
-            solana_vote_interface::state::{VoteInit, VoteStateVersions},
-        };
-
         let vote_init = VoteInit {
             node_pubkey: node_pubkey.unwrap_or_else(Pubkey::new_unique),
             authorized_voter: Pubkey::new_unique(),
@@ -291,7 +361,7 @@ mod tests {
     #[test_case(325_000_000_u64, 10_usize, 2_usize, 10_usize, 123_u64, Protocol::UDP)]
     #[test_case(325_000_000_u64, 10_usize, 10_usize, 10_usize, 123_u64, Protocol::QUIC)]
     #[test_case(325_000_000_u64, 50_usize, 7_usize, 60_usize, 123_u64, Protocol::UDP)]
-    fn test_detect_only_staked_nodes(
+    fn test_detect_only_staked_nodes_and_refresh_after_ttl(
         slot_num: u64,
         num_nodes: usize,
         num_zero_stake_nodes: usize,
@@ -310,13 +380,120 @@ mod tests {
             .bank_forks();
 
         // Create our staked validators cache
-        let mut svc = StakedValidatorsCache::new(bank_forks, protocol);
-        assert!(svc.update(slot_num, &cluster_info));
+        let mut svc = StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5);
 
-        assert_eq!(
-            num_nodes - num_zero_stake_nodes,
-            svc.get_staked_validators().len()
+        let now = Instant::now();
+
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+
+        assert!(refreshed);
+        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(1, svc.len());
+
+        // Re-fetch from the cache right before the 5-second deadline
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now + Duration::from_secs_f64(4.999),
         );
+
+        assert!(!refreshed);
+        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(1, svc.len());
+
+        // Re-fetch from the cache right at the 5-second deadline - we still shouldn't refresh.
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now + Duration::from_secs(5),
+        );
+
+        assert!(!refreshed);
+        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(1, svc.len());
+
+        // Re-fetch from the cache right after the 5-second deadline - now we should refresh.
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now + Duration::from_secs_f64(5.001),
+        );
+
+        assert!(refreshed);
+        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(1, svc.len());
+
+        // Re-fetch from the cache well after the 5-second deadline - we should refresh.
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now + Duration::from_secs(100),
+        );
+
+        assert!(refreshed);
+        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(1, svc.len());
+    }
+
+    #[test]
+    fn test_cache_eviction() {
+        // Create our harness
+        let (keypair_map, vahm) = build_epoch_stakes(50, 7, 60);
+
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(123);
+
+        let base_slot = 325_000_000_000;
+        let (bank_forks, cluster_info) = StakedValidatorsCacheHarness::new(&genesis_config)
+            .with_vote_accounts(base_slot, keypair_map, vahm, Protocol::UDP)
+            .bank_forks();
+
+        // Create our staked validators cache
+        let mut svc =
+            StakedValidatorsCache::new(bank_forks, Protocol::UDP, Duration::from_secs(5), 5);
+
+        assert_eq!(0, svc.len());
+        assert!(svc.is_empty());
+
+        let now = Instant::now();
+
+        // Populate the first five entries; accessing the cache once again shouldn't trigger any
+        // refreshes.
+        for entry_ix in 1..=5 {
+            let (_, refreshed) =
+                svc.get_staked_validators_by_slot(entry_ix * base_slot, &cluster_info, now);
+            assert!(refreshed);
+            assert_eq!(entry_ix as usize, svc.len());
+
+            let (_, refreshed) =
+                svc.get_staked_validators_by_slot(entry_ix * base_slot, &cluster_info, now);
+            assert!(!refreshed);
+            assert_eq!(entry_ix as usize, svc.len());
+        }
+
+        // Entry 6 - this shouldn't increase the cache length.
+        let (_, refreshed) = svc.get_staked_validators_by_slot(6 * base_slot, &cluster_info, now);
+        assert!(refreshed);
+        assert_eq!(5, svc.len());
+
+        // Epoch 1 should have been evicted
+        assert!(!svc.cache.contains(&svc.cur_epoch(base_slot)));
+
+        // Epochs 2 - 6 should have entries
+        for entry_ix in 2..=6 {
+            assert!(svc.cache.contains(&svc.cur_epoch(entry_ix * base_slot)));
+        }
+
+        // Accessing the cache after TTL should recalculate everything; the size remains 5, since
+        // we only ever lazily evict cache entries.
+        for entry_ix in 1..=5 {
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix * base_slot,
+                &cluster_info,
+                now + Duration::from_secs(10),
+            );
+            assert!(refreshed);
+            assert_eq!(5, svc.len());
+        }
     }
 
     #[test]
@@ -339,10 +516,17 @@ mod tests {
             .bank_forks();
 
         // Create our staked validators cache
-        let mut svc = StakedValidatorsCache::new(bank_forks, protocol);
+        let mut svc = StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5);
 
-        assert!(svc.update(slot_num, &cluster_info));
-        assert!(!svc.update(slot_num, &cluster_info));
-        assert!(svc.update(2 * slot_num, &cluster_info));
+        let now = Instant::now();
+
+        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+        assert!(refreshed);
+
+        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+        assert!(!refreshed);
+
+        let (_, refreshed) = svc.get_staked_validators_by_slot(2 * slot_num, &cluster_info, now);
+        assert!(refreshed);
     }
 }

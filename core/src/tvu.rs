@@ -335,6 +335,7 @@ impl Tvu {
         let voting_service = VotingService::new(
             voting_receiver,
             cluster_info.clone(),
+            poh_recorder.clone(),
             tower_storage,
             vote_history_storage.clone(),
             vote_connection_cache.clone(),

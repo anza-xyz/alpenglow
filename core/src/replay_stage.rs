@@ -8374,6 +8374,7 @@ pub(crate) mod tests {
     fn test_replay_stage_refresh_last_vote() {
         let ReplayBlockstoreComponents {
             cluster_info,
+            poh_recorder,
             mut tower,
             my_pubkey,
             vote_simulator,
@@ -8467,11 +8468,16 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache =
-            StakedValidatorsCache::new(bank_forks.clone(), connection_cache.protocol());
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
 
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
+            &poh_recorder,
             &tower_storage,
             &vote_history_storage,
             vote_info,
@@ -8576,11 +8582,16 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache =
-            StakedValidatorsCache::new(bank_forks.clone(), connection_cache.protocol());
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
 
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
+            &poh_recorder,
             &tower_storage,
             &vote_history_storage,
             vote_info,
@@ -8708,11 +8719,16 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache =
-            StakedValidatorsCache::new(bank_forks.clone(), connection_cache.protocol());
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
 
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
+            &poh_recorder,
             &tower_storage,
             &vote_history_storage,
             vote_info,
@@ -8818,6 +8834,7 @@ pub(crate) mod tests {
         voting_sender: &Sender<VoteOp>,
         voting_receiver: &Receiver<VoteOp>,
         cluster_info: &ClusterInfo,
+        poh_recorder: &RwLock<PohRecorder>,
         tower_storage: &dyn TowerStorage,
         vote_history_storage: &dyn VoteHistoryStorage,
         make_it_landing: bool,
@@ -8855,11 +8872,16 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache =
-            StakedValidatorsCache::new(bank_forks.clone(), connection_cache.protocol());
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
 
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
+            poh_recorder,
             tower_storage,
             vote_history_storage,
             vote_info,
@@ -8908,6 +8930,7 @@ pub(crate) mod tests {
         solana_logger::setup();
         let ReplayBlockstoreComponents {
             cluster_info,
+            poh_recorder,
             mut tower,
             my_pubkey,
             vote_simulator,
@@ -8973,6 +8996,7 @@ pub(crate) mod tests {
             &voting_sender,
             &voting_receiver,
             &cluster_info,
+            &poh_recorder,
             &tower_storage,
             &vote_history_storage,
             true,
@@ -8991,6 +9015,7 @@ pub(crate) mod tests {
             &voting_sender,
             &voting_receiver,
             &cluster_info,
+            &poh_recorder,
             &tower_storage,
             &vote_history_storage,
             false,
