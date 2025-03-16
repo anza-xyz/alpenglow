@@ -3441,7 +3441,7 @@ impl ReplayStage {
                         // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
-                            Hash::default(),
+                            highest_frozen_bank.block_id().unwrap_or(Hash::default()),
                             highest_frozen_bank.hash(),
                         ),
                     );
