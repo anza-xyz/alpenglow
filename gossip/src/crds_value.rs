@@ -24,7 +24,7 @@ use {
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct CrdsValue {
     signature: Signature,
-    data: CrdsData,
+    pub data: CrdsData,
     #[serde(skip_serializing)]
     hash: Hash, // Sha256 hash of [signature, data].
 }

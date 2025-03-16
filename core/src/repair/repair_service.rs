@@ -477,6 +477,7 @@ impl RepairService {
     }
 
     fn update_weighting_heuristic(
+        id: &Pubkey,
         blockstore: &Blockstore,
         root_bank: Arc<Bank>,
         repair_weight: &mut RepairWeight,
@@ -527,6 +528,7 @@ impl RepairService {
             .try_iter()
             .for_each(|(vote_pubkey, vote_slots)| {
                 for slot in vote_slots {
+                    info!("{} got vote {} from {}", id, slot, vote_pubkey);
                     slot_to_vote_pubkeys
                         .entry(slot)
                         .or_default()
@@ -703,6 +705,7 @@ impl RepairService {
         let root_bank = root_bank_cache.root_bank();
 
         Self::update_weighting_heuristic(
+            &repair_info.cluster_info.id(),
             blockstore,
             root_bank.clone(),
             repair_weight,

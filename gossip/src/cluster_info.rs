@@ -793,6 +793,12 @@ impl ClusterInfo {
         } else {
             Vote::new(self_pubkey, vote, now).unwrap()
         };
+        info!(
+            "pushing vote slot {:?} to gossip index {} {}",
+            vote.slot(),
+            vote_index,
+            is_alpenglow
+        );
         let vote = CrdsData::Vote(vote_index, vote);
         let vote = CrdsValue::new(vote, &self.keypair());
         let mut gossip_crds = self.gossip.crds.write().unwrap();
@@ -1351,10 +1357,14 @@ impl ClusterInfo {
                 .collect()
         };
         let entries = Rc::new(entries);
+        let id = self.id();
         push_messages
             .into_iter()
             .flat_map(move |(peer, msgs): (SocketAddr, Vec<usize>)| {
                 let entries = Rc::clone(&entries);
+                for index in &msgs {
+                    info!("{} sending message {:?} to peer {}", id, entries[*index].data, peer);
+                }
                 let msgs = msgs.into_iter().map(move |k| entries[k].clone());
                 let msgs = split_gossip_messages(PUSH_MESSAGE_MAX_PAYLOAD_SIZE, msgs)
                     .map(move |msgs| Protocol::PushMessage(self_id, msgs));
@@ -1394,6 +1404,12 @@ impl ClusterInfo {
         sender: &PacketBatchSender,
         generate_pull_requests: bool,
     ) -> Result<(), GossipError> {
+        info!(
+            "{} running gossip, staked nodes: {:?}, gossip validators: {:?}",
+            self.id(),
+            stakes,
+            gossip_validators
+        );
         let _st = ScopedTimer::from(&self.stats.gossip_transmit_loop_time);
         let mut packet_batch = PacketBatch::new_unpinned_with_recycler(recycler, 0, "run_gossip");
         self.generate_new_gossip_requests(
@@ -2063,6 +2079,7 @@ impl ClusterInfo {
                 true
             } else {
                 self.stats.num_unverifed_gossip_addrs.add_relaxed(1);
+                info!("unverified gossip addr");
                 false
             }
         };
@@ -2110,6 +2127,7 @@ impl ClusterInfo {
                         self.stats
                             .push_message_value_count
                             .add_relaxed(data.len() as u64);
+                        info!("{} received push data from {} data: {:?}", self.id(), from, data);
                         push_messages.push((from, data));
                     }
                 }
@@ -2196,9 +2214,14 @@ impl ClusterInfo {
             stakes: &HashMap<Pubkey, u64>,
             stats: &GossipStats,
         ) -> Option<(SocketAddr, Protocol)> {
+            info!("got gossip packet");
             let mut protocol: Protocol =
                 stats.record_received_packet(packet.deserialize_slice::<Protocol, _>(..))?;
-            protocol.sanitize().ok()?;
+            let sanitize_result = protocol.sanitize();
+            if sanitize_result.is_err() {
+                info!("gossip sanitize_result: {:?}", sanitize_result);
+            }
+            sanitize_result.ok()?;
             if let Protocol::PullResponse(_, values) | Protocol::PushMessage(_, values) =
                 &mut protocol
             {
@@ -3003,6 +3026,7 @@ fn discard_different_shred_version(
     if num_skipped != 0 {
         skip_shred_version_counter.add_relaxed(num_skipped as u64);
     }
+    info!("skip_shred_version_counter {}", skip_shred_version_counter.0.load(Ordering::Relaxed));
 }
 
 #[inline]

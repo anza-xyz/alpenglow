@@ -264,9 +264,11 @@ impl ClusterInfoVoteListener {
     ) -> Result<()> {
         let mut cursor = Cursor::default();
         while !exit.load(Ordering::Relaxed) {
+            info!("{} trying to got gossip votes", cluster_info.id());
             let votes = cluster_info.get_votes(&mut cursor);
             inc_new_counter_debug!("cluster_info_vote_listener-recv_count", votes.len());
             if !votes.is_empty() {
+                info!("{} got gossip votes", cluster_info.id());
                 let (vote_txs, packets) = Self::verify_votes(votes, root_bank_cache);
                 verified_vote_transactions_sender.send(vote_txs)?;
                 verified_packets_sender.send(BankingPacketBatch::new(packets))?;
@@ -505,6 +507,10 @@ impl ClusterInfoVoteListener {
             .entry(*vote_pubkey)
             .or_insert(0);
 
+        info!(
+            "listener got vote slot {} from {}",
+            last_vote_slot, vote_pubkey
+        );
         let root = root_bank.slot();
         let mut is_new_vote = false;
         let vote_slots = vote.slots();

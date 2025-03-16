@@ -457,6 +457,7 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
 
     if is_alpenglow {
+        info!("adding alpenglow vote program to genesis");
         include_alpenglow_bpf_program(&mut genesis_config, ALPENGLOW_VOTE_SO_PATH);
     }
 

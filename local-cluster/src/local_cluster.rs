@@ -5,6 +5,7 @@ use {
         integration_tests::DEFAULT_NODE_STAKE,
         validator_configs::*,
     },
+    alpenglow_vote,
     itertools::izip,
     log::*,
     solana_accounts_db::utils::create_accounts_run_and_snapshot_dirs,
@@ -50,6 +51,7 @@ use {
     },
     solana_stake_program::stake_state,
     solana_streamer::{socket::SocketAddrSpace, streamer::StakedNodes},
+    solana_system_interface,
     solana_tpu_client::tpu_client::{
         TpuClient, TpuClientConfig, DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_TPU_ENABLE_UDP,
         DEFAULT_TPU_USE_QUIC, DEFAULT_VOTE_USE_QUIC,
@@ -799,6 +801,23 @@ impl LocalCluster {
             == 0
         {
             // 1) Create vote account
+            /*let create_ix = solana_system_interface::instruction::create_account(
+                &from_account.pubkey(),
+                &vote_account_pubkey,
+                amount,
+                alpenglow_vote::state::VoteState::size() as u64,
+                &alpenglow_vote::id(),
+            );
+            let init_tx = alpenglow_vote::instruction::initialize_account(
+                vote_account_pubkey,
+                &alpenglow_vote::instruction::InitializeAccountInstructionData {
+                    node_pubkey,
+                    authorized_voter: vote_account_pubkey,
+                    authorized_withdrawer: vote_account_pubkey,
+                    commission: 0,
+                },
+            );
+            let instructions = vec![create_ix, init_tx];*/
             let instructions = vote_instruction::create_account_with_config(
                 &from_account.pubkey(),
                 &vote_account_pubkey,

@@ -120,20 +120,31 @@ fn test_local_cluster_start_and_exit() {
 #[serial]
 fn test_local_cluster_start_and_exit_with_config() {
     solana_logger::setup();
-    const NUM_NODES: usize = 1;
+    const NUM_NODES: usize = 2;
+    let validator_keys = [
+        "28bN3xyvrP4E8LwEgtLjhnkb7cY4amQb6DrYAbAYjgRV4GAGgkVM2K7wnxnAS7WDneuavza7x21MiafLu1HkwQt4",
+        "2saHBBoTkLMmttmPQP8KfBkcCw45S5cwtV3wTdGCscRC8uxdgvHxpHiWXKx4LvJjNJtnNcbSv5NdheokFFqnNDt8",
+    ]
+    .iter()
+    .map(|s| (Arc::new(Keypair::from_base58_string(s)), true))
+    .collect::<Vec<_>>();
+
     let mut config = ClusterConfig {
         validator_configs: make_identical_validator_configs(
             &ValidatorConfig::default_for_test(),
             NUM_NODES,
         ),
-        node_stakes: vec![DEFAULT_NODE_STAKE; NUM_NODES],
+        validator_keys: Some(validator_keys),
+        node_stakes: vec![DEFAULT_NODE_STAKE * 100, DEFAULT_NODE_STAKE],
         ticks_per_slot: 8,
-        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH,
-        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH,
+        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
+        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
         ..ClusterConfig::default()
     };
-    let cluster = LocalCluster::new(&mut config, SocketAddrSpace::Unspecified);
+    let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
     assert_eq!(cluster.validators.len(), NUM_NODES);
+    info!("Cluster startup success");
+    loop {}
 }
 
 fn test_n_nodes_alpenglow(num_nodes: usize) {

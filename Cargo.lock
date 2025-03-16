@@ -8369,6 +8369,7 @@ dependencies = [
 name = "solana-local-cluster"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "crossbeam-channel",
  "fs_extra",
@@ -8398,6 +8399,7 @@ dependencies = [
  "solana-sdk",
  "solana-stake-program",
  "solana-streamer",
+ "solana-system-interface",
  "solana-thin-client",
  "solana-tpu-client",
  "solana-turbine",

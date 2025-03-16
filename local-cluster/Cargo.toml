@@ -33,11 +33,13 @@ solana-runtime = { workspace = true }
 solana-sdk = { workspace = true }
 solana-stake-program = { workspace = true }
 solana-streamer = { workspace = true }
+solana-system-interface = { workspace = true }
 solana-thin-client = { workspace = true }
 solana-tpu-client = { workspace = true }
 solana-turbine = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
+alpenglow-vote = { workspace = true, features = ["serde"] }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
