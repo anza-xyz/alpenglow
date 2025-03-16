@@ -3443,7 +3443,7 @@ impl ReplayStage {
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
                             // TODO: fixup for leader blocks with None block_id
-                            highest_frozen_bank.block_id().unwrap_or(Hash::default()),
+                            highest_frozen_bank.block_id().unwrap_or_default(),
                             highest_frozen_bank.hash(),
                         ),
                     );
