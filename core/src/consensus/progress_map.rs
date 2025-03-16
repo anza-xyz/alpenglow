@@ -168,6 +168,24 @@ impl ForkProgress {
             num_dropped_blocks_on_fork,
         );
 
+        if let Some(first_alpenglow_slot) = bank
+            .feature_set
+            .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
+        {
+            let num_expected_ticks = {
+                let parent_slot = bank.parent_slot();
+                if parent_slot < first_alpenglow_slot {
+                    // 1. All slots between the parent and the first alpenglow slot need to
+                    // have `ticks_per_slot` ticks
+                    // 2. One extra tick for the actual alpenglow slot
+                    (first_alpenglow_slot - parent_slot - 1) * bank.ticks_per_slot() + 1
+                } else {
+                    1
+                }
+            };
+            bank.set_tick_height(bank.max_tick_height() - num_expected_ticks);
+        }
+
         if bank.is_frozen() {
             new_progress.fork_stats.bank_hash = Some(bank.hash());
         }
