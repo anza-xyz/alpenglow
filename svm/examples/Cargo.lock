@@ -7265,6 +7265,7 @@ name = "solana-runtime"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
+ "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "base64 0.22.1",
