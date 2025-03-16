@@ -3368,6 +3368,7 @@ impl ReplayStage {
             // the fact that there is a greater/valid slot than your own must mean there
             // was a skip certificate for your slot, so it's ok to abandon your leader slot
             //
+            // TODO: move PohRecorder::would_be_leader() to skip loop timer
             // TODO: test this scenario
             Self::reset_poh_recorder(
                 my_pubkey,
@@ -3441,6 +3442,7 @@ impl ReplayStage {
                         // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
+                            // TODO: fixup for leader blocks with None block_id
                             highest_frozen_bank.block_id().unwrap_or(Hash::default()),
                             highest_frozen_bank.hash(),
                         ),
