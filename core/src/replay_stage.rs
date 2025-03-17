@@ -4127,7 +4127,12 @@ impl ReplayStage {
                     };
                     let stake_in_parent_epoch =
                         parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
-                    info!("Stake in parent epoch: {} {:?} {:?}", stake_in_parent_epoch, vote_state.latest_notarized_slot(), vote_state.latest_notarized_bank_hash());
+                    info!(
+                        "Stake in parent epoch: {} {:?} {:?}",
+                        stake_in_parent_epoch,
+                        vote_state.latest_notarized_slot(),
+                        vote_state.latest_notarized_bank_hash()
+                    );
                     if vote_state.latest_notarized_slot() == Some(parent_slot)
                         && vote_state.latest_notarized_bank_hash() == &parent_hash
                     {
@@ -5231,7 +5236,7 @@ pub(crate) mod tests {
         },
         crossbeam_channel::unbounded,
         itertools::Itertools,
-        solana_account::{ AccountSharedData, WritableAccount },
+        solana_account::{AccountSharedData, WritableAccount},
         solana_client::connection_cache::ConnectionCache,
         solana_entry::entry::{self, Entry},
         solana_gossip::{cluster_info::Node, crds::Cursor},
@@ -5251,19 +5256,25 @@ pub(crate) mod tests {
             accounts_background_service::AbsRequestSender,
             commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
             genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts, GenesisConfigInfo, ValidatorVoteKeypairs,
+                create_genesis_config_with_alpenglow_vote_accounts, GenesisConfigInfo,
+                ValidatorVoteKeypairs,
             },
         },
         solana_sdk::{
-            clock::NUM_CONSECUTIVE_LEADER_SLOTS, genesis_config, hash::{hash, Hash}, instruction::InstructionError, poh_config::PohConfig, signature::{Keypair, Signer}, system_transaction, transaction::TransactionError
+            clock::NUM_CONSECUTIVE_LEADER_SLOTS,
+            genesis_config,
+            hash::{hash, Hash},
+            instruction::InstructionError,
+            poh_config::PohConfig,
+            signature::{Keypair, Signer},
+            system_transaction,
+            transaction::TransactionError,
         },
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         solana_transaction_status::VersionedTransactionWithStatusMeta,
         solana_vote::{vote_account::VoteAccount, vote_transaction},
-        solana_vote_program::vote_state::{
-            self, TowerSync, VoteStateVersions,
-        },
+        solana_vote_program::vote_state::{self, TowerSync, VoteStateVersions},
         std::{
             fs::remove_dir_all,
             iter,
@@ -10563,14 +10574,9 @@ pub(crate) mod tests {
         lamports: u64,
     ) {
         solana_logger::setup();
-        let mut account = AccountSharedData::new(lamports, AlpenglowVoteState::size(), &alpenglow_vote::id());
-        let mut vote_state = AlpenglowVoteState::new_for_tests(
-            *pubkey,
-            *pubkey,
-            0,
-            *pubkey,
-            0,
-        );
+        let mut account =
+            AccountSharedData::new(lamports, AlpenglowVoteState::size(), &alpenglow_vote::id());
+        let mut vote_state = AlpenglowVoteState::new_for_tests(*pubkey, *pubkey, 0, *pubkey, 0);
         vote_state.set_latest_notarized_slot(latest_notarized_slot);
         vote_state.set_latest_notarized_bank_hash(latest_notarized_bank_hash);
         if let Some(slot) = latest_skip_start_slot {
@@ -10579,11 +10585,24 @@ pub(crate) mod tests {
         if let Some(slot) = latest_skip_end_slot {
             vote_state.set_latest_skip_end_slot(slot);
         }
-        info!("Store account {} {:?} {:?}", pubkey, vote_state.latest_notarized_slot(), vote_state.latest_notarized_bank_hash());
+        info!(
+            "Store account {} {:?} {:?}",
+            pubkey,
+            vote_state.latest_notarized_slot(),
+            vote_state.latest_notarized_bank_hash()
+        );
         vote_state.serialize_into(account.data_as_mut_slice());
         let vote_account = VoteAccount::try_from(account).unwrap();
-        info!("Store account {} {} {:?}", pubkey, vote_account.owner(), vote_account.alpenglow_vote_state().unwrap().latest_notarized_slot());
-        bank.store_account(pubkey, &vote_account.account());
+        info!(
+            "Store account {} {} {:?}",
+            pubkey,
+            vote_account.owner(),
+            vote_account
+                .alpenglow_vote_state()
+                .unwrap()
+                .latest_notarized_slot()
+        );
+        bank.store_account(pubkey, vote_account.account());
     }
 
     #[test]
@@ -10592,11 +10611,12 @@ pub(crate) mod tests {
             (0..4).map(|_| ValidatorVoteKeypairs::new_rand()).collect();
         let my_keypairs = &validator_voting_keypairs[0];
         let lamports = 10_000;
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config_with_alpenglow_vote_accounts(
-            lamports,
-            &validator_voting_keypairs,
-            vec![100; validator_voting_keypairs.len()],
-        );
+        let GenesisConfigInfo { genesis_config, .. } =
+            create_genesis_config_with_alpenglow_vote_accounts(
+                lamports,
+                &validator_voting_keypairs,
+                vec![100; validator_voting_keypairs.len()],
+            );
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
         bank0.freeze();
         // Test on bank0 should always succeed
@@ -10615,12 +10635,32 @@ pub(crate) mod tests {
         // We have 4 validators, let's add my own vote in there, it's < 2/3 so verification should fail
         info!("Check vote accounts");
         for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
-            info!("{}: {} {} {:?}", pubkey, stake, account.lamports(), account.owner());
+            info!(
+                "{}: {} {} {:?}",
+                pubkey,
+                stake,
+                account.lamports(),
+                account.owner()
+            );
         }
-        store_alpenglow_vote_account(&bank1, &my_keypairs.vote_keypair.pubkey(), 0, bank0.hash(), None, None, lamports);
+        store_alpenglow_vote_account(
+            &bank1,
+            &my_keypairs.vote_keypair.pubkey(),
+            0,
+            bank0.hash(),
+            None,
+            None,
+            lamports,
+        );
         info!("Check vote accounts 2");
         for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
-            info!("{}: {} {} {:?}", pubkey, stake, account.lamports(), account.owner());
+            info!(
+                "{}: {} {} {:?}",
+                pubkey,
+                stake,
+                account.lamports(),
+                account.owner()
+            );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(&bank1)
@@ -10633,7 +10673,15 @@ pub(crate) mod tests {
         }
         // Now let's add two more votes, this should get us over 2/3 so verification should succeed
         for keypair in &validator_voting_keypairs[1..3] {
-            store_alpenglow_vote_account(&bank1, &keypair.vote_keypair.pubkey(), 0, bank0.hash(), None, None, lamports);
+            store_alpenglow_vote_account(
+                &bank1,
+                &keypair.vote_keypair.pubkey(),
+                0,
+                bank0.hash(),
+                None,
+                None,
+                lamports,
+            );
         }
         assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1).is_ok());
     }

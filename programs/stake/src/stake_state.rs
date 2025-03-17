@@ -1430,9 +1430,14 @@ fn do_create_account(
     let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
 
     let credits = if alpenglow_vote::check_id(vote_account.owner()) {
-        AlpenglowVoteState::deserialize(vote_account.data()).expect("alpenglow_vote_state").epoch_credits().credits()
+        AlpenglowVoteState::deserialize(vote_account.data())
+            .expect("alpenglow_vote_state")
+            .epoch_credits()
+            .credits()
     } else {
-        VoteState::deserialize(vote_account.data()).expect("vote_state").credits()
+        VoteState::deserialize(vote_account.data())
+            .expect("vote_state")
+            .credits()
     };
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());
