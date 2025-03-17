@@ -2815,7 +2815,8 @@ fn test_oc_bad_signatures() {
         |(_label, leader_vote_tx)| {
             let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                 .map(|(_, vote, ..)| vote)
-                .unwrap();
+                .unwrap()
+                .unwrap_tower_transaction();
             // Filter out empty votes
             if !vote.is_empty() {
                 Some((vote, leader_vote_tx))
@@ -4010,7 +4011,8 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
             if label.pubkey() == bad_leader_id {
                 let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                     .map(|(_, vote, ..)| vote)
-                    .unwrap();
+                    .unwrap()
+                    .unwrap_tower_transaction();
                 // Filter out empty votes
                 if !vote.is_empty() {
                     Some((vote, leader_vote_tx))
@@ -4073,7 +4075,7 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
                     );
                     gossip_vote_index += 1;
                     gossip_vote_index %= MAX_VOTES;
-                    cluster_info.push_vote_at_index(vote_tx, gossip_vote_index);
+                    cluster_info.push_vote_at_index(vote_tx, gossip_vote_index, false);
                 }
             }
         },

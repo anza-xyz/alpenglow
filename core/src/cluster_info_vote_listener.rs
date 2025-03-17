@@ -40,7 +40,7 @@ use {
         transaction::Transaction,
     },
     solana_vote::{
-        vote_parser::{self, ParsedVote},
+        vote_parser::{self, ParsedVote, ParsedVoteTransaction},
         vote_transaction::VoteTransaction,
     },
     std::{
@@ -620,24 +620,30 @@ impl ClusterInfoVoteListener {
             .zip(repeat(/*is_gossip:*/ true))
             .chain(replayed_votes.into_iter().zip(repeat(/*is_gossip:*/ false)));
         for ((vote_pubkey, vote, _switch_proof, signature), is_gossip) in votes {
-            Self::track_new_votes_and_notify_confirmations(
-                vote,
-                &vote_pubkey,
-                signature,
-                vote_tracker,
-                root_bank,
-                subscriptions,
-                verified_vote_sender,
-                gossip_verified_vote_hash_sender,
-                &mut diff,
-                &mut new_optimistic_confirmed_slots,
-                is_gossip,
-                bank_notification_sender,
-                duplicate_confirmed_slot_sender,
-                latest_vote_slot_per_validator,
-                bank_hash_cache,
-                dumped_slot_subscription,
-            );
+            match vote {
+                ParsedVoteTransaction::Tower(vote) => {
+                    Self::track_new_votes_and_notify_confirmations(
+                        vote,
+                        &vote_pubkey,
+                        signature,
+                        vote_tracker,
+                        root_bank,
+                        subscriptions,
+                        verified_vote_sender,
+                        gossip_verified_vote_hash_sender,
+                        &mut diff,
+                        &mut new_optimistic_confirmed_slots,
+                        is_gossip,
+                        bank_notification_sender,
+                        duplicate_confirmed_slot_sender,
+                        latest_vote_slot_per_validator,
+                        bank_hash_cache,
+                        dumped_slot_subscription,
+                    )
+                }
+                // TODO: send alpenglow votes via `verified_vote_sender` to replay and repair
+                ParsedVoteTransaction::Alpenglow(vote) => (),
+            }
         }
         gossip_vote_txn_processing_time.stop();
         let gossip_vote_txn_processing_time_us = gossip_vote_txn_processing_time.as_us();

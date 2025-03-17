@@ -1,11 +1,43 @@
 use {
-    crate::vote_transaction::VoteTransaction, solana_bincode::limited_deserialize,
-    solana_hash::Hash, solana_pubkey::Pubkey, solana_signature::Signature,
-    solana_svm_transaction::svm_transaction::SVMTransaction, solana_transaction::Transaction,
+    crate::vote_transaction::VoteTransaction,
+    alpenglow_vote::{self, vote::Vote as AlpenglowVote},
+    solana_bincode::limited_deserialize,
+    solana_clock::Slot,
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_signature::Signature,
+    solana_svm_transaction::svm_transaction::SVMTransaction,
+    solana_transaction::Transaction,
     solana_vote_interface::instruction::VoteInstruction,
 };
 
-pub type ParsedVote = (Pubkey, VoteTransaction, Option<Hash>, Signature);
+pub enum ParsedVoteTransaction {
+    Tower(VoteTransaction),
+    Alpenglow(AlpenglowVote),
+}
+
+impl ParsedVoteTransaction {
+    pub fn slots(&self) -> Vec<Slot> {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => tx.slots(),
+            ParsedVoteTransaction::Alpenglow(tx) => vec![tx.slot()],
+        }
+    }
+    pub fn last_voted_slot(&self) -> Option<Slot> {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => tx.last_voted_slot(),
+            ParsedVoteTransaction::Alpenglow(tx) => Some(tx.slot()),
+        }
+    }
+    pub fn unwrap_tower_transaction(self) -> VoteTransaction {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => tx,
+            ParsedVoteTransaction::Alpenglow(_tx) => panic!("Not a tower transaction"),
+        }
+    }
+}
+
+pub type ParsedVote = (Pubkey, ParsedVoteTransaction, Option<Hash>, Signature);
 
 // Used for locally forwarding processed vote transactions to consensus
 pub fn parse_sanitized_vote_transaction(tx: &impl SVMTransaction) -> Option<ParsedVote> {
@@ -18,7 +50,12 @@ pub fn parse_sanitized_vote_transaction(tx: &impl SVMTransaction) -> Option<Pars
     let key = tx.account_keys().get(first_account)?;
     let (vote, switch_proof_hash) = parse_vote_instruction_data(first_instruction.data)?;
     let signature = tx.signatures().first().cloned().unwrap_or_default();
-    Some((*key, vote, switch_proof_hash, signature))
+    Some((
+        *key,
+        ParsedVoteTransaction::Tower(vote),
+        switch_proof_hash,
+        signature,
+    ))
 }
 
 // Used for parsing gossip vote transactions
@@ -35,7 +72,52 @@ pub fn parse_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
     let key = message.account_keys.get(first_account)?;
     let (vote, switch_proof_hash) = parse_vote_instruction_data(&first_instruction.data)?;
     let signature = tx.signatures.first().cloned().unwrap_or_default();
-    Some((*key, vote, switch_proof_hash, signature))
+    Some((
+        *key,
+        ParsedVoteTransaction::Tower(vote),
+        switch_proof_hash,
+        signature,
+    ))
+}
+
+// Used for locally forwarding processed vote transactions to consensus
+pub fn parse_sanitized_alpenglow_vote_transaction(tx: &impl SVMTransaction) -> Option<ParsedVote> {
+    // Check first instruction for a vote
+    let (program_id, first_instruction) = tx.program_instructions_iter().next()?;
+    if program_id != &alpenglow_vote::id() {
+        return None;
+    }
+    let first_account = usize::from(*first_instruction.accounts.first()?);
+    let key = tx.account_keys().get(first_account)?;
+    let alpenglow_vote = parse_alpenglow_vote_instruction_data(first_instruction.data)?;
+    let signature = tx.signatures().first().cloned().unwrap_or_default();
+    Some((
+        *key,
+        ParsedVoteTransaction::Alpenglow(alpenglow_vote),
+        None,
+        signature,
+    ))
+}
+
+pub fn parse_alpenglow_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
+    // Check first instruction for a vote
+    let message = tx.message();
+    let first_instruction = message.instructions.first()?;
+    let program_id_index = usize::from(first_instruction.program_id_index);
+    let program_id = message.account_keys.get(program_id_index)?;
+    if program_id != &alpenglow_vote::id() {
+        return None;
+    }
+    let first_account = usize::from(*first_instruction.accounts.first()?);
+    let key = message.account_keys.get(first_account)?;
+    let alpenglow_vote = parse_alpenglow_vote_instruction_data(&first_instruction.data)?;
+    let signature = tx.signatures.first().cloned().unwrap_or_default();
+    Some((
+        *key,
+        ParsedVoteTransaction::Alpenglow(alpenglow_vote),
+        None,
+        signature,
+    ))
 }
 
 fn parse_vote_instruction_data(
@@ -74,6 +156,10 @@ fn parse_vote_instruction_data(
         | VoteInstruction::UpdateValidatorIdentity
         | VoteInstruction::Withdraw(_) => None,
     }
+}
+
+fn parse_alpenglow_vote_instruction_data(vote_instruction_data: &[u8]) -> Option<AlpenglowVote> {
+    alpenglow_vote::vote::Vote::deserialize_simple_vote(vote_instruction_data).ok()
 }
 
 #[cfg(test)]
@@ -136,7 +222,10 @@ mod test {
         );
         let (key, vote, hash, signature) = parse_vote_transaction(&vote_tx).unwrap();
         assert_eq!(hash, input_hash);
-        assert_eq!(vote, VoteTransaction::from(Vote::new(vec![42], bank_hash)));
+        assert_eq!(
+            vote,
+            ParsedVoteTransaction::Tower(VoteTransaction::from(Vote::new(vec![42], bank_hash)))
+        );
         assert_eq!(key, vote_keypair.pubkey());
         assert_eq!(signature, vote_tx.signatures[0]);
 

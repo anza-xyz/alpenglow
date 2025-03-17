@@ -784,11 +784,15 @@ impl ClusterInfo {
         Ok(())
     }
 
-    pub fn push_vote_at_index(&self, vote: Transaction, vote_index: u8) {
+    pub fn push_vote_at_index(&self, vote: Transaction, vote_index: u8, is_alpenglow: bool) {
         assert!(vote_index < MAX_VOTES);
         let self_pubkey = self.id();
         let now = timestamp();
-        let vote = Vote::new(self_pubkey, vote, now).unwrap();
+        let vote = if is_alpenglow {
+            Vote::new_alpenglow(self_pubkey, vote, now).unwrap()
+        } else {
+            Vote::new(self_pubkey, vote, now).unwrap()
+        };
         let vote = CrdsData::Vote(vote_index, vote);
         let vote = CrdsValue::new(vote, &self.keypair());
         let mut gossip_crds = self.gossip.crds.write().unwrap();
@@ -873,7 +877,7 @@ impl ClusterInfo {
 
     pub fn push_alpenglow_vote(&self, vote: Transaction) {
         let vote_index = self.find_alpenglow_vote_index_to_evict();
-        self.push_vote_at_index(vote, vote_index);
+        self.push_vote_at_index(vote, vote_index, true);
     }
 
     pub fn push_vote(&self, tower: &[Slot], vote: Transaction) {
@@ -894,10 +898,15 @@ impl ClusterInfo {
             );
         };
         debug_assert!(vote_index < MAX_VOTES);
-        self.push_vote_at_index(vote, vote_index);
+        self.push_vote_at_index(vote, vote_index, false);
     }
 
-    pub fn refresh_vote(&self, refresh_vote: Transaction, refresh_vote_slot: Slot) {
+    pub fn refresh_vote(
+        &self,
+        refresh_vote: Transaction,
+        refresh_vote_slot: Slot,
+        is_alpenglow: bool,
+    ) {
         let vote_index = {
             let self_pubkey = self.id();
             let gossip_crds =
@@ -923,7 +932,7 @@ impl ClusterInfo {
         // We don't write to an arbitrary index, because it may replace one of this validator's
         // existing votes on the network.
         if let Some(vote_index) = vote_index {
-            self.push_vote_at_index(refresh_vote, vote_index);
+            self.push_vote_at_index(refresh_vote, vote_index, is_alpenglow);
         } else {
             // If you don't see a vote with the same slot yet, this means you probably
             // restarted, and need to repush and evict the oldest vote
@@ -935,7 +944,7 @@ impl ClusterInfo {
                 return;
             };
             debug_assert!(vote_index < MAX_VOTES);
-            self.push_vote_at_index(refresh_vote, vote_index);
+            self.push_vote_at_index(refresh_vote, vote_index, is_alpenglow);
         }
     }
 
@@ -3534,7 +3543,7 @@ mod tests {
             &[refresh_ix], // instructions
             None,          // payer
         );
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
         let current_votes = cluster_info.get_votes(&mut Cursor::default());
         assert_eq!(initial_votes, current_votes);
         assert!(!current_votes.contains(&refresh_tx));
@@ -3551,7 +3560,7 @@ mod tests {
             &[refresh_ix], // instructions
             None,          // payer
         );
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
 
         // This should evict the latest vote since it's for a slot less than refresh_slot
         let votes = cluster_info.get_votes(&mut Cursor::default());
@@ -3600,7 +3609,7 @@ mod tests {
 
         // Trying to refresh vote when it doesn't yet exist in gossip
         // should add the vote without eviction if there is room in the gossip table.
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
 
         // Should be two votes in gossip
         cursor = Cursor::default();
@@ -3625,7 +3634,7 @@ mod tests {
                 &[&new_signer],
                 latest_refreshed_recent_blockhash,
             );
-            cluster_info.refresh_vote(latest_refresh_tx.clone(), refresh_slot);
+            cluster_info.refresh_vote(latest_refresh_tx.clone(), refresh_slot, false);
             // Sleep to avoid votes with same timestamp causing later vote to not override prior vote
             std::thread::sleep(Duration::from_millis(1));
         }
