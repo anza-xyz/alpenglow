@@ -4118,7 +4118,6 @@ impl ReplayStage {
             bank.vote_accounts()
                 .iter()
                 .for_each(|(vote_account_pubkey, (stake, account))| {
-                    info!("Checking vote account: {}", vote_account_pubkey);
                     let Some(vote_state) = account.alpenglow_vote_state() else {
                         info!("Vote account does not have vote state");
                         return;
@@ -4151,7 +4150,10 @@ impl ReplayStage {
                         *entry += slot_stake;
                     }
                 });
-            if (notarization_stake as f64
+            // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
+            // is genesis bank and doesn't need to be notarized.
+            if parent_slot > 0
+                && (notarization_stake as f64
                 / parent_bank
                     .epoch_total_stake(parent_bank.epoch())
                     .expect("stake must exist") as f64)
@@ -10620,12 +10622,29 @@ pub(crate) mod tests {
         // Test on bank0 should always succeed
         assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0).is_ok());
         let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 1);
-        // Test on empty bank1 should fail
+        bank1.freeze();
+        // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1).is_ok());
+        let bank2 = Arc::new(Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 2));
+        bank2.freeze();
+        // Test on bank2 should fail because even though bank 0 doesn't need to be notarized,
+        // it should have skip cert for bank 1 which it skipped.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank1)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank2)
         {
-            assert_eq!(slot, 1);
-            assert_eq!(cert_slot, 0);
+            assert_eq!(slot, 2);
+            assert_eq!(cert_slot, 1);
+            assert_eq!(cert, "Skip");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        let bank3 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3);
+        // Test on bank3 should fail because it doesn't contain notarization for bank 2.
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
+        {
+            assert_eq!(slot, 3);
+            assert_eq!(cert_slot, 2);
             assert_eq!(cert, "Notarization");
         } else {
             panic!("Expected InvalidCert error");
@@ -10642,10 +10661,10 @@ pub(crate) mod tests {
             );
         }
         store_alpenglow_vote_account(
-            &bank1,
+            &bank3,
             &my_keypairs.vote_keypair.pubkey(),
             0,
-            bank0.hash(),
+            bank2.hash(),
             None,
             None,
             lamports,
@@ -10661,10 +10680,10 @@ pub(crate) mod tests {
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank1)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
         {
-            assert_eq!(slot, 1);
-            assert_eq!(cert_slot, 0);
+            assert_eq!(slot, 3);
+            assert_eq!(cert_slot, 2);
             assert_eq!(cert, "Notarization");
         } else {
             panic!("Expected InvalidCert error");
@@ -10672,15 +10691,26 @@ pub(crate) mod tests {
         // Now let's add two more votes, this should get us over 2/3 so verification should succeed
         for keypair in &validator_voting_keypairs[1..3] {
             store_alpenglow_vote_account(
-                &bank1,
+                &bank3,
                 &keypair.vote_keypair.pubkey(),
                 0,
-                bank0.hash(),
+                bank2.hash(),
                 None,
                 None,
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1).is_ok());
+        info!("Check vote accounts 3");
+        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
+            info!(
+                "{}: {} {} {:?}",
+                pubkey,
+                stake,
+                account.lamports(),
+                account.owner()
+            );
+        }
+        // TODO(wen): this doesn't work until https://github.com/anza-xyz/alpenglow/pull/87 is merged
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3).is_ok());
     }
 }
