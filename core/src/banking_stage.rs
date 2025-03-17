@@ -822,7 +822,7 @@ pub fn commit_certificate(
 
     if summary.reached_max_poh_height {
         datapoint_error!(
-            "vote_certiificate_commit_failure",
+            "vote_certificate_commit_failure",
             ("error", "slot took too long to ingest votes", String),
             ("slot", bank.slot(), i64)
         );
@@ -832,7 +832,7 @@ pub fn commit_certificate(
 
     if summary.error_counters.total.0 != 0 {
         datapoint_error!(
-            "vote_certiificate_commit_failure",
+            "vote_certificate_commit_failure",
             (
                 "error",
                 format!("{} errors occurred", summary.error_counters.total.0),
