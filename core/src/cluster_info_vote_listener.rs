@@ -39,10 +39,7 @@ use {
         timing::AtomicInterval,
         transaction::Transaction,
     },
-    solana_vote::{
-        vote_parser::{self, ParsedVote, ParsedVoteTransaction},
-        vote_transaction::VoteTransaction,
-    },
+    solana_vote::vote_parser::{self, ParsedVote, ParsedVoteTransaction},
     std::{
         cmp::max,
         collections::HashMap,

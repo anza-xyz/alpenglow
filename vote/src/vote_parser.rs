@@ -126,6 +126,18 @@ pub fn parse_sanitized_alpenglow_vote_transaction(tx: &impl SVMTransaction) -> O
     ))
 }
 
+pub fn is_alpenglow_vote_transaction(tx: &Transaction) -> bool {
+    let message = tx.message();
+    let Some(first_instruction) = message.instructions.first() else {
+        return false;
+    };
+    let program_id_index = usize::from(first_instruction.program_id_index);
+    let Some(program_id) = message.account_keys.get(program_id_index) else {
+        return false;
+    };
+    program_id == &alpenglow_vote::id()
+}
+
 pub fn parse_alpenglow_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
     // Check first instruction for a vote
     let message = tx.message();

@@ -407,8 +407,12 @@ impl<'de> Deserialize<'de> for Vote {
         vote.transaction
             .sanitize()
             .map_err(serde::de::Error::custom)?;
-        Self::new(vote.from, vote.transaction, vote.wallclock)
-            .ok_or_else(|| serde::de::Error::custom("invalid vote tx"))
+        let vote = if vote_parser::is_alpenglow_vote_transaction(&vote.transaction) {
+            Self::new_alpenglow(vote.from, vote.transaction, vote.wallclock)
+        } else {
+            Self::new(vote.from, vote.transaction, vote.wallclock)
+        };
+        vote.ok_or_else(|| serde::de::Error::custom("invalid vote tx"))
     }
 }
 
