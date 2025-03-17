@@ -2816,7 +2816,8 @@ fn test_oc_bad_signatures() {
             let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                 .map(|(_, vote, ..)| vote)
                 .unwrap()
-                .unwrap_tower_transaction();
+                .try_into_tower_transaction()
+                .unwrap();
             // Filter out empty votes
             if !vote.is_empty() {
                 Some((vote, leader_vote_tx))
@@ -4012,7 +4013,8 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
                 let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                     .map(|(_, vote, ..)| vote)
                     .unwrap()
-                    .unwrap_tower_transaction();
+                    .try_into_tower_transaction()
+                    .unwrap();
                 // Filter out empty votes
                 if !vote.is_empty() {
                     Some((vote, leader_vote_tx))

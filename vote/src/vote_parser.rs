@@ -11,6 +11,7 @@ use {
     solana_vote_interface::instruction::VoteInstruction,
 };
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum ParsedVoteTransaction {
     Tower(VoteTransaction),
     Alpenglow(AlpenglowVote),
@@ -29,10 +30,36 @@ impl ParsedVoteTransaction {
             ParsedVoteTransaction::Alpenglow(tx) => Some(tx.slot()),
         }
     }
-    pub fn unwrap_tower_transaction(self) -> VoteTransaction {
+
+    pub fn last_voted_slot_hash(&self) -> Option<(Slot, Hash)> {
         match self {
-            ParsedVoteTransaction::Tower(tx) => tx,
-            ParsedVoteTransaction::Alpenglow(_tx) => panic!("Not a tower transaction"),
+            ParsedVoteTransaction::Tower(tx) => tx.last_voted_slot_hash(),
+            ParsedVoteTransaction::Alpenglow(tx) => match tx {
+                AlpenglowVote::Notarize(vote) => Some((vote.slot(), *vote.replayed_bank_hash())),
+                AlpenglowVote::Finalize(vote) => Some((vote.slot(), *vote.replayed_bank_hash())),
+                AlpenglowVote::Skip(_vote) => None,
+            },
+        }
+    }
+
+    pub fn is_alpenglow_vote(&self) -> bool {
+        match self {
+            ParsedVoteTransaction::Tower(_tx) => false,
+            ParsedVoteTransaction::Alpenglow(_tx) => true,
+        }
+    }
+
+    pub fn is_full_tower_vote(&self) -> bool {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => tx.is_full_tower_vote(),
+            ParsedVoteTransaction::Alpenglow(_tx) => false,
+        }
+    }
+
+    pub fn try_into_tower_transaction(self) -> Option<VoteTransaction> {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => Some(tx),
+            ParsedVoteTransaction::Alpenglow(_tx) => None,
         }
     }
 }
