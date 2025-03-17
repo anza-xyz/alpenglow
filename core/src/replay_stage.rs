@@ -3359,11 +3359,7 @@ impl ReplayStage {
         assert!(highest_frozen_bank.slot() >= first_alpenglow_slot);
 
         let poh_start_slot = poh_recorder.read().unwrap().start_slot();
-        if poh_start_slot != highest_frozen_bank.slot() {
-            // It's impossible for start poh_start_slot > highest_frozen_bank
-            // because we only ever start leader banks from parents that are
-            // frozen.
-            assert!(poh_start_slot < highest_frozen_bank.slot());
+        if poh_start_slot < highest_frozen_bank.slot() {
             // Important to keep Poh somewhat accurate for
             // parts of the system relying on PohRecorder::would_be_leader()
 
@@ -3372,6 +3368,7 @@ impl ReplayStage {
             // the fact that there is a greater/valid slot than your own must mean there
             // was a skip certificate for your slot, so it's ok to abandon your leader slot
             //
+            // TODO: move PohRecorder::would_be_leader() to skip loop timer
             // TODO: test this scenario
             Self::reset_poh_recorder(
                 my_pubkey,
@@ -3445,7 +3442,8 @@ impl ReplayStage {
                         // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
-                            highest_frozen_bank.block_id().unwrap(),
+                            // TODO: fixup for leader blocks with None block_id
+                            highest_frozen_bank.block_id().unwrap_or_default(),
                             highest_frozen_bank.hash(),
                         ),
                     );
