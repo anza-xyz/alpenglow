@@ -123,7 +123,11 @@ impl StakesCache {
         } else if alpenglow_vote::check_id(owner) {
             match VoteAccount::try_from(account.to_account_shared_data()) {
                 Ok(vote_account) => {
-                    if vote_account.alpenglow_vote_state().unwrap().version() > 0 {
+                    if vote_account
+                        .alpenglow_vote_state()
+                        .unwrap()
+                        .is_initialized()
+                    {
                         // drop the old account after releasing the lock
                         let _old_vote_account = {
                             let mut stakes = self.0.write().unwrap();
@@ -259,10 +263,19 @@ impl Stakes<StakeAccount> {
                 let voter_pubkey = &delegation.voter_pubkey;
                 if stakes.vote_accounts.get(voter_pubkey).is_none() {
                     if let Some(account) = get_account(voter_pubkey) {
-                        if (alpenglow_vote::check_id(account.owner())
-                            || VoteStateVersions::is_correct_size_and_initialized(account.data()))
-                            && VoteAccount::try_from(account.clone()).is_ok()
-                        {
+                        let is_valid_account = if alpenglow_vote::check_id(account.owner()) {
+                            match VoteAccount::try_from(account.clone()) {
+                                Ok(vote_account) => vote_account
+                                    .alpenglow_vote_state()
+                                    .unwrap()
+                                    .is_initialized(),
+                                Err(_) => false,
+                            }
+                        } else {
+                            VoteStateVersions::is_correct_size_and_initialized(account.data())
+                                && VoteAccount::try_from(account.clone()).is_ok()
+                        };
+                        if is_valid_account {
                             error!("vote account not cached: {voter_pubkey}, {account:?}");
                             return Err(Error::VoteAccountNotCached(*voter_pubkey));
                         }
