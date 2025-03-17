@@ -10650,33 +10650,34 @@ pub(crate) mod tests {
             panic!("Expected InvalidCert error");
         }
         // We have 4 validators, let's add my own vote in there, it's < 2/3 so verification should fail
-        info!("Check vote accounts");
-        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
-            info!(
-                "{}: {} {} {:?}",
-                pubkey,
-                stake,
-                account.lamports(),
-                account.owner()
-            );
-        }
         store_alpenglow_vote_account(
             &bank3,
             &my_keypairs.vote_keypair.pubkey(),
-            0,
+            2,
             bank2.hash(),
             None,
             None,
             lamports,
         );
-        info!("Check vote accounts 2");
-        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
-            info!(
-                "{}: {} {} {:?}",
-                pubkey,
-                stake,
-                account.lamports(),
-                account.owner()
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
+        {
+            assert_eq!(slot, 3);
+            assert_eq!(cert_slot, 2);
+            assert_eq!(cert, "Notarization");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        // Wrong hash will also make notarization cert check fail.
+        for keypair in &validator_voting_keypairs {
+            store_alpenglow_vote_account(
+                &bank3,
+                &keypair.vote_keypair.pubkey(),
+                2,
+                Hash::default(),
+                None,
+                None,
+                lamports,
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
@@ -10688,29 +10689,63 @@ pub(crate) mod tests {
         } else {
             panic!("Expected InvalidCert error");
         }
-        // Now let's add two more votes, this should get us over 2/3 so verification should succeed
-        for keypair in &validator_voting_keypairs[1..3] {
+        // Now let's add more votes with correct Hash, this should get us over 2/3 so verification should succeed
+        for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
                 &bank3,
                 &keypair.vote_keypair.pubkey(),
-                0,
+                2,
                 bank2.hash(),
                 None,
                 None,
                 lamports,
             );
         }
-        info!("Check vote accounts 3");
-        for (pubkey, (stake, account)) in bank1.vote_accounts().iter() {
-            info!(
-                "{}: {} {} {:?}",
-                pubkey,
-                stake,
-                account.lamports(),
-                account.owner()
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3).is_ok());
+
+        // Create bank5 which links off bank2, has notarization cert for bank2 but no skip certs.
+        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5)
+        {
+            assert_eq!(slot, 5);
+            assert_eq!(cert_slot, 2);
+            assert_eq!(cert, "Notarization");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        for keypair in &validator_voting_keypairs {
+            store_alpenglow_vote_account(
+                &bank5,
+                &keypair.vote_keypair.pubkey(),
+                2,
+                bank2.hash(),
+                None,
+                None,
+                lamports,
             );
         }
-        // TODO(wen): this doesn't work until https://github.com/anza-xyz/alpenglow/pull/87 is merged
-        // assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3).is_ok());
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5)
+        {
+            assert_eq!(slot, 5);
+            assert_eq!(cert_slot, 3);
+            assert_eq!(cert, "Skip");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
+        // Now add skip certs, this should succeed
+        for keypair in &validator_voting_keypairs {
+            store_alpenglow_vote_account(
+                &bank5,
+                &keypair.vote_keypair.pubkey(),
+                2,
+                bank2.hash(),
+                Some(3),
+                Some(4),
+                lamports,
+            );
+        }
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5).is_ok());
     }
 }
