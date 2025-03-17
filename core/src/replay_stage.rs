@@ -5269,7 +5269,14 @@ pub(crate) mod tests {
             },
         },
         solana_sdk::{
-            clock::NUM_CONSECUTIVE_LEADER_SLOTS, genesis_config, hash::{hash, Hash}, instruction::InstructionError, poh_config::PohConfig, signature::{Keypair, Signer}, system_transaction, transaction::TransactionError
+            clock::NUM_CONSECUTIVE_LEADER_SLOTS,
+            genesis_config,
+            hash::{hash, Hash},
+            instruction::InstructionError,
+            poh_config::PohConfig,
+            signature::{Keypair, Signer},
+            system_transaction,
+            transaction::TransactionError,
         },
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},

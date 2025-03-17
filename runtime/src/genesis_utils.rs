@@ -1,7 +1,7 @@
 use {
-    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     log::*,
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
+    log::*,
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
     solana_sdk::{
         account::{Account, AccountSharedData},

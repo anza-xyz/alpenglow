@@ -126,11 +126,7 @@ impl StakesCache {
                     // drop the old account after releasing the lock
                     let _old_vote_account = {
                         let mut stakes = self.0.write().unwrap();
-                        stakes.upsert_vote_account(
-                            pubkey,
-                            vote_account,
-                            new_rate_activation_epoch,
-                        )
+                        stakes.upsert_vote_account(pubkey, vote_account, new_rate_activation_epoch)
                     };
                 }
                 Err(_) => {
