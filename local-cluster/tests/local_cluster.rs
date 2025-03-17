@@ -139,6 +139,11 @@ fn test_local_cluster_start_and_exit_with_config() {
         ticks_per_slot: 8,
         slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
         stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
+        poh_config: PohConfig {
+            target_tick_duration: PohConfig::default().target_tick_duration,
+            hashes_per_tick: Some(clock::DEFAULT_HASHES_PER_TICK),
+            target_tick_count: None,
+        },
         ..ClusterConfig::default()
     };
     let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
