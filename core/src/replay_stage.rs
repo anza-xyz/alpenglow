@@ -4154,10 +4154,10 @@ impl ReplayStage {
             // is genesis bank and doesn't need to be notarized.
             if parent_slot > 0
                 && (notarization_stake as f64
-                / parent_bank
-                    .epoch_total_stake(parent_bank.epoch())
-                    .expect("stake must exist") as f64)
-                < SUPERMAJORITY
+                    / parent_bank
+                        .epoch_total_stake(parent_bank.epoch())
+                        .expect("stake must exist") as f64)
+                    < SUPERMAJORITY
             {
                 warn!(
                     "Notarization stake for bank {} parent {} is less than supermajority",
