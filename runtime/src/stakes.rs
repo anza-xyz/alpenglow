@@ -651,6 +651,7 @@ pub(crate) mod tests {
         solana_sdk::{account::WritableAccount, pubkey::Pubkey, rent::Rent, stake},
         solana_stake_program::stake_state,
         solana_vote_program::vote_state::{self, VoteState, VoteStateVersions},
+        test_case::test_case,
     };
 
     //  set up some dummies for a staked node     ((     vote      )  (     stake     ))
@@ -738,6 +739,8 @@ pub(crate) mod tests {
         )
     }
 
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_basic(is_alpenglow: bool) {
         for i in 0..4 {
             let stakes_cache = StakesCache::new(Stakes {
@@ -799,12 +802,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn test_stakes_basics() {
-        test_stakes_basic(false);
-        test_stakes_basic(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_highest(is_alpenglow: bool) {
         let stakes_cache = StakesCache::default();
 
@@ -834,12 +833,8 @@ pub(crate) mod tests {
         assert_eq!(highest_staked_node, Some(vote11_node_pubkey));
     }
 
-    #[test]
-    fn test_stakes_highests() {
-        test_stakes_highest(false);
-        test_stakes_highest(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_vote_account_disappear_reappear(is_alpenglow: bool) {
         let stakes_cache = StakesCache::new(Stakes {
             epoch: 4,
@@ -923,12 +918,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn test_stakes_vote_account_disappear_reappears() {
-        test_stakes_vote_account_disappear_reappear(false);
-        test_stakes_vote_account_disappear_reappear(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_change_delegate(is_alpenglow: bool) {
         let stakes_cache = StakesCache::new(Stakes {
             epoch: 4,
@@ -977,12 +968,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn test_stakes_change_delegates() {
-        test_stakes_change_delegate(false);
-        test_stakes_change_delegate(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_multiple_stakers(is_alpenglow: bool) {
         let stakes_cache = StakesCache::new(Stakes {
             epoch: 4,
@@ -1009,12 +996,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn test_stakes_multiple_stakers_tests() {
-        test_stakes_multiple_stakers(false);
-        test_stakes_multiple_stakers(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_activate_epoch(is_alpenglow: bool) {
         let stakes_cache = StakesCache::default();
 
@@ -1045,12 +1028,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn test_activate_epochs() {
-        test_activate_epoch(false);
-        test_activate_epoch(true);
-    }
-
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
     fn test_stakes_not_delegate(is_alpenglow: bool) {
         let stakes_cache = StakesCache::new(Stakes {
             epoch: 4,
@@ -1082,12 +1061,6 @@ pub(crate) mod tests {
             assert!(vote_accounts.get(&vote_pubkey).is_some());
             assert_eq!(vote_accounts.get_delegated_stake(&vote_pubkey), 0);
         }
-    }
-
-    #[test]
-    fn test_stakes_not_delegates() {
-        test_stakes_not_delegate(false);
-        test_stakes_not_delegate(true);
     }
 
     #[test]
