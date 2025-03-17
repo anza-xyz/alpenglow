@@ -301,14 +301,8 @@ impl ClusterInfoVoteListener {
                 let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)
                     .or_else(|| vote_parser::parse_alpenglow_vote_transaction(&tx))?;
                 let slot = vote.last_voted_slot()?;
-                if slot >= first_alpenglow_slot {
-                    if !vote.is_alpenglow_vote() {
-                        return None;
-                    }
-                } else {
-                    if vote.is_alpenglow_vote() {
-                        return None;
-                    }
+                if (slot >= first_alpenglow_slot) ^ vote.is_alpenglow_vote() {
+                    return None;
                 }
                 let epoch = epoch_schedule.get_epoch(slot);
                 let authorized_voter = root_bank
@@ -780,7 +774,7 @@ mod tests {
             pubkey::Pubkey,
             signature::{Keypair, Signature, Signer},
         },
-        solana_vote::vote_transaction,
+        solana_vote::vote_transaction::{self, VoteTransaction},
         solana_vote_program::vote_state::{TowerSync, Vote, MAX_LOCKOUT_HISTORY},
         std::{
             collections::BTreeSet,
@@ -1368,6 +1362,7 @@ mod tests {
         run_test_process_votes3(Some(Hash::default()));
     }
 
+    // TODO: Add Alpenglow equivalent tests
     #[test]
     fn test_vote_tracker_references() {
         // Create some voters at genesis

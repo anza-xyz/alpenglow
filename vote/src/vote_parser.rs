@@ -138,6 +138,7 @@ pub fn is_alpenglow_vote_transaction(tx: &Transaction) -> bool {
     program_id == &alpenglow_vote::id()
 }
 
+// TODO: add tests
 pub fn parse_alpenglow_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
     // Check first instruction for a vote
     let message = tx.message();
@@ -198,7 +199,7 @@ fn parse_vote_instruction_data(
 }
 
 fn parse_alpenglow_vote_instruction_data(vote_instruction_data: &[u8]) -> Option<AlpenglowVote> {
-    alpenglow_vote::vote::Vote::deserialize_simple_vote(vote_instruction_data).ok()
+    AlpenglowVote::deserialize_simple_vote(vote_instruction_data).ok()
 }
 
 #[cfg(test)]
