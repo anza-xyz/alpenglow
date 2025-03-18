@@ -3,6 +3,7 @@ use {
         alpenglow_consensus::vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
         next_leader::upcoming_leader_tpu_vote_sockets,
+        staked_validators_cache::StakedValidatorsCache,
     },
     bincode::serialize,
     crossbeam_channel::Receiver,
@@ -11,6 +12,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::PohRecorder,
+    solana_runtime::bank_forks::BankForks,
     solana_sdk::{
         clock::{Slot, FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET},
         transaction::Transaction,
@@ -20,9 +22,13 @@ use {
         net::SocketAddr,
         sync::{Arc, RwLock},
         thread::{self, Builder, JoinHandle},
+        time::{Duration, Instant},
     },
     thiserror::Error,
 };
+
+const STAKED_VALIDATORS_CACHE_TTL_S: u64 = 5;
+const STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP: usize = 5;
 
 pub enum VoteOp {
     PushVote {
@@ -39,16 +45,6 @@ pub enum VoteOp {
         tx: Transaction,
         last_voted_slot: Slot,
     },
-}
-
-impl VoteOp {
-    fn tx(&self) -> &Transaction {
-        match self {
-            VoteOp::PushVote { tx, .. } => tx,
-            VoteOp::PushAlpenglowVote { tx, .. } => tx,
-            VoteOp::RefreshVote { tx, .. } => tx,
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -95,10 +91,18 @@ impl VotingService {
         tower_storage: Arc<dyn TowerStorage>,
         vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
+        bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
+                let mut staked_validators_cache = StakedValidatorsCache::new(
+                    bank_forks.clone(),
+                    connection_cache.protocol(),
+                    Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
+                    STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
+                );
+
                 for vote_op in vote_receiver.iter() {
                     Self::handle_vote(
                         &cluster_info,
@@ -107,6 +111,7 @@ impl VotingService {
                         vote_history_storage.as_ref(),
                         vote_op,
                         connection_cache.clone(),
+                        &mut staked_validators_cache,
                     );
                 }
             })
@@ -114,37 +119,12 @@ impl VotingService {
         Self { thread_hdl }
     }
 
-    pub fn handle_vote(
+    fn broadcast_tower_vote(
         cluster_info: &ClusterInfo,
         poh_recorder: &RwLock<PohRecorder>,
-        tower_storage: &dyn TowerStorage,
-        vote_history_storage: &dyn VoteHistoryStorage,
-        vote_op: VoteOp,
-        connection_cache: Arc<ConnectionCache>,
+        tx: &Transaction,
+        connection_cache: &Arc<ConnectionCache>,
     ) {
-        if let VoteOp::PushVote { saved_tower, .. } = &vote_op {
-            let mut measure = Measure::start("tower storage save");
-            if let Err(err) = tower_storage.store(saved_tower) {
-                error!("Unable to save tower to storage: {:?}", err);
-                std::process::exit(1);
-            }
-            measure.stop();
-            trace!("{measure}");
-        }
-
-        if let VoteOp::PushAlpenglowVote {
-            saved_vote_history, ..
-        } = &vote_op
-        {
-            let mut measure = Measure::start("alpenglow vote history save");
-            if let Err(err) = vote_history_storage.store(saved_vote_history) {
-                error!("Unable to save vote history to storage: {:?}", err);
-                std::process::exit(1);
-            }
-            measure.stop();
-            trace!("{measure}");
-        }
-
         // Attempt to send our vote transaction to the leaders for the next few
         // slots. From the current slot to the forwarding slot offset
         // (inclusive).
@@ -152,16 +132,8 @@ impl VotingService {
             FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET.saturating_add(1);
         #[cfg(test)]
         static_assertions::const_assert_eq!(UPCOMING_LEADER_FANOUT_SLOTS, 3);
-        const UPCOMING_LEADER_ALPENGLOW_FANOUT_SLOTS: u64 = 20;
 
-        let leader_fanout = {
-            match &vote_op {
-                // Alpenglow relies on leaders to propagate votes otherwise we have to rely
-                // on gossip, especially true for skip votes
-                VoteOp::PushAlpenglowVote { .. } => UPCOMING_LEADER_ALPENGLOW_FANOUT_SLOTS,
-                _ => UPCOMING_LEADER_FANOUT_SLOTS,
-            }
-        };
+        let leader_fanout = UPCOMING_LEADER_FANOUT_SLOTS;
 
         let upcoming_leader_sockets = upcoming_leader_tpu_vote_sockets(
             cluster_info,
@@ -174,23 +146,89 @@ impl VotingService {
             for tpu_vote_socket in upcoming_leader_sockets {
                 let _ = send_vote_transaction(
                     cluster_info,
-                    vote_op.tx(),
+                    tx,
                     Some(tpu_vote_socket),
-                    &connection_cache,
+                    connection_cache,
                 );
             }
         } else {
             // Send to our own tpu vote socket if we cannot find a leader to send to
-            let _ = send_vote_transaction(cluster_info, vote_op.tx(), None, &connection_cache);
+            let _ = send_vote_transaction(cluster_info, tx, None, connection_cache);
         }
+    }
 
+    fn broadcast_alpenglow_vote(
+        slot: Slot,
+        cluster_info: &ClusterInfo,
+        tx: &Transaction,
+        connection_cache: Arc<ConnectionCache>,
+        staked_validators_cache: &mut StakedValidatorsCache,
+    ) {
+        let (staked_validator_tpu_sockets, _) = staked_validators_cache
+            .get_staked_validators_by_slot(slot, cluster_info, Instant::now());
+
+        if staked_validator_tpu_sockets.is_empty() {
+            let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
+        } else {
+            for tpu_vote_socket in staked_validator_tpu_sockets {
+                let _ = send_vote_transaction(
+                    cluster_info,
+                    tx,
+                    Some(*tpu_vote_socket),
+                    &connection_cache,
+                );
+            }
+        }
+    }
+
+    pub fn handle_vote(
+        cluster_info: &ClusterInfo,
+        poh_recorder: &RwLock<PohRecorder>,
+        tower_storage: &dyn TowerStorage,
+        vote_history_storage: &dyn VoteHistoryStorage,
+        vote_op: VoteOp,
+        connection_cache: Arc<ConnectionCache>,
+        staked_validators_cache: &mut StakedValidatorsCache,
+    ) {
         match vote_op {
             VoteOp::PushVote {
-                tx, tower_slots, ..
+                tx,
+                tower_slots,
+                saved_tower,
             } => {
+                let mut measure = Measure::start("tower storage save");
+                if let Err(err) = tower_storage.store(&saved_tower) {
+                    error!("Unable to save tower to storage: {:?}", err);
+                    std::process::exit(1);
+                }
+                measure.stop();
+                trace!("{measure}");
+
+                Self::broadcast_tower_vote(cluster_info, poh_recorder, &tx, &connection_cache);
+
                 cluster_info.push_vote(&tower_slots, tx);
             }
-            VoteOp::PushAlpenglowVote { tx, .. } => {
+            VoteOp::PushAlpenglowVote {
+                tx,
+                slot,
+                saved_vote_history,
+            } => {
+                let mut measure = Measure::start("alpenglow vote history save");
+                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
+                    error!("Unable to save vote history to storage: {:?}", err);
+                    std::process::exit(1);
+                }
+                measure.stop();
+                trace!("{measure}");
+
+                Self::broadcast_alpenglow_vote(
+                    slot,
+                    cluster_info,
+                    &tx,
+                    connection_cache,
+                    staked_validators_cache,
+                );
+
                 // TODO: Test that no important votes are overwritten
                 cluster_info.push_alpenglow_vote(tx);
             }

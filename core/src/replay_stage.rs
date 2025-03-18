@@ -5116,6 +5116,7 @@ pub(crate) mod tests {
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
             replay_stage::ReplayStage,
+            staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
         blockstore_processor::{
@@ -8474,6 +8475,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8481,6 +8489,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let mut cursor = Cursor::default();
@@ -8580,6 +8589,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8587,6 +8603,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(&mut cursor);
@@ -8709,6 +8726,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8716,6 +8740,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         assert!(last_vote_refresh_time.last_refresh_time > clone_refresh_time);
@@ -8821,7 +8846,7 @@ pub(crate) mod tests {
         vote_history_storage: &dyn VoteHistoryStorage,
         make_it_landing: bool,
         cursor: &mut Cursor,
-        bank_forks: &RwLock<BankForks>,
+        bank_forks: Arc<RwLock<BankForks>>,
         progress: &mut ProgressMap,
     ) -> Arc<Bank> {
         let my_vote_pubkey = &my_vote_keypair[0].pubkey();
@@ -8854,6 +8879,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
             poh_recorder,
@@ -8861,6 +8893,7 @@ pub(crate) mod tests {
             vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(cursor);
@@ -8876,7 +8909,7 @@ pub(crate) mod tests {
         );
         assert_eq!(tower.last_voted_slot().unwrap(), parent_bank.slot());
         let bank = new_bank_from_parent_with_bank_forks(
-            bank_forks,
+            &bank_forks,
             parent_bank,
             &Pubkey::default(),
             my_slot,
@@ -8975,7 +9008,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             true,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         new_bank = send_vote_in_new_bank(
@@ -8994,7 +9027,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             false,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         // Create enough banks on the fork so last vote is outside SlotHash, make sure

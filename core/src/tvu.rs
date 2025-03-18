@@ -341,6 +341,7 @@ impl Tvu {
             tower_storage,
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
+            bank_forks.clone(),
         );
 
         let warm_quic_cache_service = create_cache_warmer_if_needed(
