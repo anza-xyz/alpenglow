@@ -6586,6 +6586,23 @@ impl Bank {
             }
         }
 
+        let alpenglow_feature_id = solana_feature_set::secp256k1_program_enabled::id();
+        let activation_epoch = 1;
+        let activation_slot = self
+            .epoch_schedule()
+            .get_first_slot_in_epoch(activation_epoch);
+        info!("supposed to activate in slot {}", activation_slot);
+        if self.epoch >= activation_epoch && !active.contains_key(&alpenglow_feature_id) {
+            let activation_slot = self
+                .epoch_schedule()
+                .get_first_slot_in_epoch(activation_epoch + 1);
+            info!(
+                "added activating alpenglow feature at slot {} for slot {}",
+                slot, activation_slot
+            );
+            pending.insert(alpenglow_feature_id);
+            active.insert(alpenglow_feature_id, activation_slot);
+        }
         (FeatureSet { active, inactive }, pending)
     }
 

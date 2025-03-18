@@ -1217,6 +1217,10 @@ fn verify_ticks(
         .feature_set
         .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
     {
+        info!(
+            "verifying ticks first alpenglow slot: {}",
+            first_alpenglow_slot
+        );
         if bank.parent_slot() >= first_alpenglow_slot {
             return Ok(());
         }
@@ -1236,6 +1240,7 @@ fn verify_ticks(
     }
 
     let hashes_per_tick = bank.hashes_per_tick().unwrap_or(0);
+    info!("verifying ticks {}", hashes_per_tick);
     if !entries.verify_tick_hash_count(tick_hash_count, hashes_per_tick) {
         warn!(
             "Tick with invalid number of hashes found in slot: {}",

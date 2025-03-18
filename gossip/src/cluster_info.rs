@@ -1363,7 +1363,10 @@ impl ClusterInfo {
             .flat_map(move |(peer, msgs): (SocketAddr, Vec<usize>)| {
                 let entries = Rc::clone(&entries);
                 for index in &msgs {
-                    info!("{} sending message {:?} to peer {}", id, entries[*index].data, peer);
+                    info!(
+                        "{} sending message {:?} to peer {}",
+                        id, entries[*index].data, peer
+                    );
                 }
                 let msgs = msgs.into_iter().map(move |k| entries[k].clone());
                 let msgs = split_gossip_messages(PUSH_MESSAGE_MAX_PAYLOAD_SIZE, msgs)
@@ -2127,7 +2130,12 @@ impl ClusterInfo {
                         self.stats
                             .push_message_value_count
                             .add_relaxed(data.len() as u64);
-                        info!("{} received push data from {} data: {:?}", self.id(), from, data);
+                        info!(
+                            "{} received push data from {} data: {:?}",
+                            self.id(),
+                            from,
+                            data
+                        );
                         push_messages.push((from, data));
                     }
                 }
@@ -3026,7 +3034,10 @@ fn discard_different_shred_version(
     if num_skipped != 0 {
         skip_shred_version_counter.add_relaxed(num_skipped as u64);
     }
-    info!("skip_shred_version_counter {}", skip_shred_version_counter.0.load(Ordering::Relaxed));
+    info!(
+        "skip_shred_version_counter {}",
+        skip_shred_version_counter.0.load(Ordering::Relaxed)
+    );
 }
 
 #[inline]
