@@ -3359,11 +3359,7 @@ impl ReplayStage {
         assert!(highest_frozen_bank.slot() >= first_alpenglow_slot);
 
         let poh_start_slot = poh_recorder.read().unwrap().start_slot();
-        if poh_start_slot != highest_frozen_bank.slot() {
-            // It's impossible for start poh_start_slot > highest_frozen_bank
-            // because we only ever start leader banks from parents that are
-            // frozen.
-            assert!(poh_start_slot < highest_frozen_bank.slot());
+        if poh_start_slot < highest_frozen_bank.slot() {
             // Important to keep Poh somewhat accurate for
             // parts of the system relying on PohRecorder::would_be_leader()
 
@@ -3372,6 +3368,7 @@ impl ReplayStage {
             // the fact that there is a greater/valid slot than your own must mean there
             // was a skip certificate for your slot, so it's ok to abandon your leader slot
             //
+            // TODO: move PohRecorder::would_be_leader() to skip loop timer
             // TODO: test this scenario
             Self::reset_poh_recorder(
                 my_pubkey,
@@ -3445,7 +3442,8 @@ impl ReplayStage {
                         // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
-                            highest_frozen_bank.block_id().unwrap(),
+                            // TODO: fixup for leader blocks with None block_id
+                            highest_frozen_bank.block_id().unwrap_or_default(),
                             highest_frozen_bank.hash(),
                         ),
                     );
@@ -5109,6 +5107,7 @@ pub(crate) mod tests {
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
             replay_stage::ReplayStage,
+            staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
         blockstore_processor::{
@@ -8467,6 +8466,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8474,6 +8480,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let mut cursor = Cursor::default();
@@ -8573,6 +8580,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8580,6 +8594,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(&mut cursor);
@@ -8702,6 +8717,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8709,6 +8731,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         assert!(last_vote_refresh_time.last_refresh_time > clone_refresh_time);
@@ -8814,7 +8837,7 @@ pub(crate) mod tests {
         vote_history_storage: &dyn VoteHistoryStorage,
         make_it_landing: bool,
         cursor: &mut Cursor,
-        bank_forks: &RwLock<BankForks>,
+        bank_forks: Arc<RwLock<BankForks>>,
         progress: &mut ProgressMap,
     ) -> Arc<Bank> {
         let my_vote_pubkey = &my_vote_keypair[0].pubkey();
@@ -8847,6 +8870,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
             poh_recorder,
@@ -8854,6 +8884,7 @@ pub(crate) mod tests {
             vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(cursor);
@@ -8869,7 +8900,7 @@ pub(crate) mod tests {
         );
         assert_eq!(tower.last_voted_slot().unwrap(), parent_bank.slot());
         let bank = new_bank_from_parent_with_bank_forks(
-            bank_forks,
+            &bank_forks,
             parent_bank,
             &Pubkey::default(),
             my_slot,
@@ -8968,7 +8999,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             true,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         new_bank = send_vote_in_new_bank(
@@ -8987,7 +9018,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             false,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         // Create enough banks on the fork so last vote is outside SlotHash, make sure
