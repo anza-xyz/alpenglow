@@ -174,7 +174,7 @@ impl ForkProgress {
         {
             let num_expected_ticks = {
                 let parent_slot = bank.parent_slot();
-                if parent_slot < first_alpenglow_slot {
+                if parent_slot < first_alpenglow_slot && bank.slot() >= first_alpenglow_slot {
                     // 1. All slots between the parent and the first alpenglow slot need to
                     // have `ticks_per_slot` ticks
                     // 2. One extra tick for the actual alpenglow slot
