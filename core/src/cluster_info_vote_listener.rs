@@ -39,10 +39,7 @@ use {
         timing::AtomicInterval,
         transaction::Transaction,
     },
-    solana_vote::{
-        vote_parser::{self, ParsedVote},
-        vote_transaction::VoteTransaction,
-    },
+    solana_vote::vote_parser::{self, ParsedVote, ParsedVoteTransaction},
     std::{
         cmp::max,
         collections::HashMap,
@@ -287,6 +284,10 @@ impl ClusterInfoVoteListener {
             votes.len(),
         );
         let root_bank = root_bank_cache.root_bank();
+        let first_alpenglow_slot = root_bank
+            .feature_set
+            .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
+            .unwrap_or(Slot::MAX);
         let epoch_schedule = root_bank.epoch_schedule();
         votes
             .into_iter()
@@ -297,8 +298,12 @@ impl ClusterInfoVoteListener {
                 !packet_batch[0].meta().discard()
             })
             .filter_map(|(tx, packet_batch)| {
-                let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)?;
+                let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)
+                    .or_else(|| vote_parser::parse_alpenglow_vote_transaction(&tx))?;
                 let slot = vote.last_voted_slot()?;
+                if (slot >= first_alpenglow_slot) ^ vote.is_alpenglow_vote() {
+                    return None;
+                }
                 let epoch = epoch_schedule.get_epoch(slot);
                 let authorized_voter = root_bank
                     .epoch_stakes(epoch)?
@@ -394,6 +399,7 @@ impl ClusterInfoVoteListener {
         subscriptions: &RpcSubscriptions,
         gossip_verified_vote_hash_sender: &GossipVerifiedVoteHashSender,
         verified_vote_sender: &VerifiedVoteSender,
+        // TODO: send replayed Alpenglow transactions as well
         replay_votes_receiver: &ReplayVoteReceiver,
         bank_notification_sender: &Option<BankNotificationSender>,
         duplicate_confirmed_slot_sender: &Option<DuplicateConfirmedSlotsSender>,
@@ -442,7 +448,7 @@ impl ClusterInfoVoteListener {
 
     #[allow(clippy::too_many_arguments)]
     fn track_new_votes_and_notify_confirmations(
-        vote: VoteTransaction,
+        vote: ParsedVoteTransaction,
         vote_pubkey: &Pubkey,
         vote_transaction_signature: Signature,
         vote_tracker: &VoteTracker,
@@ -459,13 +465,17 @@ impl ClusterInfoVoteListener {
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
     ) {
-        if vote.is_empty() {
+        if vote.slots().is_empty() {
             return;
         }
 
         // Hold lock for whole function to ensure hash consistency with bank_forks
         let mut slots_dumped = dumped_slot_subscription.lock().unwrap();
-        let (last_vote_slot, last_vote_hash) = vote.last_voted_slot_hash().unwrap();
+        let Some((last_vote_slot, last_vote_hash)) = vote.last_voted_slot_hash() else {
+            // TODO: handle sending skip votes to replay because skp votes don't have a hash and will
+            // return
+            return;
+        };
 
         let latest_vote_slot = latest_vote_slot_per_validator
             .entry(*vote_pubkey)
@@ -535,20 +545,29 @@ impl ClusterInfoVoteListener {
                     let _ = gossip_verified_vote_hash_sender.send((*vote_pubkey, slot, hash));
                 }
 
-                if reached_threshold_results[0] {
-                    if let Some(sender) = duplicate_confirmed_slot_sender {
-                        let _ = sender.send(vec![(slot, hash)]);
+                let first_alpenglow_slot = root_bank
+                    .feature_set
+                    .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
+                    .unwrap_or(Slot::MAX);
+
+                // Optimistic confirmation and duplicate confirmation are no longer relevant after
+                // alpenglow
+                if slot < first_alpenglow_slot {
+                    if reached_threshold_results[0] {
+                        if let Some(sender) = duplicate_confirmed_slot_sender {
+                            let _ = sender.send(vec![(slot, hash)]);
+                        }
                     }
-                }
-                if reached_threshold_results[1] {
-                    new_optimistic_confirmed_slots.push((slot, hash));
-                    // Notify subscribers about new optimistic confirmation
-                    if let Some(sender) = bank_notification_sender {
-                        sender
-                            .send(BankNotification::OptimisticallyConfirmed(slot))
-                            .unwrap_or_else(|err| {
-                                warn!("bank_notification_sender failed: {:?}", err)
-                            });
+                    if reached_threshold_results[1] {
+                        new_optimistic_confirmed_slots.push((slot, hash));
+                        // Notify subscribers about new optimistic confirmation
+                        if let Some(sender) = bank_notification_sender {
+                            sender
+                                .send(BankNotification::OptimisticallyConfirmed(slot))
+                                .unwrap_or_else(|err| {
+                                    warn!("bank_notification_sender failed: {:?}", err)
+                                });
+                        }
                     }
                 }
 
@@ -588,7 +607,10 @@ impl ClusterInfoVoteListener {
         *latest_vote_slot = max(*latest_vote_slot, last_vote_slot);
 
         if is_new_vote {
-            subscriptions.notify_vote(*vote_pubkey, vote, vote_transaction_signature);
+            // TODO: Make sure to notify on notarization votes as well
+            if let Some(tower_vote) = vote.try_into_tower_transaction() {
+                subscriptions.notify_vote(*vote_pubkey, tower_vote, vote_transaction_signature);
+            }
             let _ = verified_vote_sender.send((*vote_pubkey, vote_slots));
         }
     }
@@ -616,7 +638,10 @@ impl ClusterInfoVoteListener {
         let mut gossip_vote_txn_processing_time = Measure::start("gossip_vote_processing_time");
         let votes = gossip_vote_txs
             .iter()
-            .filter_map(vote_parser::parse_vote_transaction)
+            .filter_map(|tx| {
+                vote_parser::parse_vote_transaction(tx)
+                    .or_else(|| vote_parser::parse_alpenglow_vote_transaction(tx))
+            })
             .zip(repeat(/*is_gossip:*/ true))
             .chain(replayed_votes.into_iter().zip(repeat(/*is_gossip:*/ false)));
         for ((vote_pubkey, vote, _switch_proof, signature), is_gossip) in votes {
@@ -637,7 +662,7 @@ impl ClusterInfoVoteListener {
                 latest_vote_slot_per_validator,
                 bank_hash_cache,
                 dumped_slot_subscription,
-            );
+            )
         }
         gossip_vote_txn_processing_time.stop();
         let gossip_vote_txn_processing_time_us = gossip_vote_txn_processing_time.as_us();
@@ -749,7 +774,7 @@ mod tests {
             pubkey::Pubkey,
             signature::{Keypair, Signature, Signer},
         },
-        solana_vote::vote_transaction,
+        solana_vote::vote_transaction::{self, VoteTransaction},
         solana_vote_program::vote_state::{TowerSync, Vote, MAX_LOCKOUT_HISTORY},
         std::{
             collections::BTreeSet,
@@ -962,7 +987,7 @@ mod tests {
                 replay_votes_sender
                     .send((
                         vote_keypair.pubkey(),
-                        VoteTransaction::from(replay_vote.clone()),
+                        ParsedVoteTransaction::Tower(VoteTransaction::from(replay_vote.clone())),
                         switch_proof_hash,
                         Signature::default(),
                     ))
@@ -1285,7 +1310,10 @@ mod tests {
                     replay_votes_sender
                         .send((
                             vote_keypair.pubkey(),
-                            VoteTransaction::from(Vote::new(vec![vote_slot], Hash::default())),
+                            ParsedVoteTransaction::Tower(VoteTransaction::from(Vote::new(
+                                vec![vote_slot],
+                                Hash::default(),
+                            ))),
                             switch_proof_hash,
                             Signature::default(),
                         ))
@@ -1334,6 +1362,7 @@ mod tests {
         run_test_process_votes3(Some(Hash::default()));
     }
 
+    // TODO: Add Alpenglow equivalent tests
     #[test]
     fn test_vote_tracker_references() {
         // Create some voters at genesis
@@ -1388,7 +1417,10 @@ mod tests {
             // Add gossip vote for same slot, should not affect outcome
             vec![(
                 validator0_keypairs.vote_keypair.pubkey(),
-                VoteTransaction::from(Vote::new(vec![voted_slot], Hash::default())),
+                ParsedVoteTransaction::Tower(VoteTransaction::from(Vote::new(
+                    vec![voted_slot],
+                    Hash::default(),
+                ))),
                 None,
                 Signature::default(),
             )],
@@ -1437,7 +1469,10 @@ mod tests {
             vote_txs,
             vec![(
                 validator_keypairs[1].vote_keypair.pubkey(),
-                VoteTransaction::from(Vote::new(vec![first_slot_in_new_epoch], Hash::default())),
+                ParsedVoteTransaction::Tower(VoteTransaction::from(Vote::new(
+                    vec![first_slot_in_new_epoch],
+                    Hash::default(),
+                ))),
                 None,
                 Signature::default(),
             )],
