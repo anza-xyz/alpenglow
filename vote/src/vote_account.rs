@@ -20,6 +20,12 @@ use {
     },
     thiserror::Error,
 };
+// The following imports are only needed for dev-context-only-utils.
+#[cfg(feature = "dev-context-only-utils")]
+use {
+    solana_account::WritableAccount,
+    solana_vote_interface::state::{VoteState, VoteStateVersions},
+};
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Clone, Debug, PartialEq)]
@@ -119,6 +125,53 @@ impl VoteAccount {
         }
     }
 
+    pub fn commission(&self) -> u8 {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.commission(),
+            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
+                .unwrap()
+                .commission(),
+        }
+    }
+
+    pub fn credits(&self) -> u64 {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.credits(),
+            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
+                .unwrap()
+                .epoch_credits()
+                .credits(),
+        }
+    }
+
+    pub fn epoch_credits(&self) -> Box<dyn Iterator<Item = (u64, u64, u64)> + '_> {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(vote_state_view) => {
+                Box::new(vote_state_view.epoch_credits_iter().map(|epoch_credits| {
+                    (
+                        epoch_credits.epoch(),
+                        epoch_credits.credits(),
+                        epoch_credits.prev_credits(),
+                    )
+                }))
+            }
+            VoteAccountState::Alpenglow => Box::new(
+                std::iter::once(
+                    AlpenglowVoteState::deserialize(self.0.account.data())
+                        .unwrap()
+                        .epoch_credits(),
+                )
+                .map(|epoch_credits| {
+                    (
+                        epoch_credits.epoch(),
+                        epoch_credits.credits(),
+                        epoch_credits.prev_credits(),
+                    )
+                }),
+            ),
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
@@ -149,6 +202,30 @@ impl VoteAccount {
             &solana_sdk_ids::vote::id(), // owner
         )
         .unwrap();
+
+        VoteAccount::try_from(account).unwrap()
+    }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_from_vote_state(vote_state: &VoteState) -> VoteAccount {
+        let account = AccountSharedData::new_data(
+            100, // lamports
+            &VoteStateVersions::new_current(vote_state.clone()),
+            &solana_sdk_ids::vote::id(), // owner
+        )
+        .unwrap();
+
+        VoteAccount::try_from(account).unwrap()
+    }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_from_alpenglow_vote_state(vote_state: &AlpenglowVoteState) -> VoteAccount {
+        let mut account = AccountSharedData::new(
+            100, // lamports
+            AlpenglowVoteState::size(),
+            &alpenglow_vote::id(),
+        );
+        vote_state.serialize_into(account.data_as_mut_slice());
 
         VoteAccount::try_from(account).unwrap()
     }
