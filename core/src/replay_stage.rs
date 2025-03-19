@@ -3894,29 +3894,27 @@ impl ReplayStage {
                 }
 
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-                    if *is_alpenglow_migration_complete {
-                        if let Some(parent_bank) = bank.parent() {
-                            if parent_bank.slot() >= first_alpenglow_slot {
-                                if let Err(e) = Self::alpenglow_check_cert_in_bank(bank) {
-                                    let root = bank_forks.read().unwrap().root();
-                                    Self::mark_dead_slot(
-                                        blockstore,
-                                        bank,
-                                        root,
-                                        &e,
-                                        rpc_subscriptions,
-                                        slot_status_notifier,
-                                        duplicate_slots_tracker,
-                                        duplicate_confirmed_slots,
-                                        epoch_slots_frozen_slots,
-                                        progress,
-                                        heaviest_subtree_fork_choice,
-                                        duplicate_slots_to_repair,
-                                        ancestor_hashes_replay_update_sender,
-                                        purge_repair_slot_counter,
-                                    );
-                                    continue;
-                                }
+                    if let Some(parent_bank) = bank.parent() {
+                        if bank.slot() > first_alpenglow_slot {
+                            if let Err(e) = Self::alpenglow_check_cert_in_bank(bank, parent_bank.slot() >= first_alpenglow_slot) {
+                                let root = bank_forks.read().unwrap().root();
+                                Self::mark_dead_slot(
+                                    blockstore,
+                                    bank,
+                                    root,
+                                    &e,
+                                    rpc_subscriptions,
+                                    slot_status_notifier,
+                                    duplicate_slots_tracker,
+                                    duplicate_confirmed_slots,
+                                    epoch_slots_frozen_slots,
+                                    progress,
+                                    heaviest_subtree_fork_choice,
+                                    duplicate_slots_to_repair,
+                                    ancestor_hashes_replay_update_sender,
+                                    purge_repair_slot_counter,
+                                );
+                                continue;
                             }
                         }
                     }
@@ -4104,91 +4102,92 @@ impl ReplayStage {
     }
 
     // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
-    fn alpenglow_check_cert_in_bank(bank: &Bank) -> Result<(), BlockstoreProcessorError> {
-        if let Some(parent_bank) = bank.parent() {
-            let parent_slot = parent_bank.slot();
-            let parent_epoch_stakes = parent_bank
-                .epoch_stakes(parent_bank.epoch())
-                .expect("epoch stakes must exist");
-            let parent_hash = parent_bank.hash();
-            let mut notarization_stake = 0;
-            let mut skip_stake_map: HashMap<Slot, Stake> = HashMap::new();
-            let must_skip_start = parent_slot + 1;
-            let must_skip_end = bank.slot() - 1;
-            bank.vote_accounts()
-                .iter()
-                .for_each(|(vote_account_pubkey, (stake, account))| {
-                    let Some(vote_state) = account.alpenglow_vote_state() else {
-                        info!("Vote account does not have vote state");
-                        return;
+    fn alpenglow_check_cert_in_bank(bank: &Bank, check_notarization: bool) -> Result<(), BlockstoreProcessorError> {
+        let Some(parent_bank) = bank.parent() else {
+            return Ok(());
+        };
+        let parent_slot = parent_bank.slot();
+        let parent_epoch_stakes = parent_bank
+            .epoch_stakes(parent_bank.epoch())
+            .expect("epoch stakes must exist");
+        let parent_hash = parent_bank.hash();
+        let mut notarization_stake = 0;
+        let mut skip_stake_map: HashMap<Slot, Stake> = HashMap::new();
+        let must_skip_start = parent_slot + 1;
+        let must_skip_end = bank.slot() - 1;
+        bank.vote_accounts()
+            .iter()
+            .for_each(|(vote_account_pubkey, (stake, account))| {
+                let Some(vote_state) = account.alpenglow_vote_state() else {
+                    info!("Vote account does not have vote state");
+                    return;
+                };
+                let stake_in_parent_epoch =
+                    parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
+                info!(
+                    "Stake in parent epoch: {} {:?} {:?}",
+                    stake_in_parent_epoch,
+                    vote_state.latest_notarized_slot(),
+                    vote_state.latest_notarized_bank_hash()
+                );
+                if vote_state.latest_notarized_slot() == Some(parent_slot)
+                    && vote_state.latest_notarized_bank_hash() == &parent_hash
+                {
+                    notarization_stake += stake_in_parent_epoch;
+                    info!("Adding notarization stake: {}", stake_in_parent_epoch);
+                }
+                for slot in must_skip_start.max(vote_state.latest_skip_start_slot())
+                    ..=must_skip_end.min(vote_state.latest_skip_end_slot())
+                {
+                    let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
+                    assert!(slot_epoch == parent_bank.epoch() || slot_epoch == bank.epoch());
+                    let slot_stake = if slot_epoch == parent_bank.epoch() {
+                        &stake_in_parent_epoch
+                    } else {
+                        stake
                     };
-                    let stake_in_parent_epoch =
-                        parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
-                    info!(
-                        "Stake in parent epoch: {} {:?} {:?}",
-                        stake_in_parent_epoch,
-                        vote_state.latest_notarized_slot(),
-                        vote_state.latest_notarized_bank_hash()
-                    );
-                    if vote_state.latest_notarized_slot() == Some(parent_slot)
-                        && vote_state.latest_notarized_bank_hash() == &parent_hash
-                    {
-                        notarization_stake += stake_in_parent_epoch;
-                        info!("Adding notarization stake: {}", stake_in_parent_epoch);
-                    }
-                    for slot in must_skip_start.max(vote_state.latest_skip_start_slot())
-                        ..=must_skip_end.min(vote_state.latest_skip_end_slot())
-                    {
-                        let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
-                        assert!(slot_epoch == parent_bank.epoch() || slot_epoch == bank.epoch());
-                        let slot_stake = if slot_epoch == parent_bank.epoch() {
-                            &stake_in_parent_epoch
-                        } else {
-                            stake
-                        };
-                        let entry = skip_stake_map.entry(slot).or_insert(0);
-                        *entry += slot_stake;
-                    }
-                });
-            // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
-            // is genesis bank and doesn't need to be notarized.
-            if parent_slot > 0
-                && (notarization_stake as f64
-                    / parent_bank
-                        .epoch_total_stake(parent_bank.epoch())
-                        .expect("stake must exist") as f64)
-                    < SUPERMAJORITY
+                    let entry = skip_stake_map.entry(slot).or_insert(0);
+                    *entry += slot_stake;
+                }
+            });
+        // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
+        // is genesis bank and doesn't need to be notarized.
+        if parent_slot > 0 && check_notarization
+            && (notarization_stake as f64
+                / parent_bank
+                    .epoch_total_stake(parent_bank.epoch())
+                    .expect("stake must exist") as f64)
+                < SUPERMAJORITY
+        {
+            warn!(
+                "Notarization stake for bank {} parent {} is less than supermajority",
+                bank.slot(),
+                parent_slot
+            );
+            return Err(BlockstoreProcessorError::InvalidCert(
+                bank.slot(),
+                parent_slot,
+                "Notarization".to_string(),
+            ));
+        }
+        for slot in must_skip_start..=must_skip_end {
+            let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
+            if (*skip_stake_map.get(&slot).unwrap_or(&0) as f64
+                / bank
+                    .epoch_total_stake(slot_epoch)
+                    .expect("stake must exist") as f64)
+                < SUPERMAJORITY
             {
                 warn!(
-                    "Notarization stake for bank {} parent {} is less than supermajority",
+                    "Skip stake for bank {} should skip {} is less than supermajority",
                     bank.slot(),
-                    parent_slot
+                    slot
                 );
                 return Err(BlockstoreProcessorError::InvalidCert(
                     bank.slot(),
-                    parent_slot,
-                    "Notarization".to_string(),
+                    slot,
+                    "Skip".to_string(),
                 ));
-            }
-            for slot in must_skip_start..=must_skip_end {
-                let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
-                if (*skip_stake_map.get(&slot).unwrap_or(&0) as f64
-                    / bank
-                        .epoch_total_stake(slot_epoch)
-                        .expect("stake must exist") as f64)
-                    < SUPERMAJORITY
-                {
-                    warn!(
-                        "Skip stake for bank {} should skip {} is less than supermajority",
-                        bank.slot(),
-                        slot
-                    );
-                    return Err(BlockstoreProcessorError::InvalidCert(
-                        bank.slot(),
-                        slot,
-                        "Skip".to_string(),
-                    ));
-                }
             }
         }
         Ok(())
@@ -10620,17 +10619,17 @@ pub(crate) mod tests {
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
         bank0.freeze();
         // Test on bank0 should always succeed
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0, true).is_ok());
         let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 1);
         bank1.freeze();
         // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1, true).is_ok());
         let bank2 = Arc::new(Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 2));
         bank2.freeze();
         // Test on bank2 should fail because even though bank 0 doesn't need to be notarized,
         // it should have skip cert for bank 1 which it skipped.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank2)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank2, true)
         {
             assert_eq!(slot, 2);
             assert_eq!(cert_slot, 1);
@@ -10641,7 +10640,7 @@ pub(crate) mod tests {
         let bank3 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3);
         // Test on bank3 should fail because it doesn't contain notarization for bank 2.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10660,7 +10659,7 @@ pub(crate) mod tests {
             lamports,
         );
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10681,7 +10680,7 @@ pub(crate) mod tests {
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10701,12 +10700,12 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3, true).is_ok());
 
         // Create bank5 which links off bank2, has notarization cert for bank2 but no skip certs.
         let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank5)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
         {
             assert_eq!(slot, 5);
             assert_eq!(cert_slot, 2);
@@ -10726,7 +10725,7 @@ pub(crate) mod tests {
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank5)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
         {
             assert_eq!(slot, 5);
             assert_eq!(cert_slot, 3);
@@ -10746,6 +10745,31 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5, true).is_ok());
+        // Let's say we have bank 5 which links to bank 2, and asked not to check notarization,
+        // then it should succeed only with skip cert.
+        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
+        for keypair in &validator_voting_keypairs {
+            store_alpenglow_vote_account(
+                &bank5,
+                &keypair.vote_keypair.pubkey(),
+                0,
+                Hash::default(),
+                Some(3),
+                Some(4),
+                lamports,
+            );
+        }
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5, false).is_ok());
+        // But if we are asked to check notarization, it should fail.
+        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
+        {
+            assert_eq!(slot, 5);
+            assert_eq!(cert_slot, 2);
+            assert_eq!(cert, "Notarization");
+        } else {
+            panic!("Expected InvalidCert error");
+        }
     }
 }
