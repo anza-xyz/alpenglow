@@ -7,7 +7,6 @@ use {
             utils::stake_reached_super_majority,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
-            SUPERMAJORITY,
         },
         banking_stage::{
             alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank,
