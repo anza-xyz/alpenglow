@@ -372,13 +372,12 @@ impl Bank {
                     if vote_account.owner() != &solana_vote_program {
                         return None;
                     }
-                    let vote_state_view = vote_account.vote_state_view()?;
                     let mut stake_state = *stake_account.stake_state();
 
                     let redeemed = redeem_rewards(
                         rewarded_epoch,
                         &mut stake_state,
-                        vote_state_view,
+                        &vote_account,
                         &point_value,
                         stake_history,
                         reward_calc_tracer.as_ref(),
@@ -386,7 +385,7 @@ impl Bank {
                     );
 
                     if let Ok((stakers_reward, voters_reward)) = redeemed {
-                        let commission = vote_state_view.commission();
+                        let commission = vote_account.commission();
 
                         // track voter rewards
                         let mut voters_reward_entry = vote_account_rewards
@@ -478,14 +477,14 @@ impl Bank {
                     let Some(vote_account) = get_vote_account(&vote_pubkey) else {
                         return 0;
                     };
-                    if vote_account.owner() != &solana_vote_program {
+                    if vote_account.owner() != &solana_vote_program
+                        && !alpenglow_vote::check_id(vote_account.owner())
+                    {
                         return 0;
                     }
-                    // vote_state_view should be Some because we just checked owner.
-                    let vote_state_view = vote_account.vote_state_view().unwrap();
                     calculate_points(
                         stake_account.stake_state(),
-                        vote_state_view,
+                        &vote_account,
                         stake_history,
                         new_warmup_cooldown_rate_epoch,
                     )
