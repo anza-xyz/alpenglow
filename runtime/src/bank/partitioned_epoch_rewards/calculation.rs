@@ -461,37 +461,35 @@ impl Bank {
             debug!("could not find vote account {vote_pubkey} in cache");
             return None;
         };
-        let vote_state = vote_account.vote_state_view();
         let stake_state = stake_account.stake_state();
+
+        let commission_bps_for_vote_account = |vote_account: &solana_vote::vote_account::VoteAccount| {
+            if commission_rate_in_basis_points && solana_vote_program::check_id(vote_account.owner())
+            {
+                vote_account.vote_state_view().inflation_rewards_commission()
+            } else {
+                vote_account.commission() as u16 * 100
+            }
+        };
 
         // Fetch the voter commission from past epochs to attempt to
         // delay the effect of commission updates by at least one
         // full epoch.
-        // When `commission_rate_in_basis_points` is true, use the new field
-        // `inflation_rewards_commission_bps`; otherwise use the legacy
-        // percentage field and convert to basis points by multiplying by 100.
         let commission_bps = if delay_commission_updates {
-            let vote_state_for_commission = snapshot_epoch_vote_accounts
+            snapshot_epoch_vote_accounts
                 .and_then(|eva| eva.get(&vote_pubkey))
                 .or_else(|| rewarded_epoch_vote_accounts.and_then(|eva| eva.get(&vote_pubkey)))
-                .map(|vote_account| vote_account.vote_state_view())
-                .unwrap_or(vote_state);
-            if commission_rate_in_basis_points {
-                vote_state_for_commission.inflation_rewards_commission()
-            } else {
-                vote_state_for_commission.commission() as u16 * 100
-            }
-        } else if commission_rate_in_basis_points {
-            vote_state.inflation_rewards_commission()
+                .map(commission_bps_for_vote_account)
+                .unwrap_or_else(|| commission_bps_for_vote_account(vote_account))
         } else {
-            vote_state.commission() as u16 * 100
+            commission_bps_for_vote_account(vote_account)
         };
 
         match redeem_rewards(
             rewarded_epoch,
             stake_state,
             commission_bps,
-            DelegatedVoteState::from(vote_state),
+            DelegatedVoteState::from(vote_account),
             point_value,
             stake_history,
             reward_calc_tracer,
@@ -658,7 +656,6 @@ impl Bank {
             ..
         } = cached_vote_accounts;
 
-        let solana_vote_program: Pubkey = solana_vote_program::id();
         let new_warmup_cooldown_rate_epoch = self.new_warmup_cooldown_rate_epoch();
         let (points, measure_us) = measure_us!(thread_pool.install(|| {
             stake_delegations
@@ -671,13 +668,10 @@ impl Bank {
                     else {
                         return 0;
                     };
-                    if vote_account.owner() != &solana_vote_program {
-                        return 0;
-                    }
 
                     calculate_points(
                         stake_account.stake_state(),
-                        DelegatedVoteState::from(vote_account.vote_state_view()),
+                        DelegatedVoteState::from(vote_account),
                         stake_history,
                         new_warmup_cooldown_rate_epoch,
                     )

@@ -8,6 +8,7 @@ use {
         stake_history::StakeHistory,
         state::{Delegation, Stake, StakeStateV2},
     },
+    solana_vote::vote_account::VoteAccount,
     solana_vote::vote_state_view::VoteStateView,
     std::cmp::Ordering,
 };
@@ -80,6 +81,15 @@ impl<'a> From<&'a VoteStateView> for DelegatedVoteState<'a> {
         DelegatedVoteState {
             credits: vote_state.credits(),
             epoch_credits_iter: Box::new(vote_state.epoch_credits_iter().map(Into::into)),
+        }
+    }
+}
+
+impl<'a> From<&'a VoteAccount> for DelegatedVoteState<'a> {
+    fn from(vote_account: &'a VoteAccount) -> Self {
+        DelegatedVoteState {
+            credits: vote_account.credits(),
+            epoch_credits_iter: vote_account.epoch_credits(),
         }
     }
 }

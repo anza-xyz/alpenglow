@@ -91,6 +91,29 @@ impl VoteAccount {
         self.0.vote_state_view.node_pubkey()
     }
 
+    pub fn commission(&self) -> u8 {
+        self.0.vote_state_view.commission()
+    }
+
+    pub fn credits(&self) -> u64 {
+        self.0.vote_state_view.credits()
+    }
+
+    pub fn epoch_credits(&self) -> Box<dyn Iterator<Item = (u64, u64, u64)> + '_> {
+        Box::new(
+            self.0
+                .vote_state_view
+                .epoch_credits_iter()
+                .map(|epoch_credits| {
+                    (
+                        epoch_credits.epoch(),
+                        epoch_credits.credits(),
+                        epoch_credits.prev_credits(),
+                    )
+                }),
+        )
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
@@ -125,6 +148,7 @@ impl VoteAccount {
 
         VoteAccount::try_from(account).unwrap()
     }
+
 }
 
 impl VoteAccounts {
