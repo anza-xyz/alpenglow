@@ -45,7 +45,7 @@ pub struct BlockCommitmentCache {
     block_commitment: HashMap<Slot, BlockCommitment>,
     /// Cache slot details. Cluster data is calculated from the block_commitment map, and cached in
     /// the struct to avoid the expense of recalculating on every call.
-    pub commitment_slots: CommitmentSlots,
+    commitment_slots: CommitmentSlots,
     /// Total stake active during the bank's epoch
     total_stake: u64,
 }

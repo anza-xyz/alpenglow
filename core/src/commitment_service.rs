@@ -177,8 +177,7 @@ impl AggregateCommitmentService {
 
         match update_type {
             AlpenglowCommitmentType::Notarize => {
-                w_block_commitment_cache.commitment_slots.slot =
-                    max(w_block_commitment_cache.commitment_slots.slot, slot);
+                w_block_commitment_cache.set_slot(slot);
             }
             AlpenglowCommitmentType::Root => {
                 w_block_commitment_cache.set_highest_confirmed_slot(slot);
