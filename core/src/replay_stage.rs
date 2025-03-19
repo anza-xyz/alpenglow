@@ -3,9 +3,9 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::{CertificatePool, StartLeaderCertificates},
+            utils::stake_reached_super_majority,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
-            SUPERMAJORITY,
         },
         banking_stage::{
             alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank,
@@ -3896,7 +3896,10 @@ impl ReplayStage {
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     if let Some(parent_bank) = bank.parent() {
                         if bank.slot() > first_alpenglow_slot {
-                            if let Err(e) = Self::alpenglow_check_cert_in_bank(bank, parent_bank.slot() >= first_alpenglow_slot) {
+                            if let Err(e) = Self::alpenglow_check_cert_in_bank(
+                                bank,
+                                parent_bank.slot() >= first_alpenglow_slot,
+                            ) {
                                 let root = bank_forks.read().unwrap().root();
                                 Self::mark_dead_slot(
                                     blockstore,
@@ -4102,7 +4105,10 @@ impl ReplayStage {
     }
 
     // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
-    fn alpenglow_check_cert_in_bank(bank: &Bank, check_notarization: bool) -> Result<(), BlockstoreProcessorError> {
+    fn alpenglow_check_cert_in_bank(
+        bank: &Bank,
+        check_notarization: bool,
+    ) -> Result<(), BlockstoreProcessorError> {
         let Some(parent_bank) = bank.parent() else {
             return Ok(());
         };
@@ -4152,12 +4158,14 @@ impl ReplayStage {
             });
         // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
         // is genesis bank and doesn't need to be notarized.
-        if parent_slot > 0 && check_notarization
-            && (notarization_stake as f64
-                / parent_bank
+        if parent_slot > 0
+            && check_notarization
+            && !stake_reached_super_majority(
+                notarization_stake,
+                parent_bank
                     .epoch_total_stake(parent_bank.epoch())
-                    .expect("stake must exist") as f64)
-                < SUPERMAJORITY
+                    .expect("stake must exist"),
+            )
         {
             warn!(
                 "Notarization stake for bank {} parent {} is less than supermajority",
@@ -4172,12 +4180,11 @@ impl ReplayStage {
         }
         for slot in must_skip_start..=must_skip_end {
             let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
-            if (*skip_stake_map.get(&slot).unwrap_or(&0) as f64
-                / bank
-                    .epoch_total_stake(slot_epoch)
-                    .expect("stake must exist") as f64)
-                < SUPERMAJORITY
-            {
+            if !stake_reached_super_majority(
+                *skip_stake_map.get(&slot).unwrap_or(&0),
+                bank.epoch_total_stake(slot_epoch)
+                    .expect("stake must exist"),
+            ) {
                 warn!(
                     "Skip stake for bank {} should skip {} is less than supermajority",
                     bank.slot(),

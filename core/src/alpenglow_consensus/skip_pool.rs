@@ -1,5 +1,5 @@
 use {
-    super::{Stake, SUPERMAJORITY},
+    super::{utils::super_majority_threshold, Stake},
     solana_pubkey::Pubkey,
     solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
@@ -252,7 +252,7 @@ impl SkipPool {
         &self,
         total_stake: Stake,
     ) -> Vec<(RangeInclusive<Slot>, Vec<VersionedTransaction>)> {
-        let threshold = SUPERMAJORITY * total_stake as f64;
+        let threshold = super_majority_threshold(total_stake);
         self.segment_tree
             .scan_certificates(threshold)
             .into_iter()
@@ -270,7 +270,7 @@ impl SkipPool {
     }
 
     pub(crate) fn update(&mut self, total_stake: Stake) {
-        let threshold = SUPERMAJORITY * total_stake as f64;
+        let threshold = super_majority_threshold(total_stake);
         self.certificate_ranges = self
             .segment_tree
             .scan_certificates(threshold)
