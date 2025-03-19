@@ -181,24 +181,9 @@ impl AggregateCommitmentService {
                     max(w_block_commitment_cache.commitment_slots.slot, slot);
             }
             AlpenglowCommitmentType::Root => {
-                w_block_commitment_cache
-                    .commitment_slots
-                    .highest_confirmed_slot = max(
-                    w_block_commitment_cache
-                        .commitment_slots
-                        .highest_confirmed_slot,
-                    slot,
-                );
-                w_block_commitment_cache.commitment_slots.root =
-                    max(w_block_commitment_cache.commitment_slots.root, slot);
-                w_block_commitment_cache
-                    .commitment_slots
-                    .highest_super_majority_root = max(
-                    w_block_commitment_cache
-                        .commitment_slots
-                        .highest_super_majority_root,
-                    slot,
-                );
+                w_block_commitment_cache.set_highest_confirmed_slot(slot);
+                w_block_commitment_cache.set_root(slot);
+                w_block_commitment_cache.set_highest_super_majority_root(slot);
             }
         }
         w_block_commitment_cache.commitment_slots()
