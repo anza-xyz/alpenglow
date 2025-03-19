@@ -229,7 +229,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=3c4c514#3c4c514d726891011c60d7576889c56384fd82f7"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=b3d25ff#b3d25ff8775a3671d88ccaf080e70773b6897231"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -7472,6 +7472,7 @@ name = "solana-runtime"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
+ "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "base64 0.22.1",
