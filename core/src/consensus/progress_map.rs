@@ -178,6 +178,7 @@ impl ForkProgress {
                     // 1. All slots between the parent and the first alpenglow slot need to
                     // have `ticks_per_slot` ticks
                     // 2. One extra tick for the actual alpenglow slot
+                    // 3. There are no ticks for any skipped alpenglow slots
                     (first_alpenglow_slot - parent_slot - 1) * bank.ticks_per_slot() + 1
                 } else {
                     1
