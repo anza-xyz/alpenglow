@@ -1057,7 +1057,7 @@ pub fn process_blockstore_from_root(
 /// Verify that a segment of entries has the correct number of ticks and hashes
 fn verify_ticks(
     bank: &Bank,
-    entries: &[Entry],
+    mut entries: &[Entry],
     slot_full: bool,
     tick_hash_count: &mut u64,
     migration_status: &MigrationStatus,
@@ -1089,7 +1089,21 @@ fn verify_ticks(
     }
 
     if migration_status.should_have_alpenglow_ticks(bank.slot()) {
-        return Ok(());
+        if migration_status.should_have_alpenglow_ticks(bank.parent_slot()) {
+            return Ok(());
+        }
+
+        if next_bank_tick_height == max_bank_tick_height {
+            if entries.is_empty() {
+                // This shouldn't happen, but good to double check
+                error!("Processing empty entries in verify_ticks()");
+                return Ok(());
+            }
+            // The last entry must be a tick, as verified by the `has_trailing_entry`
+            // check above. In the first alpenglow slot, that final tick (alpentick)
+            // does not carry PoH hash guarantees.
+            entries = &entries[..entries.len() - 1];
+        }
     }
 
     let hashes_per_tick = bank.hashes_per_tick().unwrap_or(0);
