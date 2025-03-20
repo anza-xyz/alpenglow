@@ -1089,7 +1089,7 @@ pub fn process_blockstore_from_root(
 /// Verify that a segment of entries has the correct number of ticks and hashes
 fn verify_ticks(
     bank: &Bank,
-    entries: &[Entry],
+    mut entries: &[Entry],
     slot_full: bool,
     tick_hash_count: &mut u64,
 ) -> std::result::Result<(), BlockError> {
@@ -1116,6 +1116,28 @@ fn verify_ticks(
         if !slot_full {
             warn!("Slot: {} was not marked full", bank.slot());
             return Err(BlockError::InvalidLastTick);
+        }
+    }
+
+    if let Some(first_alpenglow_slot) = bank
+        .feature_set
+        .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
+    {
+        if bank.parent_slot() >= first_alpenglow_slot {
+            return Ok(());
+        }
+
+        if bank.slot() >= first_alpenglow_slot && next_bank_tick_height == max_bank_tick_height {
+            if entries.is_empty() {
+                // This shouldn't happen, but good to double check
+                error!("Processing empty entries in verify_ticks()");
+                return Ok(());
+            }
+            // last entry must be a tick, as verified by the `has_trailing_entry`
+            // check above. Because in Alpenglow the last tick does not have any
+            // hashing guarantees, we pass everything but that last tick to the
+            // entry verification.
+            entries = &entries[..entries.len() - 1];
         }
     }
 
