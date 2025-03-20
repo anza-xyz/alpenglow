@@ -71,7 +71,7 @@ pub struct CertificatePool {
     // Notarization and finalization vote certificates
     certificates: BTreeMap<CertificateId, VoteCertificate>,
     // Pool of latest skip votes per validator
-    skip_pool: SkipPool,
+    skip_pool: SkipPool<VersionedTransaction>,
     // Highest slot with a notarized certificate
     highest_notarized_slot: Slot,
     // Highest slot with a finalized certificate
