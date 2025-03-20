@@ -67,8 +67,8 @@ pub type GossipVerifiedVoteHashSender = Sender<(Pubkey, Slot, Hash)>;
 pub type GossipVerifiedVoteHashReceiver = Receiver<(Pubkey, Slot, Hash)>;
 pub type DuplicateConfirmedSlotsSender = Sender<ThresholdConfirmedSlots>;
 pub type DuplicateConfirmedSlotsReceiver = Receiver<ThresholdConfirmedSlots>;
-pub type AlpenglowVoteSender = Sender<(AlpenglowVote, Transaction)>;
-pub type AlpenglowVoteReceiver = Receiver<(AlpenglowVote, Transaction)>;
+pub type AlpenglowVoteSender = Sender<(AlpenglowVote, Pubkey, Transaction)>;
+pub type AlpenglowVoteReceiver = Receiver<(AlpenglowVote, Pubkey, Transaction)>;
 
 const THRESHOLDS_TO_CHECK: [f64; 2] = [DUPLICATE_THRESHOLD, VOTE_THRESHOLD_SIZE];
 
@@ -465,7 +465,7 @@ impl ClusterInfoVoteListener {
         alpenglow_vote_sender: &AlpenglowVoteSender,
         _subscriptions: &RpcSubscriptions,
     ) {
-        let _ = alpenglow_vote_sender.send((parsed_vote, transaction));
+        let _ = alpenglow_vote_sender.send((parsed_vote, *vote_pubkey, transaction));
 
         // TODO: maybe replicate is_new behavior from `track_new_votes_and_notify_confirmations`
         // to not notify repair and more importantly RPC subscribers of votes multiple times

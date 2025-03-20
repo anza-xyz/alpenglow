@@ -12,7 +12,8 @@ use {
         },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker
+            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
+            VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
         commitment_service::{
@@ -877,6 +878,14 @@ impl ReplayStage {
                     );
                     for _ in gossip_verified_vote_hash_receiver.try_iter() {}
                     process_unfrozen_gossip_verified_vote_hashes_time.stop();
+
+                    let new_finalized_certificate_slot = Self::process_gossip_alpenglow_votes(
+                        &alpenglow_vote_receiver,
+                        &mut cert_pool,
+                        first_alpenglow_slot,
+                        &bank_forks,
+                    );
+                    maybe_new_root = std::cmp::max(maybe_new_root, new_finalized_certificate_slot);
 
                     let mut process_popular_pruned_forks_time =
                         Measure::start("process_popular_pruned_forks_time");
@@ -2054,6 +2063,41 @@ impl ReplayStage {
                 );
             }
         }
+    }
+
+    fn process_gossip_alpenglow_votes(
+        alpenglow_vote_receiver: &AlpenglowVoteReceiver,
+        cert_pool: &mut CertificatePool,
+        first_alpenglow_slot: Option<Slot>,
+        bank_forks: &RwLock<BankForks>,
+    ) -> Option<Slot> {
+        let first_alpenglow_slot = first_alpenglow_slot?;
+        let mut cached_root_bank = None;
+
+        // Find the next maximum finalization certificate
+        alpenglow_vote_receiver
+            .try_iter()
+            .filter_map(|(vote, pubkey, tx)| {
+                if vote.slot() < first_alpenglow_slot {
+                    return None;
+                }
+
+                let root_bank =
+                    cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
+                cert_pool
+                    .add_vote(
+                        &vote,
+                        tx.into(),
+                        &pubkey,
+                        root_bank.epoch_vote_account_stake(&pubkey),
+                        root_bank.total_epoch_stake(),
+                    )
+                    .ok()
+                    .flatten()
+                    .filter(|cert| cert.is_finalize())
+                    .map(|cert| cert.slot())
+            })
+            .max()
     }
 
     fn process_gossip_verified_vote_hashes(

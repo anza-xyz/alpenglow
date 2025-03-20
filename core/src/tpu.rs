@@ -8,15 +8,13 @@ pub use solana_sdk::net::DEFAULT_TPU_COALESCE;
     note = "Use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER instead"
 )]
 pub use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER as MAX_QUIC_CONNECTIONS_PER_PEER;
-use crate::cluster_info_vote_listener::AlpenglowVoteSender;
-
 use {
     crate::{
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
         cluster_info_vote_listener::{
-            ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
-            VerifiedVoteSender, VoteTracker,
+            AlpenglowVoteSender, ClusterInfoVoteListener, DuplicateConfirmedSlotsSender,
+            GossipVerifiedVoteHashSender, VerifiedVoteSender, VoteTracker,
         },
         fetch_stage::FetchStage,
         forwarding_stage::ForwardingStage,

@@ -6,7 +6,8 @@ use {
         alpenglow_consensus::vote_history_storage::VoteHistoryStorage,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver, VoteTracker
+            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
+            VerifiedVoteReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsService},
         completed_data_sets_service::CompletedDataSetsSender,
