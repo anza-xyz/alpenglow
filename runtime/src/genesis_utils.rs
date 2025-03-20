@@ -1,5 +1,4 @@
 use {
-    log::*,
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
     log::*,
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
