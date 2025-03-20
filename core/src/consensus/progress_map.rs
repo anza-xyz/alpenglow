@@ -150,6 +150,31 @@ impl ForkProgress {
         }
     }
 
+    fn calculate_alpenglow_ticks(
+        slot: Slot,
+        first_alpenglow_slot: Slot,
+        parent_slot: Slot,
+        ticks_per_slot: u64,
+    ) -> Option<u64> {
+        // Slots before alpenglow shouldn't have alpenglow ticks
+        if slot < first_alpenglow_slot {
+            return None;
+        }
+
+        let alpenglow_ticks = if parent_slot < first_alpenglow_slot && slot >= first_alpenglow_slot
+        {
+            // 1. All slots between the parent and the first alpenglow slot need to
+            // have `ticks_per_slot` ticks
+            // 2. One extra tick for the actual alpenglow slot
+            // 3. There are no ticks for any skipped alpenglow slots
+            (first_alpenglow_slot - parent_slot - 1) * ticks_per_slot + 1
+        } else {
+            1
+        };
+
+        Some(alpenglow_ticks)
+    }
+
     pub fn new_from_bank(
         bank: &Bank,
         validator_identity: &Pubkey,
@@ -177,6 +202,20 @@ impl ForkProgress {
             num_blocks_on_fork,
             num_dropped_blocks_on_fork,
         );
+
+        if let Some(first_alpenglow_slot) = bank
+            .feature_set
+            .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+        {
+            if let Some(num_expected_ticks) = Self::calculate_alpenglow_ticks(
+                bank.slot(),
+                first_alpenglow_slot,
+                bank.parent_slot(),
+                bank.ticks_per_slot(),
+            ) {
+                bank.set_tick_height(bank.max_tick_height() - num_expected_ticks);
+            }
+        }
 
         if bank.is_frozen() {
             new_progress.fork_stats.bank_hash = Some(bank.hash());
@@ -620,5 +659,84 @@ mod test {
             .unwrap()
             .is_leader_slot = true;
         assert!(!progress_map.get_leader_propagation_slot_must_exist(10).0);
+    }
+
+    #[test]
+    fn test_calculate_alpenglow_ticks() {
+        let first_alpenglow_slot = 10;
+        let ticks_per_slot = 2;
+
+        // Slots before alpenglow don't have alpenglow ticks
+        let slot = 9;
+        let parent_slot = 8;
+        assert!(ForkProgress::calculate_alpenglow_ticks(
+            slot,
+            first_alpenglow_slot,
+            parent_slot,
+            ticks_per_slot
+        )
+        .is_none());
+
+        // First alpenglow slot should only have 1 tick
+        let slot = first_alpenglow_slot;
+        let parent_slot = first_alpenglow_slot - 1;
+        assert_eq!(
+            ForkProgress::calculate_alpenglow_ticks(
+                slot,
+                first_alpenglow_slot,
+                parent_slot,
+                ticks_per_slot
+            )
+            .unwrap(),
+            1
+        );
+
+        // First alpenglow slot with skipped non-alpenglow slots
+        // need to have `ticks_per_slot` ticks per skipped slot and
+        // then one additional tick for the first alpenglow slot
+        let slot = first_alpenglow_slot;
+        let num_skipped_slots = 3;
+        let parent_slot = first_alpenglow_slot - num_skipped_slots - 1;
+        assert_eq!(
+            ForkProgress::calculate_alpenglow_ticks(
+                slot,
+                first_alpenglow_slot,
+                parent_slot,
+                ticks_per_slot
+            )
+            .unwrap(),
+            num_skipped_slots * ticks_per_slot + 1
+        );
+
+        // Skipped alpenglow slots don't need any additional ticks
+        let slot = first_alpenglow_slot + 2;
+        let parent_slot = first_alpenglow_slot;
+        assert_eq!(
+            ForkProgress::calculate_alpenglow_ticks(
+                slot,
+                first_alpenglow_slot,
+                parent_slot,
+                ticks_per_slot
+            )
+            .unwrap(),
+            1
+        );
+
+        // Skipped alpenglow slots along skipped non-alpenglow slots
+        // need to have `ticks_per_slot` ticks per skipped non-alpenglow
+        // slot only and then one additional tick for the alpenglow slot
+        let slot = first_alpenglow_slot + 2;
+        let num_skipped_non_alpenglow_slots = 4;
+        let parent_slot = first_alpenglow_slot - num_skipped_non_alpenglow_slots - 1;
+        assert_eq!(
+            ForkProgress::calculate_alpenglow_ticks(
+                slot,
+                first_alpenglow_slot,
+                parent_slot,
+                ticks_per_slot
+            )
+            .unwrap(),
+            num_skipped_non_alpenglow_slots * ticks_per_slot + 1
+        );
     }
 }
