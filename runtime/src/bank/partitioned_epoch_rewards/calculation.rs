@@ -482,7 +482,6 @@ impl Bank {
                     {
                         return 0;
                     }
-                    // vote_state_view should be Some because we just checked owner.
                     calculate_points(
                         stake_account.stake_state(),
                         &vote_account,
