@@ -3,6 +3,7 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::{CertificatePool, StartLeaderCertificates},
+            skip_pool::SkipPool,
             utils::stake_reached_super_majority,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
@@ -90,6 +91,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         num::NonZeroUsize,
+        ops::RangeInclusive,
         result,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
@@ -4118,9 +4120,9 @@ impl ReplayStage {
             .expect("epoch stakes must exist");
         let parent_hash = parent_bank.hash();
         let mut notarization_stake = 0;
-        let mut skip_stake_map: HashMap<Slot, Stake> = HashMap::new();
         let must_skip_start = parent_slot + 1;
         let must_skip_end = bank.slot() - 1;
+        let mut skip_pool = SkipPool::new();
         bank.vote_accounts()
             .iter()
             .for_each(|(vote_account_pubkey, (stake, account))| {
@@ -4142,19 +4144,16 @@ impl ReplayStage {
                     notarization_stake += stake_in_parent_epoch;
                     info!("Adding notarization stake: {}", stake_in_parent_epoch);
                 }
-                for slot in must_skip_start.max(vote_state.latest_skip_start_slot())
-                    ..=must_skip_end.min(vote_state.latest_skip_end_slot())
-                {
-                    let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
-                    assert!(slot_epoch == parent_bank.epoch() || slot_epoch == bank.epoch());
-                    let slot_stake = if slot_epoch == parent_bank.epoch() {
-                        &stake_in_parent_epoch
-                    } else {
-                        stake
-                    };
-                    let entry = skip_stake_map.entry(slot).or_insert(0);
-                    *entry += slot_stake;
-                }
+                // TODO(wen): the stake here might be incorrect for different epoch.
+                let _ = skip_pool.add_vote(
+                    vote_account_pubkey,
+                    RangeInclusive::new(
+                        vote_state.latest_skip_start_slot(),
+                        vote_state.latest_skip_end_slot(),
+                    ),
+                    (),
+                    *stake,
+                );
             });
         // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
         // is genesis bank and doesn't need to be notarized.
@@ -4178,21 +4177,23 @@ impl ReplayStage {
                 "Notarization".to_string(),
             ));
         }
-        for slot in must_skip_start..=must_skip_end {
-            let slot_epoch = bank.get_epoch_and_slot_index(slot).0;
-            if !stake_reached_super_majority(
-                *skip_stake_map.get(&slot).unwrap_or(&0),
-                bank.epoch_total_stake(slot_epoch)
+        if must_skip_start <= must_skip_end {
+            // TODO(wen): the stake can be incorrect.
+            skip_pool.update(
+                bank.epoch_total_stake(bank.epoch())
                     .expect("stake must exist"),
-            ) {
+            );
+            if !skip_pool.skip_range_certified(&must_skip_start, &must_skip_end) {
                 warn!(
-                    "Skip stake for bank {} should skip {} is less than supermajority",
+                    "Skip range for bank {} is {:?}, does not cover {} to {}",
                     bank.slot(),
-                    slot
+                    skip_pool.max_skip_certificate_range(),
+                    must_skip_start,
+                    must_skip_end
                 );
                 return Err(BlockstoreProcessorError::InvalidCert(
                     bank.slot(),
-                    slot,
+                    must_skip_start,
                     "Skip".to_string(),
                 ));
             }
