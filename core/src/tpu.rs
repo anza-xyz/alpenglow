@@ -8,6 +8,8 @@ pub use solana_sdk::net::DEFAULT_TPU_COALESCE;
     note = "Use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER instead"
 )]
 pub use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER as MAX_QUIC_CONNECTIONS_PER_PEER;
+use crate::cluster_info_vote_listener::AlpenglowVoteSender;
+
 use {
     crate::{
         banking_stage::BankingStage,
@@ -110,6 +112,7 @@ impl Tpu {
         bank_notification_sender: Option<BankNotificationSender>,
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
+        alpenglow_vote_sender: AlpenglowVoteSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         keypair: &Keypair,
@@ -258,6 +261,7 @@ impl Tpu {
             blockstore.clone(),
             bank_notification_sender,
             duplicate_confirmed_slot_sender,
+            alpenglow_vote_sender,
         );
 
         let banking_stage = BankingStage::new(

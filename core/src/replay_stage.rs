@@ -12,7 +12,7 @@ use {
         },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
+            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
         commitment_service::{
@@ -314,6 +314,7 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
+    pub alpenglow_vote_receiver: AlpenglowVoteReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -610,6 +611,7 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
+            alpenglow_vote_receiver,
         } = receivers;
 
         trace!("replay stage");
