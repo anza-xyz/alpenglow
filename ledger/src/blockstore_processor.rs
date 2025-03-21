@@ -807,6 +807,9 @@ pub enum BlockstoreProcessorError {
 
     #[error("invalid retransmitter signature final fec set")]
     InvalidRetransmitterSignatureFinalFecSet,
+
+    #[error("invalid certificate in bank {0} for slot {1}: {2}")]
+    InvalidCert(Slot, Slot, String),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
