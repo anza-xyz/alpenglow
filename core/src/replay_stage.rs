@@ -2077,7 +2077,6 @@ impl ReplayStage {
         let first_alpenglow_slot = first_alpenglow_slot?;
         let mut cached_root_bank = None;
 
-        // Find the next maximum finalization certificate
         alpenglow_vote_receiver
             .try_iter()
             .filter_map(|(vote, vote_account_pubkey, tx)| {
@@ -2093,31 +2092,38 @@ impl ReplayStage {
                 if validator_stake == 0 {
                     return None;
                 }
+
                 let total_stake = root_bank.epoch_total_stake(epoch)?;
-                cert_pool
-                    .add_vote(
-                        &vote,
-                        tx.into(),
-                        &vote_account_pubkey,
-                        validator_stake,
-                        total_stake,
-                    )
-                    .ok()
-                    .flatten()
-                    .filter(|cert| {
-                        info!(
-                            "{} got new highest gossip cert for {:?} from gossip vote",
-                            id, cert,
-                        );
+                match cert_pool.add_vote(
+                    &vote,
+                    tx.into(),
+                    &vote_account_pubkey,
+                    validator_stake,
+                    total_stake,
+                ) {
+                    Ok(Some(cert)) if cert.is_finalize() => {
                         let is_frozen = bank_forks
                             .read()
                             .unwrap()
                             .get(vote.slot())
-                            .map(|bank| bank.is_frozen())
-                            .unwrap_or(false);
-                        cert.is_finalize() && is_frozen
-                    })
-                    .map(|cert| cert.slot())
+                            .is_some_and(|bank| bank.is_frozen());
+
+                        if is_frozen {
+                            info!(
+                                "{} got new highest gossip cert for {:?} from gossip vote",
+                                id, cert
+                            );
+                            Some(cert.slot())
+                        } else {
+                            None
+                        }
+                    }
+                    Ok(_) => None,
+                    Err(e) => {
+                        error!("Adding vote {:?} errored with {:?}", vote, e);
+                        None
+                    }
+                }
             })
             .max()
     }
