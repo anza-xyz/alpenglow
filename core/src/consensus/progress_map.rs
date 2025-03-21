@@ -203,17 +203,26 @@ impl ForkProgress {
             num_dropped_blocks_on_fork,
         );
 
-        if let Some(first_alpenglow_slot) = bank
-            .feature_set
-            .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
-        {
-            if let Some(num_expected_ticks) = Self::calculate_alpenglow_ticks(
-                bank.slot(),
-                first_alpenglow_slot,
-                bank.parent_slot(),
-                bank.ticks_per_slot(),
-            ) {
-                bank.set_tick_height(bank.max_tick_height() - num_expected_ticks);
+        // Don't need set ticks for our own leader banks, poh service will do that
+        if bank.leader_id() != validator_identity {
+            if let Some(first_alpenglow_slot) = bank
+                .feature_set
+                .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+            {
+                if let Some(num_expected_ticks) = Self::calculate_alpenglow_ticks(
+                    bank.slot(),
+                    first_alpenglow_slot,
+                    bank.parent_slot(),
+                    bank.ticks_per_slot(),
+                ) {
+                    info!(
+                        "{} setting tick height for slot {} to {}",
+                        validator_identity,
+                        bank.slot(),
+                        bank.max_tick_height() - num_expected_ticks
+                    );
+                    bank.set_tick_height(bank.max_tick_height() - num_expected_ticks);
+                }
             }
         }
 
