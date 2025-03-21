@@ -2404,6 +2404,12 @@ impl ReplayStage {
                 leader_schedule_cache,
             );
         }
+
+        info!(
+            "new fork:{} parent:{} (leader) root:{}",
+            my_leader_slot, parent_slot, root_slot
+        );
+
         let tpu_bank = Self::new_bank_from_parent_with_notify(
             parent_bank.clone(),
             my_leader_slot,
@@ -2476,6 +2482,17 @@ impl ReplayStage {
                 }
             } else {
                 // We are in full alpenglow mode
+                let highest_certificate_slot = cert_pool.highest_certificate_slot();
+                if highest_certificate_slot < first_alpenglow_slot.unwrap() {
+                    // We haven't got a notarization cert yet for any of the first
+                    // alpenglow slots after the migration, wait for something to
+                    // get notarized
+                    info!(
+                        "{} alpenglow maybe_start_leader no notarization certificates yet",
+                        my_pubkey
+                    );
+                    return false;
+                }
                 info!(
                     "alpenglow maybe_start_leader certficates
                     higheset notarized slot: {},
@@ -2487,7 +2504,7 @@ impl ReplayStage {
                 );
                 (
                     cert_pool.highest_not_skip_certificate_slot(),
-                    cert_pool.highest_certificate_slot() + 1,
+                    highest_certificate_slot + 1,
                 )
             }
         };
@@ -2774,9 +2791,9 @@ impl ReplayStage {
             return None;
         };
         info!(
-            "pushing into vote pool {} {}",
-            vote_bank.epoch_vote_account_stake(vote_account_pubkey),
-            vote_bank.total_epoch_stake()
+            "{} pushing into vote pool {:?}",
+            identity_keypair.pubkey(),
+            vote
         );
         let Ok(maybe_new_cert) = cert_pool.add_vote(
             &vote,
@@ -3353,7 +3370,6 @@ impl ReplayStage {
             .expect("alpenglow feature must have been enabled if migration is complete");
         let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
         assert!(highest_frozen_bank.is_frozen());
-        assert!(highest_frozen_bank.slot() >= first_alpenglow_slot);
 
         let poh_start_slot = poh_recorder.read().unwrap().start_slot();
         if poh_start_slot < highest_frozen_bank.slot() {
@@ -3366,7 +3382,8 @@ impl ReplayStage {
             // was a skip certificate for your slot, so it's ok to abandon your leader slot
             //
             // TODO: move PohRecorder::would_be_leader() to skip loop timer
-            // TODO: test this scenario
+            // TODO: test this scenario if we reset immediately after starting up a
+            // leader block
             Self::reset_poh_recorder(
                 my_pubkey,
                 blockstore,
@@ -3375,8 +3392,10 @@ impl ReplayStage {
                 leader_schedule_cache,
             );
         }
+
         // Try to notarize the highest frozen bank
-        if vote_history.latest_notarize_vote.slot() != highest_frozen_bank.slot()
+        if highest_frozen_bank.slot() >= first_alpenglow_slot
+            && vote_history.latest_notarize_vote.slot() != highest_frozen_bank.slot()
             && !vote_history.is_slot_skipped(highest_frozen_bank.slot())
         {
             // TODO: Consider if voting on duplicate requires a retry, or not necessary if the other one has already been notarized?
@@ -3414,10 +3433,8 @@ impl ReplayStage {
 
         // Try to finalize the highest notarized block
         let highest_notarized_slot = cert_pool.highest_notarized_slot();
-        // Validators shouldn't be notarizing non alpenglow slots
-        assert!(highest_notarized_slot >= first_alpenglow_slot);
-
-        if vote_history.latest_finalize_vote.slot() != highest_notarized_slot
+        if highest_notarized_slot >= first_alpenglow_slot
+            && vote_history.latest_finalize_vote.slot() != highest_notarized_slot
             && !vote_history.is_slot_skipped(highest_notarized_slot)
         {
             let maybe_vote_bank = bank_forks.read().unwrap().get(highest_notarized_slot);
