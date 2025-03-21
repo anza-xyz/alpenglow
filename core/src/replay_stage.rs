@@ -879,12 +879,13 @@ impl ReplayStage {
                     for _ in gossip_verified_vote_hash_receiver.try_iter() {}
                     process_unfrozen_gossip_verified_vote_hashes_time.stop();
 
-                    let new_finalized_certificate_slot = Self::process_gossip_alpenglow_votes(
-                        &alpenglow_vote_receiver,
-                        &mut cert_pool,
-                        first_alpenglow_slot,
-                        &bank_forks,
-                    );
+                    let new_finalized_certificate_slot =
+                        Self::ingest_gossip_alpenglow_votes_into_certificate_pool(
+                            &alpenglow_vote_receiver,
+                            &mut cert_pool,
+                            first_alpenglow_slot,
+                            &bank_forks,
+                        );
                     maybe_new_root = std::cmp::max(maybe_new_root, new_finalized_certificate_slot);
 
                     let mut process_popular_pruned_forks_time =
@@ -2065,7 +2066,7 @@ impl ReplayStage {
         }
     }
 
-    fn process_gossip_alpenglow_votes(
+    fn ingest_gossip_alpenglow_votes_into_certificate_pool(
         alpenglow_vote_receiver: &AlpenglowVoteReceiver,
         cert_pool: &mut CertificatePool,
         first_alpenglow_slot: Option<Slot>,
@@ -2084,17 +2085,22 @@ impl ReplayStage {
 
                 let root_bank =
                     cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
+                let epoch = root_bank.epoch_schedule().get_epoch(vote.slot());
+                let validator_stake = root_bank.epoch_node_id_to_stake(epoch, &pubkey)?;
+                let total_stake = root_bank.epoch_total_stake(epoch)?;
                 cert_pool
-                    .add_vote(
-                        &vote,
-                        tx.into(),
-                        &pubkey,
-                        root_bank.epoch_vote_account_stake(&pubkey),
-                        root_bank.total_epoch_stake(),
-                    )
+                    .add_vote(&vote, tx.into(), &pubkey, validator_stake, total_stake)
                     .ok()
                     .flatten()
-                    .filter(|cert| cert.is_finalize())
+                    .filter(|cert| {
+                        let is_frozen = bank_forks
+                            .read()
+                            .unwrap()
+                            .get(vote.slot())
+                            .map(|bank| bank.is_frozen())
+                            .unwrap_or(false);
+                        cert.is_finalize() && is_frozen
+                    })
                     .map(|cert| cert.slot())
             })
             .max()
