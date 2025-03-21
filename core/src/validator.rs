@@ -1364,7 +1364,7 @@ impl Validator {
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
         let (gossip_verified_vote_hash_sender, gossip_verified_vote_hash_receiver) = unbounded();
         let (duplicate_confirmed_slot_sender, duplicate_confirmed_slots_receiver) = unbounded();
-
+        let (alpenglow_vote_sender, alpenglow_vote_receiver) = unbounded();
         let entry_notification_sender = entry_notifier_service
             .as_ref()
             .map(|service| service.sender_cloned());
@@ -1524,6 +1524,7 @@ impl Validator {
             completed_data_sets_sender,
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
+            alpenglow_vote_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 shred_version: node.info.shred_version(),
@@ -1607,6 +1608,7 @@ impl Validator {
             bank_notification_sender.map(|sender| sender.sender),
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
+            alpenglow_vote_sender,
             &connection_cache,
             turbine_quic_endpoint_sender,
             &identity_keypair,
