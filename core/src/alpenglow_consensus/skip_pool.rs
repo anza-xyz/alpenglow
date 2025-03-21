@@ -297,14 +297,6 @@ impl<T: Clone> SkipPool<T> {
 
     /// Is the given slot range contained in any skip certificates
     pub fn skip_range_certified(&self, start_slot: &Slot, end_slot: &Slot) -> bool {
-        for cert in self.certificate_ranges.iter() {
-            info!(
-                "cert {:?} {} {}",
-                cert,
-                cert.contains(start_slot),
-                cert.contains(end_slot)
-            );
-        }
         self.certificate_ranges
             .iter()
             .any(|range| range.contains(start_slot) && range.contains(end_slot))
