@@ -246,10 +246,7 @@ impl<T: Clone> SkipPool<T> {
     }
 
     /// Get all skip certificates
-    pub fn get_skip_certificates(
-        &self,
-        total_stake: Stake,
-    ) -> Vec<(RangeInclusive<Slot>, Vec<VersionedTransaction>)> {
+    pub fn get_skip_certificates(&self, total_stake: Stake) -> Vec<(RangeInclusive<Slot>, Vec<T>)> {
         let threshold = super_majority_threshold(total_stake);
         self.segment_tree
             .scan_certificates(threshold)
