@@ -1242,13 +1242,13 @@ impl ReplayStage {
                     );
                 } else {
                     let new_finalized_certificate_slot =
-                    Self::ingest_gossip_alpenglow_votes_into_certificate_pool(
-                        &my_pubkey,
-                        &alpenglow_vote_receiver,
-                        &mut cert_pool,
-                        first_alpenglow_slot,
-                        &bank_forks,
-                    );
+                        Self::ingest_gossip_alpenglow_votes_into_certificate_pool(
+                            &my_pubkey,
+                            &alpenglow_vote_receiver,
+                            &mut cert_pool,
+                            first_alpenglow_slot,
+                            &bank_forks,
+                        );
                     maybe_new_root = std::cmp::max(maybe_new_root, new_finalized_certificate_slot);
                     // TODO(ashwin): refactor this into separate timer loop
                     let maybe_finalized_certificate_slot = Self::push_alpenglow_votes(
@@ -2080,7 +2080,7 @@ impl ReplayStage {
         // Find the next maximum finalization certificate
         alpenglow_vote_receiver
             .try_iter()
-            .filter_map(|(vote, pubkey, tx)| {
+            .filter_map(|(vote, vote_account_pubkey, tx)| {
                 if vote.slot() < first_alpenglow_slot {
                     return None;
                 }
@@ -2088,13 +2088,27 @@ impl ReplayStage {
                 let root_bank =
                     cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
                 let epoch = root_bank.epoch_schedule().get_epoch(vote.slot());
-                let validator_stake = root_bank.epoch_node_id_to_stake(epoch, &pubkey)?;
+                let epoch_stakes = root_bank.epoch_stakes(epoch)?;
+                let validator_stake = epoch_stakes.vote_account_stake(&vote_account_pubkey);
+                if validator_stake == 0 {
+                    return None;
+                }
                 let total_stake = root_bank.epoch_total_stake(epoch)?;
                 cert_pool
-                    .add_vote(&vote, tx.into(), &pubkey, validator_stake, total_stake)
+                    .add_vote(
+                        &vote,
+                        tx.into(),
+                        &vote_account_pubkey,
+                        validator_stake,
+                        total_stake,
+                    )
                     .ok()
                     .flatten()
                     .filter(|cert| {
+                        info!(
+                            "{} got new highest gossip cert for {:?} from gossip vote",
+                            id, cert,
+                        );
                         let is_frozen = bank_forks
                             .read()
                             .unwrap()
