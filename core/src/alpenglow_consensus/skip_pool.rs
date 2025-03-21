@@ -1,7 +1,7 @@
 use {
     super::{Stake, SUPERMAJORITY},
     solana_pubkey::Pubkey,
-    solana_sdk::{clock::Slot, transaction::VersionedTransaction},
+    solana_sdk::clock::Slot,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
         fmt::Debug,
@@ -141,14 +141,14 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
 }
 
 /// Structure to store a skip vote, including the range and transaction
-pub struct SkipVote {
+pub struct SkipVote<T> {
     skip_range: RangeInclusive<Slot>,
-    skip_transaction: VersionedTransaction,
+    data: T,
 }
 
 /// `SkipPool` tracks validator skip votes and aggregates stake using a dynamic segment tree.
-pub struct SkipPool {
-    skips: HashMap<Pubkey, SkipVote>, // Stores latest skip range for each validator
+pub struct SkipPool<T: Clone> {
+    skips: HashMap<Pubkey, SkipVote<T>>, // Stores latest skip range for each validator
     segment_tree: DynamicSegmentTree<(Pubkey, Stake)>, // Generic tree tracking validators' stake
     /// The current ranges of slots that are skip certified
     certificate_ranges: Vec<RangeInclusive<Slot>>,
@@ -156,13 +156,13 @@ pub struct SkipPool {
     up_to_date: bool,
 }
 
-impl Default for SkipPool {
+impl<T: Clone> Default for SkipPool<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SkipPool {
+impl<T: Clone> SkipPool<T> {
     /// Initializes the `SkipPool`
     pub fn new() -> Self {
         Self {
@@ -178,7 +178,7 @@ impl SkipPool {
         &mut self,
         pubkey: &Pubkey,
         skip_range: RangeInclusive<Slot>,
-        skip_transaction: VersionedTransaction,
+        data: T,
         stake: Stake,
     ) -> Result<(), AddVoteError> {
         if stake == 0 {
@@ -228,7 +228,7 @@ impl SkipPool {
             *pubkey,
             SkipVote {
                 skip_range: skip_range.clone(),
-                skip_transaction,
+                data,
             },
         );
 
@@ -248,10 +248,7 @@ impl SkipPool {
     }
 
     /// Get all skip certificates
-    pub fn get_skip_certificates(
-        &self,
-        total_stake: Stake,
-    ) -> Vec<(RangeInclusive<Slot>, Vec<VersionedTransaction>)> {
+    pub fn get_skip_certificates(&self, total_stake: Stake) -> Vec<(RangeInclusive<Slot>, Vec<T>)> {
         let threshold = SUPERMAJORITY * total_stake as f64;
         self.segment_tree
             .scan_certificates(threshold)
@@ -262,7 +259,7 @@ impl SkipPool {
                     contributors
                         .iter()
                         .filter_map(|pk| self.skips.get(pk))
-                        .map(|sv| sv.skip_transaction.clone())
+                        .map(|sv| sv.data.clone())
                         .collect(),
                 )
             })
@@ -303,14 +300,14 @@ impl SkipPool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, solana_sdk::transaction::VersionedTransaction};
 
     fn dummy_transaction() -> VersionedTransaction {
         VersionedTransaction::default() // Creates a dummy transaction for testing
     }
 
-    fn assert_single_certificate_range(
-        pool: &SkipPool,
+    fn assert_single_certificate_range<T: Clone>(
+        pool: &SkipPool<T>,
         total_stake: Stake,
         exp_range: RangeInclusive<Slot>,
     ) {
@@ -334,7 +331,7 @@ mod tests {
 
         let stored_vote = pool.skips.get(&validator).unwrap();
         assert_eq!(stored_vote.skip_range, skip_range);
-        assert_eq!(stored_vote.skip_transaction, skip_tx);
+        assert_eq!(stored_vote.data, skip_tx);
         assert_single_certificate_range(&pool, total_stake, 10..=20);
     }
 
@@ -366,7 +363,7 @@ mod tests {
 
         let stored_vote = pool.skips.get(&validator).unwrap();
         assert_eq!(stored_vote.skip_range, skip_range);
-        assert_eq!(stored_vote.skip_transaction, skip_tx);
+        assert_eq!(stored_vote.data, skip_tx);
         assert_single_certificate_range(&pool, total_stake, 1..=1);
     }
 

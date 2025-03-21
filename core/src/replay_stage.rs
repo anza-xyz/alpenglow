@@ -15,7 +15,10 @@ use {
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
-        commitment_service::{AggregateCommitmentService, CommitmentAggregationData},
+        commitment_service::{
+            AggregateCommitmentService, AlpenglowCommitmentAggregationData,
+            AlpenglowCommitmentType, CommitmentAggregationData, TowerCommitmentAggregationData,
+        },
         consensus::{
             fork_choice::{select_vote_and_reset_forks, ForkChoice, SelectVoteAndResetForkResult},
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
@@ -70,7 +73,7 @@ use {
         accounts_background_service::AbsRequestSender,
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
-        commitment::{BlockCommitmentCache, CommitmentSlots},
+        commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::ReplayVoteSender,
@@ -1289,6 +1292,7 @@ impl ReplayStage {
                             &drop_bank_sender,
                             &mut cert_pool,
                             &mut vote_history,
+                            &lockouts_sender,
                         ) {
                             error!(
                                 "Unable to set alpenglow root {}, error {e}",
@@ -1296,12 +1300,6 @@ impl ReplayStage {
                             );
                             return;
                         }
-                        rpc_subscriptions.notify_subscribers(CommitmentSlots {
-                            slot: new_root_slot,
-                            root: new_root_slot,
-                            highest_confirmed_slot: new_root_slot,
-                            highest_super_majority_root: new_root_slot,
-                        });
                     }
                 }
 
@@ -2750,7 +2748,6 @@ impl ReplayStage {
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
-        _lockouts_sender: &Sender<CommitmentAggregationData>,
         vote_signatures: &mut Vec<Signature>,
         has_new_vote_been_rooted: &mut bool,
         replay_timing: &mut ReplayLoopTiming,
@@ -3359,11 +3356,7 @@ impl ReplayStage {
         assert!(highest_frozen_bank.slot() >= first_alpenglow_slot);
 
         let poh_start_slot = poh_recorder.read().unwrap().start_slot();
-        if poh_start_slot != highest_frozen_bank.slot() {
-            // It's impossible for start poh_start_slot > highest_frozen_bank
-            // because we only ever start leader banks from parents that are
-            // frozen.
-            assert!(poh_start_slot < highest_frozen_bank.slot());
+        if poh_start_slot < highest_frozen_bank.slot() {
             // Important to keep Poh somewhat accurate for
             // parts of the system relying on PohRecorder::would_be_leader()
 
@@ -3372,6 +3365,7 @@ impl ReplayStage {
             // the fact that there is a greater/valid slot than your own must mean there
             // was a skip certificate for your slot, so it's ok to abandon your leader slot
             //
+            // TODO: move PohRecorder::would_be_leader() to skip loop timer
             // TODO: test this scenario
             Self::reset_poh_recorder(
                 my_pubkey,
@@ -3396,7 +3390,6 @@ impl ReplayStage {
                 vote_account_pubkey,
                 identity_keypair,
                 &authorized_voter_keypairs.read().unwrap(),
-                lockouts_sender,
                 voted_signatures,
                 has_new_vote_been_rooted,
                 replay_timing,
@@ -3411,6 +3404,11 @@ impl ReplayStage {
                     highest_frozen_bank.hash(),
                     None,
                 ),
+            );
+            Self::alpenglow_update_commitment_cache(
+                AlpenglowCommitmentType::Notarize,
+                highest_frozen_bank.slot(),
+                lockouts_sender,
             );
         }
 
@@ -3434,7 +3432,6 @@ impl ReplayStage {
                         vote_account_pubkey,
                         identity_keypair,
                         &authorized_voter_keypairs.read().unwrap(),
-                        lockouts_sender,
                         voted_signatures,
                         has_new_vote_been_rooted,
                         replay_timing,
@@ -3445,7 +3442,8 @@ impl ReplayStage {
                         // TODO(ashwin): fixup when separating vote loop, check block_id for non leader slots
                         AlpenglowVote::new_finalization_vote(
                             highest_frozen_bank.slot(),
-                            highest_frozen_bank.block_id().unwrap(),
+                            // TODO: fixup for leader blocks with None block_id
+                            highest_frozen_bank.block_id().unwrap_or_default(),
                             highest_frozen_bank.hash(),
                         ),
                     );
@@ -3506,6 +3504,23 @@ impl ReplayStage {
         }
     }
 
+    fn alpenglow_update_commitment_cache(
+        commitment_type: AlpenglowCommitmentType,
+        slot: Slot,
+        lockouts_sender: &Sender<CommitmentAggregationData>,
+    ) {
+        if let Err(e) = lockouts_sender.send(
+            CommitmentAggregationData::AlpenglowCommitmentAggregationData(
+                AlpenglowCommitmentAggregationData {
+                    commitment_type,
+                    slot,
+                },
+            ),
+        ) {
+            trace!("lockouts_sender failed: {:?}", e);
+        }
+    }
+
     fn update_commitment_cache(
         bank: Arc<Bank>,
         root: Slot,
@@ -3513,12 +3528,11 @@ impl ReplayStage {
         node_vote_state: (Pubkey, TowerVoteState),
         lockouts_sender: &Sender<CommitmentAggregationData>,
     ) {
-        if let Err(e) = lockouts_sender.send(CommitmentAggregationData::new(
-            bank,
-            root,
-            total_stake,
-            node_vote_state,
-        )) {
+        if let Err(e) =
+            lockouts_sender.send(CommitmentAggregationData::TowerCommitmentAggregationData(
+                TowerCommitmentAggregationData::new(bank, root, total_stake, node_vote_state),
+            ))
+        {
             trace!("lockouts_sender failed: {:?}", e);
         }
     }
@@ -4742,6 +4756,7 @@ impl ReplayStage {
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         cert_pool: &mut CertificatePool,
         vote_history: &mut VoteHistory,
+        lockouts_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), SetRootError> {
         vote_history.set_root(new_root);
         cert_pool.purge(new_root);
@@ -4764,7 +4779,13 @@ impl ReplayStage {
             voted_signatures,
             epoch_slots_frozen_slots,
             drop_bank_sender,
-        )
+        )?;
+        Self::alpenglow_update_commitment_cache(
+            AlpenglowCommitmentType::Root,
+            new_root,
+            lockouts_sender,
+        );
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5109,6 +5130,7 @@ pub(crate) mod tests {
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
             replay_stage::ReplayStage,
+            staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
         blockstore_processor::{
@@ -8467,6 +8489,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8474,6 +8503,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let mut cursor = Cursor::default();
@@ -8573,6 +8603,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8580,6 +8617,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(&mut cursor);
@@ -8702,6 +8740,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
@@ -8709,6 +8754,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         assert!(last_vote_refresh_time.last_refresh_time > clone_refresh_time);
@@ -8814,7 +8860,7 @@ pub(crate) mod tests {
         vote_history_storage: &dyn VoteHistoryStorage,
         make_it_landing: bool,
         cursor: &mut Cursor,
-        bank_forks: &RwLock<BankForks>,
+        bank_forks: Arc<RwLock<BankForks>>,
         progress: &mut ProgressMap,
     ) -> Arc<Bank> {
         let my_vote_pubkey = &my_vote_keypair[0].pubkey();
@@ -8847,6 +8893,13 @@ pub(crate) mod tests {
             )
         };
 
+        let mut staked_validators_cache = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            connection_cache.protocol(),
+            Duration::from_secs(5),
+            5,
+        );
+
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
             poh_recorder,
@@ -8854,6 +8907,7 @@ pub(crate) mod tests {
             vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
+            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(cursor);
@@ -8869,7 +8923,7 @@ pub(crate) mod tests {
         );
         assert_eq!(tower.last_voted_slot().unwrap(), parent_bank.slot());
         let bank = new_bank_from_parent_with_bank_forks(
-            bank_forks,
+            &bank_forks,
             parent_bank,
             &Pubkey::default(),
             my_slot,
@@ -8968,7 +9022,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             true,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         new_bank = send_vote_in_new_bank(
@@ -8987,7 +9041,7 @@ pub(crate) mod tests {
             &vote_history_storage,
             false,
             &mut cursor,
-            &bank_forks,
+            bank_forks.clone(),
             &mut progress,
         );
         // Create enough banks on the fork so last vote is outside SlotHash, make sure
