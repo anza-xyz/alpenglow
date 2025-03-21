@@ -9,6 +9,7 @@
 )]
 pub use solana_stake_interface::state::*;
 use {
+    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     solana_account::{state_traits::StateMut, AccountSharedData, ReadableAccount},
     solana_clock::{Clock, Epoch},
     solana_feature_set::FeatureSet,
@@ -210,6 +211,18 @@ pub(crate) fn new_stake(
     Stake {
         delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
         credits_observed: vote_state.credits(),
+    }
+}
+
+pub(crate) fn new_stake_with_credits(
+    stake: u64,
+    voter_pubkey: &Pubkey,
+    credits: u64,
+    activation_epoch: Epoch,
+) -> Stake {
+    Stake {
+        delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
+        credits_observed: credits,
     }
 }
 
@@ -1416,7 +1429,16 @@ fn do_create_account(
 ) -> AccountSharedData {
     let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
 
-    let vote_state = VoteState::deserialize(vote_account.data()).expect("vote_state");
+    let credits = if alpenglow_vote::check_id(vote_account.owner()) {
+        AlpenglowVoteState::deserialize(vote_account.data())
+            .expect("alpenglow_vote_state")
+            .epoch_credits()
+            .credits()
+    } else {
+        VoteState::deserialize(vote_account.data())
+            .expect("vote_state")
+            .credits()
+    };
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());
 
@@ -1427,10 +1449,10 @@ fn do_create_account(
                 rent_exempt_reserve,
                 ..Meta::default()
             },
-            new_stake(
+            new_stake_with_credits(
                 lamports - rent_exempt_reserve, // underflow is an error, is basically: assert!(lamports > rent_exempt_reserve);
                 voter_pubkey,
-                &vote_state,
+                credits,
                 activation_epoch,
             ),
             StakeFlags::empty(),
