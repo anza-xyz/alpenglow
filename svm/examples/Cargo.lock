@@ -7748,6 +7748,7 @@ dependencies = [
 name = "solana-stake-program"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "bincode",
  "log",
  "solana-account",
