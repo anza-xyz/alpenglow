@@ -317,7 +317,7 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            is_alpenglow,
+            is_alpenglow.then(ALPENGLOW_SO_PATH),
         );
         genesis_config.accounts.extend(
             config
