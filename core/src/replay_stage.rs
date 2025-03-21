@@ -2484,7 +2484,7 @@ impl ReplayStage {
                 // We are in full alpenglow mode
                 let highest_certificate_slot = cert_pool.highest_certificate_slot();
                 if highest_certificate_slot < first_alpenglow_slot.unwrap() {
-                    // We haven't got a notarization yet for any of the first
+                    // We haven't got a notarization cert yet for any of the first
                     // alpenglow slots after the migration, wait for something to
                     // get notarized
                     info!(
