@@ -4235,22 +4235,14 @@ impl ReplayStage {
             .iter()
             .for_each(|(vote_account_pubkey, (stake, account))| {
                 let Some(vote_state) = account.alpenglow_vote_state() else {
-                    info!("Vote account does not have vote state");
                     return;
                 };
                 let stake_in_parent_epoch =
                     parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
-                info!(
-                    "Stake in parent epoch: {} {:?} {:?}",
-                    stake_in_parent_epoch,
-                    vote_state.latest_notarized_slot(),
-                    vote_state.latest_notarized_bank_hash()
-                );
                 if vote_state.latest_notarized_slot() == Some(parent_slot)
                     && vote_state.latest_notarized_bank_hash() == &parent_hash
                 {
                     notarization_stake += stake_in_parent_epoch;
-                    info!("Adding notarization stake: {}", stake_in_parent_epoch);
                 }
                 // TODO(wen): the stake here might be incorrect for different epoch.
                 let _ = skip_pool.add_vote(
@@ -10743,23 +10735,8 @@ pub(crate) mod tests {
         if let Some(slot) = latest_skip_end_slot {
             vote_state.set_latest_skip_end_slot(slot);
         }
-        info!(
-            "Store account {} {:?} {:?}",
-            pubkey,
-            vote_state.latest_notarized_slot(),
-            vote_state.latest_notarized_bank_hash()
-        );
         vote_state.serialize_into(account.data_as_mut_slice());
         let vote_account = VoteAccount::try_from(account).unwrap();
-        info!(
-            "Store account {} {} {:?}",
-            pubkey,
-            vote_account.owner(),
-            vote_account
-                .alpenglow_vote_state()
-                .unwrap()
-                .latest_notarized_slot()
-        );
         bank.store_account(pubkey, vote_account.account());
     }
 
