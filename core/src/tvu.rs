@@ -6,7 +6,7 @@ use {
         alpenglow_consensus::vote_history_storage::VoteHistoryStorage,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
+            DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
             VerifiedVoteReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsService},
@@ -43,7 +43,7 @@ use {
     solana_runtime::{
         accounts_background_service::AbsRequestSender, bank_forks::BankForks,
         commitment::BlockCommitmentCache, prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::ReplayVoteSender,
+        vote_sender_types::{AlpenglowVoteReceiver, ReplayVoteSender},
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
