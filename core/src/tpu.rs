@@ -13,8 +13,8 @@ use {
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
         cluster_info_vote_listener::{
-            ClusterInfoVoteListener, DuplicateConfirmedSlotsSender,
-            GossipVerifiedVoteHashSender, VerifiedVoteSender, VoteTracker,
+            ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
+            VerifiedVoteSender, VoteTracker,
         },
         fetch_stage::FetchStage,
         forwarding_stage::ForwardingStage,

@@ -1,10 +1,7 @@
 use {
     alpenglow_vote::vote::Vote as AlpenglowVote,
     crossbeam_channel::{Receiver, Sender},
-    solana_sdk::{
-        pubkey::Pubkey,
-        transaction::Transaction,
-    },
+    solana_sdk::{pubkey::Pubkey, transaction::Transaction},
     solana_vote::vote_parser::ParsedVote,
 };
 
