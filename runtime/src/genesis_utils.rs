@@ -88,7 +88,7 @@ pub fn create_genesis_config(mint_lamports: u64) -> GenesisConfigInfo {
     create_genesis_config_with_leader(
         mint_lamports,
         &solana_pubkey::new_rand(), // validator_pubkey
-        0,                          // validator_stake_lamports
+        0,                  // validator_stake_lamports
     )
 }
 
@@ -164,6 +164,10 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if is_alpenglow {
+            info!(
+                "created alpenglow vote account {} for node {}",
+                vote_pubkey, node_pubkey
+            );
             AlpenglowVoteState::create_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
