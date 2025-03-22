@@ -831,7 +831,7 @@ pub fn commit_certificate(
 
     let runtime_transactions = runtime_transactions.unwrap();
     let summary = consumer.process_transactions(bank, &Instant::now(), &runtime_transactions);
-
+    info!("process commit summary: {:?}", summary.error_counters);
     if summary.reached_max_poh_height {
         datapoint_error!(
             "vote_certificate_commit_failure",

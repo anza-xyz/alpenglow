@@ -88,7 +88,7 @@ pub fn create_genesis_config(mint_lamports: u64) -> GenesisConfigInfo {
     create_genesis_config_with_leader(
         mint_lamports,
         &solana_pubkey::new_rand(), // validator_pubkey
-        0,                  // validator_stake_lamports
+        0,                          // validator_stake_lamports
     )
 }
 

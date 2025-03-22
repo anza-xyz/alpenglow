@@ -411,6 +411,7 @@ impl LocalCluster {
             config.validator_configs[1..].iter(),
             validator_keys[1..].iter(),
         ) {
+            info!("adding validator");
             cluster.add_validator(
                 validator_config,
                 *stake,

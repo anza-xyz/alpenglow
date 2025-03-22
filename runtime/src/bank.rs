@@ -2713,6 +2713,7 @@ impl Bank {
                 self.get_account(pubkey).is_none(),
                 "{pubkey} repeated in genesis config"
             );
+            info!("genesis storing account {}", pubkey);
             self.store_account(pubkey, &account.to_account_shared_data());
             self.capitalization.fetch_add(account.lamports(), Relaxed);
             self.accounts_data_size_initial += account.data().len() as u64;
@@ -6586,7 +6587,7 @@ impl Bank {
             }
         }
 
-        let alpenglow_feature_id = solana_feature_set::secp256k1_program_enabled::id();
+        /*let alpenglow_feature_id = solana_feature_set::secp256k1_program_enabled::id();
         let activation_epoch = 1;
         let activation_slot = self
             .epoch_schedule()
@@ -6602,7 +6603,7 @@ impl Bank {
             );
             pending.insert(alpenglow_feature_id);
             active.insert(alpenglow_feature_id, activation_slot);
-        }
+        }*/
         (FeatureSet { active, inactive }, pending)
     }
 

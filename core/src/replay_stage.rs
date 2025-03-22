@@ -4013,7 +4013,7 @@ impl ReplayStage {
                     }
                 }
 
-                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
+                /*if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     if let Some(parent_bank) = bank.parent() {
                         if bank.slot() > first_alpenglow_slot {
                             if let Err(e) = Self::alpenglow_check_cert_in_bank(
@@ -4041,7 +4041,7 @@ impl ReplayStage {
                             }
                         }
                     }
-                }
+                }*/
 
                 let block_id = if bank.collector_id() != my_pubkey {
                     // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
