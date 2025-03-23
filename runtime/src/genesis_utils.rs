@@ -144,6 +144,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         Rent::free(),               // most tests don't expect rent
         cluster_type,
         vec![],
+        is_alpenglow,
     );
 
     let mut genesis_config_info = GenesisConfigInfo {
@@ -237,6 +238,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
         Rent::free(),               // most tests don't expect rent
         ClusterType::Development,
         vec![],
+        false,
     );
 
     GenesisConfigInfo {
@@ -299,13 +301,24 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     rent: Rent,
     cluster_type: ClusterType,
     mut initial_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) -> GenesisConfig {
-    let validator_vote_account = vote_state::create_account(
-        validator_vote_account_pubkey,
-        validator_pubkey,
-        0,
-        validator_stake_lamports,
-    );
+    let validator_vote_account = if is_alpenglow {
+        AlpenglowVoteState::create_account_with_authorized(
+            validator_pubkey,
+            validator_vote_account_pubkey,
+            validator_vote_account_pubkey,
+            0,
+            validator_stake_lamports,
+        )
+    } else {
+        vote_state::create_account(
+            validator_vote_account_pubkey,
+            validator_pubkey,
+            0,
+            validator_stake_lamports,
+        )
+    };
 
     let validator_stake_account = stake_state::create_account(
         validator_stake_account_pubkey,
@@ -368,6 +381,7 @@ pub fn create_genesis_config_with_leader_ex(
     rent: Rent,
     cluster_type: ClusterType,
     initial_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) -> GenesisConfig {
     let mut genesis_config = create_genesis_config_with_leader_ex_no_features(
         mint_lamports,
@@ -381,6 +395,7 @@ pub fn create_genesis_config_with_leader_ex(
         rent,
         cluster_type,
         initial_accounts,
+        is_alpenglow,
     );
 
     if genesis_config.cluster_type == ClusterType::Development {
