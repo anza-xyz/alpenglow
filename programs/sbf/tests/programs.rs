@@ -1437,6 +1437,7 @@ fn get_stable_genesis_config() -> GenesisConfigInfo {
         Rent::free(),               // most tests don't expect rent
         ClusterType::Development,
         vec![],
+        false,
     );
     genesis_config.creation_time = Duration::ZERO.as_secs() as UnixTimestamp;
 
