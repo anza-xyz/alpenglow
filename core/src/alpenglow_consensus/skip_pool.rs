@@ -1,5 +1,5 @@
 use {
-    super::{Stake, SUPERMAJORITY},
+    super::{utils::super_majority_threshold, Stake},
     solana_pubkey::Pubkey,
     solana_sdk::clock::Slot,
     std::{
@@ -233,11 +233,9 @@ impl<T: Clone> SkipPool<T> {
         );
 
         self.up_to_date = false;
-        for cert in self.certificate_ranges.iter() {
-            if cert.contains(skip_range.start()) && cert.contains(skip_range.end()) {
-                // The vote is already contained in a cert, not necessary to update
-                self.up_to_date = true;
-            }
+        if self.skip_range_certified(skip_range.start(), skip_range.end()) {
+            // The vote is already contained in a cert, not necessary to update
+            self.up_to_date = true;
         }
 
         Ok(())
@@ -249,7 +247,7 @@ impl<T: Clone> SkipPool<T> {
 
     /// Get all skip certificates
     pub fn get_skip_certificates(&self, total_stake: Stake) -> Vec<(RangeInclusive<Slot>, Vec<T>)> {
-        let threshold = SUPERMAJORITY * total_stake as f64;
+        let threshold = super_majority_threshold(total_stake);
         self.segment_tree
             .scan_certificates(threshold)
             .into_iter()
@@ -266,8 +264,8 @@ impl<T: Clone> SkipPool<T> {
             .collect()
     }
 
-    pub(crate) fn update(&mut self, total_stake: Stake) {
-        let threshold = SUPERMAJORITY * total_stake as f64;
+    pub fn update(&mut self, total_stake: Stake) {
+        let threshold = super_majority_threshold(total_stake);
         self.certificate_ranges = self
             .segment_tree
             .scan_certificates(threshold)
@@ -295,6 +293,13 @@ impl<T: Clone> SkipPool<T> {
         }
 
         false
+    }
+
+    /// Is the given slot range contained in any skip certificates
+    pub fn skip_range_certified(&self, start_slot: &Slot, end_slot: &Slot) -> bool {
+        self.certificate_ranges
+            .iter()
+            .any(|range| range.contains(start_slot) && range.contains(end_slot))
     }
 }
 
@@ -577,5 +582,23 @@ mod tests {
             .unwrap();
         pool.add_vote(&validator2, 20..=30, dummy_transaction(), 30)
             .unwrap();
+    }
+
+    #[test]
+    fn test_update_and_skip_range_certify() {
+        let mut pool = SkipPool::new();
+        let validator1 = Pubkey::new_unique();
+        let validator2 = Pubkey::new_unique();
+        let total_stake = 100;
+
+        pool.add_vote(&validator1, 5..=15, dummy_transaction(), 50)
+            .unwrap();
+        pool.add_vote(&validator2, 10..=30, dummy_transaction(), 50)
+            .unwrap();
+        pool.update(total_stake);
+        assert!(!pool.skip_range_certified(&5, &10));
+        assert!(pool.skip_range_certified(&10, &15));
+        assert!(pool.skip_range_certified(&11, &12));
+        assert!(!pool.skip_range_certified(&15, &30));
     }
 }
