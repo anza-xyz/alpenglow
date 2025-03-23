@@ -13,8 +13,8 @@ use {
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
         cluster_info_vote_listener::{
-            AlpenglowVoteSender, ClusterInfoVoteListener, DuplicateConfirmedSlotsSender,
-            GossipVerifiedVoteHashSender, VerifiedVoteSender, VoteTracker,
+            ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
+            VerifiedVoteSender, VoteTracker,
         },
         fetch_stage::FetchStage,
         forwarding_stage::ForwardingStage,
@@ -42,7 +42,7 @@ use {
         bank_forks::BankForks,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
-        vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender},
+        vote_sender_types::{AlpenglowVoteSender, ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, quic::NotifyKeyUpdate, signature::Keypair},
     solana_streamer::{
