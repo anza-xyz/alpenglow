@@ -1973,6 +1973,7 @@ fn get_stable_genesis_config() -> GenesisConfigInfo {
         ClusterType::Development,
         &FeatureSet::all_enabled(),
         vec![],
+        false,
     );
     genesis_config.creation_time = Duration::ZERO.as_secs() as UnixTimestamp;
 

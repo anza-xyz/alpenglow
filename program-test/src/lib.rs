@@ -934,6 +934,7 @@ impl ProgramTest {
             ClusterType::Development,
             &feature_set,
             std::mem::take(&mut self.genesis_accounts),
+            false,
         );
 
         let target_tick_duration = Duration::from_micros(100);

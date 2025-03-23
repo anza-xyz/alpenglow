@@ -182,6 +182,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         cluster_type,
         feature_set,
         vec![],
+        is_alpenglow,
     );
 
     if is_alpenglow {
@@ -301,6 +302,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
         ClusterType::Development,
         &FeatureSet::all_enabled(),
         vec![],
+        false,
     );
 
     GenesisConfigInfo {
@@ -399,8 +401,22 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     cluster_type: ClusterType,
     feature_set: &FeatureSet,
     mut initial_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) -> GenesisConfig {
-    let validator_vote_account = if feature_set.is_active(&vote_state_v4::id()) {
+    let validator_vote_account = if is_alpenglow {
+        // Alpenglow vote accounts are modeled as vote-state v4 accounts.
+        vote_state::create_v4_account_with_authorized(
+            validator_pubkey,
+            validator_vote_account_pubkey,
+            validator_bls_pubkey.unwrap_or([0u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]),
+            validator_vote_account_pubkey,
+            0,
+            validator_vote_account_pubkey,
+            0,
+            validator_vote_account_pubkey,
+            validator_stake_lamports,
+        )
+    } else if feature_set.is_active(&vote_state_v4::id()) {
         // Vote state v4 feature active. Create a v4 account.
         vote_state::create_v4_account_with_authorized(
             validator_pubkey,
@@ -494,6 +510,7 @@ pub fn create_genesis_config_with_leader_ex(
     cluster_type: ClusterType,
     feature_set: &FeatureSet,
     initial_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) -> GenesisConfig {
     let mut genesis_config = create_genesis_config_with_leader_ex_no_features(
         mint_lamports,
@@ -509,6 +526,7 @@ pub fn create_genesis_config_with_leader_ex(
         cluster_type,
         feature_set,
         initial_accounts,
+        is_alpenglow,
     );
 
     for feature_id in feature_set.active().keys() {

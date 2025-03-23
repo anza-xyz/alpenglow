@@ -1030,6 +1030,7 @@ impl TestValidator {
             solana_cluster_type::ClusterType::Development,
             &feature_set,
             accounts.into_iter().collect(),
+            false,
         );
         genesis_config.epoch_schedule = config
             .epoch_schedule
