@@ -14,8 +14,7 @@ use {
         },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
-            VoteTracker,
+            DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
         commitment_service::{
@@ -79,7 +78,7 @@ use {
         commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::ReplayVoteSender,
+        vote_sender_types::{AlpenglowVoteReceiver, ReplayVoteSender},
     },
     solana_sdk::{
         clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
@@ -1245,7 +1244,7 @@ impl ReplayStage {
                     );
                 } else {
                     let new_finalized_certificate_slot =
-                        Self::ingest_gossip_alpenglow_votes_into_certificate_pool(
+                        Self::ingest_alpenglow_votes_into_certificate_pool(
                             &my_pubkey,
                             &alpenglow_vote_receiver,
                             &mut cert_pool,
@@ -2070,7 +2069,7 @@ impl ReplayStage {
         }
     }
 
-    fn ingest_gossip_alpenglow_votes_into_certificate_pool(
+    fn ingest_alpenglow_votes_into_certificate_pool(
         id: &Pubkey,
         alpenglow_vote_receiver: &AlpenglowVoteReceiver,
         cert_pool: &mut CertificatePool,
