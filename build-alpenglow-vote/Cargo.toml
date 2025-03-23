@@ -1,5 +1,5 @@
 [package]
-name = "build-alpenglow-vote"
+name = "solana-build-alpenglow-vote"
 description = "Build alpenglow-vote"
 version = { workspace = true }
 authors = { workspace = true }

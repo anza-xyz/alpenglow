@@ -1,5 +1,6 @@
 use {
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
+    build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH,
     log::*,
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
     solana_loader_v3_interface::state::UpgradeableLoaderState,

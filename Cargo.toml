@@ -376,6 +376,7 @@ solana-bn254 = "=2.2.1"
 solana-borsh = "=2.2.1"
 solana-bpf-loader-program = { path = "programs/bpf_loader", version = "=2.3.0" }
 solana-bucket-map = { path = "bucket_map", version = "=2.3.0" }
+solana-build-alpenglow-vote = { path = "build-alpenglow-vote" }
 solana-builtins = { path = "builtins", version = "=2.3.0" }
 solana-builtins-default-costs = { path = "builtins-default-costs", version = "=2.3.0" }
 agave-cargo-registry = { path = "cargo-registry", version = "=2.3.0" }

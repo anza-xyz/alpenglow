@@ -160,7 +160,7 @@ fn main() {
         .to_owned();
     so_dest_path.push("target");
     so_dest_path.push("tmp");
-    so_dest_path.push("alpenglow_vote.so");
+    so_dest_path.push("spl_alpenglow-vote.so");
 
     fs::copy(&so_src_path, &so_dest_path).unwrap_or_else(|err| {
         panic!(
@@ -173,6 +173,9 @@ fn main() {
         "cargo:warning=(not a warning) Successfully built alpenglow_vote! Copying {:?} -> {:?}",
         &so_src_path, &so_dest_path
     );
+
+    // Save the destination path as an environment variable that can later be invoked in Rust code
+    println!("cargo:rustc-env=ALPENGLOW_VOTE_SO_PATH={:?}", &so_dest_path);
 
     // Re-build if we detect a change in either (1) the alpenglow-vote src or (2) this build script
     println!("cargo::rerun-if-changed={:?}", src_path);
