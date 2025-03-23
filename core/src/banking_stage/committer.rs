@@ -107,10 +107,14 @@ impl Committer {
             .collect();
 
         let ((), find_and_send_votes_us) = measure_us!({
+            // We are going to send Alpenglow votes received through TPU port directly to cert pool,
+            // whether or not the transaction is committed. So we don't need to set alpenglow_vote_sender
+            // here.
             bank_utils::find_and_send_votes(
                 batch.sanitized_transactions(),
                 &commit_results,
                 Some(&self.replay_vote_sender),
+                None,
             );
             self.collect_balances_and_send_status_batch(
                 commit_results,

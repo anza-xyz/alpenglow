@@ -45,7 +45,7 @@ use {
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{AlpenglowVoteReceiver, ReplayVoteSender},
+        vote_sender_types::{AlpenglowVoteReceiver, AlpenglowVoteSender, ReplayVoteSender},
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
@@ -146,6 +146,7 @@ impl Tvu {
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slots_receiver: DuplicateConfirmedSlotsReceiver,
+        alpenglow_vote_sender: AlpenglowVoteSender,
         alpenglow_vote_receiver: AlpenglowVoteReceiver,
         tvu_config: TvuConfig,
         max_slots: &Arc<MaxSlots>,
@@ -302,6 +303,7 @@ impl Tvu {
             drop_bank_sender,
             block_metadata_notifier,
             dumped_slots_sender,
+            alpenglow_vote_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -516,6 +518,7 @@ pub mod tests {
         let (_gossip_verified_vote_hash_sender, gossip_verified_vote_hash_receiver) = unbounded();
         let (_verified_vote_sender, verified_vote_receiver) = unbounded();
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let (_, gossip_confirmed_slots_receiver) = unbounded();
         let (_, alpenglow_vote_receiver) = unbounded();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
@@ -583,6 +586,7 @@ pub mod tests {
             /*completed_data_sets_sender:*/ None,
             None,
             gossip_confirmed_slots_receiver,
+            alpenglow_vote_sender,
             alpenglow_vote_receiver,
             TvuConfig::default(),
             &Arc::new(MaxSlots::default()),

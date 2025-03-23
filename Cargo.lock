@@ -9664,6 +9664,7 @@ name = "solana-runtime-transaction"
 version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
+ "alpenglow-vote",
  "bincode",
  "criterion",
  "log",
