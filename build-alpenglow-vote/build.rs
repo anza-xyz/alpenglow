@@ -51,22 +51,16 @@ fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
     );
 
     // Find the manifest path
-    let mut manifest_path = None;
-
-    for entry in
-        glob::glob(&glob_str).unwrap_or_else(|_| panic!("Failed to read glob: {}", &glob_str))
-    {
-        if let Ok(path) = entry {
-            manifest_path = Some(path);
-        }
-    }
-
-    let manifest_path = manifest_path.unwrap_or_else(|| {
-        panic!(
-            "Couldn't find path to git repo with glob {} and revision {}",
-            &glob_str, rev
-        )
-    });
+    let manifest_path = glob::glob(&glob_str)
+        .unwrap_or_else(|_| panic!("Failed to read glob: {}", &glob_str))
+        .filter_map(Result::ok)
+        .next()
+        .unwrap_or_else(|| {
+            panic!(
+                "Couldn't find path to git repo with glob {} and revision {}",
+                &glob_str, rev
+            )
+        });
 
     build_and_fetch_shared_object_path(&manifest_path)
 }
