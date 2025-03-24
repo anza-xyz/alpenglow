@@ -182,7 +182,10 @@ fn main() {
     );
 
     // Save the destination path as an environment variable that can later be invoked in Rust code
-    println!("cargo:rustc-env=ALPENGLOW_VOTE_SO_PATH={:?}", &so_dest_path);
+    println!(
+        "cargo:rustc-env=ALPENGLOW_VOTE_SO_PATH={}",
+        so_dest_path.display()
+    );
 
     // Re-build if we detect a change in either (1) the alpenglow-vote src or (2) this build script
     println!("cargo::rerun-if-changed={:?}", src_path);
