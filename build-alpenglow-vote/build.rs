@@ -163,8 +163,11 @@ fn main() {
         .unwrap()
         .to_owned();
     so_dest_path.push("target");
-    so_dest_path.push("tmp");
+    so_dest_path.push("alpenglow-vote-so");
     so_dest_path.push("spl_alpenglow-vote.so");
+
+    fs::create_dir_all(so_dest_path.parent().unwrap())
+        .unwrap_or_else(|_| panic!("Couldn't create path: {:?}", &so_dest_path));
 
     fs::copy(&so_src_path, &so_dest_path).unwrap_or_else(|err| {
         panic!(
