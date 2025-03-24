@@ -3,9 +3,19 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn get_cargo_path() -> PathBuf {
+    let mut cargo_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .unwrap()
+        .to_owned();
+    cargo_path.push("cargo");
+
+    cargo_path
+}
+
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
     // Run cargo build-sbf
-    if !Command::new("cargo")
+    if !Command::new(get_cargo_path())
         .arg("build-sbf")
         .arg("--manifest-path")
         .arg(
