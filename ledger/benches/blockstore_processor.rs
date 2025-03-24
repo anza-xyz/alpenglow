@@ -159,6 +159,7 @@ fn bench_execute_batch(
                 &bank,
                 None,
                 None,
+                None,
                 &mut timing,
                 None,
                 &prioritization_fee_cache,

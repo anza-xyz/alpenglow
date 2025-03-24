@@ -14,8 +14,7 @@ use {
         },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
-            AlpenglowVoteReceiver, DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver,
-            VoteTracker,
+            DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
         commitment_service::{
@@ -79,7 +78,7 @@ use {
         commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::ReplayVoteSender,
+        vote_sender_types::{AlpenglowVoteReceiver, AlpenglowVoteSender, ReplayVoteSender},
     },
     solana_sdk::{
         clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
@@ -309,6 +308,7 @@ pub struct ReplaySenders {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
+    pub alpenglow_vote_sender: AlpenglowVoteSender,
 }
 
 pub struct ReplayReceivers {
@@ -606,6 +606,7 @@ impl ReplayStage {
             drop_bank_sender,
             block_metadata_notifier,
             dumped_slots_sender,
+            alpenglow_vote_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -789,6 +790,7 @@ impl ReplayStage {
                     &verify_recyclers,
                     &mut heaviest_subtree_fork_choice,
                     &replay_vote_sender,
+                    &alpenglow_vote_sender,
                     &bank_notification_sender,
                     &rpc_subscriptions,
                     &slot_status_notifier,
@@ -1245,7 +1247,7 @@ impl ReplayStage {
                     );
                 } else {
                     let new_finalized_certificate_slot =
-                        Self::ingest_gossip_alpenglow_votes_into_certificate_pool(
+                        Self::ingest_alpenglow_votes_into_certificate_pool(
                             &my_pubkey,
                             &alpenglow_vote_receiver,
                             &mut cert_pool,
@@ -2070,7 +2072,7 @@ impl ReplayStage {
         }
     }
 
-    fn ingest_gossip_alpenglow_votes_into_certificate_pool(
+    fn ingest_alpenglow_votes_into_certificate_pool(
         id: &Pubkey,
         alpenglow_vote_receiver: &AlpenglowVoteReceiver,
         cert_pool: &mut CertificatePool,
@@ -2697,6 +2699,7 @@ impl ReplayStage {
         transaction_status_sender: Option<&TransactionStatusSender>,
         entry_notification_sender: Option<&EntryNotifierSender>,
         replay_vote_sender: &ReplayVoteSender,
+        alpenglow_vote_sender: &AlpenglowVoteSender,
         verify_recyclers: &VerifyRecyclers,
         log_messages_bytes_limit: Option<usize>,
         prioritization_fee_cache: &PrioritizationFeeCache,
@@ -2717,6 +2720,7 @@ impl ReplayStage {
             transaction_status_sender,
             entry_notification_sender,
             Some(replay_vote_sender),
+            Some(alpenglow_vote_sender),
             verify_recyclers,
             false,
             log_messages_bytes_limit,
@@ -3675,6 +3679,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
+        alpenglow_vote_sender: &AlpenglowVoteSender,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         active_bank_slots: &[Slot],
@@ -3758,6 +3763,7 @@ impl ReplayStage {
                             transaction_status_sender,
                             entry_notification_sender,
                             &replay_vote_sender.clone(),
+                            &alpenglow_vote_sender.clone(),
                             &verify_recyclers.clone(),
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
@@ -3790,6 +3796,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
+        alpenglow_vote_sender: &AlpenglowVoteSender,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         bank_slot: Slot,
@@ -3847,6 +3854,7 @@ impl ReplayStage {
                     transaction_status_sender,
                     entry_notification_sender,
                     &replay_vote_sender.clone(),
+                    &alpenglow_vote_sender.clone(),
                     &verify_recyclers.clone(),
                     log_messages_bytes_limit,
                     prioritization_fee_cache,
@@ -4314,6 +4322,7 @@ impl ReplayStage {
         verify_recyclers: &VerifyRecyclers,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         replay_vote_sender: &ReplayVoteSender,
+        alpenglow_vote_sender: &AlpenglowVoteSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         slot_status_notifier: &Option<SlotStatusNotifier>,
@@ -4363,6 +4372,7 @@ impl ReplayStage {
                     entry_notification_sender,
                     verify_recyclers,
                     replay_vote_sender,
+                    alpenglow_vote_sender,
                     replay_timing,
                     log_messages_bytes_limit,
                     &active_bank_slots,
@@ -4383,6 +4393,7 @@ impl ReplayStage {
                         entry_notification_sender,
                         verify_recyclers,
                         replay_vote_sender,
+                        alpenglow_vote_sender,
                         replay_timing,
                         log_messages_bytes_limit,
                         *bank_slot,
@@ -6077,6 +6088,7 @@ pub(crate) mod tests {
     {
         let ledger_path = get_tmp_ledger_path!();
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
+        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let res = {
             let ReplayBlockstoreComponents {
                 blockstore,
@@ -6121,6 +6133,7 @@ pub(crate) mod tests {
                 None,
                 None,
                 &replay_vote_sender,
+                &alpenglow_vote_sender,
                 &VerifyRecyclers::default(),
                 None,
                 &PrioritizationFeeCache::new(0u64),
@@ -10287,6 +10300,7 @@ pub(crate) mod tests {
             &ProcessOptions::default(),
             &recyclers,
             &mut ConfirmationProgress::new(bank0.last_blockhash()),
+            None,
             None,
             None,
             None,
