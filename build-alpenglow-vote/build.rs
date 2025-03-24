@@ -4,13 +4,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn get_cargo_path() -> PathBuf {
-    let mut cargo_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+    PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .parent()
         .unwrap()
-        .to_owned();
-    cargo_path.push("cargo");
-
-    cargo_path
+        .to_owned()
+        .join("cargo")
 }
 
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
@@ -40,19 +38,19 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
 
     // Return the path to the shared object
     let src_dir = manifest_path.parent().unwrap().to_owned();
-    let mut so_path = src_dir.clone();
-    so_path.push("target");
-    so_path.push("deploy");
-    so_path.push("alpenglow_vote.so");
+    let so_path = src_dir
+        .join("target")
+        .join("deploy")
+        .join("alpenglow_vote.so");
 
     (src_dir, so_path)
 }
 
 fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
     // Form the glob that searches for the git repo's manifest path under ~/.cargo/git/checkouts
-    let mut git_checkouts_path = PathBuf::from(env::var("CARGO_HOME").unwrap());
-    git_checkouts_path.push("git");
-    git_checkouts_path.push("checkouts");
+    let git_checkouts_path = PathBuf::from(env::var("CARGO_HOME").unwrap())
+        .join("git")
+        .join("checkouts");
 
     let glob_str = format!(
         "{}/alpenglow-vote-*/{}/Cargo.toml",
@@ -94,12 +92,11 @@ fn generate_local_checkout(path: &str) -> (PathBuf, PathBuf) {
     // If this is a relative path, then make it absolute by determining the relative path with
     // respect to the project directory, and not the current CARGO_MANIFEST_DIR.
     let path = if path.is_relative() {
-        let mut cwd = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
             .parent()
             .unwrap()
-            .to_owned();
-        cwd.push(path);
-        cwd
+            .to_owned()
+            .join(path)
     } else {
         path
     };
@@ -107,8 +104,7 @@ fn generate_local_checkout(path: &str) -> (PathBuf, PathBuf) {
     // Turn the path into an absolute path
     let path = std::path::absolute(path).unwrap();
 
-    let mut manifest_path = path.parent().unwrap().to_owned();
-    manifest_path.push("Cargo.toml");
+    let manifest_path = path.parent().unwrap().to_owned().join("Cargo.toml");
 
     build_and_fetch_shared_object_path(&manifest_path)
 }
@@ -116,9 +112,9 @@ fn generate_local_checkout(path: &str) -> (PathBuf, PathBuf) {
 fn main() {
     // Get the project's Cargo.toml
     let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let mut project_cargo_toml_path = PathBuf::from(&cargo_manifest_dir);
-    project_cargo_toml_path.push("..");
-    project_cargo_toml_path.push("Cargo.toml");
+    let project_cargo_toml_path = PathBuf::from(&cargo_manifest_dir)
+        .join("..")
+        .join("Cargo.toml");
 
     // Parse the Cargo file.
     let project_cargo_toml_contents =
@@ -158,13 +154,13 @@ fn main() {
         };
 
     // Copy the .so to project_dir/target/tmp/
-    let mut so_dest_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+    let so_dest_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .parent()
         .unwrap()
-        .to_owned();
-    so_dest_path.push("target");
-    so_dest_path.push("alpenglow-vote-so");
-    so_dest_path.push("spl_alpenglow-vote.so");
+        .to_owned()
+        .join("target")
+        .join("alpenglow-vote-so")
+        .join("spl_alpenglow-vote.so");
 
     fs::create_dir_all(so_dest_path.parent().unwrap())
         .unwrap_or_else(|_| panic!("Couldn't create path: {:?}", &so_dest_path));
