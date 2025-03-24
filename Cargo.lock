@@ -7844,6 +7844,7 @@ dependencies = [
 name = "solana-genesis"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "base64 0.22.1",
  "bincode",
  "clap 2.33.3",
