@@ -138,16 +138,20 @@ fn main() {
     // Are we trying to build alpenglow-vote from Github or a local checkout?
     let (src_path, so_src_path) =
         if alpenglow_vote.contains_key("git") && alpenglow_vote.contains_key("rev") {
-            println!(
-                "cargo:warning=(not a warning) Building alpenglow_vote.so from github rev: {:?}",
+            build_print::custom_println!(
+                "Compiling",
+                green,
+                "spl_alpenglow-vote.so: building from github rev: {:?}",
                 &alpenglow_vote
             );
             generate_github_rev(alpenglow_vote["rev"].as_str().unwrap())
         } else if alpenglow_vote.contains_key("path") {
-            println!(
-            "cargo:warning=(not a warning) Building alpenglow_vote.so from local checkout: {:?}",
-            &alpenglow_vote
-        );
+            build_print::custom_println!(
+                "Compiling",
+                green,
+                "spl_alpenglow-vote.so: building from local checkout: {:?}",
+                &alpenglow_vote
+            );
             generate_local_checkout(alpenglow_vote["path"].as_str().unwrap())
         } else {
             panic!("{}", err);
@@ -172,9 +176,12 @@ fn main() {
         )
     });
 
-    println!(
-        "cargo:warning=(not a warning) Successfully built alpenglow_vote! Copying {:?} -> {:?}",
-        &so_src_path, &so_dest_path
+    build_print::custom_println!(
+        "Compiling",
+        green,
+        "spl_alpenglow-vote.so: successfully built alpenglow_vote! Copying {} -> {}",
+        so_src_path.display(),
+        so_dest_path.display(),
     );
 
     // Save the destination path as an environment variable that can later be invoked in Rust code

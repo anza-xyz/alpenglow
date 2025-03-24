@@ -1266,6 +1266,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-print"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a2128d00b7061b82b72844a351e80acd29e05afc60e9261e2ac90dca9ecc2ac"
+
+[[package]]
 name = "bumpalo"
 version = "3.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6741,6 +6747,7 @@ dependencies = [
 name = "solana-build-alpenglow-vote"
 version = "2.3.0"
 dependencies = [
+ "build-print",
  "glob",
  "serde",
  "toml 0.8.20",
