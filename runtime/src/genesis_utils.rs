@@ -303,7 +303,7 @@ pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpengl
         solana_program::bpf_loader_upgradeable::get_program_data_address(&address);
 
     // Generate the data for the program data account
-    let upgrade_authority_address = Pubkey::default();
+    let upgrade_authority_address = system_program::id();
     let mut program_data = bincode::serialize(&UpgradeableLoaderState::ProgramData {
         slot: 0,
         upgrade_authority_address: Some(upgrade_authority_address),
