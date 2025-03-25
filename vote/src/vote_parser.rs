@@ -336,12 +336,12 @@ mod test {
         authorized_voter_keypair: &Keypair,
     ) {
         let vote_tx = new_alpenglow_vote_transaction(
-            vote.clone(),
+            vote,
             node_keypair,
             vote_keypair,
             authorized_voter_keypair,
         );
-        let versioned_tx = VersionedTransaction::try_from(vote_tx).unwrap();
+        let versioned_tx = VersionedTransaction::from(vote_tx);
         let sanitized_tx = SanitizedVersionedTransaction::try_from(versioned_tx.clone()).unwrap();
         let (parsed_vote, key, parsed_versioned_tx) =
             parse_alpenglow_vote_transaction_from_sanitized(&sanitized_tx).unwrap();
@@ -393,7 +393,7 @@ mod test {
         );
         vote_ix.program_id = solana_sdk_ids::vote::id();
         let vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&node_keypair.pubkey()));
-        let versioned_tx = VersionedTransaction::try_from(vote_tx).unwrap();
+        let versioned_tx = VersionedTransaction::from(vote_tx);
         let sanitized_tx = SanitizedVersionedTransaction::try_from(versioned_tx.clone()).unwrap();
         assert!(parse_alpenglow_vote_transaction_from_sanitized(&sanitized_tx).is_none());
     }
@@ -405,7 +405,7 @@ mod test {
         authorized_voter_keypair: &Keypair,
     ) {
         let vote_tx = new_alpenglow_vote_transaction(
-            vote.clone(),
+            vote,
             node_keypair,
             vote_keypair,
             authorized_voter_keypair,
