@@ -2,6 +2,89 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
+
+fn cargo_build_sbf_exists() -> bool {
+    let exists = Command::new("cargo")
+        .arg("build-sbf")
+        .arg("--help")
+        .status()
+        .expect("Error 1")
+        .success();
+
+    build_print::custom_println!(
+        "[build-alpenglow-vote]",
+        green,
+        "cargo build-sbf works: {}",
+        exists
+    );
+
+    exists
+}
+
+fn uninstall_solana_cli() {
+    build_print::custom_println!(
+        "[build-alpenglow-vote]",
+        yellow,
+        "Uninstalling (potentially) existing Solana CLI components, since cargo build-sbf doesn't work.",
+    );
+
+    // rm -rf potentially existing Solana CLI
+    let home_dir = env::var("HOME").unwrap();
+
+    for glob in [
+        ".cache/solana",
+        ".local/share/solana",
+        ".cargo/bin/solana*",
+        ".cargo/bin/cargo-build-sbf",
+        ".cargo/bin/solana-install",
+    ] {
+        for path in glob::glob(&format!("{home_dir}/{glob}")).unwrap().flatten() {
+            fs::remove_file(path).unwrap_or_else(|err| panic!("Couldn't remove file: {err}"));
+        }
+    }
+}
+
+fn install_solana_cli() {
+    build_print::custom_println!(
+        "[build-alpenglow-vote]",
+        green,
+        "Installing Solana CLI components.",
+    );
+
+    // curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+    let install_cli_script = Command::new("curl")
+        .arg("--proto")
+        .arg("=https")
+        .arg("--tlsv1.2")
+        .arg("-sSfL")
+        .arg("https://release.anza.xyz/stable/install")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut bash = Command::new("bash")
+        .stdin(Stdio::from(install_cli_script.stdout.unwrap()))
+        .spawn()
+        .unwrap();
+
+    if !bash.wait().expect("Couldn't install Solana CLI").success() {
+        panic!("Solana CLI install not successful.");
+    }
+}
+
+fn maybe_install_cargo_sbf() {
+    if cargo_build_sbf_exists() {
+        return;
+    }
+
+    uninstall_solana_cli();
+    install_solana_cli();
+
+    if !cargo_build_sbf_exists() {
+        panic!("Couldn't get cargo build-sbf to work after installing Solana CLI!");
+    }
+}
 
 fn get_cargo_path() -> PathBuf {
     PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
@@ -13,6 +96,8 @@ fn get_cargo_path() -> PathBuf {
 
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
     // Run cargo build-sbf
+    maybe_install_cargo_sbf();
+
     if !Command::new(get_cargo_path())
         .arg("build-sbf")
         .arg("--manifest-path")
@@ -177,7 +262,7 @@ fn main() {
     });
 
     build_print::custom_println!(
-        "Compiling",
+        "[build-alpenglow-vote]",
         green,
         "spl_alpenglow-vote.so: successfully built alpenglow_vote! Copying {} -> {}",
         so_src_path.display(),
