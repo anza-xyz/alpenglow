@@ -166,7 +166,6 @@ pub fn parse_alpenglow_vote_transaction_from_sanitized(
     ))
 }
 
-// TODO: add tests
 pub fn parse_alpenglow_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
     // Check first instruction for a vote
     let message = tx.message();
@@ -312,5 +311,156 @@ mod test {
     fn test_parse_vote_transaction() {
         run_test_parse_vote_transaction(None);
         run_test_parse_vote_transaction(Some(hash(&[42u8])));
+    }
+
+    fn new_alpenglow_vote_transaction(
+        vote: AlpenglowVote,
+        node_keypair: &Keypair,
+        vote_keypair: &Keypair,
+        authorized_voter_keypair: &Keypair,
+    ) -> Transaction {
+        let vote_ix =
+            vote.to_vote_instruction(vote_keypair.pubkey(), authorized_voter_keypair.pubkey());
+
+        let mut vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&node_keypair.pubkey()));
+
+        vote_tx.partial_sign(&[node_keypair], Hash::default());
+        vote_tx.partial_sign(&[authorized_voter_keypair], Hash::default());
+        vote_tx
+    }
+
+    fn run_test_parse_alpenglow_vote_transaction_from_sanitized(
+        vote: AlpenglowVote,
+        node_keypair: &Keypair,
+        vote_keypair: &Keypair,
+        authorized_voter_keypair: &Keypair,
+    ) {
+        let vote_tx = new_alpenglow_vote_transaction(
+            vote.clone(),
+            node_keypair,
+            vote_keypair,
+            authorized_voter_keypair,
+        );
+        let versioned_tx = VersionedTransaction::try_from(vote_tx).unwrap();
+        let sanitized_tx = SanitizedVersionedTransaction::try_from(versioned_tx.clone()).unwrap();
+        let (parsed_vote, key, parsed_versioned_tx) =
+            parse_alpenglow_vote_transaction_from_sanitized(&sanitized_tx).unwrap();
+        assert_eq!(parsed_vote, vote);
+        assert_eq!(key, vote_keypair.pubkey());
+        assert_eq!(versioned_tx, parsed_versioned_tx);
+    }
+
+    #[test]
+    fn test_parse_alpenglow_vote_transaction_from_sanitized() {
+        let node_keypair = Keypair::new();
+        let vote_keypair = Keypair::new();
+        let authorized_voter_keypair = Keypair::new();
+        let bank_hash = Hash::new_unique();
+        let block_id = Hash::new_unique();
+        run_test_parse_alpenglow_vote_transaction_from_sanitized(
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, None),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction_from_sanitized(
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, Some(1742941768)),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction_from_sanitized(
+            AlpenglowVote::new_finalization_vote(43, block_id, bank_hash),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction_from_sanitized(
+            AlpenglowVote::new_skip_vote(35, 39),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        // Test bad program_id fails
+        let mut vote_ix = vote_instruction::vote(
+            &vote_keypair.pubkey(),
+            &authorized_voter_keypair.pubkey(),
+            Vote::new(vec![1, 2], Hash::default()),
+        );
+        vote_ix.program_id = solana_sdk_ids::vote::id();
+        let vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&node_keypair.pubkey()));
+        let versioned_tx = VersionedTransaction::try_from(vote_tx).unwrap();
+        let sanitized_tx = SanitizedVersionedTransaction::try_from(versioned_tx.clone()).unwrap();
+        assert!(parse_alpenglow_vote_transaction_from_sanitized(&sanitized_tx).is_none());
+    }
+
+    fn run_test_parse_alpenglow_vote_transaction(
+        vote: AlpenglowVote,
+        node_keypair: &Keypair,
+        vote_keypair: &Keypair,
+        authorized_voter_keypair: &Keypair,
+    ) {
+        let vote_tx = new_alpenglow_vote_transaction(
+            vote.clone(),
+            node_keypair,
+            vote_keypair,
+            authorized_voter_keypair,
+        );
+        let (key, parsed_vote, hash, signature) =
+            parse_alpenglow_vote_transaction(&vote_tx).unwrap();
+        assert_eq!(parsed_vote, ParsedVoteTransaction::Alpenglow(vote));
+        assert_eq!(key, vote_keypair.pubkey());
+        assert_eq!(hash, None);
+        assert_eq!(signature, vote_tx.signatures[0]);
+    }
+
+    #[test]
+    fn test_parse_alpenglow_vote_transaction() {
+        let node_keypair = Keypair::new();
+        let vote_keypair = Keypair::new();
+        let authorized_voter_keypair = Keypair::new();
+        let bank_hash = Hash::new_unique();
+        let block_id = Hash::new_unique();
+        run_test_parse_alpenglow_vote_transaction(
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, None),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction(
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, Some(1742941768)),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction(
+            AlpenglowVote::new_finalization_vote(43, block_id, bank_hash),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        run_test_parse_alpenglow_vote_transaction(
+            AlpenglowVote::new_skip_vote(35, 39),
+            &node_keypair,
+            &vote_keypair,
+            &authorized_voter_keypair,
+        );
+
+        // Test bad program id fails
+        let mut vote_ix = vote_instruction::vote(
+            &vote_keypair.pubkey(),
+            &authorized_voter_keypair.pubkey(),
+            Vote::new(vec![1, 2], Hash::default()),
+        );
+        vote_ix.program_id = solana_sdk_ids::vote::id();
+        let vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&node_keypair.pubkey()));
+        assert!(parse_alpenglow_vote_transaction(&vote_tx).is_none());
     }
 }
