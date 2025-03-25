@@ -71,9 +71,7 @@ pub fn find_and_send_votes(
                             let _ = alpenglow_vote_sender.send((
                                 vote,
                                 pubkey,
-                                tx.to_versioned_transaction()
-                                    .into_legacy_transaction()
-                                    .unwrap(),
+                                tx.to_versioned_transaction(),
                             ));
                         }
                     }

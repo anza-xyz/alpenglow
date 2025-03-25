@@ -7,7 +7,10 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     solana_svm_transaction::svm_transaction::SVMTransaction,
-    solana_transaction::Transaction,
+    solana_transaction::{
+        versioned::{sanitized::SanitizedVersionedTransaction, VersionedTransaction},
+        Transaction,
+    },
     solana_vote_interface::instruction::VoteInstruction,
 };
 
@@ -136,6 +139,31 @@ pub fn is_alpenglow_vote_transaction(tx: &Transaction) -> bool {
         return false;
     };
     program_id == &alpenglow_vote::id()
+}
+
+pub fn parse_alpenglow_vote_transaction_from_sanitized(
+    tx: &SanitizedVersionedTransaction,
+) -> Option<(AlpenglowVote, Pubkey, VersionedTransaction)> {
+    // Check first instruction for a vote
+    let message = tx.get_message();
+    let first_instruction = message.instructions().first()?;
+    for (program_id, _) in message.program_instructions_iter() {
+        if program_id != &alpenglow_vote::id() {
+            return None;
+        }
+    }
+    let first_account = usize::from(*first_instruction.accounts.first()?);
+    let key = message.message.static_account_keys().get(first_account)?;
+    let alpenglow_vote = parse_alpenglow_vote_instruction_data(&first_instruction.data)?;
+    let (signatures, message) = tx.clone().destruct();
+    Some((
+        alpenglow_vote,
+        *key,
+        VersionedTransaction {
+            signatures,
+            message: message.message,
+        },
+    ))
 }
 
 // TODO: add tests

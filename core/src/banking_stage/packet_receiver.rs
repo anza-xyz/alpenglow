@@ -10,8 +10,8 @@ use {
     crossbeam_channel::RecvTimeoutError,
     solana_measure::{measure::Measure, measure_us},
     solana_runtime::vote_sender_types::AlpenglowVoteSender,
-    solana_sdk::{saturating_add_assign, timing::timestamp, transaction::VersionedTransaction},
-    solana_vote::vote_parser::parse_alpenglow_vote_transaction,
+    solana_sdk::{saturating_add_assign, timing::timestamp},
+    solana_vote::vote_parser::parse_alpenglow_vote_transaction_from_sanitized,
     std::{sync::atomic::Ordering, time::Duration},
 };
 
@@ -79,21 +79,10 @@ impl PacketReceiver {
         alpenglow_vote_sender: &AlpenglowVoteSender,
     ) {
         for packet in deserialized_packets.iter() {
-            if let Ok(transaction) = packet
-                .original_packet()
-                .deserialize_slice::<VersionedTransaction, _>(..)
+            if let Some(result) =
+                parse_alpenglow_vote_transaction_from_sanitized(packet.transaction())
             {
-                if let Some(transaction) = transaction.into_legacy_transaction() {
-                    if let Some((
-                        pubkey,
-                        solana_vote::vote_parser::ParsedVoteTransaction::Alpenglow(vote),
-                        _,
-                        _,
-                    )) = parse_alpenglow_vote_transaction(&transaction)
-                    {
-                        let _ = alpenglow_vote_sender.send((vote, pubkey, transaction));
-                    }
-                }
+                let _ = alpenglow_vote_sender.send(result);
             }
         }
     }
