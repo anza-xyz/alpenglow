@@ -9,7 +9,9 @@ use {
     agave_banking_stage_ingress_types::BankingPacketReceiver,
     crossbeam_channel::RecvTimeoutError,
     solana_measure::{measure::Measure, measure_us},
-    solana_sdk::{saturating_add_assign, timing::timestamp},
+    solana_runtime::vote_sender_types::AlpenglowVoteSender,
+    solana_sdk::{saturating_add_assign, timing::timestamp, transaction::VersionedTransaction},
+    solana_vote::vote_parser::parse_alpenglow_vote_transaction,
     std::{sync::atomic::Ordering, time::Duration},
 };
 
@@ -32,6 +34,7 @@ impl PacketReceiver {
         vote_storage: &mut VoteStorage,
         banking_stage_stats: &mut BankingStageStats,
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+        alpenglow_vote_sender: Option<&AlpenglowVoteSender>,
     ) -> Result<(), RecvTimeoutError> {
         let (result, recv_time_us) = measure_us!({
             let recv_timeout = Self::get_receive_timeout(vote_storage);
@@ -44,6 +47,9 @@ impl PacketReceiver {
                 })
                 // Consumes results if Ok, otherwise we keep the Err
                 .map(|receive_packet_results| {
+                    if let Some(sender) = alpenglow_vote_sender {
+                        self.forward_alpenglow_votes(&receive_packet_results, sender);
+                    }
                     self.buffer_packets(
                         receive_packet_results,
                         vote_storage,
@@ -62,6 +68,34 @@ impl PacketReceiver {
         slot_metrics_tracker.increment_receive_and_buffer_packets_us(recv_time_us);
 
         result
+    }
+
+    fn forward_alpenglow_votes(
+        &self,
+        ReceivePacketResults {
+            deserialized_packets,
+            packet_stats: _,
+        }: &ReceivePacketResults,
+        alpenglow_vote_sender: &AlpenglowVoteSender,
+    ) {
+        for packet in deserialized_packets.iter() {
+            if let Ok(transaction) = packet
+                .original_packet()
+                .deserialize_slice::<VersionedTransaction, _>(..)
+            {
+                if let Some(transaction) = transaction.into_legacy_transaction() {
+                    if let Some((
+                        pubkey,
+                        solana_vote::vote_parser::ParsedVoteTransaction::Alpenglow(vote),
+                        _,
+                        _,
+                    )) = parse_alpenglow_vote_transaction(&transaction)
+                    {
+                        let _ = alpenglow_vote_sender.send((vote, pubkey, transaction));
+                    }
+                }
+            }
+        }
     }
 
     fn get_receive_timeout(vote_storage: &VoteStorage) -> Duration {
