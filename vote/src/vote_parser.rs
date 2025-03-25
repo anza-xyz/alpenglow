@@ -345,9 +345,9 @@ mod test {
         let sanitized_tx = SanitizedVersionedTransaction::try_from(versioned_tx.clone()).unwrap();
         let (parsed_vote, key, parsed_versioned_tx) =
             parse_alpenglow_vote_transaction_from_sanitized(&sanitized_tx).unwrap();
-        assert_eq!(parsed_vote, vote);
-        assert_eq!(key, vote_keypair.pubkey());
-        assert_eq!(versioned_tx, parsed_versioned_tx);
+        assert_eq!(vote, parsed_vote);
+        assert_eq!(vote_keypair.pubkey(), key);
+        assert_eq!(parsed_versioned_tx, versioned_tx);
     }
 
     #[test]
@@ -412,10 +412,10 @@ mod test {
         );
         let (key, parsed_vote, hash, signature) =
             parse_alpenglow_vote_transaction(&vote_tx).unwrap();
-        assert_eq!(parsed_vote, ParsedVoteTransaction::Alpenglow(vote));
-        assert_eq!(key, vote_keypair.pubkey());
+        assert_eq!(ParsedVoteTransaction::Alpenglow(vote), parsed_vote);
+        assert_eq!(vote_keypair.pubkey(), key);
         assert_eq!(hash, None);
-        assert_eq!(signature, vote_tx.signatures[0]);
+        assert_eq!(vote_tx.signatures[0], signature);
     }
 
     #[test]
