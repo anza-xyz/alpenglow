@@ -48,7 +48,7 @@ impl PacketReceiver {
                 // Consumes results if Ok, otherwise we keep the Err
                 .map(|receive_packet_results| {
                     if let Some(sender) = alpenglow_vote_sender {
-                        self.forward_alpenglow_votes(&receive_packet_results, sender);
+                        self.send_alpenglow_votes_to_cert_pool(&receive_packet_results, sender);
                     }
                     self.buffer_packets(
                         receive_packet_results,
@@ -70,7 +70,7 @@ impl PacketReceiver {
         result
     }
 
-    fn forward_alpenglow_votes(
+    fn send_alpenglow_votes_to_cert_pool(
         &self,
         ReceivePacketResults {
             deserialized_packets,
