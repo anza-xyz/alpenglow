@@ -1,142 +1,57 @@
-use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
+use std::{env, fs};
 
-fn cargo_build_sbf_exists() -> bool {
-    let exists = Command::new("cargo")
-        .arg("build-sbf")
-        .arg("--help")
-        .status()
-        .expect("Error 1")
-        .success();
+fn cargo_build_sbf() -> Command {
+    let mut cargo_build_sbf = Command::new("cargo-build-sbf");
 
-    build_print::custom_println!(
-        "[build-alpenglow-vote]",
-        green,
-        "cargo build-sbf works: {}",
-        exists
-    );
+    if cargo_build_sbf.arg("--help").output().is_err() {
+        build_print::custom_println!(
+            "[build-alpenglow-vote]",
+            green,
+            "installing cargo-build-sbf"
+        );
 
-    exists
-}
+        let install_command_output = Command::new("sh")
+            .arg("-c")
+            .arg("curl -sSfL https://release.anza.xyz/edge/install | sh -s -- --data-dir . --no-modify-path v2.1.16")
+            .output()
+            .expect("failed to execute install command");
 
-fn uninstall_solana_cli() {
-    build_print::custom_println!(
-        "[build-alpenglow-vote]",
-        yellow,
-        "Uninstalling (potentially) existing Solana CLI components, since cargo build-sbf doesn't work.",
-    );
-
-    // rm -rf potentially existing Solana CLI
-    let home_dir = env::var("HOME").unwrap();
-
-    for glob in [
-        ".cache/solana",
-        ".local/share/solana",
-        ".cargo/bin/solana*",
-        ".cargo/bin/cargo-build-sbf",
-        ".cargo/bin/solana-install",
-    ] {
-        for path in glob::glob(&format!("{home_dir}/{glob}")).unwrap().flatten() {
-            let _ = fs::remove_file(path);
+        if !install_command_output.stderr.is_empty() {
+            build_print::custom_println!(
+                "[build-alpenglow-vote]",
+                green,
+                "{}",
+                String::from_utf8_lossy(&install_command_output.stderr)
+            );
         }
-    }
-}
 
-fn install_solana_cli() {
-    build_print::custom_println!(
-        "[build-alpenglow-vote]",
-        green,
-        "Installing Solana CLI components.",
-    );
-
-    // curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
-    let mut install_cli_script = Command::new("curl")
-        .arg("--proto")
-        .arg("=https")
-        .arg("--tlsv1.2")
-        .arg("-sSfL")
-        .arg("https://release.anza.xyz/stable/install")
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    install_cli_script
-        .wait()
-        .expect("Couldn't fetch Solana CLI install script.");
-
-    let mut bash = Command::new("bash")
-        .stdin(Stdio::from(install_cli_script.stdout.unwrap()))
-        .spawn()
-        .unwrap();
-
-    if !bash.wait().expect("Couldn't install Solana CLI").success() {
-        panic!("Solana CLI install not successful.");
-    }
-}
-
-fn maybe_install_cargo_sbf() {
-    if cargo_build_sbf_exists() {
-        return;
+        cargo_build_sbf = std::process::Command::new("./active_release/bin/cargo-build-sbf");
     }
 
-    uninstall_solana_cli();
-    install_solana_cli();
-
-    if !cargo_build_sbf_exists() {
-        panic!("Couldn't get cargo build-sbf to work after installing Solana CLI!");
-    }
+    cargo_build_sbf
 }
 
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
-    let new_path = [
-        PathBuf::from("/var/lib/buildkite-agent/"),
-        PathBuf::from(env::var("HOME").unwrap()),
-    ]
-    .into_iter()
-    .map(|base| {
-        base.join(".local/share/solana/install/active_release/bin")
-            .to_string_lossy()
-            .to_string()
-    })
-    .collect::<Vec<_>>()
-    .join(":");
-
-    let new_path = format!("{}:{}", new_path, env::var("PATH").unwrap());
-
-    build_print::println!("NEW PATH :: {}", &new_path);
-    build_print::println!("HOME :: {}", env::var("HOME").unwrap());
-
-    // Run cargo build-sbf
-    maybe_install_cargo_sbf();
-
-    if !Command::new("cargo-build-sbf")
-        .env("PATH", new_path)
-        // .arg("build-sbf")
-        .arg("--manifest-path")
-        .arg(
-            manifest_path.to_str().unwrap_or_else(|| {
+    let result =
+        cargo_build_sbf()
+            .arg("--manifest-path")
+            .arg(manifest_path.to_str().unwrap_or_else(|| {
                 panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
-            }),
-        )
-        .status()
-        .unwrap_or_else(|err| {
-            panic!(
-                "Couldn't build alpenglow-vote with manifest path: {:?}. Error:\n{}",
-                &manifest_path, err
-            )
-        })
-        .success()
-    {
-        panic!(
-            "cargo build-sbf failed for manifest path: {:?}",
-            &manifest_path
+            }))
+            .output()
+            .expect("Couldn't run cargo-build-sbf");
+
+    if !result.stderr.is_empty() {
+        build_print::custom_println!(
+            "[build-alpenglow-vote]",
+            green,
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
         );
     }
 
-    // Return the path to the shared object
     let src_dir = manifest_path.parent().unwrap().to_owned();
     let so_path = src_dir
         .join("target")
