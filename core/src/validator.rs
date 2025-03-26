@@ -1470,19 +1470,27 @@ impl Validator {
         } else {
             None
         };
-        let tower = match process_blockstore.process_to_create_tower() {
-            Ok(tower) => {
-                info!("Tower state: {:?}", tower);
-                tower
-            }
-            Err(e) => {
-                warn!(
-                    "Unable to retrieve tower: {:?} creating default tower....",
-                    e
-                );
-                Tower::default()
+        let tower = if genesis_config
+            .accounts
+            .contains_key(&solana_feature_set::secp256k1_program_enabled::id())
+        {
+            Tower::default()
+        } else {
+            match process_blockstore.process_to_create_tower() {
+                Ok(tower) => {
+                    info!("Tower state: {:?}", tower);
+                    tower
+                }
+                Err(e) => {
+                    warn!(
+                        "Unable to retrieve tower: {:?} creating default tower....",
+                        e
+                    );
+                    Tower::default()
+                }
             }
         };
+
         let last_vote = tower.last_vote();
 
         let outstanding_repair_requests =
