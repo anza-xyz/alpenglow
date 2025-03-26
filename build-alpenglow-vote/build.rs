@@ -40,7 +40,7 @@ fn uninstall_solana_cli() {
         ".cargo/bin/solana-install",
     ] {
         for path in glob::glob(&format!("{home_dir}/{glob}")).unwrap().flatten() {
-            fs::remove_file(path).unwrap_or_else(|err| panic!("Couldn't remove file: {err}"));
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -53,7 +53,7 @@ fn install_solana_cli() {
     );
 
     // curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
-    let install_cli_script = Command::new("curl")
+    let mut install_cli_script = Command::new("curl")
         .arg("--proto")
         .arg("=https")
         .arg("--tlsv1.2")
@@ -62,6 +62,10 @@ fn install_solana_cli() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+
+    install_cli_script
+        .wait()
+        .expect("Couldn't fetch Solana CLI install script.");
 
     let mut bash = Command::new("bash")
         .stdin(Stdio::from(install_cli_script.stdout.unwrap()))
