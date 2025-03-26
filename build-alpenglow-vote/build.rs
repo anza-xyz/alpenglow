@@ -139,6 +139,9 @@ fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
             )
         });
 
+    build_print::println!("manifest_path: {}", manifest_path.display());
+    build_print::println!("manifest_path exists: {}", manifest_path.exists());
+
     build_and_fetch_shared_object_path(&manifest_path)
 }
 
