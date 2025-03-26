@@ -26,26 +26,31 @@ fn cargo_build_sbf2(manifest_path: &PathBuf) {
         cargo_build_sbf = Command::new("./active_release/bin/cargo-build-sbf");
     }
 
-    let output = cargo_build_sbf
-        .arg("--version")
-        .output()
-        .expect("failed to run cargo-build-sbf");
+    // let output = cargo_build_sbf
+    //     .arg("--version")
+    //     .output()
+    //     .expect("failed to run cargo-build-sbf");
 
-    if output.status.success() {
-        let version = String::from_utf8_lossy(&output.stdout);
-        println!("cargo:warning=cargo-build-sbf version: {}", version);
-    } else {
-        eprintln!("cargo:warning=failed to get cargo-build-sbf version");
-    }
+    // if output.status.success() {
+    //     let version = String::from_utf8_lossy(&output.stdout);
+    //     println!("cargo:warning=cargo-build-sbf version: {}", version);
+    // } else {
+    //     eprintln!("cargo:warning=failed to get cargo-build-sbf version");
+    // }
 
-    let output =
+    let cmd =
         cargo_build_sbf
             .arg("--manifest-path")
             .arg(manifest_path.to_str().unwrap_or_else(|| {
                 panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
-            }))
-            .output()
-            .expect("failed to run cargo-build-sbf");
+            }));
+
+    println!(
+        "cargo:warning=cargo build command that's being run: {:?}",
+        cmd
+    );
+
+    let output = cmd.output().expect("failed to run cargo-build-sbf");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("cargo:warning=cargo-build-sbf output: stdout :: {}", stdout);
