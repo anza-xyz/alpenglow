@@ -90,22 +90,24 @@ fn maybe_install_cargo_sbf() {
     }
 }
 
-fn get_cargo_path() -> PathBuf {
-    PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
-        .parent()
-        .unwrap()
-        .to_owned()
-        .join("cargo")
-}
-
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
     // Run cargo build-sbf
     maybe_install_cargo_sbf();
 
-    let new_path = format!(
-        "/var/lib/buildkite-agent/.local/share/solana/install/active_release/bin:{}",
-        env::var("PATH").unwrap()
-    );
+    let new_path = [
+        PathBuf::from("/var/lib/buildkite-agent/"),
+        PathBuf::from(env::var("HOME").unwrap()),
+    ]
+    .into_iter()
+    .map(|base| {
+        base.join(".local/share/solana/install/active_release/bin")
+            .to_string_lossy()
+            .to_string()
+    })
+    .collect::<Vec<_>>()
+    .join(":");
+
+    let new_path = format!("{}:{}", new_path, env::var("PATH").unwrap());
 
     if !Command::new("cargo-build-sbf")
         .env("PATH", new_path)
