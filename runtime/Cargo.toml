@@ -65,6 +65,7 @@ solana-frozen-abi-macro = { workspace = true, optional = true, features = [
 ] }
 solana-inline-spl = { workspace = true }
 solana-lattice-hash = { workspace = true }
+solana-loader-v3-interface = { workspace = true }
 solana-measure = { workspace = true }
 solana-metrics = { workspace = true }
 solana-nohash-hasher = { workspace = true }
