@@ -7347,6 +7347,7 @@ dependencies = [
  "solana-fee",
  "solana-inline-spl",
  "solana-lattice-hash",
+ "solana-loader-v3-interface",
  "solana-measure",
  "solana-metrics",
  "solana-nohash-hasher",
