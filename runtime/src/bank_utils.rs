@@ -71,6 +71,7 @@ pub fn find_and_send_votes(
                             let _ = alpenglow_vote_sender.send((
                                 vote,
                                 pubkey,
+                                //TODO(wen): to_versioned_transaction() has performance implications, we should replace it.
                                 tx.to_versioned_transaction(),
                             ));
                         }
