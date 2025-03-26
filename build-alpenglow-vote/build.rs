@@ -91,9 +91,6 @@ fn maybe_install_cargo_sbf() {
 }
 
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
-    // Run cargo build-sbf
-    maybe_install_cargo_sbf();
-
     let new_path = [
         PathBuf::from("/var/lib/buildkite-agent/"),
         PathBuf::from(env::var("HOME").unwrap()),
@@ -111,6 +108,9 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
 
     build_print::println!("NEW PATH :: {}", &new_path);
     build_print::println!("HOME :: {}", env::var("HOME").unwrap());
+
+    // Run cargo build-sbf
+    maybe_install_cargo_sbf();
 
     if !Command::new("cargo-build-sbf")
         .env("PATH", new_path)
