@@ -137,6 +137,53 @@ fn test_local_cluster_start_and_exit_with_config() {
 
 #[test]
 #[serial]
+fn test_2_nodes_alpenglow() {
+    solana_logger::setup_with_default(RUST_LOG_FILTER);
+    const NUM_NODES: usize = 2;
+    let validator_keys = [
+        "28bN3xyvrP4E8LwEgtLjhnkb7cY4amQb6DrYAbAYjgRV4GAGgkVM2K7wnxnAS7WDneuavza7x21MiafLu1HkwQt4",
+        "2saHBBoTkLMmttmPQP8KfBkcCw45S5cwtV3wTdGCscRC8uxdgvHxpHiWXKx4LvJjNJtnNcbSv5NdheokFFqnNDt8",
+    ]
+    .iter()
+    .map(|s| (Arc::new(Keypair::from_base58_string(s)), true))
+    .collect::<Vec<_>>();
+
+    let mut config = ClusterConfig {
+        validator_configs: make_identical_validator_configs(
+            &ValidatorConfig::default_for_test(),
+            NUM_NODES,
+        ),
+        validator_keys: Some(validator_keys),
+        node_stakes: vec![DEFAULT_NODE_STAKE; NUM_NODES],
+        ticks_per_slot: 8,
+        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
+        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
+        poh_config: PohConfig {
+            target_tick_duration: PohConfig::default().target_tick_duration,
+            hashes_per_tick: Some(clock::DEFAULT_HASHES_PER_TICK),
+            target_tick_count: None,
+        },
+        ..ClusterConfig::default()
+    };
+    let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
+    assert_eq!(cluster.validators.len(), NUM_NODES);
+
+    // Check transactions land
+    cluster_tests::spend_and_verify_all_nodes(
+        &cluster.entry_point_info,
+        &cluster.funding_keypair,
+        NUM_NODES,
+        HashSet::new(),
+        SocketAddrSpace::Unspecified,
+        &cluster.connection_cache,
+    );
+
+    // Check for new roots
+    cluster.check_for_new_roots(16, "test_2_nodes_alpenglow", SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
 fn test_spend_and_verify_all_nodes_1() {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
     error!("test_spend_and_verify_all_nodes_1");
