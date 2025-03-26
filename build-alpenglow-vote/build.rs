@@ -48,8 +48,12 @@ fn cargo_build_sbf2(manifest_path: &PathBuf) {
             .expect("failed to run cargo-build-sbf");
 
     if output.status.success() {
-        let version = String::from_utf8_lossy(&output.stdout);
-        println!("cargo:warning=cargo-build-sbf output: {}", version);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!(
+            "cargo:warning=cargo-build-sbf output:\nstdout :: {}\nstderr :: {}",
+            stdout, stderr
+        );
     } else {
         eprintln!("cargo:warning=failed to get cargo-build-sbf output");
     }
