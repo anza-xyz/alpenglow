@@ -3,9 +3,11 @@ use std::process::Command;
 use std::{env, fs};
 
 fn cargo_build_sbf() -> Command {
-    let mut cargo_build_sbf = Command::new("cargo-build-sbf");
-
-    if cargo_build_sbf.arg("--help").output().is_err() {
+    if Command::new("cargo-build-sbf")
+        .arg("--help")
+        .output()
+        .is_err()
+    {
         build_print::custom_println!(
             "[build-alpenglow-vote]",
             green,
@@ -26,11 +28,9 @@ fn cargo_build_sbf() -> Command {
                 String::from_utf8_lossy(&install_command_output.stderr)
             );
         }
-
-        cargo_build_sbf = std::process::Command::new("./active_release/bin/cargo-build-sbf");
     }
 
-    cargo_build_sbf
+    Command::new("./active_release/bin/cargo-build-sbf")
 }
 
 fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
