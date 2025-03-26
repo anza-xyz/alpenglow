@@ -172,6 +172,17 @@ impl VoteAccount {
         }
     }
 
+    pub fn get_authorized_voter(&self, epoch: u64) -> Option<Pubkey> {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(vote_state_view) => {
+                vote_state_view.get_authorized_voter(epoch).copied()
+            }
+            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
+                .unwrap()
+                .get_authorized_voter(epoch),
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {

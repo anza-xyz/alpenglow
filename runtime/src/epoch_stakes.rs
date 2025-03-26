@@ -100,21 +100,18 @@ impl EpochStakes {
         let epoch_authorized_voters = epoch_vote_accounts
             .iter()
             .filter_map(|(key, (stake, account))| {
-                // TODO(wen): make this work for Alpenglow.
-                let vote_state = account.vote_state_view()?;
-
                 if *stake > 0 {
                     if let Some(authorized_voter) =
-                        vote_state.get_authorized_voter(leader_schedule_epoch)
+                        account.get_authorized_voter(leader_schedule_epoch)
                     {
                         let node_vote_accounts = node_id_to_vote_accounts
-                            .entry(*vote_state.node_pubkey())
+                            .entry(*account.node_pubkey())
                             .or_default();
 
                         node_vote_accounts.total_stake += stake;
                         node_vote_accounts.vote_accounts.push(*key);
 
-                        Some((*key, *authorized_voter))
+                        Some((*key, authorized_voter))
                     } else {
                         None
                     }
@@ -229,11 +226,13 @@ pub(crate) mod tests {
             stake_account::StakeAccount,
             stakes::{Stakes, StakesCache},
         },
+        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         solana_sdk::{account::AccountSharedData, rent::Rent},
         solana_stake_program::stake_state::{self, Delegation, Stake},
         solana_vote::vote_account::VoteAccount,
         solana_vote_program::vote_state::{self, create_account_with_authorized},
         std::iter,
+        test_case::test_case,
     };
 
     struct VoteAccountInfo {
@@ -245,6 +244,7 @@ pub(crate) mod tests {
     fn new_vote_accounts(
         num_nodes: usize,
         num_vote_accounts_per_node: usize,
+        is_alpenglow: bool,
     ) -> HashMap<Pubkey, Vec<VoteAccountInfo>> {
         // Create some vote accounts for each pubkey
         (0..num_nodes)
@@ -254,15 +254,26 @@ pub(crate) mod tests {
                     node_id,
                     iter::repeat_with(|| {
                         let authorized_voter = solana_pubkey::new_rand();
-                        VoteAccountInfo {
-                            vote_account: solana_pubkey::new_rand(),
-                            account: create_account_with_authorized(
+                        let account = if is_alpenglow {
+                            AlpenglowVoteState::create_account_with_authorized(
                                 &node_id,
                                 &authorized_voter,
                                 &node_id,
                                 0,
                                 100,
-                            ),
+                            )
+                        } else {
+                            create_account_with_authorized(
+                                &node_id,
+                                &authorized_voter,
+                                &node_id,
+                                0,
+                                100,
+                            )
+                        };
+                        VoteAccountInfo {
+                            vote_account: solana_pubkey::new_rand(),
+                            account,
                             authorized_voter,
                         }
                     })
@@ -289,13 +300,15 @@ pub(crate) mod tests {
             .collect()
     }
 
-    #[test]
-    fn test_parse_epoch_vote_accounts() {
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
+    fn test_parse_epoch_vote_accounts(is_alpenglow: bool) {
         let stake_per_account = 100;
         let num_vote_accounts_per_node = 2;
         let num_nodes = 10;
 
-        let vote_accounts_map = new_vote_accounts(num_nodes, num_vote_accounts_per_node);
+        let vote_accounts_map =
+            new_vote_accounts(num_nodes, num_vote_accounts_per_node, is_alpenglow);
 
         let expected_authorized_voters: HashMap<_, _> = vote_accounts_map
             .iter()
@@ -530,12 +543,14 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn test_node_id_to_stake() {
+    #[test_case(true; "alpenglow")]
+    #[test_case(false; "towerbft")]
+    fn test_node_id_to_stake(is_alpenglow: bool) {
         let num_nodes = 10;
         let num_vote_accounts_per_node = 2;
 
-        let vote_accounts_map = new_vote_accounts(num_nodes, num_vote_accounts_per_node);
+        let vote_accounts_map =
+            new_vote_accounts(num_nodes, num_vote_accounts_per_node, is_alpenglow);
         let node_id_to_stake_map = vote_accounts_map
             .keys()
             .enumerate()
