@@ -142,7 +142,7 @@ fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
     build_print::println!("manifest_path: {}", manifest_path.display());
     build_print::println!("manifest_path exists: {}", manifest_path.exists());
 
-    for entry in walkdir::WalkDir::new(&manifest_path.parent().unwrap()) {
+    for entry in walkdir::WalkDir::new(manifest_path.parent().unwrap()) {
         build_print::println!("Entry :: {}", entry.unwrap().path().display());
     }
 
