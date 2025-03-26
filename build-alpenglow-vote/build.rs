@@ -2,55 +2,109 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
 
-fn cargo_build_sbf() -> Command {
-    if Command::new("cargo-build-sbf")
-        .arg("--help")
-        .output()
-        .is_err()
-    {
-        build_print::custom_println!(
-            "[build-alpenglow-vote]",
-            green,
-            "installing cargo-build-sbf"
-        );
+fn cargo_build_sbf2(manifest_path: &PathBuf) {
+    println!("cargo:warning=checking for cargo-build-sbf");
 
+    let mut cargo_build_sbf = Command::new("cargo-build-sbf");
+    if cargo_build_sbf.arg("--help").output().is_ok() {
+        println!("cargo:warning=cargo-build-sbf found");
+    } else {
+        println!("cargo:warning=cargo-build-sbf not found");
+
+        println!("cargo:warning=installing cargo-build-sbf");
         let install_command_output = Command::new("sh")
             .arg("-c")
             .arg("curl -sSfL https://release.anza.xyz/edge/install | sh -s -- --data-dir . --no-modify-path v2.1.16")
             .output()
             .expect("failed to execute install command");
 
-        if !install_command_output.stderr.is_empty() {
-            build_print::custom_println!(
-                "[build-alpenglow-vote]",
-                green,
-                "{}",
-                String::from_utf8_lossy(&install_command_output.stderr)
-            );
-        }
+        println!(
+            "cargo:warning=cargo-build-sbf {}",
+            String::from_utf8_lossy(&install_command_output.stderr)
+        );
+
+        cargo_build_sbf = Command::new("./active_release/bin/cargo-build-sbf");
     }
 
-    Command::new("./active_release/bin/cargo-build-sbf")
-}
+    let output = cargo_build_sbf
+        .arg("--version")
+        .output()
+        .expect("failed to run cargo-build-sbf");
 
-fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
-    let result =
-        cargo_build_sbf()
+    if output.status.success() {
+        let version = String::from_utf8_lossy(&output.stdout);
+        println!("cargo:warning=cargo-build-sbf version: {}", version);
+    } else {
+        eprintln!("cargo:warning=failed to get cargo-build-sbf version");
+    }
+
+    let output =
+        cargo_build_sbf
             .arg("--manifest-path")
             .arg(manifest_path.to_str().unwrap_or_else(|| {
                 panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
             }))
             .output()
-            .expect("Couldn't run cargo-build-sbf");
+            .expect("failed to run cargo-build-sbf");
 
-    if !result.stderr.is_empty() {
-        build_print::custom_println!(
-            "[build-alpenglow-vote]",
-            green,
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+    if output.status.success() {
+        let version = String::from_utf8_lossy(&output.stdout);
+        println!("cargo:warning=cargo-build-sbf output: {}", version);
+    } else {
+        eprintln!("cargo:warning=failed to get cargo-build-sbf output");
     }
+}
+
+// fn cargo_build_sbf() -> Command {
+//     if Command::new("cargo-build-sbf")
+//         .arg("--help")
+//         .output()
+//         .is_err()
+//     {
+//         build_print::custom_println!(
+//             "[build-alpenglow-vote]",
+//             green,
+//             "installing cargo-build-sbf"
+//         );
+//
+//         let install_command_output = Command::new("sh")
+//             .arg("-c")
+//             .arg("curl -sSfL https://release.anza.xyz/edge/install | sh -s -- --data-dir . --no-modify-path v2.1.16")
+//             .output()
+//             .expect("failed to execute install command");
+//
+//         if !install_command_output.stderr.is_empty() {
+//             build_print::custom_println!(
+//                 "[build-alpenglow-vote]",
+//                 green,
+//                 "{}",
+//                 String::from_utf8_lossy(&install_command_output.stderr)
+//             );
+//         }
+//     }
+//
+//     Command::new("./active_release/bin/cargo-build-sbf")
+// }
+
+fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
+    cargo_build_sbf2(manifest_path);
+    // let result =
+    //     cargo_build_sbf()
+    //         .arg("--manifest-path")
+    //         .arg(manifest_path.to_str().unwrap_or_else(|| {
+    //             panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
+    //         }))
+    //         .output()
+    //         .expect("Couldn't run cargo-build-sbf");
+
+    // if !result.stderr.is_empty() {
+    //     build_print::custom_println!(
+    //         "[build-alpenglow-vote]",
+    //         green,
+    //         "{}",
+    //         String::from_utf8_lossy(&result.stderr)
+    //     );
+    // }
 
     let src_dir = manifest_path.parent().unwrap().to_owned();
     let so_path = src_dir
