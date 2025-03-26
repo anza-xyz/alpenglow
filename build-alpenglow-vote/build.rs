@@ -109,6 +109,9 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
 
     let new_path = format!("{}:{}", new_path, env::var("PATH").unwrap());
 
+    build_print::println!("NEW PATH :: {}", &new_path);
+    build_print::println!("HOME :: {}", env::var("HOME").unwrap());
+
     if !Command::new("cargo-build-sbf")
         .env("PATH", new_path)
         // .arg("build-sbf")
