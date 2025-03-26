@@ -267,17 +267,15 @@ impl VersionedEpochStakes {
                 continue;
             }
 
-            let vote_state = account.vote_state_view();
-
-            if let Some(authorized_voter) = vote_state.get_authorized_voter(leader_schedule_epoch) {
+            if let Some(authorized_voter) = account.get_authorized_voter(leader_schedule_epoch) {
                 let node_vote_accounts = node_id_to_vote_accounts
-                    .entry(*vote_state.node_pubkey())
+                    .entry(*account.node_pubkey())
                     .or_default();
 
                 node_vote_accounts.total_stake += stake;
                 node_vote_accounts.vote_accounts.push(*key);
 
-                epoch_authorized_voters.insert(*key, *authorized_voter);
+                epoch_authorized_voters.insert(*key, authorized_voter);
             }
         }
 

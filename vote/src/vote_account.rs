@@ -114,6 +114,10 @@ impl VoteAccount {
         )
     }
 
+    pub fn get_authorized_voter(&self, epoch: u64) -> Option<Pubkey> {
+        self.0.vote_state_view.get_authorized_voter(epoch).copied()
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random() -> VoteAccount {
         use {
