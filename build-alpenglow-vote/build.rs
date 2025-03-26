@@ -102,6 +102,11 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
     // Run cargo build-sbf
     maybe_install_cargo_sbf();
 
+    let new_path = format!(
+        "/var/lib/buildkite-agent/.local/share/solana/install/active_release/bin:{}",
+        env::var("PATH").unwrap()
+    );
+
     if !Command::new(get_cargo_path())
         .arg("build-sbf")
         .arg("--manifest-path")
@@ -110,6 +115,7 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
                 panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
             }),
         )
+        .env("PATH", new_path)
         .status()
         .unwrap_or_else(|err| {
             panic!(
