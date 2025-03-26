@@ -633,31 +633,60 @@ impl ReplayStage {
             let _exit = Finalizer::new(exit.clone());
             let mut identity_keypair = cluster_info.keypair().clone();
             let mut my_pubkey = identity_keypair.pubkey();
+            // Alpenglow specific objects
+            // TODO: Properly initialize VoteHistory from storage
+            let mut vote_history = VoteHistory::new(my_pubkey, bank_forks.read().unwrap().root());
+            let mut first_alpenglow_slot = bank_forks
+                .read()
+                .unwrap()
+                .root_bank()
+                .feature_set
+                .activated_slot(&solana_feature_set::secp256k1_program_enabled::id());
+
+            let mut is_alpenglow_migration_complete = false;
+            if let Some(first_alpenglow_slot) = first_alpenglow_slot {
+                if bank_forks
+                    .read()
+                    .unwrap()
+                    .frozen_banks()
+                    .iter()
+                    .any(|(slot, _bank)| *slot >= first_alpenglow_slot)
+                {
+                    info!("initiating alpenglow migration on startup");
+                    Self::initiate_alpenglow_migration(
+                        &poh_recorder,
+                        &mut is_alpenglow_migration_complete,
+                    );
+                }
+            }
+
             if my_pubkey != tower.node_pubkey {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
                 let my_old_pubkey = tower.node_pubkey;
-                tower = match Self::load_tower(
-                    tower_storage.as_ref(),
-                    &my_pubkey,
-                    &vote_account,
-                    &bank_forks,
-                ) {
-                    Ok(tower) => tower,
-                    Err(err) => {
-                        error!(
-                            "Unable to load new tower when attempting to change identity from {} \
-                             to {} on ReplayStage startup, Exiting: {}",
-                            my_old_pubkey, my_pubkey, err
-                        );
-                        // drop(_exit) will set the exit flag, eventually tearing down the entire process
-                        return;
-                    }
-                };
-                warn!(
-                    "Identity changed during startup from {} to {}",
-                    my_old_pubkey, my_pubkey
-                );
+                if !is_alpenglow_migration_complete {
+                    tower = match Self::load_tower(
+                        tower_storage.as_ref(),
+                        &my_pubkey,
+                        &vote_account,
+                        &bank_forks,
+                    ) {
+                        Ok(tower) => tower,
+                        Err(err) => {
+                            error!(
+                                "Unable to load new tower when attempting to change identity from {} \
+                                to {} on ReplayStage startup, Exiting: {}",
+                                my_old_pubkey, my_pubkey, err
+                            );
+                            // drop(_exit) will set the exit flag, eventually tearing down the entire process
+                            return;
+                        }
+                    };
+                    warn!(
+                        "Identity changed during startup from {} to {}",
+                        my_old_pubkey, my_pubkey
+                    );
+                }
             }
             let (mut progress, mut heaviest_subtree_fork_choice) =
                 Self::initialize_progress_and_fork_choice_with_locked_bank_forks(
@@ -689,33 +718,6 @@ impl ReplayStage {
                 last_refresh_time: Instant::now(),
                 last_print_time: Instant::now(),
             };
-
-            // Alpenglow specific objects
-            // TODO: Properly initialize VoteHistory from storage
-            let mut vote_history = VoteHistory::new(my_pubkey, bank_forks.read().unwrap().root());
-            let mut first_alpenglow_slot = bank_forks
-                .read()
-                .unwrap()
-                .root_bank()
-                .feature_set
-                .activated_slot(&solana_feature_set::secp256k1_program_enabled::id());
-
-            let mut is_alpenglow_migration_complete = false;
-            if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-                if bank_forks
-                    .read()
-                    .unwrap()
-                    .frozen_banks()
-                    .iter()
-                    .any(|(slot, _bank)| *slot >= first_alpenglow_slot)
-                {
-                    info!("initiating alpenglow migration on startup");
-                    Self::initiate_alpenglow_migration(
-                        &poh_recorder,
-                        &mut is_alpenglow_migration_complete,
-                    );
-                }
-            }
 
             let (working_bank, in_vote_only_mode) = {
                 let r_bank_forks = bank_forks.read().unwrap();
@@ -1131,7 +1133,7 @@ impl ReplayStage {
                                 ),
                             );
 
-                            if my_pubkey != cluster_info.id() {
+                            if my_pubkey != cluster_info.id() && !is_alpenglow_migration_complete {
                                 identity_keypair = cluster_info.keypair().clone();
                                 let my_old_pubkey = my_pubkey;
                                 my_pubkey = identity_keypair.pubkey();
