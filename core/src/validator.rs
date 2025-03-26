@@ -1572,15 +1572,20 @@ impl Validator {
             exit.clone(),
         );
 
-        let tower = match process_blockstore.process_to_create_tower() {
-            Ok(tower) => {
-                info!("Tower state: {tower:?}");
-                tower
+        let tower = if migration_status.is_pre_feature_activation() {
+            match process_blockstore.process_to_create_tower() {
+                Ok(tower) => {
+                    info!("Tower state: {tower:?}");
+                    tower
+                }
+                Err(e) => {
+                    warn!("Unable to retrieve tower: {e:?} creating default tower....");
+                    Tower::default()
+                }
             }
-            Err(e) => {
-                warn!("Unable to retrieve tower: {e:?} creating default tower....");
-                Tower::default()
-            }
+        } else {
+            info!("Skipping tower restore during alpenglow migration");
+            Tower::default()
         };
         // Future upstream PR will handle reconciliation of VoteHistory against hard forks
         let vote_history =

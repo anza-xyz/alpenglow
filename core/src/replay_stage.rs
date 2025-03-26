@@ -651,7 +651,7 @@ impl ReplayStage {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
                 let my_old_pubkey = tower.node_pubkey;
-                if !migration_status.is_alpenglow_enabled() {
+                if migration_status.is_pre_feature_activation() {
                     tower = match Self::load_tower(
                         tower_storage.as_ref(),
                         &my_pubkey,
@@ -1144,7 +1144,9 @@ impl ReplayStage {
                                 ),
                             );
 
-                            if my_pubkey != cluster_info.id() {
+                            if my_pubkey != cluster_info.id()
+                                && migration_status.is_pre_feature_activation()
+                            {
                                 identity_keypair = cluster_info.keypair();
                                 let my_old_pubkey = my_pubkey;
                                 my_pubkey = identity_keypair.pubkey();
