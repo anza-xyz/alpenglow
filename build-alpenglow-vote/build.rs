@@ -47,16 +47,21 @@ fn cargo_build_sbf2(manifest_path: &PathBuf) {
             .output()
             .expect("failed to run cargo-build-sbf");
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        println!(
-            "cargo:warning=cargo-build-sbf output:\nstdout :: {}\nstderr :: {}",
-            stdout, stderr
-        );
-    } else {
-        eprintln!("cargo:warning=failed to get cargo-build-sbf output");
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("cargo:warning=cargo-build-sbf output: stdout :: {}", stdout);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("cargo:warning=cargo-build-sbf output: stderr :: {}", stderr);
+
+    // if output.status.success() {
+    //     let stdout = String::from_utf8_lossy(&output.stdout);
+    //     println!("cargo:warning=cargo-build-sbf output: stdout :: {}", stdout);
+
+    //     let stderr = String::from_utf8_lossy(&output.stderr);
+    //     println!("cargo:warning=cargo-build-sbf output: stderr :: {}", stderr);
+    // } else {
+    //     eprintln!("cargo:warning=failed to get cargo-build-sbf output");
+    // }
 }
 
 // fn cargo_build_sbf() -> Command {
