@@ -107,15 +107,15 @@ fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, Path
         env::var("PATH").unwrap()
     );
 
-    if !Command::new(get_cargo_path())
-        .arg("build-sbf")
+    if !Command::new("cargo-build-sbf")
+        .env("PATH", new_path)
+        // .arg("build-sbf")
         .arg("--manifest-path")
         .arg(
             manifest_path.to_str().unwrap_or_else(|| {
                 panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
             }),
         )
-        .env("PATH", new_path)
         .status()
         .unwrap_or_else(|err| {
             panic!(
