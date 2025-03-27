@@ -2108,7 +2108,7 @@ impl ReplayStage {
                 let total_stake = root_bank.epoch_total_stake(epoch)?;
                 match cert_pool.add_vote(
                     &vote,
-                    tx.into(),
+                    tx,
                     &vote_account_pubkey,
                     validator_stake,
                     total_stake,

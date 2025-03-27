@@ -260,7 +260,7 @@ impl Tpu {
             blockstore.clone(),
             bank_notification_sender,
             duplicate_confirmed_slot_sender,
-            alpenglow_vote_sender,
+            alpenglow_vote_sender.clone(),
         );
 
         let banking_stage = BankingStage::new(
@@ -277,6 +277,7 @@ impl Tpu {
             log_messages_bytes_limit,
             bank_forks.clone(),
             prioritization_fee_cache,
+            Some(alpenglow_vote_sender),
         );
 
         let forwarding_stage = ForwardingStage::spawn(
