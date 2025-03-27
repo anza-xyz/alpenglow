@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=96f8d34#96f8d34cadd64b374c10606c57261df608083f76"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=ff9c449#ff9c449233c5b4b157ea8e9107ad98b79ac63297"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
