@@ -1,11 +1,9 @@
 use std::path::Path;
 
 fn main() {
-    if let Some(toolchain) = std::env::var_os("RUSTUP_TOOLCHAIN") {
-        if toolchain.to_string_lossy().contains("nightly") {
-            println!("cargo:warning=skipping cargo-build-sbf check because nightly rust is used");
-            return;
-        }
+    if std::env::var("CLIPPY_ARGS").is_ok() {
+        println!("cargo:warning=Build script detected Clippy run.");
+        return;
     }
 
     println!("cargo:warning=checking for cargo-build-sbf");
