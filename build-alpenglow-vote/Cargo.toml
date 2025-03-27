@@ -18,8 +18,6 @@ toml = { workspace = true }
 crate-type = ["lib"]
 name = "build_alpenglow_vote"
 
-[dev-dependencies]
-
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 

@@ -38,7 +38,6 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    // solana_runtime::genesis_utils::include_alpenglow_bpf_program,
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
@@ -120,7 +119,6 @@ pub fn load_validator_accounts(
     commission: u8,
     rent: &Rent,
     genesis_config: &mut GenesisConfig,
-    is_alpenglow: bool,
 ) -> io::Result<()> {
     let accounts_file = File::open(file)?;
     let validator_genesis_accounts: Vec<StakedValidatorAccountInfo> =
@@ -167,7 +165,6 @@ pub fn load_validator_accounts(
             commission,
             rent,
             None,
-            is_alpenglow,
         )?;
     }
 
@@ -246,7 +243,6 @@ fn add_validator_accounts(
     commission: u8,
     rent: &Rent,
     authorized_pubkey: Option<&Pubkey>,
-    is_alpenglow: bool,
 ) -> io::Result<()> {
     rent_exempt_check(
         stake_lamports,
@@ -265,26 +261,13 @@ fn add_validator_accounts(
             AccountSharedData::new(lamports, 0, &system_program::id()),
         );
 
-        let vote_account = if is_alpenglow {
-            type AlpenglowVoteState = alpenglow_vote::state::VoteState;
-
-            AlpenglowVoteState::create_account_with_authorized(
-                identity_pubkey,
-                identity_pubkey,
-                identity_pubkey,
-                commission,
-                // TODO: create get_rent_exempt_reserve(rent) for alpenglow_vote::state::VoteState
-                rent.minimum_balance(AlpenglowVoteState::size()).max(1),
-            )
-        } else {
-            vote_state::create_account_with_authorized(
-                identity_pubkey,
-                identity_pubkey,
-                identity_pubkey,
-                commission,
-                VoteState::get_rent_exempt_reserve(rent).max(1),
-            )
-        };
+        let vote_account = vote_state::create_account_with_authorized(
+            identity_pubkey,
+            identity_pubkey,
+            identity_pubkey,
+            commission,
+            VoteState::get_rent_exempt_reserve(rent).max(1),
+        );
 
         genesis_config.add_account(
             *stake_pubkey,
@@ -637,14 +620,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     feature sets",
                 ),
         )
-        .arg(
-            Arg::with_name("alpenglow")
-                .long("alpenglow")
-                .help(
-                    "When enabled, employ Alpenglow consensus. When disabled, \
-                    employ POH consensus."
-                ),
-        )
         .get_matches();
 
     let ledger_path = PathBuf::from(matches.value_of("ledger_path").unwrap());
@@ -765,8 +740,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let commission = value_t_or_exit!(matches, "vote_commission_percentage", u8);
     let rent = genesis_config.rent.clone();
 
-    let is_alpenglow = matches.is_present("alpenglow");
-
     add_validator_accounts(
         &mut genesis_config,
         &mut bootstrap_validator_pubkeys.iter(),
@@ -775,7 +748,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         commission,
         &rent,
         bootstrap_stake_authorized_pubkey.as_ref(),
-        is_alpenglow,
     )?;
 
     if let Some(creation_time) = unix_timestamp_from_rfc3339_datetime(&matches, "creation_time") {
@@ -806,7 +778,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     if let Some(files) = matches.values_of("validator_accounts_file") {
         for file in files {
-            load_validator_accounts(file, commission, &rent, &mut genesis_config, is_alpenglow)?;
+            load_validator_accounts(file, commission, &rent, &mut genesis_config)?;
         }
     }
 
@@ -855,16 +827,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 }),
             );
         }
-    }
-
-    if is_alpenglow {
-        solana_runtime::genesis_utils::activate_feature(
-            &mut genesis_config,
-            solana_feature_set::secp256k1_program_enabled::id(),
-        );
-
-        // TODO: uncomment this
-        // include_alpenglow_bpf_program(&mut genesis_config);
     }
 
     if let Some(values) = matches.values_of("upgradeable_program") {
@@ -1290,7 +1252,6 @@ mod tests {
             100,
             &Rent::default(),
             &mut GenesisConfig::default(),
-            false
         )
         .is_err());
 
@@ -1333,7 +1294,6 @@ mod tests {
             100,
             &Rent::default(),
             &mut genesis_config,
-            false,
         )
         .expect("Failed to load validator accounts");
 
