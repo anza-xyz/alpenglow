@@ -463,7 +463,7 @@ impl ClusterInfoVoteListener {
         alpenglow_vote_sender: &AlpenglowVoteSender,
         _subscriptions: &RpcSubscriptions,
     ) {
-        let _ = alpenglow_vote_sender.send((parsed_vote, *vote_pubkey, transaction));
+        let _ = alpenglow_vote_sender.send((parsed_vote, *vote_pubkey, transaction.into()));
 
         // TODO: maybe replicate is_new behavior from `track_new_votes_and_notify_confirmations`
         // to not notify repair and more importantly RPC subscribers of votes multiple times
