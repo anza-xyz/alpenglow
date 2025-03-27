@@ -1,135 +1,15 @@
 use std::path::PathBuf;
-use std::process::Command;
 use std::{env, fs};
 
-fn cargo_build_sbf2(manifest_path: &PathBuf) {
-    println!("cargo:warning=checking for cargo-build-sbf");
-
-    let mut cargo_build_sbf = Command::new("cargo-build-sbf");
-    if cargo_build_sbf.arg("--help").output().is_ok() {
-        println!("cargo:warning=cargo-build-sbf found");
-    } else {
-        println!("cargo:warning=cargo-build-sbf not found");
-
-        println!("cargo:warning=installing cargo-build-sbf");
-        let install_command_output = Command::new("sh")
-            .arg("-c")
-            .arg("curl -sSfL https://release.anza.xyz/edge/install | sh -s -- --data-dir . --no-modify-path v2.1.16")
-            .output()
-            .expect("failed to execute install command");
-
-        println!(
-            "cargo:warning=cargo-build-sbf {}",
-            String::from_utf8_lossy(&install_command_output.stderr)
-        );
-
-        cargo_build_sbf = Command::new("./active_release/bin/cargo-build-sbf");
-    }
-
-    // let output = cargo_build_sbf
-    //     .arg("--version")
-    //     .output()
-    //     .expect("failed to run cargo-build-sbf");
-
-    // if output.status.success() {
-    //     let version = String::from_utf8_lossy(&output.stdout);
-    //     println!("cargo:warning=cargo-build-sbf version: {}", version);
-    // } else {
-    //     eprintln!("cargo:warning=failed to get cargo-build-sbf version");
-    // }
-
-    let cmd =
-        cargo_build_sbf
-            .arg("--manifest-path")
-            .arg(manifest_path.to_str().unwrap_or_else(|| {
-                panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
-            }));
-
-    println!(
-        "cargo:warning=cargo build command that's being run: {:?}",
-        cmd
-    );
-
-    let output = cmd.output().expect("failed to run cargo-build-sbf");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("cargo:warning=cargo-build-sbf output: stdout :: {}", stdout);
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("cargo:warning=cargo-build-sbf output: stderr :: {}", stderr);
-
-    // if output.status.success() {
-    //     let stdout = String::from_utf8_lossy(&output.stdout);
-    //     println!("cargo:warning=cargo-build-sbf output: stdout :: {}", stdout);
-
-    //     let stderr = String::from_utf8_lossy(&output.stderr);
-    //     println!("cargo:warning=cargo-build-sbf output: stderr :: {}", stderr);
-    // } else {
-    //     eprintln!("cargo:warning=failed to get cargo-build-sbf output");
-    // }
+fn fetch_shared_object_path(manifest_path: &PathBuf) -> PathBuf {
+    manifest_path
+        .parent()
+        .unwrap()
+        .to_owned()
+        .join("spl-alpenglow_vote.so")
 }
 
-// fn cargo_build_sbf() -> Command {
-//     if Command::new("cargo-build-sbf")
-//         .arg("--help")
-//         .output()
-//         .is_err()
-//     {
-//         build_print::custom_println!(
-//             "[build-alpenglow-vote]",
-//             green,
-//             "installing cargo-build-sbf"
-//         );
-//
-//         let install_command_output = Command::new("sh")
-//             .arg("-c")
-//             .arg("curl -sSfL https://release.anza.xyz/edge/install | sh -s -- --data-dir . --no-modify-path v2.1.16")
-//             .output()
-//             .expect("failed to execute install command");
-//
-//         if !install_command_output.stderr.is_empty() {
-//             build_print::custom_println!(
-//                 "[build-alpenglow-vote]",
-//                 green,
-//                 "{}",
-//                 String::from_utf8_lossy(&install_command_output.stderr)
-//             );
-//         }
-//     }
-//
-//     Command::new("./active_release/bin/cargo-build-sbf")
-// }
-
-fn build_and_fetch_shared_object_path(manifest_path: &PathBuf) -> (PathBuf, PathBuf) {
-    cargo_build_sbf2(manifest_path);
-    // let result =
-    //     cargo_build_sbf()
-    //         .arg("--manifest-path")
-    //         .arg(manifest_path.to_str().unwrap_or_else(|| {
-    //             panic!("Couldn't fetch manifest path as str: {:?}", &manifest_path)
-    //         }))
-    //         .output()
-    //         .expect("Couldn't run cargo-build-sbf");
-
-    // if !result.stderr.is_empty() {
-    //     build_print::custom_println!(
-    //         "[build-alpenglow-vote]",
-    //         green,
-    //         "{}",
-    //         String::from_utf8_lossy(&result.stderr)
-    //     );
-    // }
-
-    let src_dir = manifest_path.parent().unwrap().to_owned();
-    let so_path = src_dir
-        .join("target")
-        .join("deploy")
-        .join("alpenglow_vote.so");
-
-    (src_dir, so_path)
-}
-
-fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
+fn generate_github_rev(rev: &str) -> PathBuf {
     // Form the glob that searches for the git repo's manifest path under ~/.cargo/git/checkouts
     let git_checkouts_path = PathBuf::from(env::var("CARGO_HOME").unwrap())
         .join("git")
@@ -153,17 +33,10 @@ fn generate_github_rev(rev: &str) -> (PathBuf, PathBuf) {
             )
         });
 
-    build_print::println!("manifest_path: {}", manifest_path.display());
-    build_print::println!("manifest_path exists: {}", manifest_path.exists());
-
-    for entry in walkdir::WalkDir::new(manifest_path.parent().unwrap()) {
-        build_print::println!("Entry :: {}", entry.unwrap().path().display());
-    }
-
-    build_and_fetch_shared_object_path(&manifest_path)
+    fetch_shared_object_path(&manifest_path)
 }
 
-fn generate_local_checkout(path: &str) -> (PathBuf, PathBuf) {
+fn generate_local_checkout(path: &str) -> PathBuf {
     let err = || {
         format!("Local checkout path must be of the form: /x/y/z/alpenglow-vote-project-path/program. In particular, alpenglow-vote-project-path is the local checkout, which might typically just be called alpenglow-vote. Current checkout path: {}", path)
     };
@@ -193,10 +66,9 @@ fn generate_local_checkout(path: &str) -> (PathBuf, PathBuf) {
 
     // Turn the path into an absolute path
     let path = std::path::absolute(path).unwrap();
-
     let manifest_path = path.parent().unwrap().to_owned().join("Cargo.toml");
 
-    build_and_fetch_shared_object_path(&manifest_path)
+    fetch_shared_object_path(&manifest_path)
 }
 
 fn main() {
@@ -226,26 +98,25 @@ fn main() {
         .expect(err);
 
     // Are we trying to build alpenglow-vote from Github or a local checkout?
-    let (src_path, so_src_path) =
-        if alpenglow_vote.contains_key("git") && alpenglow_vote.contains_key("rev") {
-            build_print::custom_println!(
-                "Compiling",
-                green,
-                "spl_alpenglow-vote.so: building from github rev: {:?}",
-                &alpenglow_vote
-            );
-            generate_github_rev(alpenglow_vote["rev"].as_str().unwrap())
-        } else if alpenglow_vote.contains_key("path") {
-            build_print::custom_println!(
-                "Compiling",
-                green,
-                "spl_alpenglow-vote.so: building from local checkout: {:?}",
-                &alpenglow_vote
-            );
-            generate_local_checkout(alpenglow_vote["path"].as_str().unwrap())
-        } else {
-            panic!("{}", err);
-        };
+    let so_src_path = if alpenglow_vote.contains_key("git") && alpenglow_vote.contains_key("rev") {
+        build_print::custom_println!(
+            "Compiling",
+            green,
+            "spl-alpenglow_vote.so: building from github rev: {:?}",
+            &alpenglow_vote
+        );
+        generate_github_rev(alpenglow_vote["rev"].as_str().unwrap())
+    } else if alpenglow_vote.contains_key("path") {
+        build_print::custom_println!(
+            "Compiling",
+            green,
+            "spl-alpenglow_vote.so: building from local checkout: {:?}",
+            &alpenglow_vote
+        );
+        generate_local_checkout(alpenglow_vote["path"].as_str().unwrap())
+    } else {
+        panic!("{}", err);
+    };
 
     // Copy the .so to project_dir/target/tmp/
     let so_dest_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
@@ -254,7 +125,7 @@ fn main() {
         .to_owned()
         .join("target")
         .join("alpenglow-vote-so")
-        .join("spl_alpenglow-vote.so");
+        .join("spl-alpenglow_vote.so");
 
     fs::create_dir_all(so_dest_path.parent().unwrap())
         .unwrap_or_else(|_| panic!("Couldn't create path: {:?}", &so_dest_path));
@@ -269,7 +140,7 @@ fn main() {
     build_print::custom_println!(
         "[build-alpenglow-vote]",
         green,
-        "spl_alpenglow-vote.so: successfully built alpenglow_vote! Copying {} -> {}",
+        "spl-alpenglow_vote.so: successfully built alpenglow_vote! Copying {} -> {}",
         so_src_path.display(),
         so_dest_path.display(),
     );
@@ -281,6 +152,6 @@ fn main() {
     );
 
     // Re-build if we detect a change in either (1) the alpenglow-vote src or (2) this build script
-    println!("cargo::rerun-if-changed={:?}", src_path);
+    println!("cargo::rerun-if-changed={}", so_src_path.display());
     println!("cargo::rerun-if-changed=build.rs");
 }
