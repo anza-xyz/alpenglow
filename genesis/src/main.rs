@@ -38,7 +38,7 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    solana_runtime::genesis_utils::include_alpenglow_bpf_program,
+    // solana_runtime::genesis_utils::include_alpenglow_bpf_program,
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
@@ -863,7 +863,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             solana_feature_set::secp256k1_program_enabled::id(),
         );
 
-        include_alpenglow_bpf_program(&mut genesis_config);
+        // TODO: uncomment this
+        // include_alpenglow_bpf_program(&mut genesis_config);
     }
 
     if let Some(values) = matches.values_of("upgradeable_program") {
