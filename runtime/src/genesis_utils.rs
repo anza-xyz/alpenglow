@@ -215,6 +215,7 @@ pub fn create_genesis_config_with_leader(
     )
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_genesis_config_with_leader_enable_alpenglow(
     mint_lamports: u64,
     validator_pubkey: &Pubkey,
