@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-fn fetch_shared_object_path(manifest_path: &PathBuf) -> PathBuf {
+fn fetch_shared_object_path(manifest_path: &Path) -> PathBuf {
     manifest_path
         .parent()
         .unwrap()
