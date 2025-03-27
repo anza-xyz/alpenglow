@@ -6738,6 +6738,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-build-alpenglow-vote"
+version = "2.3.0"
+
+[[package]]
 name = "solana-builtins"
 version = "2.3.0"
 dependencies = [

@@ -28,6 +28,7 @@ members = [
     "bench-vote",
     "bloom",
     "bucket_map",
+    "build-alpenglow-vote",
     "builtins",
     "builtins-default-costs",
     "cargo-registry",
