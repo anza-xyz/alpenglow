@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 fn fetch_shared_object_path(manifest_path: &Path) -> PathBuf {
