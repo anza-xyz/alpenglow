@@ -11,6 +11,7 @@ use {
         genesis_utils::{
             self, GenesisConfigInfo, ValidatorVoteKeypairs, activate_all_features,
             activate_feature, bootstrap_validator_stake_lamports,
+            create_genesis_config_with_leader_enable_alpenglow,
             create_genesis_config_with_leader, create_genesis_config_with_vote_accounts,
             create_lockup_stake_account, genesis_sysvar_and_builtin_program_lamports,
         },
@@ -7295,14 +7296,15 @@ fn test_adjust_sysvar_balance_for_rent() {
     assert_eq!(smaller_sample_sysvar.lamports(), excess_lamports);
 }
 
-#[test]
-fn test_update_clock_timestamp() {
+#[test_case(true; "alpenglow")]
+#[test_case(false; "towerbft")]
+fn test_update_clock_timestamp(is_alpenglow: bool) {
     let leader_pubkey = solana_pubkey::new_rand();
     let GenesisConfigInfo {
         genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
+    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
     let mut bank = Bank::new_for_tests(&genesis_config);
     // Advance past slot 0, which has special handling.
     bank = new_from_parent(Arc::new(bank));
@@ -7325,6 +7327,7 @@ fn test_update_clock_timestamp() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -7339,6 +7342,7 @@ fn test_update_clock_timestamp() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -7353,6 +7357,7 @@ fn test_update_clock_timestamp() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -7369,6 +7374,7 @@ fn test_update_clock_timestamp() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -7388,8 +7394,9 @@ fn poh_estimate_offset(bank: &Bank) -> Duration {
         * Duration::from_nanos(bank.ns_per_slot as u64)
 }
 
-#[test]
-fn test_timestamp_slow() {
+#[test_case(true; "alpenglow")]
+#[test_case(false; "towerbft")]
+fn test_timestamp_slow(is_alpenglow: bool) {
     fn max_allowable_delta_since_epoch(bank: &Bank, max_allowable_drift: u32) -> i64 {
         let poh_estimate_offset = poh_estimate_offset(bank);
         (poh_estimate_offset.as_secs()
@@ -7401,7 +7408,7 @@ fn test_timestamp_slow() {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
+    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);
@@ -7417,6 +7424,7 @@ fn test_timestamp_slow() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
 
     // additional_secs greater than MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2 for an epoch
@@ -7432,8 +7440,9 @@ fn test_timestamp_slow() {
     }
 }
 
-#[test]
-fn test_timestamp_fast() {
+#[test_case(true; "alpenglow")]
+#[test_case(false; "towerbft")]
+fn test_timestamp_fast(is_alpenglow: bool) {
     fn max_allowable_delta_since_epoch(bank: &Bank, max_allowable_drift: u32) -> i64 {
         let poh_estimate_offset = poh_estimate_offset(bank);
         (poh_estimate_offset.as_secs()
@@ -7445,7 +7454,7 @@ fn test_timestamp_fast() {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
+    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);
@@ -7459,6 +7468,7 @@ fn test_timestamp_fast() {
         },
         &bank,
         &voting_keypair.pubkey(),
+        is_alpenglow,
     );
 
     // additional_secs greater than MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST for an epoch
@@ -11554,7 +11564,7 @@ fn test_last_restart_slot() {
     let GenesisConfigInfo {
         mut genesis_config, ..
     } = create_genesis_config_with_leader(mint_lamports, &leader_pubkey, validator_stake_lamports);
-    // Remove last restart slot account so we can simluate its' activation
+    // Remove last restart slot account so we can simulate its' activation
     genesis_config
         .accounts
         .remove(&feature_set::last_restart_slot_sysvar::id())

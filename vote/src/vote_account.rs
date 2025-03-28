@@ -8,6 +8,7 @@ use {
     solana_account::{AccountSharedData, ReadableAccount},
     solana_instruction::error::InstructionError,
     solana_pubkey::Pubkey,
+    solana_vote_interface::state::BlockTimestamp,
     std::{
         cmp::Ordering,
         collections::{HashMap, hash_map::Entry},
@@ -116,6 +117,10 @@ impl VoteAccount {
 
     pub fn get_authorized_voter(&self, epoch: u64) -> Option<Pubkey> {
         self.0.vote_state_view.get_authorized_voter(epoch).copied()
+    }
+
+    pub fn last_timestamp(&self) -> BlockTimestamp {
+        self.0.vote_state_view.last_timestamp()
     }
 
     #[cfg(feature = "dev-context-only-utils")]
