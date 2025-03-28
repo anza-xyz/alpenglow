@@ -128,7 +128,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
- "toml 0.8.12",
+ "toml 0.8.20",
 ]
 
 [[package]]
@@ -287,7 +287,7 @@ dependencies = [
  "solana-metrics",
  "thread-priority",
  "tokio",
- "toml 0.8.12",
+ "toml 0.8.20",
  "tower 0.5.2",
 ]
 
@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=96f8d34#96f8d34cadd64b374c10606c57261df608083f76"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=f5bbc58#f5bbc58130d9b9a30a3af72f41a717224b2cf3d0"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -1307,6 +1307,12 @@ dependencies = [
  "regex-automata 0.1.10",
  "serde",
 ]
+
+[[package]]
+name = "build-print"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a2128d00b7061b82b72844a351e80acd29e05afc60e9261e2ac90dca9ecc2ac"
 
 [[package]]
 name = "bumpalo"
@@ -2896,9 +2902,9 @@ checksum = "b6c80984affa11d98d1b88b66ac8853f143217b399d3c74116778ff8fdb4ed2e"
 
 [[package]]
 name = "glob"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
+checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 
 [[package]]
 name = "globset"
@@ -5948,9 +5954,9 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "0.6.5"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb3622f419d1296904700073ea6cc23ad690adbd66f13ea683df73298736f0c1"
+checksum = "87607cb1398ed59d48732e575a4c28a7a8ebf2454b964fe3f224f2afc07909e1"
 dependencies = [
  "serde",
 ]
@@ -6872,6 +6878,16 @@ dependencies = [
  "solana-measure",
  "solana-pubkey",
  "tempfile",
+]
+
+[[package]]
+name = "solana-build-alpenglow-vote"
+version = "2.3.0"
+dependencies = [
+ "build-print",
+ "glob",
+ "serde",
+ "toml 0.8.20",
 ]
 
 [[package]]
@@ -7972,6 +7988,7 @@ dependencies = [
 name = "solana-genesis"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "base64 0.22.1",
  "bincode",
  "clap 2.33.3",
@@ -9610,6 +9627,7 @@ dependencies = [
  "solana-accounts-db",
  "solana-bpf-loader-program",
  "solana-bucket-map",
+ "solana-build-alpenglow-vote",
  "solana-builtins",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
@@ -12347,21 +12365,21 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.8.12"
+version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9dd1545e8208b4a5af1aa9bbd0b4cf7e9ea08fabc5d0a5c67fcaafa17433aa3"
+checksum = "cd87a5cdd6ffab733b2f74bc4fd7ee5fff6634124999ac278c35fc78c6120148"
 dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "toml_edit 0.22.12",
+ "toml_edit 0.22.24",
 ]
 
 [[package]]
 name = "toml_datetime"
-version = "0.6.5"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3550f4e9685620ac18a50ed434eb3aec30db8ba93b0287467bca5826ea25baf1"
+checksum = "0dd7358ecb8fc2f8d014bf86f6f638ce72ba252a2c3a2572f2a795f1d23efb41"
 dependencies = [
  "serde",
 ]
@@ -12379,15 +12397,15 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.22.12"
+version = "0.22.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3328d4f68a705b2a4498da1d580585d39a6510f98318a2cec3018a7ec61ddef"
+checksum = "17b4795ff5edd201c7cd6dca065ae59972ce77d1b80fa0a84d94950ece7d1474"
 dependencies = [
  "indexmap 2.8.0",
  "serde",
  "serde_spanned",
  "toml_datetime",
- "winnow 0.6.13",
+ "winnow 0.7.4",
 ]
 
 [[package]]
@@ -13304,9 +13322,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "0.6.13"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59b5e5f6c299a3c7890b876a2a587f3115162487e704907d9b6cd29473052ba1"
+checksum = "0e97b544156e9bebe1a0ffbc03484fc1ffe3100cbce3ffb17eac35f7cdd7ab36"
 dependencies = [
  "memchr",
 ]
