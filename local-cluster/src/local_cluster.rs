@@ -196,6 +196,18 @@ impl LocalCluster {
     }
 
     pub fn new(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
+        Self::init(config, socket_addr_space, false)
+    }
+
+    pub fn new_alpenglow(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
+        Self::init(config, socket_addr_space, true)
+    }
+
+    pub fn init(
+        config: &mut ClusterConfig,
+        socket_addr_space: SocketAddrSpace,
+        is_alpenglow: bool,
+    ) -> Self {
         assert_eq!(config.validator_configs.len(), config.node_stakes.len());
 
         let quic_connection_cache_config = config.tpu_use_quic.then(|| {
@@ -305,7 +317,7 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            false,
+            is_alpenglow,
         );
         genesis_config.accounts.extend(
             config
