@@ -154,6 +154,61 @@ fn test_local_cluster_start_and_exit_with_config() {
     assert_eq!(cluster.validators.len(), NUM_NODES);
 }
 
+fn test_n_nodes_alpenglow(num_nodes: usize) {
+    agave_logger::setup_with_default(RUST_LOG_FILTER);
+    let validator_keys = (0..num_nodes)
+        .map(|i| {
+            (
+                ValidatorKeys {
+                    node_keypair: Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()),
+                    vote_keypair: Arc::new(Keypair::new()),
+                },
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut config = ClusterConfig {
+        validator_configs: make_identical_validator_configs(
+            &ValidatorConfig::default_for_test(),
+            num_nodes,
+        ),
+        validator_keys: Some(validator_keys),
+        node_stakes: vec![DEFAULT_NODE_STAKE; num_nodes],
+        ticks_per_slot: 8,
+        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
+        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
+        poh_config: PohConfig {
+            target_tick_duration: PohConfig::default().target_tick_duration,
+            hashes_per_tick: Some(clock::DEFAULT_HASHES_PER_TICK),
+            target_tick_count: None,
+        },
+        ..ClusterConfig::default()
+    };
+    let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    // Check transactions land
+    cluster_tests::spend_and_verify_all_nodes(
+        &cluster.entry_point_info,
+        &cluster.funding_keypair,
+        num_nodes,
+        HashSet::new(),
+        SocketAddrSpace::Unspecified,
+        &cluster.connection_cache,
+    );
+
+    // Check for new roots
+    cluster.check_for_new_roots(16, "test_2_nodes_alpenglow", SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
+fn test_2_nodes_alpenglow() {
+    const NUM_NODES: usize = 2;
+    test_n_nodes_alpenglow(NUM_NODES);
+}
+
 #[test]
 #[serial]
 fn test_spend_and_verify_all_nodes_1() {
