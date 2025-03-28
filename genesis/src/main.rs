@@ -1251,7 +1251,7 @@ mod tests {
             "unknownfile",
             100,
             &Rent::default(),
-            &mut GenesisConfig::default()
+            &mut GenesisConfig::default(),
         )
         .is_err());
 
