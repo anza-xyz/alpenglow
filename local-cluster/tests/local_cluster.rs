@@ -21,6 +21,7 @@ use {
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
     solana_gossip::{crds_data::MAX_VOTES, gossip_service::discover_cluster},
+    solana_keypair::keypair_from_seed,
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
         bank_forks_utils,
@@ -135,26 +136,19 @@ fn test_local_cluster_start_and_exit_with_config() {
     assert_eq!(cluster.validators.len(), NUM_NODES);
 }
 
-#[test]
-#[serial]
-fn test_2_nodes_alpenglow() {
+fn test_n_nodes_alpenglow(num_nodes: usize) {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
-    const NUM_NODES: usize = 2;
-    let validator_keys = [
-        "28bN3xyvrP4E8LwEgtLjhnkb7cY4amQb6DrYAbAYjgRV4GAGgkVM2K7wnxnAS7WDneuavza7x21MiafLu1HkwQt4",
-        "2saHBBoTkLMmttmPQP8KfBkcCw45S5cwtV3wTdGCscRC8uxdgvHxpHiWXKx4LvJjNJtnNcbSv5NdheokFFqnNDt8",
-    ]
-    .iter()
-    .map(|s| (Arc::new(Keypair::from_base58_string(s)), true))
-    .collect::<Vec<_>>();
+    let validator_keys = (0..num_nodes)
+        .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
+        .collect::<Vec<_>>();
 
     let mut config = ClusterConfig {
         validator_configs: make_identical_validator_configs(
             &ValidatorConfig::default_for_test(),
-            NUM_NODES,
+            num_nodes,
         ),
         validator_keys: Some(validator_keys),
-        node_stakes: vec![DEFAULT_NODE_STAKE; NUM_NODES],
+        node_stakes: vec![DEFAULT_NODE_STAKE; num_nodes],
         ticks_per_slot: 8,
         slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
         stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
@@ -166,13 +160,13 @@ fn test_2_nodes_alpenglow() {
         ..ClusterConfig::default()
     };
     let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
-    assert_eq!(cluster.validators.len(), NUM_NODES);
+    assert_eq!(cluster.validators.len(), num_nodes);
 
     // Check transactions land
     cluster_tests::spend_and_verify_all_nodes(
         &cluster.entry_point_info,
         &cluster.funding_keypair,
-        NUM_NODES,
+        num_nodes,
         HashSet::new(),
         SocketAddrSpace::Unspecified,
         &cluster.connection_cache,
@@ -180,6 +174,13 @@ fn test_2_nodes_alpenglow() {
 
     // Check for new roots
     cluster.check_for_new_roots(16, "test_2_nodes_alpenglow", SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
+fn test_2_nodes_alpenglow() {
+    const NUM_NODES: usize = 2;
+    test_n_nodes_alpenglow(NUM_NODES);
 }
 
 #[test]
