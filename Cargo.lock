@@ -8524,6 +8524,7 @@ dependencies = [
  "solana-download-utils",
  "solana-entry",
  "solana-gossip",
+ "solana-keypair",
  "solana-ledger",
  "solana-local-cluster",
  "solana-logger",
