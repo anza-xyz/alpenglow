@@ -2504,9 +2504,7 @@ impl Bank {
         let slots_per_epoch = self.epoch_schedule().slots_per_epoch;
         let vote_accounts = self.vote_accounts();
         let recent_timestamps = vote_accounts.iter().filter_map(|(pubkey, (_, account))| {
-            // TODO(wen): make this work for Alpenglow.
-            let vote_state = account.vote_state_view()?;
-            let last_timestamp = vote_state.last_timestamp();
+            let last_timestamp = account.last_timestamp();
             let slot_delta = self.slot().checked_sub(last_timestamp.slot)?;
             (slot_delta <= slots_per_epoch)
                 .then_some((*pubkey, (last_timestamp.slot, last_timestamp.timestamp)))
@@ -7386,6 +7384,7 @@ pub mod test_utils {
     use {
         super::Bank,
         crate::installed_scheduler_pool::BankWithScheduler,
+        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         solana_sdk::{
             account::{ReadableAccount, WritableAccount},
             hash::hashv,
@@ -7415,12 +7414,21 @@ pub mod test_utils {
         timestamp: BlockTimestamp,
         bank: &Bank,
         vote_pubkey: &Pubkey,
+        is_alpenglow: bool,
     ) {
         let mut vote_account = bank.get_account(vote_pubkey).unwrap_or_default();
-        let mut vote_state = vote_state::from(&vote_account).unwrap_or_default();
-        vote_state.last_timestamp = timestamp;
-        let versioned = VoteStateVersions::new_current(vote_state);
-        vote_state::to(&versioned, &mut vote_account).unwrap();
+        if is_alpenglow {
+            let vote_state = &mut AlpenglowVoteState::deserialize(vote_account.data())
+                .unwrap()
+                .clone();
+            vote_state.set_latest_timestamp(timestamp.slot, timestamp.timestamp);
+            vote_state.serialize_into(vote_account.data_as_mut_slice());
+        } else {
+            let mut vote_state = vote_state::from(&vote_account).unwrap_or_default();
+            vote_state.last_timestamp = timestamp;
+            let versioned = VoteStateVersions::new_current(vote_state);
+            vote_state::to(&versioned, &mut vote_account).unwrap();
+        }
         bank.store_account(vote_pubkey, &vote_account);
     }
 
