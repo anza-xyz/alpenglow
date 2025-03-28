@@ -10,6 +10,7 @@ use {
     solana_instruction::error::InstructionError,
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
+    solana_vote_interface::state::BlockTimestamp,
     std::{
         cmp::Ordering,
         collections::{hash_map::Entry, HashMap},
@@ -180,6 +181,16 @@ impl VoteAccount {
             VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
                 .unwrap()
                 .get_authorized_voter(epoch),
+        }
+    }
+
+    pub fn last_timestamp(&self) -> BlockTimestamp {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.last_timestamp(),
+            VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
+                .unwrap()
+                .latest_timestamp()
+                .into(),
         }
     }
 
