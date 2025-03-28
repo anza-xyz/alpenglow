@@ -154,7 +154,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=b3d25ff#b3d25ff8775a3671d88ccaf080e70773b6897231"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=96f8d34#96f8d34cadd64b374c10606c57261df608083f76"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -804,6 +804,12 @@ dependencies = [
  "memchr",
  "serde",
 ]
+
+[[package]]
+name = "build-print"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a2128d00b7061b82b72844a351e80acd29e05afc60e9261e2ac90dca9ecc2ac"
 
 [[package]]
 name = "bumpalo"
@@ -3874,7 +3880,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d6ea3c4595b96363c13943497db34af4460fb474a95c43f4446ad341b8c9785"
 dependencies = [
- "toml",
+ "toml 0.5.11",
 ]
 
 [[package]]
@@ -4772,6 +4778,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87607cb1398ed59d48732e575a4c28a7a8ebf2454b964fe3f224f2afc07909e1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5374,6 +5389,17 @@ dependencies = [
  "solana-measure",
  "solana-pubkey",
  "tempfile",
+]
+
+[[package]]
+name = "solana-build-alpenglow-vote"
+version = "2.3.0"
+dependencies = [
+ "build-print",
+ "glob",
+ "serde",
+ "toml 0.8.19",
+ "walkdir",
 ]
 
 [[package]]
@@ -7336,6 +7362,7 @@ dependencies = [
  "solana-accounts-db",
  "solana-bpf-loader-program",
  "solana-bucket-map",
+ "solana-build-alpenglow-vote",
  "solana-builtins",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
@@ -9580,10 +9607,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1ed1f98e3fdc28d6d910e6737ae6ab1a93bf1985935a1193e68f93eeb68d24e"
+dependencies = [
+ "serde",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_edit",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dd7358ecb8fc2f8d014bf86f6f638ce72ba252a2c3a2572f2a795f1d23efb41"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "toml_edit"
@@ -9592,6 +9634,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae48d6208a266e853d946088ed816055e556cc6028c5e8e2b84d9fa5dd7c7f5"
 dependencies = [
  "indexmap 2.8.0",
+ "serde",
+ "serde_spanned",
  "toml_datetime",
  "winnow",
 ]
