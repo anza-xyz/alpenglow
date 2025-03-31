@@ -259,6 +259,7 @@ pub fn run_kill_partition_switch_threshold<C>(
         on_partition_resolved,
         ticks_per_slot,
         vec![],
+        false,
     )
 }
 
@@ -311,6 +312,7 @@ pub fn run_cluster_partition<C>(
     on_partition_resolved: impl FnOnce(&mut LocalCluster, &mut C),
     ticks_per_slot: Option<u64>,
     additional_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
     info!("PARTITION_TEST!");
@@ -374,7 +376,12 @@ pub fn run_cluster_partition<C>(
         "PARTITION_TEST starting cluster with {:?} partitions slots_per_epoch: {}",
         partitions, config.slots_per_epoch,
     );
-    let mut cluster = LocalCluster::new(&mut config, SocketAddrSpace::Unspecified);
+
+    let mut cluster = if is_alpenglow {
+        LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified)
+    } else {
+        LocalCluster::new(&mut config, SocketAddrSpace::Unspecified)
+    };
 
     info!("PARTITION_TEST spend_and_verify_all_nodes(), ensure all nodes are caught up");
     cluster_tests::spend_and_verify_all_nodes(
