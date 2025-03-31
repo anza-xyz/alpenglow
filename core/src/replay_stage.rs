@@ -3,7 +3,6 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::{CertificatePool, StartLeaderCertificates},
-            skip_pool::SkipPool,
             utils::stake_reached_super_majority,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
@@ -94,7 +93,6 @@ use {
     std::{
         collections::{HashMap, HashSet},
         num::NonZeroUsize,
-        ops::RangeInclusive,
         result,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
@@ -620,7 +618,7 @@ impl ReplayStage {
         } = receivers;
 
         trace!("replay stage");
-        let mut cert_pool = CertificatePool::default();
+        let mut cert_pool = CertificatePool::new_from_bank(&bank_forks.read().unwrap().root_bank());
 
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
@@ -2082,8 +2080,6 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
     ) -> Option<Slot> {
         let first_alpenglow_slot = first_alpenglow_slot?;
-        let mut cached_root_bank = None;
-
         alpenglow_vote_receiver
             .try_iter()
             .filter_map(|(vote, vote_account_pubkey, tx)| {
@@ -2091,23 +2087,7 @@ impl ReplayStage {
                     return None;
                 }
 
-                let root_bank =
-                    cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
-                let epoch = root_bank.epoch_schedule().get_epoch(vote.slot());
-                let epoch_stakes = root_bank.epoch_stakes(epoch)?;
-                let validator_stake = epoch_stakes.vote_account_stake(&vote_account_pubkey);
-                if validator_stake == 0 {
-                    return None;
-                }
-
-                let total_stake = root_bank.epoch_total_stake(epoch)?;
-                match cert_pool.add_vote(
-                    &vote,
-                    tx,
-                    &vote_account_pubkey,
-                    validator_stake,
-                    total_stake,
-                ) {
+                match cert_pool.add_vote(&vote, tx, &vote_account_pubkey) {
                     Ok(Some(cert)) if cert.is_finalize() => {
                         let is_frozen = bank_forks
                             .read()
@@ -2116,10 +2096,7 @@ impl ReplayStage {
                             .is_some_and(|bank| bank.is_frozen());
 
                         if is_frozen {
-                            info!(
-                                "{} got new highest gossip cert for {:?} from gossip vote",
-                                id, cert
-                            );
+                            info!("{} got new highest cert for {:?} from vote", id, cert);
                             Some(cert.slot())
                         } else {
                             None
@@ -2451,9 +2428,6 @@ impl ReplayStage {
         let parent_slot = parent_bank.slot();
         let first_alpenglow_slot = first_alpenglow_slot.unwrap();
         let root_slot = bank_forks.read().unwrap().root();
-        let total_stake = parent_bank
-            .epoch_total_stake(parent_bank.epoch_schedule().get_epoch(my_leader_slot))
-            .expect("my_leader_slot - 1 got a certificate, so we must be in a known epoch range");
         info!(
             "checking alpenglow decision {} {} {}",
             my_leader_slot, parent_slot, first_alpenglow_slot
@@ -2466,7 +2440,6 @@ impl ReplayStage {
             parent_slot,
             // We only need skip certificates for slots > the slot at which alpenglow is enabled
             first_alpenglow_slot,
-            total_stake,
         )
         else {
             return false;
@@ -2878,13 +2851,9 @@ impl ReplayStage {
             identity_keypair.pubkey(),
             vote
         );
-        let Ok(maybe_new_cert) = cert_pool.add_vote(
-            &vote,
-            vote_tx.clone().into(),
-            vote_account_pubkey,
-            vote_bank.epoch_vote_account_stake(vote_account_pubkey),
-            vote_bank.total_epoch_stake(),
-        ) else {
+        let Ok(maybe_new_cert) =
+            cert_pool.add_vote(&vote, vote_tx.clone().into(), vote_account_pubkey)
+        else {
             return None;
         };
 
@@ -4240,10 +4209,10 @@ impl ReplayStage {
         let mut notarization_stake = 0;
         let must_skip_start = parent_slot + 1;
         let must_skip_end = bank.slot() - 1;
-        let mut skip_pool = SkipPool::new();
+        let mut certificate_pool = CertificatePool::new_from_bank(bank);
         bank.vote_accounts()
             .iter()
-            .for_each(|(vote_account_pubkey, (stake, account))| {
+            .for_each(|(vote_account_pubkey, (_, account))| {
                 let Some(vote_state) = account.alpenglow_vote_state() else {
                     return;
                 };
@@ -4254,15 +4223,10 @@ impl ReplayStage {
                 {
                     notarization_stake += stake_in_parent_epoch;
                 }
-                // TODO(wen): the stake here might be incorrect for different epoch.
-                let _ = skip_pool.add_vote(
+                let _ = certificate_pool.add_fake_skip_vote(
+                    vote_state.latest_skip_start_slot(),
+                    vote_state.latest_skip_end_slot(),
                     vote_account_pubkey,
-                    RangeInclusive::new(
-                        vote_state.latest_skip_start_slot(),
-                        vote_state.latest_skip_end_slot(),
-                    ),
-                    (),
-                    *stake,
                 );
             });
         // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
@@ -4287,17 +4251,12 @@ impl ReplayStage {
                 "Notarization".to_string(),
             ));
         }
-        if must_skip_start <= must_skip_end {
-            // TODO(wen): the stake can be incorrect.
-            skip_pool.update(
-                bank.epoch_total_stake(bank.epoch())
-                    .expect("stake must exist"),
-            );
-            if !skip_pool.skip_range_certified(&must_skip_start, &must_skip_end) {
+        for slot in must_skip_start..=must_skip_end {
+            if !certificate_pool.skip_certified(slot) {
                 warn!(
-                    "Skip range for bank {} is {:?}, does not cover {} to {}",
+                    "Skip range for bank {} does not cover {} in {} to {}",
                     bank.slot(),
-                    skip_pool.max_skip_certificate_range(),
+                    slot,
                     must_skip_start,
                     must_skip_end
                 );
@@ -4985,7 +4944,6 @@ impl ReplayStage {
         lockouts_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), SetRootError> {
         vote_history.set_root(new_root);
-        cert_pool.purge(new_root);
         Self::check_and_handle_new_root(
             my_pubkey,
             vote_bank,
@@ -5007,6 +4965,13 @@ impl ReplayStage {
             epoch_slots_frozen_slots,
             drop_bank_sender,
         )?;
+        cert_pool.handle_new_root(
+            bank_forks
+                .read()
+                .unwrap()
+                .get(new_root)
+                .expect("Root bank doesn't exist"),
+        );
         Self::alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Root,
             new_root,
@@ -9753,7 +9718,7 @@ pub(crate) mod tests {
         let has_new_vote_been_rooted = true;
         let track_transaction_indexes = false;
 
-        let mut cert_pool = CertificatePool::default();
+        let mut cert_pool = CertificatePool::new_from_bank(&bank_forks.read().unwrap().root_bank());
         assert!(!ReplayStage::maybe_start_leader(
             my_pubkey,
             bank_forks,
@@ -10432,7 +10397,7 @@ pub(crate) mod tests {
             PohLeaderStatus::NotReached
         );
 
-        let mut cert_pool = CertificatePool::default();
+        let mut cert_pool = CertificatePool::new_from_bank(&bank_forks.read().unwrap().root_bank());
         assert!(!ReplayStage::maybe_start_leader(
             &my_pubkey,
             &bank_forks,
@@ -10464,7 +10429,7 @@ pub(crate) mod tests {
 
         // We should now start leader for dummy_slot + 1
         let good_slot = dummy_slot + 1;
-        let mut cert_pool = CertificatePool::default();
+        let mut cert_pool = CertificatePool::new_from_bank(&bank_forks.read().unwrap().root_bank());
         assert!(ReplayStage::maybe_start_leader(
             &my_pubkey,
             &bank_forks,
