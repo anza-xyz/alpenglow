@@ -277,17 +277,17 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
 }
 
 pub fn activate_all_features_alpenglow(genesis_config: &mut GenesisConfig) {
-    do_activate_all_features(genesis_config, true);
+    do_activate_all_features::<true>(genesis_config);
 }
 
 pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
-    do_activate_all_features(genesis_config, false);
+    do_activate_all_features::<false>(genesis_config);
 }
 
-pub fn do_activate_all_features(genesis_config: &mut GenesisConfig, is_alpenglow: bool) {
+pub fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive {
-        if feature_id != solana_feature_set::secp256k1_program_enabled::id() || is_alpenglow {
+        if IS_ALPENGLOW || feature_id != solana_feature_set::secp256k1_program_enabled::id() {
             activate_feature(genesis_config, feature_id);
         }
     }

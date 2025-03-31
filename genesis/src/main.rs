@@ -704,12 +704,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             std::process::exit(1);
         });
 
-    let alpenglow_so_path = matches.value_of("alpenglow");
-
-    if alpenglow_so_path.is_none() {
-        features_to_deactivate.push(solana_feature_set::secp256k1_program_enabled::id());
-    }
-
     match matches.value_of("hashes_per_tick").unwrap() {
         "auto" => match cluster_type {
             ClusterType::Development => {
@@ -769,6 +763,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let commission = value_t_or_exit!(matches, "vote_commission_percentage", u8);
     let rent = genesis_config.rent.clone();
 
+    let alpenglow_so_path = matches.value_of("alpenglow");
+
     add_validator_accounts(
         &mut genesis_config,
         &mut bootstrap_validator_pubkeys.iter(),
@@ -792,7 +788,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     }
 
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
-    solana_runtime::genesis_utils::activate_all_features(&mut genesis_config);
+
+    if alpenglow_so_path.is_some() {
+        solana_runtime::genesis_utils::activate_all_features_alpenglow
+    } else {
+        solana_runtime::genesis_utils::activate_all_features
+    }
+    (&mut genesis_config);
+
     if !features_to_deactivate.is_empty() {
         solana_runtime::genesis_utils::deactivate_features(
             &mut genesis_config,

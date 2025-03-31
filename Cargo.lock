@@ -8379,6 +8379,7 @@ dependencies = [
  "rayon",
  "serial_test",
  "solana-accounts-db",
+ "solana-build-alpenglow-vote",
  "solana-client",
  "solana-config-program",
  "solana-core",
