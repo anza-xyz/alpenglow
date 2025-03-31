@@ -345,7 +345,7 @@ startBootstrapLeader() {
       local remoteSolanaHome="${remoteHome}/solana"
 
       rsync -vPrc -e "ssh ${sshOptions[*]}" \
-        "$SOLANA_ROOT"/target/alpenglow-vote-so/spl-alpenglow_vote.so \
+        "$SOLANA_ROOT"/target/alpenglow-vote-so/spl_alpenglow-vote.so \
         "$ipAddress":"$remoteSolanaHome"/ > /dev/null
     fi
 

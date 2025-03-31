@@ -5365,6 +5365,7 @@ pub(crate) mod tests {
         blockstore_processor::{
             confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
         },
+        build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH,
         crossbeam_channel::unbounded,
         itertools::Itertools,
         solana_account::{AccountSharedData, WritableAccount},
@@ -10767,6 +10768,7 @@ pub(crate) mod tests {
                 lamports,
                 &validator_voting_keypairs,
                 vec![100; validator_voting_keypairs.len()],
+                ALPENGLOW_VOTE_SO_PATH,
             );
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
         bank0.freeze();
