@@ -212,6 +212,30 @@ pub fn create_genesis_config_with_leader(
         mint_lamports,
         validator_pubkey,
         validator_stake_lamports,
+        false,
+    )
+}
+
+#[cfg(feature = "dev-context-only-utils")]
+pub fn create_genesis_config_with_leader_enable_alpenglow(
+    mint_lamports: u64,
+    validator_pubkey: &Pubkey,
+    validator_stake_lamports: u64,
+    is_alpenglow: bool,
+) -> GenesisConfigInfo {
+    // Use deterministic keypair so we don't get confused by randomness in tests
+    let mint_keypair = Keypair::from_seed(&[
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31,
+    ])
+    .unwrap();
+
+    create_genesis_config_with_leader_with_mint_keypair(
+        mint_keypair,
+        mint_lamports,
+        validator_pubkey,
+        validator_stake_lamports,
+        is_alpenglow,
     )
 }
 
@@ -220,6 +244,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     mint_lamports: u64,
     validator_pubkey: &Pubkey,
     validator_stake_lamports: u64,
+    is_alpenglow: bool,
 ) -> GenesisConfigInfo {
     // Use deterministic keypair so we don't get confused by randomness in tests
     let voting_keypair = Keypair::from_seed(&[
@@ -240,7 +265,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
         Rent::free(),               // most tests don't expect rent
         ClusterType::Development,
         vec![],
-        false,
+        is_alpenglow,
     );
 
     GenesisConfigInfo {
@@ -251,11 +276,18 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     }
 }
 
+pub fn activate_all_features_alpenglow(genesis_config: &mut GenesisConfig) {
+    do_activate_all_features(genesis_config, true);
+}
+
 pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
+    do_activate_all_features(genesis_config, false);
+}
+
+pub fn do_activate_all_features(genesis_config: &mut GenesisConfig, is_alpenglow: bool) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive {
-        // TODO remove this
-        if feature_id != solana_feature_set::secp256k1_program_enabled::id() {
+        if feature_id != solana_feature_set::secp256k1_program_enabled::id() || is_alpenglow {
             activate_feature(genesis_config, feature_id);
         }
     }
@@ -462,7 +494,11 @@ pub fn create_genesis_config_with_leader_ex(
     );
 
     if genesis_config.cluster_type == ClusterType::Development {
-        activate_all_features(&mut genesis_config);
+        if is_alpenglow {
+            activate_all_features_alpenglow(&mut genesis_config);
+        } else {
+            activate_all_features(&mut genesis_config);
+        }
     }
 
     genesis_config
