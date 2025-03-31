@@ -327,7 +327,12 @@ pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpengl
     let mut program_data_elf: Vec<u8> = vec![];
     File::open(alpenglow_so_path)
         .and_then(|mut file| file.read_to_end(&mut program_data_elf))
-        .unwrap_or_else(|err| panic!("Error: failed to read alpenglow-vote program: {}", err));
+        .unwrap_or_else(|err| {
+            panic!(
+                "Error: failed to read alpenglow-vote program from path {}: {}",
+                alpenglow_so_path, err
+            )
+        });
 
     // Derive the address for the program data account
     let address = alpenglow_vote::id();

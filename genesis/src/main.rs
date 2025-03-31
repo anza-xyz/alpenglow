@@ -698,7 +698,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let cluster_type = cluster_type_of(&matches, "cluster_type").unwrap();
 
     // Get the features to deactivate if provided
-    let mut features_to_deactivate = features_to_deactivate_for_cluster(&cluster_type, &matches)
+    let features_to_deactivate = features_to_deactivate_for_cluster(&cluster_type, &matches)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             std::process::exit(1);
@@ -790,11 +790,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
 
     if alpenglow_so_path.is_some() {
-        solana_runtime::genesis_utils::activate_all_features_alpenglow
+        solana_runtime::genesis_utils::activate_all_features_alpenglow(&mut genesis_config);
     } else {
-        solana_runtime::genesis_utils::activate_all_features
+        solana_runtime::genesis_utils::activate_all_features(&mut genesis_config);
     }
-    (&mut genesis_config);
 
     if !features_to_deactivate.is_empty() {
         solana_runtime::genesis_utils::deactivate_features(

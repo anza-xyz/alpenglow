@@ -339,6 +339,16 @@ startBootstrapLeader() {
 
     deployBootstrapValidator "$ipAddress"
 
+    if $alpenglow; then
+      declare remoteHome
+      remoteHome=$(remoteHomeDir "$ipAddress")
+      local remoteSolanaHome="${remoteHome}/solana"
+
+      rsync -vPrc -e "ssh ${sshOptions[*]}" \
+        "$SOLANA_ROOT"/target/alpenglow-vote-so/spl-alpenglow_vote.so \
+        "$ipAddress":"$remoteSolanaHome"/ > /dev/null
+    fi
+
     ssh "${sshOptions[@]}" -n "$ipAddress" \
       "./solana/net/remote/remote-node.sh \
          $deployMethod \
