@@ -3985,15 +3985,16 @@ impl ReplayStage {
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     if let Some(parent_bank) = bank.parent() {
                         if bank.slot() > first_alpenglow_slot {
+                            let root_bank = bank_forks.read().unwrap().root_bank();
                             if let Err(e) = Self::alpenglow_check_cert_in_bank(
                                 bank,
+                                &root_bank,
                                 parent_bank.slot() >= first_alpenglow_slot,
                             ) {
-                                let root = bank_forks.read().unwrap().root();
                                 Self::mark_dead_slot(
                                     blockstore,
                                     bank,
-                                    root,
+                                    root_bank.slot(),
                                     &e,
                                     rpc_subscriptions,
                                     slot_status_notifier,
@@ -4196,6 +4197,7 @@ impl ReplayStage {
     // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
     fn alpenglow_check_cert_in_bank(
         bank: &Bank,
+        root_bank: &Bank,
         check_notarization: bool,
     ) -> Result<(), BlockstoreProcessorError> {
         let Some(parent_bank) = bank.parent() else {
@@ -4209,7 +4211,7 @@ impl ReplayStage {
         let mut notarization_stake = 0;
         let must_skip_start = parent_slot + 1;
         let must_skip_end = bank.slot() - 1;
-        let mut certificate_pool = CertificatePool::new_from_bank(bank);
+        let mut certificate_pool = CertificatePool::new_from_bank(root_bank);
         bank.vote_accounts()
             .iter()
             .for_each(|(vote_account_pubkey, (_, account))| {
@@ -10736,17 +10738,17 @@ pub(crate) mod tests {
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
         bank0.freeze();
         // Test on bank0 should always succeed
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0, true).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank0, &bank0, true).is_ok());
         let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 1);
         bank1.freeze();
         // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1, true).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank1, &bank0, true).is_ok());
         let bank2 = Arc::new(Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 2));
         bank2.freeze();
         // Test on bank2 should fail because even though bank 0 doesn't need to be notarized,
         // it should have skip cert for bank 1 which it skipped.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank2, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank2, &bank0, true)
         {
             assert_eq!(slot, 2);
             assert_eq!(cert_slot, 1);
@@ -10757,7 +10759,7 @@ pub(crate) mod tests {
         let bank3 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3);
         // Test on bank3 should fail because it doesn't contain notarization for bank 2.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, &bank0, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10776,7 +10778,7 @@ pub(crate) mod tests {
             lamports,
         );
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, &bank0, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10797,7 +10799,7 @@ pub(crate) mod tests {
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank3, &bank0, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
@@ -10817,12 +10819,12 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3, true).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank3, &bank0, true).is_ok());
 
         // Create bank5 which links off bank2, has notarization cert for bank2 but no skip certs.
         let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, &bank0, true)
         {
             assert_eq!(slot, 5);
             assert_eq!(cert_slot, 2);
@@ -10842,7 +10844,7 @@ pub(crate) mod tests {
             );
         }
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, &bank0, true)
         {
             assert_eq!(slot, 5);
             assert_eq!(cert_slot, 3);
@@ -10862,7 +10864,10 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5, true).is_ok());
+        assert!(matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, &bank0, true),
+            Ok(())
+        ));
         // Let's say we have bank 5 which links to bank 2, and asked not to check notarization,
         // then it should succeed only with skip cert.
         let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
@@ -10877,10 +10882,10 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5, false).is_ok());
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(&bank5, &bank0, false).is_ok());
         // But if we are asked to check notarization, it should fail.
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(&bank5, true)
+            ReplayStage::alpenglow_check_cert_in_bank(&bank5, &bank0, true)
         {
             assert_eq!(slot, 5);
             assert_eq!(cert_slot, 2);
