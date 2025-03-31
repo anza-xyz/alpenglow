@@ -90,7 +90,7 @@ impl PacketReceiver {
                 parse_alpenglow_vote_transaction_from_sanitized(packet.transaction())
             {
                 total += 1;
-                if let Ok(_) = alpenglow_vote_sender.send(result) {
+                if alpenglow_vote_sender.send(result).is_ok() {
                     total_sent += 1;
                 }
             }
