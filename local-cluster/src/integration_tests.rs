@@ -283,6 +283,7 @@ pub fn run_kill_partition_switch_threshold<C>(
         ticks_per_slot,
         true,
         vec![],
+        false,
     )
 }
 
@@ -327,7 +328,7 @@ pub fn create_custom_leader_schedule_with_random_keys(
 /// * `no_wait_for_vote_to_start_leader` - provide option to only allow the
 ///   bootstrap to build blocks at first to minimize forking during cluster
 ///   startup.
-#[allow(clippy::cognitive_complexity)]
+#[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 pub fn run_cluster_partition<C>(
     partitions: &[usize],
     leader_schedule: Option<(LeaderSchedule, Vec<ValidatorKeys>)>,
@@ -338,6 +339,7 @@ pub fn run_cluster_partition<C>(
     ticks_per_slot: Option<u64>,
     no_wait_for_vote_to_start_leader: bool,
     additional_accounts: Vec<(Pubkey, AccountSharedData)>,
+    is_alpenglow: bool,
 ) {
     agave_logger::setup_with_default(RUST_LOG_FILTER);
     info!("PARTITION_TEST!");
@@ -422,7 +424,12 @@ pub fn run_cluster_partition<C>(
         "PARTITION_TEST starting cluster with {:?} partitions slots_per_epoch: {}",
         partitions, config.slots_per_epoch,
     );
-    let mut cluster = LocalCluster::new(&mut config, SocketAddrSpace::Unspecified);
+
+    let mut cluster = if is_alpenglow {
+        LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified)
+    } else {
+        LocalCluster::new(&mut config, SocketAddrSpace::Unspecified)
+    };
 
     info!("PARTITION_TEST spend_and_verify_all_nodes(), ensure all nodes are caught up");
     cluster_tests::spend_and_verify_all_nodes(

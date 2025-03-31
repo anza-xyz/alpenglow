@@ -2707,10 +2707,16 @@ fn test_restart_tower_rollback() {
 #[test]
 #[serial]
 fn test_run_test_load_program_accounts_partition_root() {
-    run_test_load_program_accounts_partition(CommitmentConfig::finalized());
+    run_test_load_program_accounts_partition(CommitmentConfig::finalized(), false);
 }
 
-fn run_test_load_program_accounts_partition(scan_commitment: CommitmentConfig) {
+#[test]
+#[serial]
+fn test_alpenglow_run_test_load_program_accounts_partition_root() {
+    run_test_load_program_accounts_partition(CommitmentConfig::finalized(), true);
+}
+
+fn run_test_load_program_accounts_partition(scan_commitment: CommitmentConfig, is_alpenglow: bool) {
     let num_slots_per_validator = 8;
     let partitions: [usize; 2] = [1, 1];
     let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[
@@ -2764,6 +2770,7 @@ fn run_test_load_program_accounts_partition(scan_commitment: CommitmentConfig) {
         None,
         false,
         additional_accounts,
+        is_alpenglow,
     );
 }
 
@@ -3901,6 +3908,8 @@ fn test_kill_heaviest_partition() {
         None,
         true,
         vec![],
+        // TODO: make Alpenglow equivalent when skips are available
+        false,
     )
 }
 
@@ -4469,32 +4478,35 @@ fn find_latest_replayed_slot_from_ledger(
 #[test]
 #[serial]
 fn test_cluster_partition_1_1() {
-    let empty = |_: &mut LocalCluster, _: &mut ()| {};
-    let on_partition_resolved = |cluster: &mut LocalCluster, _: &mut ()| {
-        cluster.check_for_new_roots(16, "PARTITION_TEST", SocketAddrSpace::Unspecified);
-    };
-    run_cluster_partition(
-        &[1, 1],
-        None,
-        (),
-        empty,
-        empty,
-        on_partition_resolved,
-        None,
-        false,
-        vec![],
-    )
+    run_test_cluster_partition(2, false);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_cluster_partition_1_1() {
+    run_test_cluster_partition(2, true);
 }
 
 #[test]
 #[serial]
 fn test_cluster_partition_1_1_1() {
+    run_test_cluster_partition(3, false);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_cluster_partition_1_1_1() {
+    run_test_cluster_partition(3, true);
+}
+
+fn run_test_cluster_partition(num_partitions: usize, is_alpenglow: bool) {
     let empty = |_: &mut LocalCluster, _: &mut ()| {};
     let on_partition_resolved = |cluster: &mut LocalCluster, _: &mut ()| {
         cluster.check_for_new_roots(16, "PARTITION_TEST", SocketAddrSpace::Unspecified);
     };
+    let partition_sizes = vec![1; num_partitions];
     run_cluster_partition(
-        &[1, 1, 1],
+        &partition_sizes,
         None,
         (),
         empty,
@@ -4503,6 +4515,7 @@ fn test_cluster_partition_1_1_1() {
         None,
         false,
         vec![],
+        is_alpenglow,
     )
 }
 
