@@ -6897,6 +6897,7 @@ dependencies = [
 name = "solana-cli"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bs58",

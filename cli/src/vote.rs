@@ -13,6 +13,7 @@ use {
         spend_utils::{resolve_spend_tx_and_check_account_balances, SpendAmount},
         stake::check_current_authority,
     },
+    alpenglow_vote::instruction::InitializeAccountInstructionData,
     clap::{value_t_or_exit, App, Arg, ArgMatches, SubCommand},
     solana_account::Account,
     solana_clap_utils::{
@@ -474,6 +475,7 @@ pub fn parse_create_vote_account(
         signer_of(matches, NONCE_AUTHORITY_ARG.name, wallet_manager)?;
     let (fee_payer, fee_payer_pubkey) = signer_of(matches, FEE_PAYER_ARG.name, wallet_manager)?;
     let compute_unit_price = value_of(matches, COMPUTE_UNIT_PRICE_ARG.name);
+    let is_alpenglow = matches.is_present("alpenglow");
 
     if !allow_unsafe {
         if authorized_withdrawer == vote_account_pubkey.unwrap() {
@@ -515,6 +517,7 @@ pub fn parse_create_vote_account(
             memo,
             fee_payer: signer_info.index_of(fee_payer_pubkey).unwrap(),
             compute_unit_price,
+            is_alpenglow,
         },
         signers: signer_info.signers,
     })
@@ -808,6 +811,7 @@ pub fn process_create_vote_account(
     memo: Option<&String>,
     fee_payer: SignerIndex,
     compute_unit_price: Option<u64>,
+    is_alpenglow: bool,
 ) -> ProcessResult {
     let vote_account = config.signers[vote_account];
     let vote_account_pubkey = vote_account.pubkey();
@@ -842,35 +846,64 @@ pub fn process_create_vote_account(
         BlockhashQuery::All(_) => ComputeUnitLimit::Simulated,
     };
     let build_message = |lamports| {
-        let vote_init = VoteInit {
-            node_pubkey: identity_pubkey,
-            authorized_voter: authorized_voter.unwrap_or(identity_pubkey),
-            authorized_withdrawer,
-            commission,
-        };
-        let mut create_vote_account_config = CreateVoteAccountConfig {
-            space,
-            ..CreateVoteAccountConfig::default()
-        };
-        let to = if let Some(seed) = seed {
-            create_vote_account_config.with_seed = Some((&vote_account_pubkey, seed));
+        let node_pubkey = identity_pubkey;
+        let authorized_voter = authorized_voter.unwrap_or(identity_pubkey);
+
+        let to = if seed.is_some() {
             &vote_account_address
         } else {
             &vote_account_pubkey
         };
 
-        let ixs = vote_instruction::create_account_with_config(
-            &config.signers[0].pubkey(),
-            to,
-            &vote_init,
-            lamports,
-            create_vote_account_config,
-        )
-        .with_memo(memo)
-        .with_compute_unit_config(&ComputeUnitConfig {
-            compute_unit_price,
-            compute_unit_limit,
-        });
+        let mut ixs = if is_alpenglow {
+            let iaid = InitializeAccountInstructionData {
+                node_pubkey,
+                authorized_voter,
+                authorized_withdrawer,
+                commission,
+            };
+
+            let create_ix = solana_system_interface::instruction::create_account(
+                &config.signers[0].pubkey(),
+                to,
+                lamports,
+                space,
+                &alpenglow_vote::id(),
+            );
+
+            let init_ix = alpenglow_vote::instruction::initialize_account(*to, &iaid);
+
+            vec![create_ix, init_ix]
+        } else {
+            let vote_init = VoteInit {
+                node_pubkey,
+                authorized_voter,
+                authorized_withdrawer,
+                commission,
+            };
+            let mut create_vote_account_config = CreateVoteAccountConfig {
+                space,
+                ..CreateVoteAccountConfig::default()
+            };
+            if let Some(seed) = seed {
+                create_vote_account_config.with_seed = Some((&vote_account_pubkey, seed));
+            }
+
+            vote_instruction::create_account_with_config(
+                &config.signers[0].pubkey(),
+                to,
+                &vote_init,
+                lamports,
+                create_vote_account_config,
+            )
+        };
+
+        ixs = ixs
+            .with_memo(memo)
+            .with_compute_unit_config(&ComputeUnitConfig {
+                compute_unit_price,
+                compute_unit_limit,
+            });
 
         if let Some(nonce_account) = &nonce_account {
             Message::new_with_nonce(
@@ -1853,6 +1886,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),
@@ -1887,6 +1921,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),
@@ -1928,6 +1963,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),
@@ -1981,6 +2017,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),
@@ -2024,6 +2061,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),
@@ -2063,6 +2101,7 @@ mod tests {
                     memo: None,
                     fee_payer: 0,
                     compute_unit_price: None,
+                    is_alpenglow: false,
                 },
                 signers: vec![
                     Box::new(read_keypair_file(&default_keypair_file).unwrap()),

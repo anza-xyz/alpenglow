@@ -448,6 +448,13 @@ EOF
       args+=(--wen-restart-coordinator "$maybeWenRestart")
     fi
 
+    if $alpenglow; then
+      echo "Consensus method: Alpenglow"
+      args+=(--alpenglow)
+    else
+      echo "Consensus method: POH"
+    fi
+
 cat >> ~/solana/on-reboot <<EOF
     $maybeSkipAccountsCreation
     nohup multinode-demo/validator.sh ${args[@]} > validator.log.\$now 2>&1 &
