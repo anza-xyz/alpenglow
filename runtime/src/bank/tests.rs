@@ -8227,7 +8227,7 @@ fn test_adjust_sysvar_balance_for_rent() {
 #[test_case(false; "towerbft")]
 fn test_update_clock_timestamp(is_alpenglow: bool) {
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then(|| ALPENGLOW_VOTE_SO_PATH);
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         genesis_config,
         voting_keypair,
@@ -8337,7 +8337,7 @@ fn test_timestamp_slow(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then(|| ALPENGLOW_VOTE_SO_PATH);
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
@@ -8389,7 +8389,7 @@ fn test_timestamp_fast(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then(|| ALPENGLOW_VOTE_SO_PATH);
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
