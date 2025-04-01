@@ -194,6 +194,7 @@ while [[ -n $1 ]]; do
       shift 2
     elif [[ $1 == --alpenglow ]]; then
       alpenglow=(--alpenglow)
+      shift
     elif [[ $1 = -h ]]; then
       usage "$@"
     else
@@ -332,13 +333,13 @@ setup_validator_accounts() {
       ) || return $?
     fi
 
-    if $alpenglow; then
+    if [[ -n "$alpenglow" ]]; then
       echo "Creating Alpenglow validator vote account"
+      wallet create-vote-account "$alpenglow" "$vote_account" "$identity" "$authorized_withdrawer" || return $?
     else
       echo "Creating POH validator vote account"
+      wallet create-vote-account "$vote_account" "$identity" "$authorized_withdrawer" || return $?
     fi
-
-    wallet create-vote-account "$alpenglow" "$vote_account" "$identity" "$authorized_withdrawer" || return $?
   fi
   echo "Validator vote account configured"
 

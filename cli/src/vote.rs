@@ -120,6 +120,15 @@ impl VoteSubCommands for App<'_, '_> {
                              will be at a derived address of the VOTE ACCOUNT pubkey",
                         ),
                 )
+                .arg(
+                    Arg::with_name("alpenglow")
+                        .long("alpenglow")
+                        .takes_value(false)
+                        .help(
+                            "When enabled, creates an Alpenglow vote account. When disabled, \
+                             creates a POH vote account.",
+                        ),
+                )
                 .offline_args()
                 .nonce_args(false)
                 .arg(fee_payer_arg())
