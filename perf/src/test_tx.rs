@@ -1,4 +1,5 @@
 use {
+    agave_feature_set::alpenglow::id as alpenglow_program_id,
     rand::{CryptoRng, Rng, RngCore},
     solana_clock::Slot,
     solana_hash::Hash,
@@ -115,4 +116,17 @@ impl FromTestTx for VersionedTransaction {
         let versioned = VersionedMessage::V0(msg_v0);
         VersionedTransaction::try_new(versioned, &[payer]).unwrap()
     }
+}
+
+pub fn new_test_alpenglow_vote_tx<R>(rng: &mut R) -> Transaction
+where
+    R: CryptoRng + RngCore,
+{
+    let payer = Keypair::new();
+    let vote_ix = Instruction {
+        program_id: alpenglow_program_id(),
+        accounts: vec![AccountMeta::new_readonly(payer.pubkey(), true)],
+        data: vec![rng.random()],
+    };
+    Transaction::new_with_payer(&[vote_ix], Some(&payer.pubkey()))
 }
