@@ -154,7 +154,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=96f8d34#96f8d34cadd64b374c10606c57261df608083f76"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=f5bbc58#f5bbc58130d9b9a30a3af72f41a717224b2cf3d0"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -5399,7 +5399,6 @@ dependencies = [
  "glob",
  "serde",
  "toml 0.8.19",
- "walkdir",
 ]
 
 [[package]]
@@ -6669,6 +6668,7 @@ name = "solana-perf"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
+ "alpenglow-vote",
  "bincode",
  "bv",
  "caps",
