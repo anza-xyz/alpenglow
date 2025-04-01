@@ -27,7 +27,7 @@ pub enum AddVoteError {
     #[error("Add vote to vote certificate failed: {0}")]
     AddToCertificatePool(#[from] vote_certificate::AddVoteError),
 
-    #[error("Add vote to skip pool failed: {0}")]
+    #[error("Epoch stakes missing for epoch: {0}")]
     EpochStakesNotFound(Epoch),
 
     #[error("Zero stake")]
