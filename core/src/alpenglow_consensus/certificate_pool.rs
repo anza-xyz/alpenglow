@@ -237,8 +237,8 @@ impl CertificatePool {
         first_alpenglow_slot: Slot,
         total_stake: Stake,
     ) -> Option<StartLeaderCertificates> {
-        let needs_notarization_certificate =
-            parent_slot >= first_alpenglow_slot && parent_slot != 0;
+        // TODO: for GCE tests we WFSM on 1 so slot 1 is exempt
+        let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
         let notarization_certificate = {
             if needs_notarization_certificate {
@@ -343,8 +343,8 @@ mod tests {
         let total_stake = 100;
 
         // No notarization set, pool is default
-        let parent_slot = 1;
-        let my_leader_slot = 2;
+        let parent_slot = 2;
+        let my_leader_slot = 3;
         let first_alpenglow_slot = 0;
         let decision = pool.make_start_leader_decision(
             my_leader_slot,
@@ -439,9 +439,9 @@ mod tests {
         let total_stake = 100;
         // If parent_slot == first_alpenglow_slot, and
         // first_alpenglow_slot > 0, you need a notarization certificate
-        let parent_slot = 1;
-        let my_leader_slot = 2;
-        let first_alpenglow_slot = 1;
+        let parent_slot = 2;
+        let my_leader_slot = 3;
+        let first_alpenglow_slot = 2;
         assert!(pool
             .make_start_leader_decision(
                 my_leader_slot,

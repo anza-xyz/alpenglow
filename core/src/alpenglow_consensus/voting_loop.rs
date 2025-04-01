@@ -562,7 +562,11 @@ impl VotingLoop {
             return false;
         }
 
-        let parent_slot = cert_pool.highest_not_skip_certificate_slot();
+        // TODO(ashwin): We max with root here, as the snapshot slot might not have a certificate.
+        // Think about this more and fix if necessary.
+        let parent_slot = cert_pool
+            .highest_not_skip_certificate_slot()
+            .max(ctx.bank_forks.read().unwrap().root());
         if ctx
             .cert_tracker
             .read()

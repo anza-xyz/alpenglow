@@ -3701,7 +3701,8 @@ impl ReplayStage {
             });
         // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
         // is genesis bank and doesn't need to be notarized.
-        if parent_slot > 0
+        // TODO: for GCE tests we WFSM on slot 1, so exempt here
+        if parent_slot > 1
             && check_notarization
             && !stake_reached_super_majority(
                 notarization_stake,
