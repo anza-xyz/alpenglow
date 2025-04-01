@@ -105,7 +105,7 @@ impl CertificatePool {
 
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
-        if self.epoch_stakes_map.is_empty() || epoch != self.epoch_stakes_map_cached_at {
+        if self.epoch_stakes_map.is_empty() || epoch > self.epoch_stakes_map_cached_at {
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
             self.epoch_stakes_map_cached_at = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();
