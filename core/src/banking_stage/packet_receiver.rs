@@ -48,7 +48,11 @@ impl PacketReceiver {
                 // Consumes results if Ok, otherwise we keep the Err
                 .map(|receive_packet_results| {
                     if let Some(sender) = alpenglow_vote_sender {
-                        self.send_alpenglow_votes_to_cert_pool(&receive_packet_results, sender);
+                        self.send_alpenglow_votes_to_cert_pool(
+                            &receive_packet_results,
+                            sender,
+                            slot_metrics_tracker,
+                        );
                     }
                     self.buffer_packets(
                         receive_packet_results,
@@ -77,14 +81,21 @@ impl PacketReceiver {
             packet_stats: _,
         }: &ReceivePacketResults,
         alpenglow_vote_sender: &AlpenglowVoteSender,
+        slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
     ) {
+        let mut total = 0;
+        let mut total_sent = 0;
         for packet in deserialized_packets.iter() {
             if let Some(result) =
                 parse_alpenglow_vote_transaction_from_sanitized(packet.transaction())
             {
-                let _ = alpenglow_vote_sender.send(result);
+                total += 1;
+                if alpenglow_vote_sender.send(result).is_ok() {
+                    total_sent += 1;
+                }
             }
         }
+        slot_metrics_tracker.increment_alpenglow_vote_count(total, total_sent);
     }
 
     fn get_receive_timeout(vote_storage: &VoteStorage) -> Duration {
