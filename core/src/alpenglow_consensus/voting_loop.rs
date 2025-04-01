@@ -64,7 +64,7 @@ use {
 };
 
 // Skip time for each block
-const BLOCKTIME: u128 = 400;
+const BLOCKTIME: u128 = 800;
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
