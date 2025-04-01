@@ -1,4 +1,5 @@
 use {
+    alpenglow_vote::vote::Vote as AlpenglowVote,
     rand::{CryptoRng, Rng, RngCore},
     solana_clock::Slot,
     solana_hash::Hash,
@@ -68,4 +69,17 @@ where
         &Keypair::new(),    // authorized_voter_keypair
         switch_proof_hash,
     )
+}
+
+pub fn new_test_alpenglow_vote_tx<R>(rng: &mut R) -> Transaction
+where
+    R: CryptoRng + RngCore,
+{
+    let slot = rng.gen();
+    let vote =
+        AlpenglowVote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique(), None);
+    let keypair = Keypair::new();
+    let vote_ix = vote.to_vote_instruction(keypair.pubkey(), keypair.pubkey());
+
+    Transaction::new_with_payer(&[vote_ix], Some(&keypair.pubkey()))
 }

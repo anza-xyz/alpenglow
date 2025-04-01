@@ -11,6 +11,7 @@ edition = { workspace = true }
 
 [dependencies]
 ahash = { workspace = true }
+alpenglow-vote = { workspace = true }
 bincode = { workspace = true }
 bv = { workspace = true, features = ["serde"] }
 curve25519-dalek = { workspace = true }
