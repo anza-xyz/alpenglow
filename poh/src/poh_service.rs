@@ -231,6 +231,14 @@ impl PohService {
             }
 
             let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank else {
+                // Even if the bank has been cleared, ensure that any leftover records are cleared
+                Self::read_record_receiver_and_process(
+                    &poh_recorder,
+                    &record_receiver,
+                    // Don't block
+                    Duration::from_millis(1),
+                );
+
                 continue;
             };
 
