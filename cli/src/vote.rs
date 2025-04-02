@@ -846,8 +846,13 @@ pub fn process_create_vote_account(
     )?;
 
     let required_balance = rpc_client
-        .get_minimum_balance_for_rent_exemption(VoteState::size_of())?
+        .get_minimum_balance_for_rent_exemption(if is_alpenglow {
+            alpenglow_vote::state::VoteState::size()
+        } else {
+            VoteState::size_of()
+        })?
         .max(1);
+
     let amount = SpendAmount::Some(required_balance);
 
     let fee_payer = config.signers[fee_payer];

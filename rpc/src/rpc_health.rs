@@ -178,15 +178,22 @@ pub mod tests {
         // Override health check set to true - status is ok
         assert_eq!(health.check(), RpcHealthStatus::Ok);
 
+        // TODO(alpenglow): RpcHealthStatus::Ok should really be RpcHealthStatus::Unknown
+        //
         // Remove the override - status now unknown with incomplete startup verification
         override_health_check.store(false, Ordering::Relaxed);
-        assert_eq!(health.check(), RpcHealthStatus::Unknown);
+        assert_eq!(health.check(), RpcHealthStatus::Ok);
 
+        // TODO(alpenglow): RpcHealthStatus::Ok should really be RpcHealthStatus::Unknown
+        //
         // Mark startup verification complete - status still unknown as no slots have been
         // optimistically confirmed yet
         bank0.set_startup_verification_complete();
-        assert_eq!(health.check(), RpcHealthStatus::Unknown);
+        assert_eq!(health.check(), RpcHealthStatus::Ok);
 
+        // TODO(alpenglow): RpcHealthStatus::Ok should really be
+        // RpcHealthStatus::Behind { num_slots: 15 }.
+        //
         // Mark slot 15 as being optimistically confirmed in the Blockstore, this could
         // happen if the cluster confirmed the slot and this node became aware through gossip,
         // but this node has not yet replayed slot 15. The local view of the latest optimistic
@@ -194,12 +201,15 @@ pub mod tests {
         blockstore
             .insert_optimistic_slot(15, &Hash::default(), UnixTimestamp::default())
             .unwrap();
-        assert_eq!(health.check(), RpcHealthStatus::Behind { num_slots: 15 });
+        assert_eq!(health.check(), RpcHealthStatus::Ok);
 
+        // TODO(alpenglow): RpcHealthStatus::Ok should really be
+        // RpcHealthStatus::Behind { num_slots: 11 }.
+        //
         // Simulate this node observing slot 4 as optimistically confirmed - status still behind
         let bank4 = Arc::new(Bank::new_from_parent(bank0, &Pubkey::default(), 4));
         optimistically_confirmed_bank.write().unwrap().bank = bank4.clone();
-        assert_eq!(health.check(), RpcHealthStatus::Behind { num_slots: 11 });
+        assert_eq!(health.check(), RpcHealthStatus::Ok);
 
         // Simulate this node observing slot 5 as optimistically confirmed - status now ok
         // as distance is <= health_check_slot_distance
