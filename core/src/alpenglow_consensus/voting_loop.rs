@@ -402,7 +402,10 @@ impl VotingLoop {
                     }
 
                     // Check if replay has successfully completed
-                    if !bank_forks.read().unwrap().is_frozen(current_slot) {
+                    let Some(bank) = bank_forks.read().unwrap().get(current_slot) else {
+                        continue;
+                    };
+                    if !bank.is_frozen() {
                         continue;
                     };
 
@@ -410,9 +413,8 @@ impl VotingLoop {
                     if Self::vote(
                         &my_pubkey,
                         BlockIdVote::Notarize,
-                        current_slot,
+                        bank.as_ref(),
                         is_leader,
-                        &bank_forks,
                         &blockstore,
                         &mut cert_pool,
                         &mut voting_context,
@@ -440,18 +442,25 @@ impl VotingLoop {
                         &cert_pool,
                         cert_tracker.as_ref(),
                     )
-                    && bank_forks.read().unwrap().is_frozen(current_slot)
                 {
-                    Self::vote(
-                        &my_pubkey,
-                        BlockIdVote::Finalize,
-                        current_slot,
-                        is_leader,
-                        &bank_forks,
-                        &blockstore,
-                        &mut cert_pool,
-                        &mut voting_context,
-                    );
+                    if let Some(bank) = bank_forks.read().unwrap().get(current_slot) {
+                        if bank.is_frozen() {
+                            Self::vote(
+                                &my_pubkey,
+                                BlockIdVote::Finalize,
+                                bank.as_ref(),
+                                is_leader,
+                                &blockstore,
+                                &mut cert_pool,
+                                &mut voting_context,
+                            );
+                        } else {
+                            // TODO: could consider voting later
+                            warn!("Replay is catching up skipping finalize vote on {current_slot}");
+                        }
+                    } else {
+                        warn!("Block is still being ingested skipping finalize vote on {current_slot}");
+                    }
                 }
 
                 current_slot += 1;
@@ -850,24 +859,14 @@ impl VotingLoop {
     fn vote(
         my_pubkey: &Pubkey,
         vote_type: BlockIdVote,
-        slot: Slot,
+        bank: &Bank,
         is_leader: bool,
-        bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
-        let Some(bank) = bank_forks.read().unwrap().get(slot) else {
-            if matches!(vote_type, BlockIdVote::Finalize) {
-                warn!("Replay is catching up skipping finalize vote on {slot}");
-                return false;
-            }
-            // This should never happen
-            panic!(
-                "Bank for slot {slot} is missing, but we have already verified that
-                    it is frozen. Something has gone wrong"
-            );
-        };
+        debug_assert!(bank.is_frozen());
+        let slot = bank.slot();
         let hash = bank.hash();
         let Some(block_id) = blockstore
             .check_last_fec_set_and_get_block_id(
@@ -881,19 +880,20 @@ impl VotingLoop {
                     warn!("Unable to retrieve block_id, failed last fec set checks for slot {slot} hash {hash}: {e:?}")
                 }
                 None
-            }) else {
-          if is_leader {
-              // For leader slots, shredding is asynchronous so block_id might not yet
-              // be available. In this case we want to retry our vote later
-              return false;
-          }
-          // At this point we could mark the bank as dead similar to TowerBFT, however
-          // for alpenglow this is not necessary
-          warn!(
-              "Unable to retrieve block id or duplicate block checks have failed
-              for non leader slot {slot} {hash}, not voting {vote_type}"
-          );
-          return true;
+            }
+        ) else {
+            if is_leader {
+                // For leader slots, shredding is asynchronous so block_id might not yet
+                // be available. In this case we want to retry our vote later
+                return false;
+            }
+            // At this point we could mark the bank as dead similar to TowerBFT, however
+            // for alpenglow this is not necessary
+            warn!(
+                "Unable to retrieve block id or duplicate block checks have failed
+                for non leader slot {slot} {hash}, not voting {vote_type}"
+            );
+            return true;
         };
 
         let vote = match vote_type {
@@ -906,7 +906,7 @@ impl VotingLoop {
             BlockIdVote::Finalize => Vote::new_finalization_vote(slot, block_id, hash),
         };
         info!("{my_pubkey}: Voting {vote_type} for slot {slot} hash {hash} block_id {block_id}");
-        Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
+        Self::send_vote(vote, false, bank, cert_pool, voting_context);
 
         true
     }
