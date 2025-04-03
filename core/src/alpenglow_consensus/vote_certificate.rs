@@ -70,6 +70,10 @@ impl VoteCertificate {
         self.slot
     }
 
+    pub fn size(&self) -> usize {
+        self.certificate.len()
+    }
+
     pub fn get_certificate(&self) -> Vec<VersionedTransaction> {
         self.certificate.values().cloned().collect()
     }
