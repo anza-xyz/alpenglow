@@ -323,7 +323,8 @@ impl VotingLoop {
                 let mut notarized = false;
 
                 info!(
-                    "{my_pubkey}: Starting timer for slot: {current_slot}, is_leader: {is_leader}"
+                    "{my_pubkey}: Starting timer for slot: {current_slot}, is_leader: {is_leader}. Skip timer {} vs timeout {}",
+                    skip_timer.elapsed().as_millis(), timeout
                 );
 
                 while !Self::branch_notarized(
