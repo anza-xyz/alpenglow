@@ -196,17 +196,21 @@ impl LocalCluster {
     }
 
     pub fn new(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        Self::init(config, socket_addr_space, false)
+        Self::init(config, socket_addr_space, None)
     }
 
     pub fn new_alpenglow(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        Self::init(config, socket_addr_space, true)
+        Self::init(
+            config,
+            socket_addr_space,
+            Some(build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH),
+        )
     }
 
     pub fn init(
         config: &mut ClusterConfig,
         socket_addr_space: SocketAddrSpace,
-        is_alpenglow: bool,
+        alpenglow_so_path: Option<&str>,
     ) -> Self {
         assert_eq!(config.validator_configs.len(), config.node_stakes.len());
 
@@ -317,7 +321,7 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            is_alpenglow,
+            alpenglow_so_path,
         );
         genesis_config.accounts.extend(
             config

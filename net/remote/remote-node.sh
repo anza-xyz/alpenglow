@@ -31,6 +31,7 @@ tmpfsAccounts="${22:false}"
 disableQuic="${23}"
 enableUdp="${24}"
 maybeWenRestart="${25}"
+alpenglow="${26}"
 
 set +x
 
@@ -239,6 +240,13 @@ EOF
         done
       fi
 
+      if $alpenglow; then
+        echo "Consensus method: Alpenglow"
+        args+=(--alpenglow "$HOME"/solana/spl_alpenglow-vote.so)
+      else
+        echo "Consensus method: POH"
+      fi
+
       multinode-demo/setup.sh "${args[@]}"
 
       maybeWaitForSupermajority=
@@ -438,6 +446,13 @@ EOF
     if [[ -n "$maybeWenRestart" ]]; then
       args+=(--wen-restart wen_restart.proto3)
       args+=(--wen-restart-coordinator "$maybeWenRestart")
+    fi
+
+    if $alpenglow; then
+      echo "Consensus method: Alpenglow"
+      args+=(--alpenglow)
+    else
+      echo "Consensus method: POH"
     fi
 
 cat >> ~/solana/on-reboot <<EOF
