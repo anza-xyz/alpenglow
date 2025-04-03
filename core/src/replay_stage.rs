@@ -1264,7 +1264,6 @@ impl ReplayStage {
                             transaction_status_sender.is_some(),
                             &first_alpenglow_slot,
                             &mut is_alpenglow_migration_complete,
-                            &blockstore,
                         );
 
                         let poh_bank = poh_recorder.read().unwrap().bank();
@@ -2326,7 +2325,6 @@ impl ReplayStage {
         track_transaction_indexes: bool,
         first_alpenglow_slot: &Option<Slot>,
         is_alpenglow_migration_complete: &mut bool,
-        _blockstore: &Blockstore,
     ) -> bool {
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
@@ -9167,7 +9165,6 @@ pub(crate) mod tests {
             track_transaction_indexes,
             &None,
             &mut false,
-            blockstore,
         ));
     }
 
@@ -9844,7 +9841,6 @@ pub(crate) mod tests {
             track_transaction_indexes,
             &None,
             &mut false,
-            &blockstore,
         ));
 
         // Register another slots worth of ticks  with PoH recorder
@@ -9874,7 +9870,6 @@ pub(crate) mod tests {
             track_transaction_indexes,
             &None,
             &mut false,
-            &blockstore,
         ));
         // Get the new working bank, which is also the new leader bank/slot
         let working_bank = bank_forks.read().unwrap().working_bank();
