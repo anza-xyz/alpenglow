@@ -98,7 +98,16 @@ impl VoteHistory {
         })
     }
 
+    /// Returns the start slot of the skip vote that contains `slot`
+    pub fn prev_skip_start(&self, slot: Slot) -> Option<Slot> {
+        self.skip_votes.iter().find_map(|vote| {
+            let range = vote.skip_range().expect("must be a skip vote");
+            range.contains(&slot).then_some(*range.start())
+        })
+    }
+
     pub fn set_root(&mut self, root: Slot) {
+        self.root = root;
         self.skip_votes
             .retain(|skip_vote| *skip_vote.skip_range().expect("must be a skip vote").end() > root)
     }

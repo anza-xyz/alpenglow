@@ -216,6 +216,10 @@ impl BankForks {
         self.get(slot).map(|bank| bank.hash())
     }
 
+    pub fn is_frozen(&self, slot: Slot) -> bool {
+        self.get(slot).map(|bank| bank.is_frozen()).unwrap_or(false)
+    }
+
     pub fn root_bank(&self) -> Arc<Bank> {
         self[self.root()].clone()
     }

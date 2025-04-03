@@ -146,6 +146,10 @@ impl VoteCertificate {
         self.slot
     }
 
+    pub fn size(&self) -> usize {
+        self.certificate.len()
+    }
+
     // Return an iterator of CertificateMap
     pub(crate) fn get_certificate_iter(
         &self,

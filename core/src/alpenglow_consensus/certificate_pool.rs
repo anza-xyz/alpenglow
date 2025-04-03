@@ -42,8 +42,11 @@ pub enum NewHighestCertificate {
 }
 
 impl NewHighestCertificate {
-    pub fn is_finalize(&self) -> bool {
-        matches!(self, NewHighestCertificate::Finalize(_slot))
+    pub fn is_notarization_or_skip(&self) -> bool {
+        matches!(
+            self,
+            NewHighestCertificate::Notarize(_) | NewHighestCertificate::Skip(_)
+        )
     }
 
     pub fn slot(&self) -> Slot {
@@ -234,11 +237,11 @@ impl CertificatePool {
         }
     }
 
-    pub fn is_notarization_certificate_complete(&self, slot: Slot) -> bool {
+    /// If complete, returns Some(size), the size of the certificate
+    pub fn is_notarization_certificate_complete(&self, slot: Slot) -> Option<usize> {
         self.certificates
             .get(&(slot, CertificateType::Notarize))
-            .map(|certificate| certificate.is_complete())
-            .unwrap_or(false)
+            .and_then(|certificate| certificate.is_complete().then_some(certificate.size()))
     }
 
     fn get_certificate(
@@ -353,8 +356,8 @@ impl CertificatePool {
         parent_slot: Slot,
         first_alpenglow_slot: Slot,
     ) -> Option<StartLeaderCertificates> {
-        let needs_notarization_certificate =
-            parent_slot >= first_alpenglow_slot && parent_slot != 0;
+        // TODO: for GCE tests we WFSM on 1 so slot 1 is exempt
+        let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
         let notarization_certificate = {
             if needs_notarization_certificate {
@@ -367,6 +370,7 @@ impl CertificatePool {
                 {
                     finalization_certificate
                 } else {
+                    error!("Missing notarization certificate {parent_slot}");
                     return None;
                 }
             } else {
@@ -492,8 +496,8 @@ mod tests {
         let (_, pool) = create_keypairs_and_pool();
 
         // No notarization set, pool is default
-        let parent_slot = 1;
-        let my_leader_slot = 2;
+        let parent_slot = 2;
+        let my_leader_slot = 3;
         let first_alpenglow_slot = 0;
         let decision =
             pool.make_start_leader_decision(my_leader_slot, parent_slot, first_alpenglow_slot);
@@ -556,9 +560,9 @@ mod tests {
         let (_, pool) = create_keypairs_and_pool();
         // If parent_slot == first_alpenglow_slot, and
         // first_alpenglow_slot > 0, you need a notarization certificate
-        let parent_slot = 1;
-        let my_leader_slot = 2;
-        let first_alpenglow_slot = 1;
+        let parent_slot = 2;
+        let my_leader_slot = 3;
+        let first_alpenglow_slot = 2;
         assert!(pool
             .make_start_leader_decision(my_leader_slot, parent_slot, first_alpenglow_slot,)
             .is_none());
