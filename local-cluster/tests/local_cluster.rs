@@ -136,7 +136,7 @@ fn test_local_cluster_start_and_exit_with_config() {
     assert_eq!(cluster.validators.len(), NUM_NODES);
 }
 
-fn test_alpenglow_nodes_basic(num_nodes: usize) {
+fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize, num_new_roots: usize) {
     solana_logger::setup_with_default(RUST_LOG_FILTER);
     let validator_keys = (0..num_nodes)
         .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
@@ -147,7 +147,7 @@ fn test_alpenglow_nodes_basic(num_nodes: usize) {
             &ValidatorConfig::default_for_test(),
             num_nodes,
         ),
-        validator_keys: Some(validator_keys),
+        validator_keys: Some(validator_keys.clone()),
         node_stakes: vec![DEFAULT_NODE_STAKE; num_nodes],
         ticks_per_slot: 8,
         slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
@@ -159,7 +159,7 @@ fn test_alpenglow_nodes_basic(num_nodes: usize) {
         },
         ..ClusterConfig::default()
     };
-    let cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
+    let mut cluster = LocalCluster::new_alpenglow(&mut config, SocketAddrSpace::Unspecified);
     assert_eq!(cluster.validators.len(), num_nodes);
 
     // Check transactions land
@@ -172,15 +172,49 @@ fn test_alpenglow_nodes_basic(num_nodes: usize) {
         &cluster.connection_cache,
     );
 
+    if num_offline_nodes > 0 {
+        // Bring nodes offline
+        info!("Shutting down {num_offline_nodes} nodes");
+        for (key, _) in validator_keys.iter().take(num_offline_nodes) {
+            cluster.exit_node(&key.pubkey());
+        }
+    }
+
     // Check for new roots
-    cluster.check_for_new_roots(16, "test_2_nodes_alpenglow", SocketAddrSpace::Unspecified);
+    cluster.check_for_new_roots(
+        num_new_roots,
+        &format!("test_{}_nodes_alpenglow", num_nodes),
+        SocketAddrSpace::Unspecified,
+    );
 }
 
 #[test]
 #[serial]
-fn test_alpenglow_nodes_basic_2() {
+fn test_1_node_alpenglow() {
+    const NUM_NODES: usize = 1;
+    test_alpenglow_nodes_basic(NUM_NODES, 0, 16);
+}
+
+#[test]
+#[serial]
+fn test_2_nodes_alpenglow() {
     const NUM_NODES: usize = 2;
-    test_alpenglow_nodes_basic(NUM_NODES);
+    test_alpenglow_nodes_basic(NUM_NODES, 0, 16);
+}
+
+#[test]
+#[serial]
+fn test_4_nodes_alpenglow() {
+    const NUM_NODES: usize = 4;
+    test_alpenglow_nodes_basic(NUM_NODES, 0, 16);
+}
+
+#[test]
+#[serial]
+fn test_4_nodes_with_1_offline_alpenglow() {
+    const NUM_NODES: usize = 4;
+    const NUM_OFFLINE: usize = 1;
+    test_alpenglow_nodes_basic(NUM_NODES, NUM_OFFLINE, 32);
 }
 
 #[test]
