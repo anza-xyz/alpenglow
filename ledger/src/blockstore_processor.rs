@@ -2235,7 +2235,7 @@ pub fn process_single_slot(
     })?;
 
     let block_id = blockstore
-        .check_last_fec_set_and_get_block_id(slot, bank.hash(), &bank.feature_set)
+        .check_last_fec_set_and_get_block_id(slot, bank.hash(), false, &bank.feature_set)
         .inspect_err(|err| {
             warn!("slot {slot} failed last fec set checks: {err}");
             if blockstore.is_primary_access() {
