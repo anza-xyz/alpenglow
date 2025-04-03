@@ -1,6 +1,7 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
+    super::{BLOCKTIME, DELTA, DELTA_TIMEOUT},
     crate::{
         alpenglow_consensus::{
             certificate_pool::{CertificatePool, StartLeaderCertificates},
@@ -62,9 +63,6 @@ use {
         time::Instant,
     },
 };
-
-// Skip time for each block
-const BLOCKTIME: u128 = 800;
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
@@ -303,20 +301,20 @@ impl VotingLoop {
 
             // }
 
-            // Create timer for each slot in the leader window
-            let timers = [Instant::now(); NUM_CONSECUTIVE_LEADER_SLOTS as usize];
+            // Create a timer for the leader window
+            let skip_timer = Instant::now();
+            let timeouts: Vec<_> = (1..=(NUM_CONSECUTIVE_LEADER_SLOTS as u128))
+                .map(|i| DELTA_TIMEOUT + i * BLOCKTIME + DELTA)
+                .collect();
 
             while current_slot <= leader_end_slot {
                 let leader_slot_index = (current_slot - leader_start_slot) as usize;
-                let current_timer = timers[leader_slot_index];
-                let timeout = BLOCKTIME * ((leader_slot_index + 1) as u128);
-                let cert_timer = Instant::now();
+                let timeout = timeouts[leader_slot_index];
+                let cert_log_timer = Instant::now();
                 let mut skip_refresh_timer = Instant::now();
 
-                let leader_pubkey = leader_schedule_cache.slot_leader_at(
-                    current_slot,
-                    Some(bank_forks.read().unwrap().root_bank().as_ref()),
-                );
+                let leader_pubkey = leader_schedule_cache
+                    .slot_leader_at(current_slot, Some(root_bank_cache.root_bank().as_ref()));
                 let is_leader = leader_pubkey.map(|pk| pk == my_pubkey).unwrap_or(false);
                 let mut notarized = false;
 
@@ -360,7 +358,7 @@ impl VotingLoop {
                         );
                     }
 
-                    if !skipped && current_timer.elapsed().as_millis() > timeout {
+                    if !skipped && skip_timer.elapsed().as_millis() > timeout {
                         Self::vote_skip(
                             &my_pubkey,
                             current_slot,
@@ -425,8 +423,8 @@ impl VotingLoop {
 
                 info!(
                     "{my_pubkey}: Slot {current_slot} certificate observed in {} ms. Skip timer {} vs timeout {}",
-                    cert_timer.elapsed().as_millis(),
-                    current_timer.elapsed().as_millis(),
+                    cert_log_timer.elapsed().as_millis(),
+                    skip_timer.elapsed().as_millis(),
                     timeout,
                 );
 
