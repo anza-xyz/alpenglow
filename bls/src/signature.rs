@@ -16,6 +16,7 @@ impl BlsSignature {
     }
 
     /// Aggregate a list of signatures into an existing aggregate
+    #[allow(clippy::arithmetic_side_effects)]
     pub fn aggregate_with<'a, I>(&mut self, signatures: I)
     where
         I: IntoIterator<Item = &'a BlsSignature>,
@@ -27,6 +28,7 @@ impl BlsSignature {
     }
 
     /// Aggregate a list of public keys
+    #[allow(clippy::arithmetic_side_effects)]
     pub fn aggregate<'a, I>(signatures: I) -> Result<BlsSignature, BlsError>
     where
         I: IntoIterator<Item = &'a BlsSignature>,

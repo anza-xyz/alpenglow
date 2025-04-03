@@ -17,6 +17,7 @@ pub const HASH_TO_POINT_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NU
 pub struct Bls;
 impl Bls {
     /// Sign a message using the provided secret key
+    #[allow(clippy::arithmetic_side_effects)]
     pub(crate) fn sign(secret_key: &BlsSecretKey, message: &[u8]) -> BlsSignature {
         let hashed_message = Bls::hash_message_to_point(message);
         BlsSignature(hashed_message * secret_key.0)

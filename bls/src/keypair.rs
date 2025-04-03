@@ -60,6 +60,7 @@ pub struct BlsPubkey(pub G1Projective);
 
 impl BlsPubkey {
     /// Construct a corresponding `BlsPubkey` for a `BlsSecretKey`
+    #[allow(clippy::arithmetic_side_effects)]
     pub fn from_secret(secret: &BlsSecretKey) -> Self {
         Self(G1Projective::generator() * secret.0)
     }
@@ -70,6 +71,7 @@ impl BlsPubkey {
     }
 
     /// Aggregate a list of public keys into an existing aggregate
+    #[allow(clippy::arithmetic_side_effects)]
     pub fn aggregate_with<'a, I>(&mut self, pubkeys: I)
     where
         I: IntoIterator<Item = &'a BlsPubkey>,
@@ -81,6 +83,7 @@ impl BlsPubkey {
     }
 
     /// Aggregate a list of public keys
+    #[allow(clippy::arithmetic_side_effects)]
     pub fn aggregate<'a, I>(pubkeys: I) -> Result<BlsPubkey, BlsError>
     where
         I: IntoIterator<Item = &'a BlsPubkey>,
