@@ -1,0 +1,26 @@
+[package]
+name = "solana-bls-keypair"
+description = "Solana BLS keypair"
+documentation = "https://docs.rs/solana-bls-keypair"
+version = { workspace = true }
+authors = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+blst = { workspace = true }
+blstrs = { workspace = true }
+ff = { workspace = true }
+group = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
