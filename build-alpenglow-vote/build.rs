@@ -127,7 +127,7 @@ fn main() {
         .to_owned()
         .join("target")
         .join("alpenglow-vote-so")
-        .join("spl-alpenglow_vote.so");
+        .join("spl_alpenglow-vote.so");
 
     fs::create_dir_all(so_dest_path.parent().unwrap())
         .unwrap_or_else(|_| panic!("Couldn't create path: {:?}", &so_dest_path));
