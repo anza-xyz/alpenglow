@@ -72,6 +72,7 @@ pub struct VotingLoopConfig {
     pub wait_for_vote_to_start_leader: bool,
     pub wait_to_vote_slot: Option<Slot>,
     pub track_transaction_indexes: bool,
+
     // Shared state
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub blockstore: Arc<Blockstore>,
@@ -82,6 +83,7 @@ pub struct VotingLoopConfig {
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Arc<RpcSubscriptions>,
     pub banking_tracer: Arc<BankingTracer>,
+
     // Senders
     pub accounts_background_request_sender: AbsRequestSender,
     pub voting_sender: Sender<VoteOp>,
@@ -89,6 +91,7 @@ pub struct VotingLoopConfig {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub slot_status_notifier: Option<SlotStatusNotifier>,
+
     // Receivers
     pub vote_receiver: VoteReceiver,
 }
