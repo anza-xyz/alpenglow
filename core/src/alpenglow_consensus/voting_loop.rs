@@ -869,32 +869,31 @@ impl VotingLoop {
             );
         };
         let hash = bank.hash();
-        let block_id = blockstore
+        let Some(block_id) = blockstore
             .check_last_fec_set_and_get_block_id(
                 slot,
                 hash,
                 is_leader,
                 // TODO:(ashwin) ignore duplicate block checks (?)
                 &FeatureSet::all_enabled(),
-            ).unwrap_or_else(|e| {if !is_leader {
-                warn!("Unable to retrieve block_id, failed last fec set checks for slot {slot} hash {hash}: {e:?}")
-            }
-            None}
-            );
-
-        let Some(block_id) = block_id else {
-            if is_leader {
-                // For leader slots, shredding is asynchronous so block_id might not yet
-                // be available. In this case we want to retry our vote later
-                return false;
-            }
-            // At this point we could mark the bank as dead similar to TowerBFT, however
-            // for alpenglow this is not necessary
-            warn!(
-                "Unable to retrieve block id or duplicate block checks have failed
-                for non leader slot {slot} {hash}, not voting {vote_type}"
-            );
-            return true;
+            ).unwrap_or_else(|e| {
+                if !is_leader {
+                    warn!("Unable to retrieve block_id, failed last fec set checks for slot {slot} hash {hash}: {e:?}")
+                }
+                None
+            }) else {
+          if is_leader {
+              // For leader slots, shredding is asynchronous so block_id might not yet
+              // be available. In this case we want to retry our vote later
+              return false;
+          }
+          // At this point we could mark the bank as dead similar to TowerBFT, however
+          // for alpenglow this is not necessary
+          warn!(
+              "Unable to retrieve block id or duplicate block checks have failed
+              for non leader slot {slot} {hash}, not voting {vote_type}"
+          );
+          return true;
         };
 
         let vote = match vote_type {
