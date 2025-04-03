@@ -21,6 +21,7 @@ use {
     },
     agave_transaction_view::static_account_keys_frame::MAX_STATIC_ACCOUNTS_PER_PACKET,
     assert_matches::assert_matches,
+    build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH,
     crossbeam_channel::{bounded, unbounded},
     itertools::Itertools,
     rand::Rng,
@@ -8225,11 +8226,17 @@ fn test_adjust_sysvar_balance_for_rent() {
 #[test_case(false; "towerbft")]
 fn test_update_clock_timestamp(is_alpenglow: bool) {
     let leader_pubkey = solana_pubkey::new_rand();
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
+    } = create_genesis_config_with_leader_enable_alpenglow(
+        5,
+        &leader_pubkey,
+        3,
+        alpenglow_vote_so_path,
+    );
     let mut bank = Bank::new_for_tests(&genesis_config);
     // Advance past slot 0, which has special handling.
     bank = new_from_parent(Arc::new(bank));
@@ -8329,11 +8336,17 @@ fn test_timestamp_slow(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
+    } = create_genesis_config_with_leader_enable_alpenglow(
+        5,
+        &leader_pubkey,
+        3,
+        alpenglow_vote_so_path,
+    );
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);
@@ -8375,11 +8388,17 @@ fn test_timestamp_fast(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
+    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(5, &leader_pubkey, 3, is_alpenglow);
+    } = create_genesis_config_with_leader_enable_alpenglow(
+        5,
+        &leader_pubkey,
+        3,
+        alpenglow_vote_so_path,
+    );
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);

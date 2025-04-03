@@ -5387,7 +5387,7 @@ pub(crate) mod tests {
             accounts_background_service::AbsRequestSender,
             commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
             genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts, GenesisConfigInfo,
+                create_genesis_config_with_alpenglow_vote_accounts_no_program, GenesisConfigInfo,
                 ValidatorVoteKeypairs,
             },
         },
@@ -10763,7 +10763,7 @@ pub(crate) mod tests {
         let my_keypairs = &validator_voting_keypairs[0];
         let lamports = 10_000;
         let GenesisConfigInfo { genesis_config, .. } =
-            create_genesis_config_with_alpenglow_vote_accounts(
+            create_genesis_config_with_alpenglow_vote_accounts_no_program(
                 lamports,
                 &validator_voting_keypairs,
                 vec![100; validator_voting_keypairs.len()],
