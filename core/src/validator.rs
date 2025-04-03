@@ -1024,6 +1024,11 @@ impl Validator {
         let entry_notification_sender = entry_notifier_service
             .as_ref()
             .map(|service| service.sender());
+
+        let is_alpenglow = genesis_config
+            .accounts
+            .contains_key(&solana_feature_set::secp256k1_program_enabled::id());
+
         let mut process_blockstore = ProcessBlockStore::new(
             &id,
             vote_account,
@@ -1039,6 +1044,7 @@ impl Validator {
             blockstore_root_scan,
             accounts_background_request_sender.clone(),
             config,
+            is_alpenglow,
         );
 
         maybe_warp_slot(
@@ -2146,6 +2152,7 @@ pub struct ProcessBlockStore<'a> {
     accounts_background_request_sender: AbsRequestSender,
     config: &'a ValidatorConfig,
     tower: Option<Tower>,
+    is_alpenglow: bool,
 }
 
 impl<'a> ProcessBlockStore<'a> {
@@ -2165,6 +2172,7 @@ impl<'a> ProcessBlockStore<'a> {
         blockstore_root_scan: BlockstoreRootScan,
         accounts_background_request_sender: AbsRequestSender,
         config: &'a ValidatorConfig,
+        is_alpenglow: bool,
     ) -> Self {
         Self {
             id,
@@ -2182,11 +2190,14 @@ impl<'a> ProcessBlockStore<'a> {
             accounts_background_request_sender,
             config,
             tower: None,
+            is_alpenglow,
         }
     }
 
     pub(crate) fn process(&mut self) -> Result<(), String> {
-        if self.tower.is_none() {
+        if self.is_alpenglow {
+            self.tower = Some(Tower::default());
+        } else if self.tower.is_none() {
             let previous_start_process = *self.start_progress.read().unwrap();
             *self.start_progress.write().unwrap() = ValidatorStartProgress::LoadingLedger;
 

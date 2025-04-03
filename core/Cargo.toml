@@ -114,6 +114,7 @@ serial_test = { workspace = true }
 # See order-crates-for-publishing.py for using this unusual `path = "."`
 solana-account = { workspace = true }
 solana-address-lookup-table-program = { workspace = true }
+solana-build-alpenglow-vote = { workspace = true }
 solana-compute-budget-program = { workspace = true }
 solana-core = { path = ".", features = ["dev-context-only-utils"] }
 solana-cost-model = { workspace = true, features = ["dev-context-only-utils"] }
