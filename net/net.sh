@@ -295,16 +295,6 @@ deployBootstrapValidator() {
   remoteHome=$(remoteHomeDir "$ipAddress")
   local remoteCargoBin="${remoteHome}/.cargo/bin"
 
-  echo "!!!!! DEPLOYING BOOTSTRAP VALIDATOR !!!!!"
-  echo "sshOptions"
-  echo ${sshOptions[*]}
-  echo "SOLANA_ROOT"
-  echo $SOLANA_ROOT
-  echo "ipAddress"
-  echo $ipAddress
-  echo "remoteCargoBin"
-  echo $remoteCargoBin
-
   echo "Deploying software to bootstrap validator ($ipAddress)"
   case $deployMethod in
   tar)
@@ -339,6 +329,11 @@ startBootstrapLeader() {
 
     deployBootstrapValidator "$ipAddress"
 
+    # TODO: once we cut a public release of alpenglow-vote, we can eliminate this block
+    # below. For now though, as we're developing alpenglow in tandem with alpenglow-vote,
+    # we auto-generate spl_alpenglow-vote.so while building alpenglow. This block here
+    # copies over this auto-generated spl_alpenglow-vote.so over to the bootstrap
+    # validator.
     if $alpenglow; then
       declare remoteHome
       remoteHome=$(remoteHomeDir "$ipAddress")

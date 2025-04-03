@@ -5365,7 +5365,6 @@ pub(crate) mod tests {
         blockstore_processor::{
             confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
         },
-        build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH,
         crossbeam_channel::unbounded,
         itertools::Itertools,
         solana_account::{AccountSharedData, WritableAccount},
@@ -5388,7 +5387,7 @@ pub(crate) mod tests {
             accounts_background_service::AbsRequestSender,
             commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
             genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts, GenesisConfigInfo,
+                create_genesis_config_with_alpenglow_vote_accounts_no_program, GenesisConfigInfo,
                 ValidatorVoteKeypairs,
             },
         },
@@ -10764,11 +10763,10 @@ pub(crate) mod tests {
         let my_keypairs = &validator_voting_keypairs[0];
         let lamports = 10_000;
         let GenesisConfigInfo { genesis_config, .. } =
-            create_genesis_config_with_alpenglow_vote_accounts(
+            create_genesis_config_with_alpenglow_vote_accounts_no_program(
                 lamports,
                 &validator_voting_keypairs,
                 vec![100; validator_voting_keypairs.len()],
-                ALPENGLOW_VOTE_SO_PATH,
             );
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
         bank0.freeze();

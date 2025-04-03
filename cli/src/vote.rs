@@ -866,14 +866,11 @@ pub fn process_create_vote_account(
         let node_pubkey = identity_pubkey;
         let authorized_voter = authorized_voter.unwrap_or(identity_pubkey);
 
-        let to = if seed.is_some() {
-            &vote_account_address
-        } else {
-            &vote_account_pubkey
-        };
+        let from_pubkey = &config.signers[0].pubkey();
+        let to_pubkey = &vote_account_address;
 
         let mut ixs = if is_alpenglow {
-            let iaid = InitializeAccountInstructionData {
+            let initialize_account_ixn_meta = InitializeAccountInstructionData {
                 node_pubkey,
                 authorized_voter,
                 authorized_withdrawer,
@@ -881,14 +878,17 @@ pub fn process_create_vote_account(
             };
 
             let create_ix = solana_system_interface::instruction::create_account(
-                &config.signers[0].pubkey(),
-                to,
+                from_pubkey,
+                to_pubkey,
                 lamports,
                 alpenglow_vote::state::VoteState::size() as u64,
                 &alpenglow_vote::id(),
             );
 
-            let init_ix = alpenglow_vote::instruction::initialize_account(*to, &iaid);
+            let init_ix = alpenglow_vote::instruction::initialize_account(
+                *to_pubkey,
+                &initialize_account_ixn_meta,
+            );
 
             vec![create_ix, init_ix]
         } else {
@@ -907,8 +907,8 @@ pub fn process_create_vote_account(
             }
 
             vote_instruction::create_account_with_config(
-                &config.signers[0].pubkey(),
-                to,
+                from_pubkey,
+                to_pubkey,
                 &vote_init,
                 lamports,
                 create_vote_account_config,

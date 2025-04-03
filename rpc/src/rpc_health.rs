@@ -56,7 +56,7 @@ impl RpcHealth {
             return RpcHealthStatus::Ok;
         }
         if !self.startup_verification_complete.load(Ordering::Acquire) {
-            // TODO: ¯\_(ツ)_/¯
+            // TODO: address https://github.com/anza-xyz/alpenglow/issues/126
             return RpcHealthStatus::Ok;
             // return RpcHealthStatus::Unknown;
         }
@@ -179,12 +179,14 @@ pub mod tests {
         assert_eq!(health.check(), RpcHealthStatus::Ok);
 
         // TODO(alpenglow): RpcHealthStatus::Ok should really be RpcHealthStatus::Unknown
+        // See: https://github.com/anza-xyz/alpenglow/issues/126
         //
         // Remove the override - status now unknown with incomplete startup verification
         override_health_check.store(false, Ordering::Relaxed);
         assert_eq!(health.check(), RpcHealthStatus::Ok);
 
         // TODO(alpenglow): RpcHealthStatus::Ok should really be RpcHealthStatus::Unknown
+        // See: https://github.com/anza-xyz/alpenglow/issues/126
         //
         // Mark startup verification complete - status still unknown as no slots have been
         // optimistically confirmed yet
@@ -193,6 +195,7 @@ pub mod tests {
 
         // TODO(alpenglow): RpcHealthStatus::Ok should really be
         // RpcHealthStatus::Behind { num_slots: 15 }.
+        // See: https://github.com/anza-xyz/alpenglow/issues/126
         //
         // Mark slot 15 as being optimistically confirmed in the Blockstore, this could
         // happen if the cluster confirmed the slot and this node became aware through gossip,
@@ -205,6 +208,7 @@ pub mod tests {
 
         // TODO(alpenglow): RpcHealthStatus::Ok should really be
         // RpcHealthStatus::Behind { num_slots: 11 }.
+        // See: https://github.com/anza-xyz/alpenglow/issues/126
         //
         // Simulate this node observing slot 4 as optimistically confirmed - status still behind
         let bank4 = Arc::new(Bank::new_from_parent(bank0, &Pubkey::default(), 4));
