@@ -841,6 +841,7 @@ pub fn commit_certificate(
     let summary = consumer.process_transactions(bank, &Instant::now(), &runtime_transactions);
 
     if summary.reached_max_poh_height {
+        error!("Slot took too long to ingest votes {}", bank.slot());
         datapoint_error!(
             "vote_certificate_commit_failure",
             ("error", "slot took too long to ingest votes", String),
@@ -851,6 +852,10 @@ pub fn commit_certificate(
     }
 
     if summary.error_counters.total.0 != 0 {
+        error!(
+            "Vote certificate commit failure {} errors occured",
+            summary.error_counters.total.0
+        );
         datapoint_error!(
             "vote_certificate_commit_failure",
             (
