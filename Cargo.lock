@@ -7034,6 +7034,7 @@ dependencies = [
 name = "solana-cli"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bs58",
@@ -7488,6 +7489,7 @@ dependencies = [
  "solana-accounts-db",
  "solana-address-lookup-table-program",
  "solana-bloom",
+ "solana-build-alpenglow-vote",
  "solana-builtins-default-costs",
  "solana-client",
  "solana-compute-budget",
@@ -8518,6 +8520,7 @@ dependencies = [
  "rayon",
  "serial_test",
  "solana-accounts-db",
+ "solana-build-alpenglow-vote",
  "solana-client",
  "solana-config-program",
  "solana-core",
