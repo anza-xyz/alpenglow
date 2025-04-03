@@ -364,6 +364,7 @@ impl VotingLoop {
                     }
 
                     if !skipped && skip_timer.elapsed().as_millis() > timeout {
+                        skipped = true;
                         Self::vote_skip(
                             &my_pubkey,
                             current_slot,
@@ -372,7 +373,6 @@ impl VotingLoop {
                             &mut cert_pool,
                             &mut voting_context,
                         );
-                        skipped = true;
                         skip_refresh_timer = Instant::now();
                     }
 
