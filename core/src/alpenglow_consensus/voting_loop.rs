@@ -284,6 +284,7 @@ impl VotingLoop {
             my_pubkey,
         };
 
+        // Reset poh recorder to root bank for things that still depend on poh accuracy
         ReplayStage::reset_poh_recorder(
             &my_pubkey,
             blockstore.as_ref(),
