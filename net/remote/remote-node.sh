@@ -29,6 +29,8 @@ extraPrimordialStakes="${20:=0}"
 tmpfsAccounts="${21:false}"
 disableQuic="${22}"
 enableUdp="${23}"
+maybeWenRestart="${24}"
+alpenglow="${25:-false}"
 
 set +x
 
@@ -206,6 +208,13 @@ EOF
                                        "$(solana-keygen pubkey "config/validator-stake-$i.json")"
           )
         done
+      fi
+
+      if $alpenglow; then
+        echo "Consensus method: Alpenglow"
+        args+=(--alpenglow "$HOME"/solana/spl_alpenglow-vote.so)
+      else
+        echo "Consensus method: POH"
       fi
 
       multinode-demo/setup.sh "${args[@]}"
@@ -400,6 +409,17 @@ EOF
       args+=(--tpu-enable-udp)
     fi
 
+    if [[ -n "$maybeWenRestart" ]]; then
+      args+=(--wen-restart wen_restart.proto3)
+      args+=(--wen-restart-coordinator "$maybeWenRestart")
+    fi
+
+    if $alpenglow; then
+      echo "Consensus method: Alpenglow"
+      args+=(--alpenglow)
+    else
+      echo "Consensus method: POH"
+    fi
 cat >> ~/solana/on-reboot <<EOF
     $maybeSkipAccountsCreation
     nohup multinode-demo/validator.sh ${args[@]} > validator.log.\$now 2>&1 &
