@@ -828,7 +828,7 @@ impl ReplayStage {
                 replay_active_banks_time.stop();
 
                 let forks_root = bank_forks.read().unwrap().root();
-                if !is_alpenglow_migration_complete {
+                let start_leader_time = if !is_alpenglow_migration_complete {
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
@@ -1246,39 +1246,44 @@ impl ReplayStage {
                         dump_then_repair_correct_slots_time.as_us(),
                         retransmit_not_propagated_time.as_us(),
                     );
-                }
 
-                let mut start_leader_time = Measure::start("start_leader_time");
-                if !is_alpenglow_migration_complete && !tpu_has_bank {
-                    Self::maybe_start_leader(
-                        &my_pubkey,
-                        &bank_forks,
-                        &poh_recorder,
-                        &leader_schedule_cache,
-                        &rpc_subscriptions,
-                        &slot_status_notifier,
-                        &mut progress,
-                        &retransmit_slots_sender,
-                        &mut skipped_slots_info,
-                        &banking_tracer,
-                        has_new_vote_been_rooted,
-                        transaction_status_sender.is_some(),
-                        &first_alpenglow_slot,
-                        &mut is_alpenglow_migration_complete,
-                        &blockstore,
-                    );
-
-                    let poh_bank = poh_recorder.read().unwrap().bank();
-                    if let Some(bank) = poh_bank {
-                        Self::log_leader_change(
+                    let mut start_leader_time = Measure::start("start_leader_time");
+                    if !tpu_has_bank {
+                        Self::maybe_start_leader(
                             &my_pubkey,
-                            bank.slot(),
-                            &mut current_leader,
-                            &my_pubkey,
+                            &bank_forks,
+                            &poh_recorder,
+                            &leader_schedule_cache,
+                            &rpc_subscriptions,
+                            &slot_status_notifier,
+                            &mut progress,
+                            &retransmit_slots_sender,
+                            &mut skipped_slots_info,
+                            &banking_tracer,
+                            has_new_vote_been_rooted,
+                            transaction_status_sender.is_some(),
+                            &first_alpenglow_slot,
+                            &mut is_alpenglow_migration_complete,
+                            &blockstore,
                         );
+
+                        let poh_bank = poh_recorder.read().unwrap().bank();
+                        if let Some(bank) = poh_bank {
+                            Self::log_leader_change(
+                                &my_pubkey,
+                                bank.slot(),
+                                &mut current_leader,
+                                &my_pubkey,
+                            );
+                        }
                     }
-                }
-                start_leader_time.stop();
+                    start_leader_time.stop();
+                    start_leader_time
+                } else {
+                    let mut start_leader_time = Measure::start("start_leader_time");
+                    start_leader_time.stop();
+                    start_leader_time
+                };
 
                 let mut wait_receive_time = Measure::start("wait_receive_time");
                 if !did_complete_bank {
