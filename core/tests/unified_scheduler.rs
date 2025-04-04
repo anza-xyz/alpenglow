@@ -15,7 +15,7 @@ use {
         repair::cluster_slot_state_verifier::{
             DuplicateConfirmedSlots, DuplicateSlotsTracker, EpochSlotsFrozenSlots,
         },
-        replay_stage::ReplayStage,
+        replay_stage::{ReplayStage, TowerBFTStructures},
         unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
     },
     solana_entry::entry::Entry,
@@ -162,20 +162,23 @@ fn test_scheduler_waited_by_drop_bank_service() {
             .into_iter()
             .map(|slot| (slot, Hash::default()))
             .collect();
+        let tbft_structs = TowerBFTStructures {
+            heaviest_subtree_fork_choice: &mut heaviest_subtree_fork_choice,
+            duplicate_slots_tracker: &mut duplicate_slots_tracker,
+            duplicate_confirmed_slots: &mut duplicate_confirmed_slots,
+            unfrozen_gossip_verified_vote_hashes: &mut unfrozen_gossip_verified_vote_hashes,
+            epoch_slots_frozen_slots: &mut epoch_slots_frozen_slots,
+        };
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
             &mut progress,
             &AbsRequestSender::default(),
             None,
-            &mut heaviest_subtree_fork_choice,
-            &mut duplicate_slots_tracker,
-            &mut duplicate_confirmed_slots,
-            &mut unfrozen_gossip_verified_vote_hashes,
             &mut true,
             &mut Vec::new(),
-            &mut epoch_slots_frozen_slots,
             &drop_bank_sender1,
+            Some(tbft_structs),
         )
         .unwrap();
     }
