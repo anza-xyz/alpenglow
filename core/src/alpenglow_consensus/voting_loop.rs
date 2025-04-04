@@ -802,6 +802,7 @@ impl VotingLoop {
             return None;
         }
 
+        // Distinguish between duplicate versions of same slot
         let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
         if let Err(e) =
             ctx.blockstore
