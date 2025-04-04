@@ -2,7 +2,7 @@
 use {
     crate::{
         alpenglow_consensus::{
-            certificate_pool::{CertificatePool, StartLeaderCertificates},
+            certificate_pool::CertificatePool,
             utils::stake_reached_super_majority,
             voting_loop::{
                 GenerateVoteTxResult, ReplayCertificateTracker, VotingLoop, VotingLoopConfig,
@@ -3450,6 +3450,7 @@ impl ReplayStage {
                             let root_bank = bank_forks.read().unwrap().root_bank();
                             if let Err(e) = Self::alpenglow_check_cert_in_bank(
                                 bank,
+                                &root_bank,
                                 cert_tracker,
                                 parent_bank.slot() >= first_alpenglow_slot,
                             ) {
@@ -3660,6 +3661,7 @@ impl ReplayStage {
     // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
     fn alpenglow_check_cert_in_bank(
         bank: &Bank,
+        root_bank: &Bank,
         cert_tracker: &RwLock<ReplayCertificateTracker>,
         check_notarization: bool,
     ) -> Result<(), BlockstoreProcessorError> {
@@ -3724,13 +3726,8 @@ impl ReplayStage {
             .write()
             .unwrap()
             .add_notarization_certificate(parent_slot, notarization_size);
-        if must_skip_start <= must_skip_end {
-            // TODO(wen): the stake can be incorrect.
-            skip_pool.update(
-                bank.epoch_total_stake(bank.epoch())
-                    .expect("stake must exist"),
-            );
-            if !skip_pool.skip_range_certified(&must_skip_start, &must_skip_end) {
+        for slot in must_skip_start..=must_skip_end {
+            if !certificate_pool.skip_certified(slot) {
                 warn!(
                     "Skip range for bank {} does not cover {} in {} to {}",
                     bank.slot(),
@@ -10155,6 +10152,7 @@ pub(crate) mod tests {
         // Test on bank0 should always succeed
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank0,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10164,6 +10162,7 @@ pub(crate) mod tests {
         // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank1,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10176,6 +10175,7 @@ pub(crate) mod tests {
             // TODO(ashwin): TESTS FOR THIS FN
             ReplayStage::alpenglow_check_cert_in_bank(
                     &bank2,
+                    &bank0,
                     ReplayCertificateTracker::new_rw_arc().as_ref(),
                     true,
                 )
@@ -10191,6 +10191,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank3,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
@@ -10214,6 +10215,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank3,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
@@ -10239,6 +10241,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank3,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
@@ -10263,6 +10266,7 @@ pub(crate) mod tests {
         }
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank3,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10273,6 +10277,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
@@ -10297,6 +10302,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
@@ -10321,6 +10327,7 @@ pub(crate) mod tests {
         }
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank5,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10341,6 +10348,7 @@ pub(crate) mod tests {
         }
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank5,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             false
         )
@@ -10349,6 +10357,7 @@ pub(crate) mod tests {
         if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
