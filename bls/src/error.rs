@@ -6,4 +6,6 @@ pub enum BlsError {
     FieldDecode,
     #[error("Empty aggregation attempted")]
     EmptyAggregation,
+    #[error("Key derivation failed")]
+    KeyDerivation,
 }

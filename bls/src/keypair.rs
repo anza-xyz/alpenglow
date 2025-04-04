@@ -7,6 +7,8 @@ use {
     rand::{rngs::OsRng, CryptoRng, RngCore},
     std::ptr,
 };
+#[cfg(feature = "solana-signer-derive")]
+use {solana_signature::Signature, solana_signer::Signer, subtle::ConstantTimeEq};
 
 pub const BLS_SECRET_KEY_SIZE: usize = 32;
 pub const BLS_PUBLIC_KEY_SIZE: usize = 48;
@@ -46,6 +48,23 @@ impl BlsSecretKey {
             .try_into()
             .map(Self)
             .map_err(|_| BlsError::FieldDecode)
+    }
+
+    /// Derive a `BlsSecretKey` from a Solana signer
+    #[cfg(feature = "solana-signer-derive")]
+    pub fn derive_from_signer(signer: &dyn Signer, public_seed: &[u8]) -> Result<Self, BlsError> {
+        let message = [b"bls-key-derive-", public_seed].concat();
+        let signature = signer
+            .try_sign_message(&message)
+            .map_err(|_| BlsError::KeyDerivation)?;
+
+        // Some `Signer` implementations return the default signature, which is not suitable for
+        // use as key material
+        if bool::from(signature.as_ref().ct_eq(Signature::default().as_ref())) {
+            return Err(BlsError::KeyDerivation);
+        }
+
+        Self::derive(signature.as_ref())
     }
 
     /// Sign a message using the provided secret key
@@ -132,6 +151,14 @@ impl BlsKeypair {
         Ok(Self { secret, public })
     }
 
+    /// Derive a `BlsSecretKey` from a Solana signer
+    #[cfg(feature = "solana-signer-derive")]
+    pub fn derive_from_signer(signer: &dyn Signer, public_seed: &[u8]) -> Result<Self, BlsError> {
+        let secret = BlsSecretKey::derive_from_signer(signer, public_seed)?;
+        let public = BlsPubkey::from_secret(&secret);
+        Ok(Self { secret, public })
+    }
+
     /// Sign a message using the provided secret key
     pub fn sign(&self, message: &[u8]) -> BlsSignature {
         Bls::sign(&self.secret, message)
@@ -153,6 +180,18 @@ mod tests {
         let secret = BlsSecretKey::derive(ikm).unwrap();
         let public = BlsPubkey::from_secret(&secret);
         let keypair = BlsKeypair::derive(ikm).unwrap();
+        assert_eq!(keypair.secret, secret);
+        assert_eq!(keypair.public, public);
+    }
+
+    #[test]
+    #[cfg(feature = "solana-signer-derive")]
+    fn test_keygen_derive_from_signer() {
+        let solana_keypair = solana_keypair::Keypair::new();
+        let secret = BlsSecretKey::derive_from_signer(&solana_keypair, b"alpenglow-vote").unwrap();
+        let public = BlsPubkey::from_secret(&secret);
+        let keypair = BlsKeypair::derive_from_signer(&solana_keypair, b"alpenglow-vote").unwrap();
+
         assert_eq!(keypair.secret, secret);
         assert_eq!(keypair.public, public);
     }

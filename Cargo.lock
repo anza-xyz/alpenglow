@@ -6702,6 +6702,10 @@ dependencies = [
  "ff",
  "group",
  "rand 0.8.5",
+ "solana-keypair",
+ "solana-signature",
+ "solana-signer",
+ "subtle",
  "thiserror 2.0.12",
 ]
 
