@@ -27,11 +27,7 @@ pub enum AddVoteError {
     #[error("Add vote to vote certificate failed: {0}")]
     AddToCertificatePool(#[from] vote_certificate::AddVoteError),
 
-<<<<<<< HEAD
     #[error("Epoch stakes missing for epoch: {0}")]
-=======
-    #[error("Add vote to skip pool failed: {0}")]
->>>>>>> a47bff4daf (Move skip cert into per-slot pool and fix stake.)
     EpochStakesNotFound(Epoch),
 
     #[error("Zero stake")]
@@ -112,11 +108,7 @@ impl CertificatePool {
 
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
-<<<<<<< HEAD
         if self.epoch_stakes_map.is_empty() || epoch > self.epoch_stakes_map_cached_at {
-=======
-        if self.epoch_stakes_map.is_empty() || epoch != self.epoch_stakes_map_cached_at {
->>>>>>> a47bff4daf (Move skip cert into per-slot pool and fix stake.)
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
             self.epoch_stakes_map_cached_at = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();

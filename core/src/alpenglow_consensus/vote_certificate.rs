@@ -56,11 +56,7 @@ impl VoteCertificate {
         }
     }
 
-<<<<<<< HEAD
     pub(crate) fn can_accept_new_skip_range(
-=======
-    fn can_accept_new_skip_range(
->>>>>>> a47bff4daf (Move skip cert into per-slot pool and fix stake.)
         old_skip_range: Option<(Slot, Slot)>,
         new_skip_range: Option<(Slot, Slot)>,
     ) -> bool {
@@ -70,7 +66,6 @@ impl VoteCertificate {
         );
         if let Some((old_start, old_end)) = old_skip_range {
             if let Some((new_start, new_end)) = new_skip_range {
-<<<<<<< HEAD
                 // Because we now use per-slot skip certificate pool, users are never allowed
                 // to un-vote. If user sent (2, 5) then (3, 6), the skip cert pool for slot 2
                 // will still have (2, 5) saved. The skip cert for slot 3 to 5 will replace
@@ -88,27 +83,6 @@ impl VoteCertificate {
                 //   Reject if new_start <= old_start.  (3, 8) > (2, 8).
                 // 3.new_end < old_end: reject new one
                 new_end > old_end || (new_end == old_end && new_start > old_start)
-=======
-                // We never allow users to un-vote, so it's okay if they extend the end
-                // of skip range, but we reject any new range with a smaller end.
-                // We do allow new_start to be larger than old_start. There is a choice here:
-                // 1. Ask that new_start to be always equal to old_start, then the clients must
-                //    remember the skip range of the last Skip vote, otherwise if someone voted
-                //    for (2, 5), then 3 got finalized, they can't discard anything smaller than
-                //    3. If they want to skip 6, they must send (2, 6), otherwise it will not land.
-                // 2. Allow new_start to be larger than old_start, then the clients can just discard
-                //    anything older than their local root. This is the option we chose. Note that
-                //    we use per-slot cert now, so if someone voted for (2, 5) using transaction t1,
-                //    then its local root becomes 3 and it now sends (4, 7) using transaction t2,
-                //    the slots 4 to 7 will save t2 in skip cert, while 2 to 3 will save t1 in skip
-                //    cert. Therefore, even if we allow new_start to be larger, we don't allow users
-                //    to un-vote.
-                //    However, in the per-slot cert world, we can forbid new_start to be smaller
-                //    than old_start. Someone may have sent (2, 5) and (3, 7), these two may
-                //    arrive out of order. (2, 5) will not be able to land in cert of slot 3 to 5,
-                //    but it can still land in cert of slot 2.
-                new_start >= old_start && new_end > old_end
->>>>>>> a47bff4daf (Move skip cert into per-slot pool and fix stake.)
             } else {
                 // We should always replace skip with a skip, so should never happen that new
                 // skip range is None when old one is Some.
@@ -181,7 +155,6 @@ impl VoteCertificate {
         &self,
     ) -> std::collections::hash_map::Iter<'_, Pubkey, VoteCertificateEntry> {
         self.certificate.iter()
-<<<<<<< HEAD
     }
 }
 
@@ -252,7 +225,5 @@ mod test {
             old_skip_range,
             new_skip_range
         ));
-=======
->>>>>>> a47bff4daf (Move skip cert into per-slot pool and fix stake.)
     }
 }

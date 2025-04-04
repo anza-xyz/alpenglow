@@ -3,7 +3,6 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::{CertificatePool, StartLeaderCertificates},
-            certificate_pool::{CertificatePool, StartLeaderCertificates},
             utils::stake_reached_super_majority,
             voting_loop::{
                 GenerateVoteTxResult, ReplayCertificateTracker, VotingLoop, VotingLoopConfig,
@@ -598,7 +597,6 @@ impl ReplayStage {
         } = receivers;
 
         trace!("replay stage");
-        let mut cert_pool = CertificatePool::new_from_bank(&bank_forks.read().unwrap().root_bank());
 
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
@@ -2004,46 +2002,6 @@ impl ReplayStage {
         }
     }
 
-    fn ingest_alpenglow_votes_into_certificate_pool(
-        id: &Pubkey,
-        alpenglow_vote_receiver: &AlpenglowVoteReceiver,
-        cert_pool: &mut CertificatePool,
-        first_alpenglow_slot: Option<Slot>,
-        bank_forks: &RwLock<BankForks>,
-    ) -> Option<Slot> {
-        let first_alpenglow_slot = first_alpenglow_slot?;
-        alpenglow_vote_receiver
-            .try_iter()
-            .filter_map(|(vote, vote_account_pubkey, tx)| {
-                if vote.slot() < first_alpenglow_slot {
-                    return None;
-                }
-
-                match cert_pool.add_vote(&vote, tx, &vote_account_pubkey) {
-                    Ok(Some(cert)) if cert.is_finalize() => {
-                        let is_frozen = bank_forks
-                            .read()
-                            .unwrap()
-                            .get(vote.slot())
-                            .is_some_and(|bank| bank.is_frozen());
-
-                        if is_frozen {
-                            info!("{} got new highest cert for {:?} from vote", id, cert);
-                            Some(cert.slot())
-                        } else {
-                            None
-                        }
-                    }
-                    Ok(_) => None,
-                    Err(e) => {
-                        error!("Adding vote {:?} errored with {:?}", vote, e);
-                        None
-                    }
-                }
-            })
-            .max()
-    }
-
     fn process_gossip_verified_vote_hashes(
         gossip_verified_vote_hash_receiver: &GossipVerifiedVoteHashReceiver,
         unfrozen_gossip_verified_vote_hashes: &mut UnfrozenGossipVerifiedVoteHashes,
@@ -2627,72 +2585,6 @@ impl ReplayStage {
                 SlotStateUpdate::Duplicate(duplicate_state),
             );
         }
-    }
-
-    /// Returns a new root if our vote creates a new finalization certificate
-    #[allow(clippy::too_many_arguments)]
-    fn handle_votable_alpenglow_bank(
-        vote_bank: &Arc<Bank>,
-        vote_account_pubkey: &Pubkey,
-        identity_keypair: &Keypair,
-        authorized_voter_keypairs: &[Arc<Keypair>],
-        vote_signatures: &mut Vec<Signature>,
-        has_new_vote_been_rooted: &mut bool,
-        replay_timing: &mut ReplayLoopTiming,
-        voting_sender: &Sender<VoteOp>,
-        wait_to_vote_slot: Option<Slot>,
-        cert_pool: &mut CertificatePool,
-        vote_history: &mut VoteHistory,
-        vote: AlpenglowVote,
-    ) -> Option<Slot> {
-        let mut generate_time = Measure::start("generate_vote");
-        let vote_tx_result = Self::generate_alpenglow_tx(
-            identity_keypair,
-            vote_bank,
-            vote_account_pubkey,
-            authorized_voter_keypairs,
-            &vote,
-            vote_signatures,
-            *has_new_vote_been_rooted,
-            wait_to_vote_slot,
-        );
-        generate_time.stop();
-        replay_timing.generate_vote_us += generate_time.as_us();
-        let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result else {
-            return None;
-        };
-        info!(
-            "{} pushing into vote pool {:?}",
-            identity_keypair.pubkey(),
-            vote
-        );
-        let Ok(maybe_new_cert) =
-            cert_pool.add_vote(&vote, vote_tx.clone().into(), vote_account_pubkey)
-        else {
-            return None;
-        };
-
-        // Update and save the vote history
-        match &vote {
-            AlpenglowVote::Notarize(_) => vote_history.latest_notarize_vote = vote,
-            AlpenglowVote::Skip(..) => vote_history.push_skip_vote(vote),
-            AlpenglowVote::Finalize(_) => vote_history.latest_finalize_vote = vote,
-        }
-        let saved_vote_history = SavedVoteHistory::new(vote_history, identity_keypair)
-            .unwrap_or_else(|err| {
-                error!("Unable to create saved vote history: {:?}", err);
-                std::process::exit(1);
-            });
-
-        // Send the vote over the wire
-        voting_sender
-            .send(VoteOp::PushAlpenglowVote {
-                tx: vote_tx,
-                slot: vote_bank.slot(),
-                saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-            })
-            .unwrap_or_else(|err| warn!("Error: {:?}", err));
-        maybe_new_cert.and_then(|new_cert| new_cert.is_finalize().then_some(new_cert.slot()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -10325,7 +10217,6 @@ pub(crate) mod tests {
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-            ReplayStage::alpenglow_check_cert_in_bank(&bank3, &bank0, true)
         {
             assert_eq!(slot, 3);
             assert_eq!(cert_slot, 2);
