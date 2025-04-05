@@ -5076,37 +5076,35 @@ pub(crate) mod tests {
         let root_hash = root_bank.hash();
         bank_forks.write().unwrap().insert(root_bank);
 
-        let mut heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice::new((root, root_hash));
-
         let mut progress = ProgressMap::default();
         for i in 0..=root {
             progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
         }
 
-        let mut duplicate_slots_tracker: DuplicateSlotsTracker =
+        let duplicate_slots_tracker: DuplicateSlotsTracker =
             vec![root - 1, root, root + 1].into_iter().collect();
-        let mut duplicate_confirmed_slots: DuplicateConfirmedSlots = vec![root - 1, root, root + 1]
+        let duplicate_confirmed_slots: DuplicateConfirmedSlots = vec![root - 1, root, root + 1]
             .into_iter()
             .map(|s| (s, Hash::default()))
             .collect();
-        let mut unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes =
+        let unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes =
             UnfrozenGossipVerifiedVoteHashes {
                 votes_per_slot: vec![root - 1, root, root + 1]
                     .into_iter()
                     .map(|s| (s, HashMap::new()))
                     .collect(),
             };
-        let mut epoch_slots_frozen_slots: EpochSlotsFrozenSlots = vec![root - 1, root, root + 1]
+        let epoch_slots_frozen_slots: EpochSlotsFrozenSlots = vec![root - 1, root, root + 1]
             .into_iter()
             .map(|slot| (slot, Hash::default()))
             .collect();
         let (drop_bank_sender, _drop_bank_receiver) = unbounded();
-        let tbft_structs = TowerBFTStructures {
-            heaviest_subtree_fork_choice: &mut heaviest_subtree_fork_choice,
-            duplicate_slots_tracker: &mut duplicate_slots_tracker,
-            duplicate_confirmed_slots: &mut duplicate_confirmed_slots,
-            unfrozen_gossip_verified_vote_hashes: &mut unfrozen_gossip_verified_vote_hashes,
-            epoch_slots_frozen_slots: &mut epoch_slots_frozen_slots,
+        let mut tbft_structs = TowerBFTStructures {
+            heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice::new((root, root_hash)),
+            duplicate_slots_tracker,
+            duplicate_confirmed_slots,
+            unfrozen_gossip_verified_vote_hashes,
+            epoch_slots_frozen_slots,
         };
         ReplayStage::handle_new_root(
             root,
@@ -5117,7 +5115,7 @@ pub(crate) mod tests {
             &mut true,
             &mut Vec::new(),
             &drop_bank_sender,
-            Some(tbft_structs),
+            Some(&mut tbft_structs),
         )
         .unwrap();
         assert_eq!(bank_forks.read().unwrap().root(), root);
@@ -5125,18 +5123,23 @@ pub(crate) mod tests {
         assert!(progress.get(&root).is_some());
         // root - 1 is filtered out
         assert_eq!(
-            duplicate_slots_tracker.into_iter().collect::<Vec<Slot>>(),
+            tbft_structs
+                .duplicate_slots_tracker
+                .into_iter()
+                .collect::<Vec<Slot>>(),
             vec![root, root + 1]
         );
         assert_eq!(
-            duplicate_confirmed_slots
+            tbft_structs
+                .duplicate_confirmed_slots
                 .keys()
                 .cloned()
                 .collect::<Vec<Slot>>(),
             vec![root, root + 1]
         );
         assert_eq!(
-            unfrozen_gossip_verified_vote_hashes
+            tbft_structs
+                .unfrozen_gossip_verified_vote_hashes
                 .votes_per_slot
                 .keys()
                 .cloned()
@@ -5144,7 +5147,10 @@ pub(crate) mod tests {
             vec![root, root + 1]
         );
         assert_eq!(
-            epoch_slots_frozen_slots.into_keys().collect::<Vec<Slot>>(),
+            tbft_structs
+                .epoch_slots_frozen_slots
+                .into_keys()
+                .collect::<Vec<Slot>>(),
             vec![root, root + 1]
         );
     }
@@ -5177,18 +5183,17 @@ pub(crate) mod tests {
         root_bank.freeze();
         let root_hash = root_bank.hash();
         bank_forks.write().unwrap().insert(root_bank);
-        let mut heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice::new((root, root_hash));
         let mut progress = ProgressMap::default();
         for i in 0..=root {
             progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
         }
         let (drop_bank_sender, _drop_bank_receiver) = unbounded();
-        let tbft_structs = TowerBFTStructures {
-            heaviest_subtree_fork_choice: &mut heaviest_subtree_fork_choice,
-            duplicate_slots_tracker: &mut DuplicateSlotsTracker::default(),
-            duplicate_confirmed_slots: &mut DuplicateConfirmedSlots::default(),
-            unfrozen_gossip_verified_vote_hashes: &mut UnfrozenGossipVerifiedVoteHashes::default(),
-            epoch_slots_frozen_slots: &mut EpochSlotsFrozenSlots::default(),
+        let mut tbft_structs = TowerBFTStructures {
+            heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice::new((root, root_hash)),
+            duplicate_slots_tracker: DuplicateSlotsTracker::default(),
+            duplicate_confirmed_slots: DuplicateConfirmedSlots::default(),
+            unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes::default(),
+            epoch_slots_frozen_slots: EpochSlotsFrozenSlots::default(),
         };
         ReplayStage::handle_new_root(
             root,
@@ -5199,7 +5204,7 @@ pub(crate) mod tests {
             &mut true,
             &mut Vec::new(),
             &drop_bank_sender,
-            Some(tbft_structs),
+            Some(&mut tbft_structs),
         )
         .unwrap();
         assert_eq!(bank_forks.read().unwrap().root(), root);
@@ -5487,7 +5492,7 @@ pub(crate) mod tests {
             let VoteSimulator {
                 mut progress,
                 bank_forks,
-                mut heaviest_subtree_fork_choice,
+                mut tbft_structs,
                 validator_keypairs,
                 ..
             } = vote_simulator;
@@ -5553,12 +5558,11 @@ pub(crate) mod tests {
                     err,
                     &rpc_subscriptions,
                     &slot_status_notifier,
-                    &mut EpochSlotsFrozenSlots::default(),
                     &mut progress,
                     &mut DuplicateSlotsToRepair::default(),
                     &ancestor_hashes_replay_update_sender,
                     &mut PurgeRepairSlotCounter::default(),
-                    &mut tbft_structs,
+                    &mut Some(&mut tbft_structs),
                 );
             }
             assert!(dead_slots.lock().unwrap().contains(&bank1.slot()));
@@ -5933,7 +5937,8 @@ pub(crate) mod tests {
             .values()
             .cloned()
             .collect();
-        let heaviest_subtree_fork_choice = &mut vote_simulator.heaviest_subtree_fork_choice;
+        let heaviest_subtree_fork_choice =
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice;
         let mut latest_validator_votes_for_frozen_banks =
             LatestValidatorVotesForFrozenBanks::default();
         let ancestors = vote_simulator.bank_forks.read().unwrap().ancestors();
@@ -6017,7 +6022,7 @@ pub(crate) mod tests {
             &VoteTracker::default(),
             &ClusterSlots::default(),
             &vote_simulator.bank_forks,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
         );
 
@@ -6039,6 +6044,7 @@ pub(crate) mod tests {
             // The only leaf should always be chosen over parents
             assert_eq!(
                 vote_simulator
+                    .tbft_structs
                     .heaviest_subtree_fork_choice
                     .best_slot(&(bank.slot(), bank.hash()))
                     .unwrap()
@@ -7198,7 +7204,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7214,7 +7220,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7239,7 +7245,7 @@ pub(crate) mod tests {
         let duplicate_state = DuplicateState::new_from_state(
             5,
             &duplicate_confirmed_slots,
-            &vote_simulator.heaviest_subtree_fork_choice,
+            &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             || progress.is_dead(5).unwrap_or(false),
             || Some(bank5_hash),
         );
@@ -7251,7 +7257,7 @@ pub(crate) mod tests {
             &blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut purge_repair_slot_counter,
@@ -7265,7 +7271,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7292,7 +7298,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7320,7 +7326,7 @@ pub(crate) mod tests {
             &blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &ancestor_hashes_replay_update_sender,
             &mut purge_repair_slot_counter,
@@ -7339,7 +7345,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7357,6 +7363,7 @@ pub(crate) mod tests {
         // last vote which was previously marked as invalid and now duplicate confirmed
         let bank6_hash = bank_forks.read().unwrap().bank_hash(6).unwrap();
         let _ = vote_simulator
+            .tbft_structs
             .heaviest_subtree_fork_choice
             .split_off(&(6, bank6_hash));
         // Should now pick 5 as the heaviest fork from last vote again.
@@ -7364,7 +7371,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7423,7 +7430,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7444,7 +7451,7 @@ pub(crate) mod tests {
         let duplicate_state = DuplicateState::new_from_state(
             4,
             &duplicate_confirmed_slots,
-            &vote_simulator.heaviest_subtree_fork_choice,
+            &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             || progress.is_dead(4).unwrap_or(false),
             || Some(bank4_hash),
         );
@@ -7456,7 +7463,7 @@ pub(crate) mod tests {
             &blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
@@ -7467,7 +7474,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7481,7 +7488,7 @@ pub(crate) mod tests {
         let duplicate_state = DuplicateState::new_from_state(
             2,
             &duplicate_confirmed_slots,
-            &vote_simulator.heaviest_subtree_fork_choice,
+            &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             || progress.is_dead(2).unwrap_or(false),
             || Some(bank2_hash),
         );
@@ -7491,7 +7498,7 @@ pub(crate) mod tests {
             &blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
@@ -7502,7 +7509,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7527,7 +7534,7 @@ pub(crate) mod tests {
             &blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
@@ -7542,7 +7549,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             None,
         );
@@ -7661,7 +7668,7 @@ pub(crate) mod tests {
         let VoteSimulator {
             ref mut progress,
             ref bank_forks,
-            ref mut heaviest_subtree_fork_choice,
+            ref mut tbft_structs,
             ..
         } = vote_simulator;
 
@@ -7691,7 +7698,7 @@ pub(crate) mod tests {
             blockstore,
             &mut duplicate_slots_tracker,
             &mut epoch_slots_frozen_slots,
-            heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut duplicate_slots_to_repair,
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
@@ -7749,7 +7756,7 @@ pub(crate) mod tests {
         let VoteSimulator {
             mut progress,
             bank_forks,
-            mut heaviest_subtree_fork_choice,
+            mut tbft_structs,
             mut latest_validator_votes_for_frozen_banks,
             ..
         } = vote_simulator;
@@ -7774,12 +7781,13 @@ pub(crate) mod tests {
             &VoteTracker::default(),
             &ClusterSlots::default(),
             &bank_forks,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
         );
 
         // Try to switch to vote to the heaviest slot 6, then return the vote results
-        let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
+        let (heaviest_bank, heaviest_bank_on_same_fork) = tbft_structs
+            .heaviest_subtree_fork_choice
             .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
         assert_eq!(heaviest_bank.slot(), 7);
         assert!(heaviest_bank_on_same_fork.is_none());
@@ -7791,7 +7799,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         )
     }
 
@@ -7865,14 +7873,14 @@ pub(crate) mod tests {
         let VoteSimulator {
             mut progress,
             bank_forks,
-            mut heaviest_subtree_fork_choice,
+            mut tbft_structs,
             mut latest_validator_votes_for_frozen_banks,
             ..
         } = vote_simulator;
 
         // Check that the new branch with slot 2 is different than the original version.
         let bank_1_hash = bank_forks.read().unwrap().bank_hash(1).unwrap();
-        let children_of_1 = (&heaviest_subtree_fork_choice)
+        let children_of_1 = (&tbft_structs.heaviest_subtree_fork_choice)
             .children(&(1, bank_1_hash))
             .unwrap();
         let duplicate_versions_of_2 = children_of_1.filter(|(slot, _hash)| *slot == 2).count();
@@ -7898,11 +7906,12 @@ pub(crate) mod tests {
             &VoteTracker::default(),
             &ClusterSlots::default(),
             &bank_forks,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
         );
         // Try to switch to vote to the heaviest slot 5, then return the vote results
-        let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
+        let (heaviest_bank, heaviest_bank_on_same_fork) = tbft_structs
+            .heaviest_subtree_fork_choice
             .select_forks(&frozen_banks, &tower, &progress, &ancestors, &bank_forks);
         assert_eq!(heaviest_bank.slot(), 5);
         assert!(heaviest_bank_on_same_fork.is_none());
@@ -7914,7 +7923,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         )
     }
 
@@ -7979,7 +7988,7 @@ pub(crate) mod tests {
         let (
             VoteSimulator {
                 bank_forks,
-                mut heaviest_subtree_fork_choice,
+                mut tbft_structs,
                 mut latest_validator_votes_for_frozen_banks,
                 vote_pubkeys,
                 ..
@@ -7992,7 +8001,13 @@ pub(crate) mod tests {
         let (gossip_verified_vote_hash_sender, gossip_verified_vote_hash_receiver) = unbounded();
 
         // Best slot is 4
-        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot().0, 4);
+        assert_eq!(
+            tbft_structs
+                .heaviest_subtree_fork_choice
+                .best_overall_slot()
+                .0,
+            4
+        );
 
         // Cast a vote for slot 3 on one fork
         let vote_slot = 3;
@@ -8003,19 +8018,27 @@ pub(crate) mod tests {
         ReplayStage::process_gossip_verified_vote_hashes(
             &gossip_verified_vote_hash_receiver,
             &mut unfrozen_gossip_verified_vote_hashes,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
         );
 
         // Pick the best fork. Gossip votes shouldn't affect fork choice
-        heaviest_subtree_fork_choice.compute_bank_stats(
-            &vote_bank,
-            &Tower::default(),
-            &mut latest_validator_votes_for_frozen_banks,
-        );
+        tbft_structs
+            .heaviest_subtree_fork_choice
+            .compute_bank_stats(
+                &vote_bank,
+                &Tower::default(),
+                &mut latest_validator_votes_for_frozen_banks,
+            );
 
         // Best slot is still 4
-        assert_eq!(heaviest_subtree_fork_choice.best_overall_slot().0, 4);
+        assert_eq!(
+            tbft_structs
+                .heaviest_subtree_fork_choice
+                .best_overall_slot()
+                .0,
+            4
+        );
     }
 
     #[test]
@@ -8258,7 +8281,7 @@ pub(crate) mod tests {
         assert_eq!(tower.last_voted_slot().unwrap(), 1);
 
         // Trying to refresh the vote for bank 1 in bank 2 won't succeed because
-        // the blockheight has not increased enough
+        // the blockheight is not increased enough
         progress
             .get_fork_stats_mut(bank1.slot())
             .unwrap()
@@ -8590,7 +8613,7 @@ pub(crate) mod tests {
         let VoteSimulator {
             mut validator_keypairs,
             bank_forks,
-            mut heaviest_subtree_fork_choice,
+            mut tbft_structs,
             mut latest_validator_votes_for_frozen_banks,
             mut progress,
             ..
@@ -8714,7 +8737,7 @@ pub(crate) mod tests {
             &VoteTracker::default(),
             &ClusterSlots::default(),
             &bank_forks,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
         );
         assert_eq!(tower.last_voted_slot(), Some(last_voted_slot));
@@ -8728,7 +8751,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         );
         assert!(vote_bank.is_some());
         assert_eq!(vote_bank.unwrap().0.slot(), tip_of_voted_fork);
@@ -8744,7 +8767,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         );
         assert!(vote_bank.is_none());
 
@@ -8759,7 +8782,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         );
         assert!(vote_bank.is_none());
 
@@ -8776,7 +8799,7 @@ pub(crate) mod tests {
             &progress,
             &mut tower,
             &latest_validator_votes_for_frozen_banks,
-            &heaviest_subtree_fork_choice,
+            &tbft_structs.heaviest_subtree_fork_choice,
         );
         assert!(vote_bank.is_none());
     }
@@ -8874,7 +8897,7 @@ pub(crate) mod tests {
         let res = retransmit_slots_receiver.recv_timeout(Duration::from_millis(10));
         assert!(
             res.is_err(),
-            "retry_iteration=1, elapsed < 2^1 * RETRY_BASE_DELAY_MS"
+            "retry_iteration=1, elapsed < 2^1 * RETRANSMIT_BASE_DELAY_MS"
         );
 
         progress.get_retransmit_info_mut(0).unwrap().retry_time = Instant::now()
@@ -9374,7 +9397,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             Some(my_vote_pubkey),
         );
@@ -9393,7 +9416,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             Some(my_vote_pubkey),
         );
@@ -9457,7 +9480,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             Some(my_vote_pubkey),
         );
@@ -9470,7 +9493,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut tower,
-            &mut vote_simulator.heaviest_subtree_fork_choice,
+            &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
             Some(my_vote_pubkey),
         );
@@ -9890,7 +9913,7 @@ pub(crate) mod tests {
             setup_forks_from_tree(tree, 3, Some(Box::new(generate_votes)));
         let VoteSimulator {
             bank_forks,
-            mut heaviest_subtree_fork_choice,
+            mut tbft_structs,
             mut progress,
             ..
         } = vote_simulator;
@@ -9912,7 +9935,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut DuplicateSlotsTracker::default(),
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut EpochSlotsFrozenSlots::default(),
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
@@ -9932,7 +9955,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut DuplicateSlotsTracker::default(),
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut EpochSlotsFrozenSlots::default(),
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
@@ -9941,7 +9964,8 @@ pub(crate) mod tests {
         );
 
         assert_eq!(*duplicate_confirmed_slots.get(&5).unwrap(), bank_hash_5);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(5, bank_hash_5))
             .unwrap_or(false));
 
@@ -9955,7 +9979,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut DuplicateSlotsTracker::default(),
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut EpochSlotsFrozenSlots::default(),
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
@@ -9964,11 +9988,13 @@ pub(crate) mod tests {
         );
 
         assert_eq!(*duplicate_confirmed_slots.get(&5).unwrap(), bank_hash_5);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(5, bank_hash_5))
             .unwrap_or(false));
         assert_eq!(*duplicate_confirmed_slots.get(&6).unwrap(), bank_hash_6);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(6, bank_hash_6))
             .unwrap_or(false));
 
@@ -9980,7 +10006,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut progress,
             &mut DuplicateSlotsTracker::default(),
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut EpochSlotsFrozenSlots::default(),
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
@@ -10004,7 +10030,7 @@ pub(crate) mod tests {
             setup_forks_from_tree(tree, 3, Some(Box::new(generate_votes)));
         let VoteSimulator {
             bank_forks,
-            mut heaviest_subtree_fork_choice,
+            mut tbft_structs,
             progress,
             ..
         } = vote_simulator;
@@ -10030,7 +10056,7 @@ pub(crate) mod tests {
             &mut EpochSlotsFrozenSlots::default(),
             &bank_forks,
             &progress,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
@@ -10050,14 +10076,15 @@ pub(crate) mod tests {
             &mut EpochSlotsFrozenSlots::default(),
             &bank_forks,
             &progress,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
         );
 
         assert_eq!(*duplicate_confirmed_slots.get(&5).unwrap(), bank_hash_5);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(5, bank_hash_5))
             .unwrap_or(false));
 
@@ -10080,18 +10107,20 @@ pub(crate) mod tests {
             &mut EpochSlotsFrozenSlots::default(),
             &bank_forks,
             &progress,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
         );
 
         assert_eq!(*duplicate_confirmed_slots.get(&5).unwrap(), bank_hash_5);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(5, bank_hash_5))
             .unwrap_or(false));
         assert_eq!(*duplicate_confirmed_slots.get(&6).unwrap(), bank_hash_6);
-        assert!(heaviest_subtree_fork_choice
+        assert!(tbft_structs
+            .heaviest_subtree_fork_choice
             .is_duplicate_confirmed(&(6, bank_hash_6))
             .unwrap_or(false));
 
@@ -10106,7 +10135,7 @@ pub(crate) mod tests {
             &mut EpochSlotsFrozenSlots::default(),
             &bank_forks,
             &progress,
-            &mut heaviest_subtree_fork_choice,
+            &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
