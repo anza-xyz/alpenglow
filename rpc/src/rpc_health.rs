@@ -164,9 +164,9 @@ pub mod tests {
         assert_eq!(health.check(), RpcHealthStatus::Ok);
 
         // Remove the override - status now unknown as no slots have been
-        // optimistically confirmed yet
         override_health_check.store(false, Ordering::Relaxed);
         assert_eq!(health.check(), RpcHealthStatus::Unknown);
+        // optimistically confirmed yet
 
         // Mark slot 15 as being optimistically confirmed in the Blockstore, this could
         // happen if the cluster confirmed the slot and this node became aware through gossip,
