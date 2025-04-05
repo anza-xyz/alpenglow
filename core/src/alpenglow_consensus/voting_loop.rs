@@ -50,6 +50,7 @@ use {
         hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
+        timing::timestamp,
         transaction::Transaction,
     },
     std::{
@@ -803,6 +804,18 @@ impl VotingLoop {
         ) {
             error!("Unable to set root: {e:?}");
             return None;
+        }
+
+        // Distinguish between duplicate versions of same slot
+        let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
+        if let Err(e) =
+            ctx.blockstore
+                .insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
+        {
+            error!(
+                "failed to record optimistic slot in blockstore: slot={}: {:?}",
+                new_root, &e
+            );
         }
 
         Some(new_root)
