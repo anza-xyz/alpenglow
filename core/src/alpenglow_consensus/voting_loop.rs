@@ -22,8 +22,9 @@ use {
     solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
-        leader_schedule_utils::first_of_consecutive_leader_slots,
+        blockstore::Blockstore,
+        leader_schedule_cache::LeaderScheduleCache,
+        leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::{PohRecorder, TransactionRecorder},
@@ -293,8 +294,7 @@ impl VotingLoop {
 
         // TODO(ashwin): Start loop once migration is complete current_slot from vote history
         loop {
-            let leader_start_slot = first_of_consecutive_leader_slots(current_slot);
-            let leader_end_slot = leader_start_slot + NUM_CONSECUTIVE_LEADER_SLOTS - 1;
+            let leader_end_slot = last_of_consecutive_leader_slots(current_slot);
             let mut skipped = false;
 
             // TODO(ashwin): Do maybe_leader for all 4 blocks here, right now
@@ -310,7 +310,7 @@ impl VotingLoop {
                 .collect();
 
             while current_slot <= leader_end_slot {
-                let leader_slot_index = (current_slot - leader_start_slot) as usize;
+                let leader_slot_index = leader_slot_index(current_slot);
                 let timeout = timeouts[leader_slot_index];
                 let cert_log_timer = Instant::now();
                 let mut skip_refresh_timer = Instant::now();

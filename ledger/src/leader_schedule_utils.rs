@@ -72,6 +72,18 @@ pub fn first_of_consecutive_leader_slots(slot: Slot) -> Slot {
     (slot / NUM_CONSECUTIVE_LEADER_SLOTS) * NUM_CONSECUTIVE_LEADER_SLOTS
 }
 
+/// Returns the last slot in the leader window that contains `slot`
+#[inline]
+pub fn last_of_consecutive_leader_slots(slot: Slot) -> Slot {
+    first_of_consecutive_leader_slots(slot) + NUM_CONSECUTIVE_LEADER_SLOTS - 1
+}
+
+/// Returns the index within the leader slot range that contains `slot`
+#[inline]
+pub fn leader_slot_index(slot: Slot) -> usize {
+    (slot % NUM_CONSECUTIVE_LEADER_SLOTS) as usize
+}
+
 #[cfg(test)]
 mod tests {
     use {
