@@ -13,14 +13,8 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        consensus::{
-            heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice, progress_map::ProgressMap,
-        },
-        repair::cluster_slot_state_verifier::{
-            DuplicateConfirmedSlots, DuplicateSlotsTracker, EpochSlotsFrozenSlots,
-        },
+        consensus::progress_map::ProgressMap,
         replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
-        unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,
@@ -47,9 +41,9 @@ use {
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
-        hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
+        timing::timestamp,
         transaction::Transaction,
     },
     std::{
@@ -756,11 +750,9 @@ impl VotingLoop {
         vctx.vote_history.set_root(new_root);
         cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
         ctx.cert_tracker.write().unwrap().set_root(new_root);
-        // TODO(ashwin): AG doesn't need this bank
-        let bank = ctx.bank_forks.read().unwrap().working_bank();
         if let Err(e) = ReplayStage::check_and_handle_new_root(
             &ctx.my_pubkey,
-            bank.as_ref(),
+            slot,
             new_root,
             ctx.bank_forks.as_ref(),
             &mut ctx.progress,
@@ -769,21 +761,26 @@ impl VotingLoop {
             accounts_background_request_sender,
             &ctx.rpc_subscriptions,
             Some(new_root),
-            // TODO(ashwin): AG doesn't need most of these
-            // we should stop populating them after the migration
-            // and remove them here
-            &mut HeaviestSubtreeForkChoice::new((0, Hash::default())),
             bank_notification_sender,
-            &mut DuplicateSlotsTracker::default(),
-            &mut DuplicateConfirmedSlots::default(),
-            &mut UnfrozenGossipVerifiedVoteHashes::default(),
             &mut vctx.has_new_vote_been_rooted,
             &mut vctx.voted_signatures,
-            &mut EpochSlotsFrozenSlots::default(),
             drop_bank_sender,
+            None,
         ) {
             error!("Unable to set root: {e:?}");
             return None;
+        }
+
+        // Distinguish between duplicate versions of same slot
+        let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
+        if let Err(e) =
+            ctx.blockstore
+                .insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
+        {
+            error!(
+                "failed to record optimistic slot in blockstore: slot={}: {:?}",
+                new_root, &e
+            );
         }
 
         Some(new_root)

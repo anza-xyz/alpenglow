@@ -1994,6 +1994,7 @@ pub mod test {
         let duplicate_ancestor1 = 44;
         let duplicate_ancestor2 = 45;
         vote_simulator
+            .tbft_structs
             .heaviest_subtree_fork_choice
             .mark_fork_invalid_candidate(&(
                 duplicate_ancestor1,
@@ -2006,6 +2007,7 @@ pub mod test {
                     .hash(),
             ));
         vote_simulator
+            .tbft_structs
             .heaviest_subtree_fork_choice
             .mark_fork_invalid_candidate(&(
                 duplicate_ancestor2,
@@ -2026,7 +2028,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchDuplicateRollback(duplicate_ancestor2)
         );
@@ -2040,6 +2042,7 @@ pub mod test {
         }
         for (i, duplicate_ancestor) in confirm_ancestors.into_iter().enumerate() {
             vote_simulator
+                .tbft_structs
                 .heaviest_subtree_fork_choice
                 .mark_fork_valid_candidate(&(
                     duplicate_ancestor,
@@ -2059,7 +2062,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             );
             if i == 0 {
                 assert_eq!(
@@ -2091,7 +2094,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SameFork
         );
@@ -2106,7 +2109,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2123,7 +2126,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2140,7 +2143,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2157,7 +2160,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2176,7 +2179,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2193,7 +2196,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SwitchProof(Hash::default())
         );
@@ -2211,7 +2214,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SwitchProof(Hash::default())
         );
@@ -2233,7 +2236,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2261,7 +2264,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, num_validators * 10000)
         );
@@ -2277,7 +2280,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -2310,7 +2313,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SwitchProof(Hash::default())
         );
@@ -2330,7 +2333,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -3050,7 +3053,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SameFork
         );
@@ -3065,7 +3068,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -3081,7 +3084,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SwitchProof(Hash::default())
         );
@@ -3141,7 +3144,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -3157,7 +3160,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20000)
         );
@@ -3173,7 +3176,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::SwitchProof(Hash::default())
         );
@@ -3778,7 +3781,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20_000)
         );
@@ -3796,7 +3799,7 @@ pub mod test {
                     total_stake,
                     bank0.epoch_vote_accounts(0).unwrap(),
                     &vote_simulator.latest_validator_votes_for_frozen_banks,
-                    &vote_simulator.heaviest_subtree_fork_choice,
+                    &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
                 ),
                 SwitchForkDecision::SwitchProof(Hash::default())
             );
@@ -3834,7 +3837,7 @@ pub mod test {
                 total_stake,
                 bank0.epoch_vote_accounts(0).unwrap(),
                 &vote_simulator.latest_validator_votes_for_frozen_banks,
-                &vote_simulator.heaviest_subtree_fork_choice,
+                &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             ),
             SwitchForkDecision::FailedSwitchThreshold(0, 20_000)
         );
@@ -3854,7 +3857,7 @@ pub mod test {
                     total_stake,
                     bank0.epoch_vote_accounts(0).unwrap(),
                     &vote_simulator.latest_validator_votes_for_frozen_banks,
-                    &vote_simulator.heaviest_subtree_fork_choice,
+                    &vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
                 ),
                 SwitchForkDecision::SwitchProof(Hash::default())
             );
