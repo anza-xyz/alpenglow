@@ -58,7 +58,7 @@ use {
         },
         entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
-        leader_schedule_utils::first_of_consecutive_leader_slots,
+        leader_schedule_utils::{first_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::{PohLeaderStatus, PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
@@ -3669,9 +3669,27 @@ impl ReplayStage {
         let parent_hash = parent_bank.hash();
         let mut notarization_stake = 0;
         let mut notarization_size = 0;
-        let must_skip_start = parent_slot + 1;
-        let must_skip_end = bank.slot() - 1;
         let mut skip_pool = SkipPool::new();
+
+        let leader_slot_idx = leader_slot_index(bank.slot());
+        if leader_slot_idx > 1 {
+            // The last two leaders blocks must be always built consecutively
+            if parent_slot + 1 != bank.slot() {
+                return Err(BlockstoreProcessorError::NonConsecutiveLeaderSlot(
+                    bank.slot(),
+                    parent_slot,
+                ));
+            }
+            // No certificates required
+            return Ok(());
+        }
+
+        if leader_slot_idx == 1 && parent_slot + 1 == bank.slot() {
+            // No certificates required
+            return Ok(());
+        }
+
+        // Certificates are required
         bank.vote_accounts()
             .iter()
             .for_each(|(vote_account_pubkey, (stake, account))| {
@@ -3714,10 +3732,9 @@ impl ReplayStage {
                 bank.slot(),
                 parent_slot
             );
-            return Err(BlockstoreProcessorError::InvalidCert(
+            return Err(BlockstoreProcessorError::InvalidNotarizationCertificate(
                 bank.slot(),
                 parent_slot,
-                "Notarization".to_string(),
             ));
         }
         // TODO(ashwin): Track by block id / hash
@@ -3725,31 +3742,45 @@ impl ReplayStage {
             .write()
             .unwrap()
             .add_notarization_certificate(parent_slot, notarization_size);
-        if must_skip_start <= must_skip_end {
-            // TODO(wen): the stake can be incorrect.
-            skip_pool.update(
-                bank.epoch_total_stake(bank.epoch())
-                    .expect("stake must exist"),
-            );
-            if !skip_pool.skip_range_certified(&must_skip_start, &must_skip_end) {
-                warn!(
-                    "Skip range for bank {} is {:?}, does not cover {} to {}",
-                    bank.slot(),
-                    skip_pool.max_skip_certificate_range(),
-                    must_skip_start,
-                    must_skip_end
-                );
-                return Err(BlockstoreProcessorError::InvalidCert(
-                    bank.slot(),
-                    must_skip_start,
-                    "Skip".to_string(),
-                ));
-            }
-            cert_tracker
-                .write()
-                .unwrap()
-                .add_skip_certificates(must_skip_start, must_skip_end);
+
+        let must_skip_start = parent_slot + 1;
+        // At this point we know we are either the first or second leader block in the window
+        // For the second leader block we do not require a skip certificate on the first leader block
+        let Some(must_skip_end) = first_of_consecutive_leader_slots(bank.slot()).checked_sub(1)
+        else {
+            // This is immediately after genesis no skip required
+            return Ok(());
+        };
+
+        if must_skip_start > must_skip_end {
+            // No skip certificate needed, these are consecutive blocks
+            return Ok(());
         }
+
+        // TODO(wen): the stake can be incorrect.
+        skip_pool.update(
+            bank.epoch_total_stake(bank.epoch())
+                .expect("stake must exist"),
+        );
+        if !skip_pool.skip_range_certified(&must_skip_start, &must_skip_end) {
+            warn!(
+                "Skip range for bank {} is {:?}, does not cover {} to {}",
+                bank.slot(),
+                skip_pool.max_skip_certificate_range(),
+                must_skip_start,
+                must_skip_end
+            );
+            return Err(BlockstoreProcessorError::InvalidSkipCertificate(
+                bank.slot(),
+                must_skip_start,
+                must_skip_end,
+            ));
+        }
+        cert_tracker
+            .write()
+            .unwrap()
+            .add_skip_certificates(must_skip_start, must_skip_end);
+
         Ok(())
     }
 
@@ -10189,7 +10220,7 @@ pub(crate) mod tests {
             true
         )
         .is_ok());
-        let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 1);
+        let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::new_unique(), 1);
         bank1.freeze();
         // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
@@ -10198,121 +10229,115 @@ pub(crate) mod tests {
             true
         )
         .is_ok());
-        let bank2 = Arc::new(Bank::new_from_parent(bank0.clone(), &Pubkey::default(), 2));
+        let bank2 = Arc::new(Bank::new_from_parent(
+            bank0.clone(),
+            &Pubkey::new_unique(),
+            2,
+        ));
         bank2.freeze();
-        // Test on bank2 should fail because even though bank 0 doesn't need to be notarized,
-        // it should have skip cert for bank 1 which it skipped.
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            // TODO(ashwin): TESTS FOR THIS FN
+        // Test on bank2 should fail because it is not consectuive
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                    &bank2,
-                    ReplayCertificateTracker::new_rw_arc().as_ref(),
-                    true,
-                )
-        {
-            assert_eq!(slot, 2);
-            assert_eq!(cert_slot, 1);
-            assert_eq!(cert, "Skip");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
-        let bank3 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3);
-        // Test on bank3 should fail because it doesn't contain notarization for bank 2.
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank2,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 3);
-            assert_eq!(cert_slot, 2);
-            assert_eq!(cert, "Notarization");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::NonConsecutiveLeaderSlot(2, 0)
+        );
+        let bank3 = Arc::new(Bank::new_from_parent(
+            bank2.clone(),
+            &Pubkey::new_unique(),
+            3,
+        ));
+        // bank3 does not need a certificate becauses it is consecutive
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(
+            &bank3,
+            ReplayCertificateTracker::new_rw_arc().as_ref(),
+            true,
+        )
+        .is_ok(),);
+        let bank4 = Bank::new_from_parent(bank3.clone(), bank3.collector_id(), 4);
+        // bank4 needs a certificate because it is a new leader window (even though it's consecutive and the same leader)
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bank4,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true,
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
+        );
         // We have 4 validators, let's add my own vote in there, it's < 2/3 so verification should fail
         store_alpenglow_vote_account(
-            &bank3,
+            &bank4,
             &my_keypairs.vote_keypair.pubkey(),
-            2,
-            bank2.hash(),
+            3,
+            bank3.hash(),
             None,
             None,
             lamports,
         );
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank4,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 3);
-            assert_eq!(cert_slot, 2);
-            assert_eq!(cert, "Notarization");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
+        );
         // Wrong hash will also make notarization cert check fail.
         for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
-                &bank3,
+                &bank4,
                 &keypair.vote_keypair.pubkey(),
-                2,
+                3,
                 Hash::default(),
                 None,
                 None,
                 lamports,
             );
         }
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank4,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 3);
-            assert_eq!(cert_slot, 2);
-            assert_eq!(cert, "Notarization");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
+        );
         // Now let's add more votes with correct Hash, this should get us over 2/3 so verification should succeed
         for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
-                &bank3,
+                &bank4,
                 &keypair.vote_keypair.pubkey(),
-                2,
-                bank2.hash(),
+                3,
+                bank3.hash(),
                 None,
                 None,
                 lamports,
             );
         }
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank3,
+            &bank4,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
         .is_ok());
 
         // Create bank5 which links off bank2, has notarization cert for bank2 but no skip certs.
-        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::new_unique(), 5);
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 5);
-            assert_eq!(cert_slot, 2);
-            assert_eq!(cert, "Notarization");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(5, 2)
+        );
         for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
                 &bank5,
@@ -10324,19 +10349,16 @@ pub(crate) mod tests {
                 lamports,
             );
         }
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        // We don't need a skip cert for 4 since it's our leader block in the same window
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 5);
-            assert_eq!(cert_slot, 3);
-            assert_eq!(cert, "Skip");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidSkipCertificate(5, 3, 3)
+        );
         // Now add skip certs, this should succeed
         for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
@@ -10345,7 +10367,7 @@ pub(crate) mod tests {
                 2,
                 bank2.hash(),
                 Some(3),
-                Some(4),
+                Some(3),
                 lamports,
             );
         }
@@ -10357,7 +10379,7 @@ pub(crate) mod tests {
         .is_ok());
         // Let's say we have bank 5 which links to bank 2, and asked not to check notarization,
         // then it should succeed only with skip cert.
-        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 5);
+        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::new_unique(), 5);
         for keypair in &validator_voting_keypairs {
             store_alpenglow_vote_account(
                 &bank5,
@@ -10365,7 +10387,7 @@ pub(crate) mod tests {
                 0,
                 Hash::default(),
                 Some(3),
-                Some(4),
+                Some(3),
                 lamports,
             );
         }
@@ -10376,18 +10398,148 @@ pub(crate) mod tests {
         )
         .is_ok());
         // But if we are asked to check notarization, it should fail.
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank5,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
             )
-        {
-            assert_eq!(slot, 5);
-            assert_eq!(cert_slot, 2);
-            assert_eq!(cert, "Notarization");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(5, 2)
+        );
+    }
+
+    #[test]
+    fn test_alpenglow_check_cert_in_bank_consecutive() {
+        let kps: Vec<_> = (0..2).map(|_| ValidatorVoteKeypairs::new_rand()).collect();
+        let lamports = 10_000;
+        let GenesisConfigInfo { genesis_config, .. } =
+            create_genesis_config_with_alpenglow_vote_accounts_no_program(
+                lamports,
+                &kps,
+                vec![100; kps.len()],
+            );
+
+        let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
+        bank0.freeze();
+
+        //         /- bad 7
+        //        /   /- bad 6
+        // 0 -> 2 -> 4 -> 5 - good 6 - good 7
+        //      \------------------------------ 9
+        // A    A    B    B        B        B   A
+        let bank2 = Arc::new(Bank::new_from_parent(
+            bank0.clone(),
+            &kps[0].node_keypair.pubkey(),
+            2,
+        ));
+        let bank4 = Arc::new(Bank::new_from_parent(
+            bank2.clone(),
+            &kps[1].node_keypair.pubkey(),
+            4,
+        ));
+        let bank5 = Arc::new(Bank::new_from_parent(
+            bank4.clone(),
+            &kps[1].node_keypair.pubkey(),
+            5,
+        ));
+        let bad_bank6 = Arc::new(Bank::new_from_parent(
+            bank4.clone(),
+            &kps[1].node_keypair.pubkey(),
+            6,
+        ));
+        let good_bank6 = Arc::new(Bank::new_from_parent(
+            bank5.clone(),
+            &kps[1].node_keypair.pubkey(),
+            6,
+        ));
+        let bad_bank7 = Arc::new(Bank::new_from_parent(
+            bank2.clone(),
+            &kps[1].node_keypair.pubkey(),
+            7,
+        ));
+        let good_bank7 = Arc::new(Bank::new_from_parent(
+            good_bank6.clone(),
+            &kps[1].node_keypair.pubkey(),
+            7,
+        ));
+
+        let bank9 = Arc::new(Bank::new_from_parent(
+            bank2.clone(),
+            &kps[0].node_keypair.pubkey(),
+            9,
+        ));
+
+        // 4 requires a notarization certificate on 2 as it is a leader handoff
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bank4,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 2)
+        );
+        // 5 requires no certificate
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(
+            &bank5,
+            ReplayCertificateTracker::new_rw_arc().as_ref(),
+            true
+        )
+        .is_ok(),);
+        // 6 must be built off of 5, and it requires no certificate
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bad_bank6,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::NonConsecutiveLeaderSlot(6, 4)
+        );
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(
+            &good_bank6,
+            ReplayCertificateTracker::new_rw_arc().as_ref(),
+            true
+        )
+        .is_ok(),);
+        // 7 must be built off of 6, and it requires no certificate
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bad_bank7,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::NonConsecutiveLeaderSlot(7, 2)
+        );
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(
+            &good_bank7,
+            ReplayCertificateTracker::new_rw_arc().as_ref(),
+            false
+        )
+        .is_ok());
+
+        // Although 9 is built off of 2 (same leader), since there was a leader in between
+        // it requires a notarization certificate and a skip certificate since 7. We do not
+        // require a skip certificate for 8
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bank9,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidNotarizationCertificate(9, 2)
+        );
+        assert_matches!(
+            ReplayStage::alpenglow_check_cert_in_bank(
+                &bank9,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                false
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::InvalidSkipCertificate(9, 3, 7)
+        );
     }
 }
