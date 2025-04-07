@@ -821,8 +821,14 @@ pub enum BlockstoreProcessorError {
     #[error("invalid retransmitter signature final fec set")]
     InvalidRetransmitterSignatureFinalFecSet,
 
-    #[error("invalid certificate in bank {0} for slot {1}: {2}")]
-    InvalidCert(Slot, Slot, String),
+    #[error("invalid notarization certificate in bank {0} for slot {1}")]
+    InvalidNotarizationCertificate(Slot, Slot),
+
+    #[error("invalid skip certificate in bank {0} for slot range {1} - {2}")]
+    InvalidSkipCertificate(Slot, Slot, Slot),
+
+    #[error("non consecutive leader slot for bank {0} parent {1}")]
+    NonConsecutiveLeaderSlot(Slot, Slot),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
