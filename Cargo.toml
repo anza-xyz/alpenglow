@@ -27,6 +27,7 @@ members = [
     "bench-tps",
     "bench-vote",
     "bloom",
+    "bls",
     "bucket_map",
     "build-alpenglow-vote",
     "builtins",
@@ -201,6 +202,8 @@ base64 = "0.22.1"
 bincode = "1.3.3"
 bitflags = { version = "2.9.0" }
 blake3 = "1.6.1"
+blst = "0.3.14"
+blstrs = "0.7.1"
 borsh = { version = "1.5.5", features = ["derive", "unstable__schema"] }
 borsh0-10 = { package = "borsh", version = "0.10.3" }
 bs58 = { version = "0.5.1", default-features = false }
@@ -246,6 +249,7 @@ env_logger = "0.9.3"
 etcd-client = "0.11.1"
 fast-math = "0.1"
 fd-lock = "3.0.13"
+ff = "0.13.1"
 flate2 = "1.0.31"
 five8_const = "0.1.3"
 fnv = "1.0.7"
@@ -257,6 +261,7 @@ gethostname = "0.2.3"
 getrandom = "0.3.2"
 goauth = "0.13.1"
 governor = "0.6.3"
+group = "0.13.0"
 hex = "0.4.3"
 hidapi = { version = "2.6.3", default-features = false }
 histogram = "0.6.9"
@@ -373,6 +378,7 @@ solana-big-mod-exp = "=2.2.1"
 solana-bincode = "=2.2.1"
 solana-blake3-hasher = "=2.2.1"
 solana-bloom = { path = "bloom", version = "=2.3.0" }
+solana-bls = { path = "bls", version = "=2.3.0" }
 solana-bn254 = "=2.2.1"
 solana-borsh = "=2.2.1"
 solana-bpf-loader-program = { path = "programs/bpf_loader", version = "=2.3.0" }
@@ -543,7 +549,10 @@ solana-transaction = "=2.2.1"
 solana-transaction-error = "=2.2.1"
 solana-tpu-client = { path = "tpu-client", version = "=2.3.0", default-features = false }
 solana-tpu-client-next = { path = "tpu-client-next", version = "=2.3.0" }
-solana-transaction-context = { path = "transaction-context", version = "=2.3.0", features = [ "bincode", "debug-signature" ] }
+solana-transaction-context = { path = "transaction-context", version = "=2.3.0", features = [
+    "bincode",
+    "debug-signature",
+] }
 solana-transaction-status = { path = "transaction-status", version = "=2.3.0" }
 solana-transaction-status-client-types = { path = "transaction-status-client-types", version = "=2.3.0" }
 solana-transaction-metrics-tracker = { path = "transaction-metrics-tracker", version = "=2.3.0" }
