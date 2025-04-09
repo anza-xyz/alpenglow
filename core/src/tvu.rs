@@ -3,7 +3,10 @@
 
 use {
     crate::{
-        alpenglow_consensus::vote_history_storage::VoteHistoryStorage,
+        alpenglow_consensus::{
+            block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
+            vote_history_storage::VoteHistoryStorage,
+        },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
@@ -167,6 +170,8 @@ impl Tvu {
         wen_restart_repair_slots: Option<Arc<RwLock<Vec<Slot>>>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
+        replay_highest_frozen: Arc<ReplayHighestFrozen>,
+        leader_window_notifier: Arc<LeaderWindowNotifier>,
         voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
@@ -337,6 +342,8 @@ impl Tvu {
             log_messages_bytes_limit,
             prioritization_fee_cache: prioritization_fee_cache.clone(),
             banking_tracer,
+            replay_highest_frozen,
+            leader_window_notifier,
         };
 
         let voting_service = VotingService::new(
@@ -607,6 +614,8 @@ pub mod tests {
             wen_restart_repair_slots,
             None,
             Arc::new(connection_cache),
+            Arc::new(ReplayHighestFrozen::default()),
+            Arc::new(LeaderWindowNotifier::default()),
             None,
         )
         .expect("assume success");
