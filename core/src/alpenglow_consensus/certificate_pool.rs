@@ -501,7 +501,8 @@ impl CertificatePool {
         (voted_stake - top_notarized_stake) as f64 / total_stake as f64 >= SAFE_TO_SKIP_THRESHOLD
     }
 
-    /// Determines if the leader can start based on notarization and skip certificates.
+    /// Determines if we can produce `my_leader_slot` with parent `parent_slot`
+    /// based on the certificates in the pool.
     pub fn make_start_leader_decision(
         &self,
         my_leader_slot: Slot,

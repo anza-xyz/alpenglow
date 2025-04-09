@@ -60,14 +60,3 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
 pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
-
-/// The amount of time a leader has to build their block in ms
-pub const BLOCKTIME: u128 = 400;
-
-/// The maximum message delay in ms
-pub const DELTA: u128 = 100;
-
-/// The Maximum delay a node can observe between entering the loop iteration
-/// for a window and receiving any shred of the first block of the leader.
-/// As a conservative global constant we set this to 3 * DELTA
-pub const DELTA_TIMEOUT: u128 = 300;

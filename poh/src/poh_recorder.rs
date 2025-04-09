@@ -243,6 +243,8 @@ impl TransactionRecorder {
 
 pub struct WorkingBank {
     pub bank: BankWithScheduler,
+    // For TowerBFT this marks when the bank was initially inserted
+    // For Alpenglow this marks the beginning of this leader window
     pub start: Arc<Instant>,
     pub min_tick_height: u64,
     pub max_tick_height: u64,
@@ -337,6 +339,7 @@ pub struct PohRecorder {
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
     pub is_alpenglow_enabled: bool,
+    pub(crate) preempted_slot: Option<Slot>,
     pub use_alpenglow_tick_producer: bool,
 }
 
@@ -432,6 +435,7 @@ impl PohRecorder {
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
                 is_alpenglow_enabled,
+                preempted_slot: None,
                 use_alpenglow_tick_producer: is_alpenglow_enabled,
             },
             working_bank_receiver,
@@ -579,9 +583,10 @@ impl PohRecorder {
         &mut self,
         bank: BankWithScheduler,
         track_transaction_indexes: bool,
+        skip_timer: Option<Instant>,
     ) -> BankStart {
         assert!(self.working_bank.is_none());
-        self.leader_bank_notifier.set_in_progress(&bank);
+        self.leader_bank_notifier.set_in_progress(&bank, skip_timer);
         let working_bank = WorkingBank {
             min_tick_height: bank.tick_height(),
             max_tick_height: bank.max_tick_height(),
@@ -591,7 +596,6 @@ impl PohRecorder {
             contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
         let bank_start = BankStart::from(&working_bank);
-        trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
         if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
             if self.poh.lock().unwrap().hashes_per_tick() != hashes_per_tick {
@@ -628,8 +632,20 @@ impl PohRecorder {
         bank_start
     }
 
+    pub fn clear_bank_due_to_preemption(&mut self, next_window_slot: Slot) {
+        if let Some(slot) = self.preempted_slot {
+            error!(
+            "Multiple of our consecutive leader windows are being preempted due to skip votes, we are unable to keep up, 
+                previously preempted {slot}, now preempting with {next_window_slot}"
+            );
+        }
+        self.preempted_slot = Some(next_window_slot);
+        self.clear_bank();
+    }
+
     fn clear_bank(&mut self) {
         if let Some(WorkingBank { bank, start, .. }) = self.working_bank.take() {
+            trace!("{}: clearing bank {}", bank.collector_id(), bank.slot());
             self.leader_bank_notifier.set_completed(bank.slot());
             let next_leader_slot = self.leader_schedule_cache.next_leader_slot(
                 bank.collector_id(),
@@ -1058,12 +1074,12 @@ impl PohRecorder {
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false);
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), false, None);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn set_bank_with_transaction_index_for_test(&mut self, bank: Arc<Bank>) {
-        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true);
+        self.set_bank(BankWithScheduler::new_without_scheduler(bank), true, None);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -1180,6 +1196,8 @@ fn do_create_test_recorder(
     PohService,
     Receiver<WorkingBankEntry>,
 ) {
+    use solana_runtime::bank_forks::BankForks;
+
     let leader_schedule_cache = match leader_schedule_cache {
         Some(provided_cache) => provided_cache,
         None => Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
@@ -1200,18 +1218,21 @@ fn do_create_test_recorder(
     let ticks_per_slot = bank.ticks_per_slot();
 
     poh_recorder.set_bank(
-        BankWithScheduler::new_without_scheduler(bank),
+        BankWithScheduler::new_without_scheduler(bank.clone()),
         track_transaction_indexes,
+        None,
     );
     let poh_recorder = Arc::new(RwLock::new(poh_recorder));
     let poh_service = PohService::new(
         poh_recorder.clone(),
+        BankForks::new_empty_for_tests(bank),
         &poh_config,
         exit.clone(),
         ticks_per_slot,
         crate::poh_service::DEFAULT_PINNED_CPU_CORE,
         crate::poh_service::DEFAULT_HASHES_PER_BATCH,
         record_receiver,
+        track_transaction_indexes,
     );
 
     (exit, poh_recorder, poh_service, entry_receiver)

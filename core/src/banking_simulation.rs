@@ -744,12 +744,14 @@ impl BankingSimulator {
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let poh_service = PohService::new(
             poh_recorder.clone(),
+            bank_forks.clone(),
             &genesis_config.poh_config,
             exit.clone(),
             bank.ticks_per_slot(),
             DEFAULT_PINNED_CPU_CORE,
             DEFAULT_HASHES_PER_BATCH,
             record_receiver,
+            false,
         );
 
         // Enable BankingTracer to approximate the real environment as close as possible because

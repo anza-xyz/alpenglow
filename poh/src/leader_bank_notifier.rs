@@ -50,6 +50,7 @@ enum Status {
 struct SlotAndBankWithStatus {
     status: Status,
     slot: Option<Slot>,
+    skip_timer: Option<Instant>,
     bank: Weak<Bank>,
 }
 
@@ -57,7 +58,7 @@ impl LeaderBankNotifier {
     /// Set the status to `InProgress` and notify any waiting threads.
     /// Panics if the status is not `StandBy` - cannot have multiple
     /// leader banks in progress.
-    pub(crate) fn set_in_progress(&self, bank: &Arc<Bank>) {
+    pub(crate) fn set_in_progress(&self, bank: &Arc<Bank>, skip_timer: Option<Instant>) {
         let mut state = self.state.lock().unwrap();
         assert_eq!(state.status, Status::StandBy);
 
@@ -66,6 +67,7 @@ impl LeaderBankNotifier {
         *state = SlotAndBankWithStatus {
             status: Status::InProgress,
             slot: Some(bank.slot()),
+            skip_timer,
             bank: Arc::downgrade(bank),
         };
         drop(state);
@@ -109,6 +111,39 @@ impl LeaderBankNotifier {
         Self::get_or_wait_for_in_progress_state(&self.condvar, state, timeout)
             .map(|state| state.bank.clone())
             .unwrap_or_default()
+    }
+
+    /// If the status is `InProgress`, immediately return a weak reference to the bank and
+    /// the associated skip timer. The skip timer corresponds to the start of this leader window.
+    /// Otherwise, wait up to the `timeout` for the status to become `InProgress`.
+    /// If the timeout is reached, the weak reference is unupgradable.
+    ///
+    /// Panics on non alpenglow banks
+    pub(crate) fn get_or_wait_for_in_progress_with_timer(
+        &self,
+        timeout: Duration,
+    ) -> (Weak<Bank>, Instant) {
+        let state = self.state.lock().unwrap();
+        Self::get_or_wait_for_in_progress_state(&self.condvar, state, timeout)
+            .map(|state| {
+                (
+                    state.bank.clone(),
+                    state
+                        .skip_timer
+                        .expect("Alpenglow leader banks must have a skip timer"),
+                )
+            })
+            .unwrap_or((Weak::default(), Instant::now()))
+    }
+
+    /// Returns the skip timer. This is the timer from the leader window of the last bank set.
+    ///
+    /// Panics on non alpenglow banks, or if a skip timer has not yet been set.
+    pub(crate) fn get_skip_timer(&self) -> Instant {
+        let state = self.state.lock().unwrap();
+        state
+            .skip_timer
+            .expect("Alpenglow leader banks must have a skip timer")
     }
 
     /// Wait for next notification for a completed leader slot.
@@ -169,15 +204,15 @@ mod tests {
     fn test_leader_bank_notifier_set_in_progress_already_in_progress() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
+        leader_bank_notifier.set_in_progress(&bank, None);
     }
 
     #[test]
     fn test_leader_bank_notifier_set_in_progress() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
 
         let state = leader_bank_notifier.state.lock().unwrap();
         assert_eq!(
@@ -201,7 +236,7 @@ mod tests {
     fn test_leader_bank_notifier_set_completed_mismatched_in_progress_slot() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         leader_bank_notifier.set_completed(bank.slot() + 1);
     }
 
@@ -210,7 +245,7 @@ mod tests {
     fn test_leader_bank_notifier_set_completed_mismatched_completed_slot() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         leader_bank_notifier.set_completed(bank.slot());
         leader_bank_notifier.set_completed(bank.slot() + 1);
     }
@@ -219,7 +254,7 @@ mod tests {
     fn test_leader_bank_notifier_set_completed() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         leader_bank_notifier.set_completed(bank.slot());
 
         let state = leader_bank_notifier.state.lock().unwrap();
@@ -240,7 +275,7 @@ mod tests {
             .is_none());
 
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         leader_bank_notifier.set_completed(bank.slot());
 
         // Completed
@@ -255,7 +290,7 @@ mod tests {
         let leader_bank_notifier = LeaderBankNotifier::default();
 
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         let weak_bank = leader_bank_notifier.get_or_wait_for_in_progress(Duration::ZERO);
         assert!(weak_bank.upgrade().is_some());
     }
@@ -271,7 +306,7 @@ mod tests {
             let bank = bank.clone();
             move || {
                 std::thread::sleep(Duration::from_millis(10));
-                leader_bank_notifier.set_in_progress(&bank);
+                leader_bank_notifier.set_in_progress(&bank, None);
             }
         });
 
@@ -291,7 +326,7 @@ mod tests {
             let leader_bank_notifier = leader_bank_notifier.clone();
             let bank = bank.clone();
             move || {
-                leader_bank_notifier.set_in_progress(&bank);
+                leader_bank_notifier.set_in_progress(&bank, None);
                 std::thread::sleep(Duration::from_millis(10));
                 leader_bank_notifier.set_completed(bank.slot());
             }
@@ -307,7 +342,7 @@ mod tests {
     fn test_leader_bank_notifier_wait_for_completed_timeout() {
         let leader_bank_notifier = LeaderBankNotifier::default();
         let bank = Arc::new(Bank::default_for_tests());
-        leader_bank_notifier.set_in_progress(&bank);
+        leader_bank_notifier.set_in_progress(&bank, None);
         assert!(leader_bank_notifier
             .wait_for_completed(Duration::from_millis(1))
             .is_none());

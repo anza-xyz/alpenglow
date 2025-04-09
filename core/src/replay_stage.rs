@@ -1,7 +1,9 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
 use {
     crate::{
-        alpenglow_consensus::voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
+        alpenglow_consensus::voting_loop::{
+            GenerateVoteTxResult, ReplayHighestFrozen, VotingLoop, VotingLoopConfig,
+        },
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
@@ -631,6 +633,8 @@ impl ReplayStage {
                 );
             }
         }
+        let mut highest_frozen_slot = 0;
+        let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
@@ -655,6 +659,7 @@ impl ReplayStage {
                 bank_notification_sender: bank_notification_sender.clone(),
                 slot_status_notifier: slot_status_notifier.clone(),
                 vote_receiver: alpenglow_vote_receiver,
+                replay_highest_frozen: replay_highest_frozen.clone(),
             };
             Some(VotingLoop::new(voting_loop_config))
         } else {
@@ -825,6 +830,18 @@ impl ReplayStage {
                     &mut is_alpenglow_migration_complete,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
+                if is_alpenglow_migration_complete {
+                    if let Some(highest) = new_frozen_slots.iter().max() {
+                        if *highest > highest_frozen_slot {
+                            highest_frozen_slot = *highest;
+                            let mut l_highest_frozen =
+                                replay_highest_frozen.highest_frozen_slot.lock().unwrap();
+                            // Let the voting loop know about this new frozen slot
+                            *l_highest_frozen = *highest;
+                            replay_highest_frozen.freeze_notification.notify_one();
+                        }
+                    }
+                }
                 replay_active_banks_time.stop();
 
                 let forks_root = bank_forks.read().unwrap().root();
@@ -2142,7 +2159,7 @@ impl ReplayStage {
         }
     }
 
-    pub(crate) fn common_maybe_start_leader_checks(
+    fn common_maybe_start_leader_checks(
         my_pubkey: &Pubkey,
         leader_schedule_cache: &LeaderScheduleCache,
         parent_bank: &Bank,

@@ -143,6 +143,30 @@ impl BankForks {
         bank_forks
     }
 
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_empty_for_tests(root_bank: Arc<Bank>) -> Arc<RwLock<Self>> {
+        let root_slot = root_bank.slot();
+
+        let mut banks = HashMap::new();
+        banks.insert(
+            root_slot,
+            BankWithScheduler::new_without_scheduler(root_bank.clone()),
+        );
+
+        Arc::new(RwLock::new(Self {
+            root: Arc::new(AtomicSlot::new(root_slot)),
+            banks,
+            descendants: HashMap::default(),
+            snapshot_config: None,
+            accounts_hash_interval_slots: u64::MAX,
+            last_accounts_hash_slot: root_slot,
+            in_vote_only_mode: Arc::new(AtomicBool::new(false)),
+            highest_slot_at_startup: 0,
+            scheduler_pool: None,
+            dumped_slot_subscribers: vec![],
+        }))
+    }
+
     pub fn banks(&self) -> &HashMap<Slot, BankWithScheduler> {
         &self.banks
     }

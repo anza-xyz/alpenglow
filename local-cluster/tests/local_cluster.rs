@@ -42,7 +42,7 @@ use {
             run_cluster_partition, run_kill_partition_switch_threshold, save_tower,
             setup_snapshot_validator_config, test_faulty_node, wait_for_duplicate_proof,
             wait_for_last_vote_in_tower_to_land_in_ledger, SnapshotValidatorConfig,
-            ValidatorTestConfig, DEFAULT_NODE_STAKE, RUST_LOG_FILTER,
+            ValidatorTestConfig, AG_DEBUG_LOG_FILTER, DEFAULT_NODE_STAKE, RUST_LOG_FILTER,
         },
         local_cluster::{ClusterConfig, LocalCluster, DEFAULT_MINT_LAMPORTS},
         validator_configs::*,
@@ -137,7 +137,7 @@ fn test_local_cluster_start_and_exit_with_config() {
 }
 
 fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize, num_new_roots: usize) {
-    solana_logger::setup_with_default(RUST_LOG_FILTER);
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     let validator_keys = (0..num_nodes)
         .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
         .collect::<Vec<_>>();

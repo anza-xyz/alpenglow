@@ -1343,12 +1343,14 @@ impl Validator {
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
+            bank_forks.clone(),
             &genesis_config.poh_config,
             exit.clone(),
             bank_forks.read().unwrap().root_bank().ticks_per_slot(),
             config.poh_pinned_cpu_core,
             config.poh_hashes_per_batch,
             record_receiver,
+            /* track_transaction_indexes */ transaction_status_sender.is_some(),
         );
         assert_eq!(
             blockstore.get_new_shred_signals_len(),

@@ -4,11 +4,14 @@ use {
     crate::poh_recorder::{PohRecorder, Record},
     crossbeam_channel::Receiver,
     log::*,
+    solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
     solana_entry::poh::Poh,
+    solana_ledger::leader_schedule_utils::{
+        first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
+    },
     solana_measure::{measure::Measure, measure_us},
     solana_poh_config::PohConfig,
-    solana_runtime::bank::Bank,
-    solana_sdk::clock::DEFAULT_MS_PER_SLOT,
+    solana_runtime::{bank::Bank, bank_forks::BankForks},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -18,11 +21,6 @@ use {
         time::{Duration, Instant},
     },
 };
-
-pub struct CurrentLeaderBank {
-    bank: Arc<Bank>,
-    start: Instant,
-}
 
 pub struct PohService {
     tick_producer: JoinHandle<()>,
@@ -39,6 +37,33 @@ pub const DEFAULT_HASHES_PER_BATCH: u64 = 64;
 pub const DEFAULT_PINNED_CPU_CORE: usize = 0;
 
 const TARGET_SLOT_ADJUSTMENT_NS: u64 = 50_000_000;
+
+/// Alpenglow block constants
+/// The amount of time a leader has to build their block
+pub const BLOCKTIME: Duration = Duration::from_millis(400);
+
+/// The maximum message delay
+pub const DELTA: Duration = Duration::from_millis(100);
+
+/// The maximum delay a node can observe between entering the loop iteration
+/// for a window and receiving any shred of the first block of the leader.
+/// As a conservative global constant we set this to 3 * DELTA
+pub const DELTA_TIMEOUT: Duration = DELTA.saturating_mul(3);
+
+/// The timeout in ms for the leader block index within the leader window
+#[inline]
+pub fn skip_timeout(leader_block_index: usize) -> Duration {
+    DELTA_TIMEOUT + (leader_block_index as u32 + 1) * BLOCKTIME + DELTA
+}
+
+/// Block timeout, when we should publish the final shred for the leader block index
+/// within the leader window
+#[inline]
+pub fn block_timeout(leader_block_index: usize) -> Duration {
+    // TODO: What should be a reasonable buffer for this?
+    // Release the final shred `DELTA`ms before the skip timeout
+    skip_timeout(leader_block_index).saturating_sub(DELTA)
+}
 
 #[derive(Debug)]
 struct PohTiming {
@@ -103,12 +128,14 @@ impl PohTiming {
 impl PohService {
     pub fn new(
         poh_recorder: Arc<RwLock<PohRecorder>>,
+        bank_forks: Arc<RwLock<BankForks>>,
         poh_config: &PohConfig,
         poh_exit: Arc<AtomicBool>,
         ticks_per_slot: u64,
         pinned_cpu_core: usize,
         hashes_per_batch: u64,
         record_receiver: Receiver<Record>,
+        track_transaction_indexes: bool,
     ) -> Self {
         let poh_config = poh_config.clone();
         let is_alpenglow_enabled = poh_recorder.read().unwrap().is_alpenglow_enabled;
@@ -178,7 +205,13 @@ impl PohService {
                     w_poh_recorder.migrate_to_alpenglow_poh();
                     w_poh_recorder.use_alpenglow_tick_producer = true;
                 }
-                Self::alpenglow_tick_producer(poh_recorder, &poh_exit, record_receiver);
+                Self::alpenglow_tick_producer(
+                    poh_recorder,
+                    &poh_exit,
+                    bank_forks.as_ref(),
+                    record_receiver,
+                    track_transaction_indexes,
+                );
                 poh_exit.store(true, Ordering::Relaxed);
             })
             .unwrap();
@@ -197,72 +230,217 @@ impl PohService {
         target_tick_duration_ns.saturating_sub(adjustment_per_tick)
     }
 
+    /// The block creation loop. Although this lives in `poh_service` out of convinience, it does
+    /// not use poh but rather a timer to produce blocks.
+    ///
+    /// The `alpenglow_consensus::voting_loop` tracks when it is our leader window, and populates
+    /// an empty bank with certificates for the first block in the window. This loop takes on the
+    /// remaining responsibility of clearing this block when complete or the timeout is reached,
+    /// and creating the remaining three blocks on time.
     fn alpenglow_tick_producer(
         poh_recorder: Arc<RwLock<PohRecorder>>,
         poh_exit: &AtomicBool,
+        bank_forks: &RwLock<BankForks>,
         record_receiver: Receiver<Record>,
+        track_transaction_indexes: bool,
     ) {
+        // TODO: at some point we can move this to alpenglow_consensus
         info!("starting alpenglow tick producer");
-        let mut current_leader_bank = None;
-        let mut current_slot_time = Duration::from_millis(DEFAULT_MS_PER_SLOT);
         let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
-        while !poh_exit.load(Ordering::Relaxed) {
-            // Wait for a new leader bank to be set in PohRecorder
-            let leader_bank = leader_bank_notifier
-                .get_or_wait_for_in_progress(Duration::from_millis(50))
-                .upgrade();
+        let mut preempted_bank_and_timer: Option<(Arc<Bank>, Instant)> = None;
 
-            if let Some(leader_bank) = leader_bank {
-                // Only start the clock after we set the bank
-                if Some(leader_bank.slot())
-                    != current_leader_bank.as_ref().map(
-                        |current_leader_bank: &CurrentLeaderBank| current_leader_bank.bank.slot(),
-                    )
-                {
-                    current_leader_bank = Some(CurrentLeaderBank {
-                        bank: leader_bank.clone(),
-                        // By this point the leader should have committed their certificates,
-                        // so it's safe to start the timer
-                        start: Instant::now(),
-                    });
-                    info!("current ns per slot: {}", leader_bank.ns_per_slot);
-                    current_slot_time = Duration::from_nanos(leader_bank.ns_per_slot as u64);
+        loop {
+            let (mut current_bank, skip_timer) = if let Some((bank, timer)) =
+                preempted_bank_and_timer
+            {
+                // If our previous leader window was preempted, immediately start this new window
+                preempted_bank_and_timer = None;
+                (bank, timer)
+            } else {
+                // Wait for the first leader bank in the window to be set by the voting loop
+                loop {
+                    if poh_exit.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    // Ensure that we process any leftover records from previous banks
+                    // to avoid clogging the channel
+                    Self::read_record_receiver_and_process(
+                        &poh_recorder,
+                        &record_receiver,
+                        // Don't block
+                        Duration::from_millis(1),
+                    );
+
+                    // Wait for first leader bank to be set
+                    let (leader_bank, skip_timer) = leader_bank_notifier
+                        .get_or_wait_for_in_progress_with_timer(Duration::from_millis(50));
+
+                    let Some(leader_bank) = leader_bank.upgrade() else {
+                        continue;
+                    };
+
+                    let slot = leader_bank.slot();
+                    trace!(
+                        "{}: observed first leader bank for {}, skip_timer {}ms",
+                        leader_bank.collector_id(),
+                        slot,
+                        skip_timer.elapsed().as_millis()
+                    );
+                    // Slot should be the first in the leader window with an exception for slot 1 as slot 0 is genesis
+                    // TODO: we allow 2 here as well since GCE tests WFSM on 1, fix this when we actually incorporate WFSM
+                    if slot % NUM_CONSECUTIVE_LEADER_SLOTS != 0 && slot != 1 && slot != 2 {
+                        // TODO: Test hotswap failover in the middle of a leader window
+                        panic!(
+                            "Attempting to produce {slot} without producing {}. Something has gone wrong.",
+                            first_of_consecutive_leader_slots(slot)
+                        );
+                    };
+                    break (leader_bank, skip_timer);
                 }
-            }
-
-            let Some(CurrentLeaderBank { bank, start }) = &current_leader_bank else {
-                // Even if the bank has been cleared, ensure that any leftover records are cleared
-                Self::read_record_receiver_and_process(
-                    &poh_recorder,
-                    &record_receiver,
-                    // Don't block
-                    Duration::from_millis(1),
-                );
-
-                continue;
             };
 
-            let remaining_slot_time = current_slot_time.saturating_sub(start.elapsed());
-            if remaining_slot_time.is_zero() {
-                // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
-                // will properly increment the tick_height to max_tick_height.
-                // TODO: make sure replay verification can handle not having all the ticks
-                bank.set_tick_height(bank.max_tick_height() - 1);
-                // Write the single tick for this slot
-                // TODO: handle migration slot because we need to provide the PoH
-                // for slots from the previous epoch, but `tick_alpenglow()` will
-                // delete those ticks from the cache
-                poh_recorder
-                    .write()
-                    .unwrap()
-                    .tick_alpenglow(bank.max_tick_height());
-                current_leader_bank = None;
+            // Produce `NUM_CONSECUTIVE_LEADER_SLOTS` built off each other
+            let mut leader_slot_index = leader_slot_index(current_bank.slot());
+            loop {
+                if poh_exit.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                // Calculate the block timeout
+                let current_timeout = block_timeout(leader_slot_index);
+                let mut remaining_slot_time = current_timeout;
+
+                // Wait for block to finish or timeout
+                // TODO: Add a test where we don't hit block timeout, but instead the block is completely full
+                // and verify that this works.
+                while !remaining_slot_time.is_zero()
+                    && leader_bank_notifier.get_current_bank_id() == Some(current_bank.bank_id())
+                {
+                    remaining_slot_time = current_timeout.saturating_sub(skip_timer.elapsed());
+                    trace!(
+                        "{}: waiting for leader bank {} to finish, remaining time: {}",
+                        current_bank.collector_id(),
+                        current_bank.slot(),
+                        remaining_slot_time.as_millis(),
+                    );
+
+                    // Process records
+                    Self::read_record_receiver_and_process(
+                        &poh_recorder,
+                        &record_receiver,
+                        remaining_slot_time,
+                    );
+                }
+
+                // There are three possibilities here that we have to handle:
+                // (1) We hit the block time out before the bank reached the max tick height.
+                //      `current_bank` is still present in `poh_recorder`
+                // (2) The bank has reached the max tick height, and has been cleared.
+                //      No bank is present in `poh_recorder`
+                // (3) We were too slow or experienced network issues and the entire window has
+                //      been SkipCertified. We are also the leader for the next window and the
+                //      `current_bank` has been cleared from `poh_recorder`, and the voting loop
+                //      has inserted the first leader bank for the next window.
+                //      In this case `poh_recorder.preempted_slot` will have been set
+                //
+                //  We hold the poh recorder write lock until the new bank is inserted
+                let mut w_poh_recorder = poh_recorder.write().unwrap();
+                match (w_poh_recorder.bank(), w_poh_recorder.preempted_slot.take()) {
+                    (None, None) => {
+                        trace!(
+                            "{}: {} reached max tick height, moving to next block",
+                            current_bank.collector_id(),
+                            current_bank.slot()
+                        );
+                        // (2), Nothing to do we insert the next bank below
+                    }
+                    (Some(bank), None) => {
+                        // (1) we must clear the `current_bank` which also publishes the last shred
+                        // and finishes the block broadcast.
+                        assert_eq!(bank.slot(), current_bank.slot());
+                        trace!(
+                            "{}: current bank {} has reached block timeout, ticking",
+                            current_bank.collector_id(),
+                            current_bank.slot()
+                        );
+                        let max_tick_height = current_bank.max_tick_height();
+                        // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
+                        // will properly increment the tick_height to max_tick_height.
+                        current_bank.set_tick_height(max_tick_height - 1);
+                        // Write the single tick for this slot
+                        // TODO: handle migration slot because we need to provide the PoH
+                        // for slots from the previous epoch, but `tick_alpenglow()` will
+                        // delete those ticks from the cache
+                        w_poh_recorder.tick_alpenglow(max_tick_height);
+                        assert!(!w_poh_recorder.has_bank());
+                    }
+                    (Some(bank), Some(preempted_slot)) => {
+                        let slot = bank.slot();
+                        assert_eq!(slot, preempted_slot);
+                        assert_ne!(slot, current_bank.slot());
+                        // (3), do not continue producing this leader window
+                        warn!(
+                            "We were too slow while producing block {} and have already reached our next leader window for slot {}. \
+                            Abandoning further production of blocks in this window production in favor of window {}-{}",
+                            current_bank.slot(),
+                            slot,
+                            first_of_consecutive_leader_slots(slot),
+                            last_of_consecutive_leader_slots(slot)
+                        );
+                        // On the next iteration we will immediately start from this new leader window
+                        preempted_bank_and_timer =
+                            Some((bank, leader_bank_notifier.get_skip_timer()));
+                        break;
+                    }
+                    (None, Some(preempted_slot)) => {
+                        panic!(
+                        "Programmer error: while building block {} we have been preempted by {preempted_slot},
+                            however there is no working bank",
+                            current_bank.slot(),
+                        );
+                    }
+                };
+
+                // Create the next bank if we have not reached the end
+                leader_slot_index += 1;
+                if leader_slot_index == NUM_CONSECUTIVE_LEADER_SLOTS as usize {
+                    trace!(
+                        "{}: Finished leader window, last slot {}",
+                        current_bank.collector_id(),
+                        current_bank.slot()
+                    );
+                    // Finished window
+                    break;
+                }
+
+                // Create a new bank, note that set-identity is not allowed within a leader window
+                trace!(
+                    "{}: Creating new child bank {}",
+                    current_bank.collector_id(),
+                    current_bank.slot() + 1
+                );
+                // TODO: notify rpc / banking tracer integration
+                let child_bank = Bank::new_from_parent(
+                    current_bank.clone(),
+                    current_bank.collector_id(),
+                    current_bank.slot() + 1,
+                );
+
+                // Insert the child_bank and update the current bank
+                let child_bank = bank_forks.write().unwrap().insert(child_bank);
+                current_bank = child_bank.clone_without_scheduler();
+                let poh_bank_start = w_poh_recorder.set_bank(
+                    child_bank,
+                    track_transaction_indexes,
+                    // No need to set the skip timer since we already have it for this window
+                    None,
+                );
+
+                // No certificates needed, banking_stage can start immediately
+                poh_bank_start
+                    .contains_valid_certificate
+                    .store(true, Ordering::Relaxed);
             }
-            Self::read_record_receiver_and_process(
-                &poh_recorder,
-                &record_receiver,
-                remaining_slot_time,
-            );
         }
     }
 
@@ -512,7 +690,7 @@ mod tests {
     fn test_poh_service() {
         solana_logger::setup();
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(2);
-        let (bank, _bank_forks) = Bank::new_no_wallclock_throttle_for_tests(&genesis_config);
+        let (bank, bank_forks) = Bank::new_no_wallclock_throttle_for_tests(&genesis_config);
         let prev_hash = bank.last_blockhash();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path())
@@ -599,12 +777,14 @@ mod tests {
             .unwrap_or(DEFAULT_HASHES_PER_BATCH);
         let poh_service = PohService::new(
             poh_recorder.clone(),
+            bank_forks.clone(),
             &poh_config,
             exit.clone(),
             0,
             DEFAULT_PINNED_CPU_CORE,
             hashes_per_batch,
             record_receiver,
+            false,
         );
         poh_recorder.write().unwrap().set_bank_for_test(bank);
 
