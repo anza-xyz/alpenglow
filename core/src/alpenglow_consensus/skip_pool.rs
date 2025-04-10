@@ -1,7 +1,7 @@
 use {
-    super::{utils::super_majority_threshold, Stake},
+    super::{utils::super_majority_threshold, vote_signature::VoteSignature, Stake},
     solana_pubkey::Pubkey,
-    solana_sdk::clock::Slot,
+    solana_sdk::{clock::Slot, transaction::VersionedTransaction},
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
         fmt::Debug,
@@ -141,14 +141,14 @@ impl<T: Ord + Clone + Debug + HasStake> DynamicSegmentTree<T> {
 }
 
 /// Structure to store a skip vote, including the range and transaction
-pub struct SkipVote<T> {
+pub struct SkipVote<S: VoteSignature> {
     skip_range: RangeInclusive<Slot>,
-    data: T,
+    signature: S,
 }
 
 /// `SkipPool` tracks validator skip votes and aggregates stake using a dynamic segment tree.
-pub struct SkipPool<T: Clone> {
-    skips: HashMap<Pubkey, SkipVote<T>>, // Stores latest skip range for each validator
+pub struct SkipPool<S: VoteSignature> {
+    skips: HashMap<Pubkey, SkipVote<S>>, // Stores latest skip range for each validator
     segment_tree: DynamicSegmentTree<(Pubkey, Stake)>, // Generic tree tracking validators' stake
     /// The current ranges of slots that are skip certified
     certificate_ranges: Vec<RangeInclusive<Slot>>,
@@ -156,13 +156,13 @@ pub struct SkipPool<T: Clone> {
     up_to_date: bool,
 }
 
-impl<T: Clone> Default for SkipPool<T> {
+impl<S: VoteSignature> Default for SkipPool<S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Clone> SkipPool<T> {
+impl<S: VoteSignature> SkipPool<S> {
     /// Initializes the `SkipPool`
     pub fn new() -> Self {
         Self {
@@ -178,7 +178,7 @@ impl<T: Clone> SkipPool<T> {
         &mut self,
         pubkey: &Pubkey,
         skip_range: RangeInclusive<Slot>,
-        data: T,
+        data: VersionedTransaction,
         stake: Stake,
     ) -> Result<(), AddVoteError> {
         if stake == 0 {
@@ -228,7 +228,7 @@ impl<T: Clone> SkipPool<T> {
             *pubkey,
             SkipVote {
                 skip_range: skip_range.clone(),
-                data,
+                signature: S::from_transaction(data),
             },
         );
 
@@ -246,7 +246,10 @@ impl<T: Clone> SkipPool<T> {
     }
 
     /// Get all skip certificates
-    pub fn get_skip_certificates(&self, total_stake: Stake) -> Vec<(RangeInclusive<Slot>, Vec<T>)> {
+    pub fn get_skip_certificates(
+        &self,
+        total_stake: Stake,
+    ) -> Vec<(RangeInclusive<Slot>, S::Aggregate)> {
         let threshold = super_majority_threshold(total_stake);
         self.segment_tree
             .scan_certificates(threshold)
@@ -254,11 +257,12 @@ impl<T: Clone> SkipPool<T> {
             .map(|((start, end), contributors)| {
                 (
                     start..=end,
-                    contributors
-                        .iter()
-                        .filter_map(|pk| self.skips.get(pk))
-                        .map(|sv| sv.data.clone())
-                        .collect(),
+                    S::aggregate(
+                        contributors
+                            .iter()
+                            .filter_map(|pk| self.skips.get(pk))
+                            .map(|sv| &sv.signature),
+                    ),
                 )
             })
             .collect()
@@ -311,8 +315,8 @@ mod tests {
         VersionedTransaction::default() // Creates a dummy transaction for testing
     }
 
-    fn assert_single_certificate_range<T: Clone>(
-        pool: &SkipPool<T>,
+    fn assert_single_certificate_range<S: VoteSignature>(
+        pool: &SkipPool<S>,
         total_stake: Stake,
         exp_range: RangeInclusive<Slot>,
     ) {
@@ -324,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_add_single_vote() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator = Pubkey::new_unique();
         let skip_range = 10..=20;
         let skip_tx = dummy_transaction();
@@ -336,13 +340,13 @@ mod tests {
 
         let stored_vote = pool.skips.get(&validator).unwrap();
         assert_eq!(stored_vote.skip_range, skip_range);
-        assert_eq!(stored_vote.data, skip_tx);
+        assert_eq!(stored_vote.signature, skip_tx);
         assert_single_certificate_range(&pool, total_stake, 10..=20);
     }
 
     #[test]
     fn test_add_vote_zero_stake() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator = Pubkey::new_unique();
         let skip_range = 1..=1;
         let skip_tx = dummy_transaction();
@@ -356,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_add_singleton_range() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator = Pubkey::new_unique();
         let skip_range = 1..=1;
         let skip_tx = dummy_transaction();
@@ -368,13 +372,13 @@ mod tests {
 
         let stored_vote = pool.skips.get(&validator).unwrap();
         assert_eq!(stored_vote.skip_range, skip_range);
-        assert_eq!(stored_vote.data, skip_tx);
+        assert_eq!(stored_vote.signature, skip_tx);
         assert_single_certificate_range(&pool, total_stake, 1..=1);
     }
 
     #[test]
     fn test_consecutive_slots() -> Result<(), AddVoteError> {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let total_stake = 100;
         let validator1 = Pubkey::new_unique();
         let single_slot_skippers = [Pubkey::new_unique(); 10];
@@ -393,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_contributer_removed() -> Result<(), AddVoteError> {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let total_stake = 100;
         let small_non_contributor = Pubkey::new_unique();
         let validator = Pubkey::new_unique();
@@ -411,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_multi_cert() -> Result<(), AddVoteError> {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let total_stake = 100;
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
@@ -433,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_votes() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
         let total_stake = 100;
@@ -451,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_disjoint_votes() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
         let validator3 = Pubkey::new_unique();
@@ -485,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_two_validators_overlapping_votes() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
         let total_stake = 100;
@@ -511,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_update_existing_singleton_vote() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator = Pubkey::new_unique();
         let total_stake = 100;
         // Range expansion on a singleton vote should be ok
@@ -525,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_update_existing_vote() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator = Pubkey::new_unique();
         let total_stake = 100;
 
@@ -574,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_threshold_not_reached() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
 
@@ -586,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_update_and_skip_range_certify() {
-        let mut pool = SkipPool::new();
+        let mut pool: SkipPool<VersionedTransaction> = SkipPool::new();
         let validator1 = Pubkey::new_unique();
         let validator2 = Pubkey::new_unique();
         let total_stake = 100;

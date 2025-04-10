@@ -45,7 +45,7 @@ use {
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     std::{
         collections::{BTreeMap, BTreeSet},
@@ -486,7 +486,7 @@ impl VotingLoop {
     fn branch_notarized(
         my_pubkey: &Pubkey,
         slot: Slot,
-        cert_pool: &CertificatePool,
+        cert_pool: &CertificatePool<VersionedTransaction>,
         cert_tracker: &RwLock<ReplayCertificateTracker>,
     ) -> bool {
         if let Some(size) = cert_pool.is_notarization_certificate_complete(slot) {
@@ -511,7 +511,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         cert_tracker: &RwLock<ReplayCertificateTracker>,
     ) -> bool {
         let root_bank = root_bank_cache.root_bank();
@@ -549,7 +549,7 @@ impl VotingLoop {
     fn maybe_start_leader(
         leader: &Option<Pubkey>,
         slot: Slot,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         slot_status_notifier: &Option<SlotStatusNotifier>,
         track_transaction_indexes: bool,
         ctx: &SharedContext,
@@ -745,7 +745,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -807,7 +807,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         voting_context: &mut VotingContext,
     ) {
         // Extend the previous range if possible
@@ -829,7 +829,7 @@ impl VotingLoop {
     fn refresh_skip(
         my_pubkey: &Pubkey,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         voting_context: &mut VotingContext,
     ) {
         let Some(skip_vote) = voting_context.vote_history.skip_votes.last().copied() else {
@@ -858,7 +858,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -922,7 +922,7 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         context: &mut VotingContext,
     ) {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
@@ -1065,7 +1065,7 @@ impl VotingLoop {
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<VersionedTransaction>,
         bank_forks: &RwLock<BankForks>,
     ) -> Option<Slot> {
         let mut cached_root_bank = None;

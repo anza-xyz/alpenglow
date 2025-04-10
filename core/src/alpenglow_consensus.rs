@@ -4,6 +4,7 @@ pub mod utils;
 pub mod vote_certificate;
 pub mod vote_history;
 pub mod vote_history_storage;
+pub mod vote_signature;
 pub mod voting_loop;
 
 pub type Stake = u64;

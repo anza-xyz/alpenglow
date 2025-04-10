@@ -1,5 +1,5 @@
 use {
-    super::{Stake, SUPERMAJORITY},
+    super::{vote_signature::VoteSignature, Stake, SUPERMAJORITY},
     solana_pubkey::Pubkey,
     solana_sdk::{
         clock::Slot,
@@ -18,10 +18,10 @@ pub enum AddVoteError {
     TransactionFailed(#[from] TransactionError),
 }
 
-pub struct VoteCertificate {
+pub struct VoteCertificate<S: VoteSignature> {
     // Must be either all notarization or finalization votes.
     // We keep separate certificates for each type
-    certificate: HashMap<Pubkey, VersionedTransaction>,
+    certificate: HashMap<Pubkey, S>,
     // Total stake of all the slots in the certificate
     stake: Stake,
     // The slot the votes in the certificate are for
@@ -29,7 +29,7 @@ pub struct VoteCertificate {
     is_complete: bool,
 }
 
-impl VoteCertificate {
+impl<S: VoteSignature> VoteCertificate<S> {
     pub fn new(slot: Slot) -> Self {
         Self {
             certificate: HashMap::new(),
@@ -51,7 +51,8 @@ impl VoteCertificate {
             return Err(AddVoteError::DuplicateVote);
         }
         // TODO: verification that this vote can land
-        self.certificate.insert(*validator_key, transaction);
+        self.certificate
+            .insert(*validator_key, S::from_transaction(transaction));
         self.stake += validator_stake;
         self.is_complete = self.check_complete(total_stake);
 
@@ -74,7 +75,7 @@ impl VoteCertificate {
         self.certificate.len()
     }
 
-    pub fn get_certificate(&self) -> Vec<VersionedTransaction> {
-        self.certificate.values().cloned().collect()
+    pub fn get_certificate(&self) -> S::Aggregate {
+        S::aggregate(self.certificate.values())
     }
 }

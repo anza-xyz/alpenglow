@@ -85,7 +85,7 @@ use {
         saturating_add_assign,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
@@ -3669,7 +3669,7 @@ impl ReplayStage {
         let parent_hash = parent_bank.hash();
         let mut notarization_stake = 0;
         let mut notarization_size = 0;
-        let mut skip_pool = SkipPool::new();
+        let mut skip_pool: SkipPool<VersionedTransaction> = SkipPool::new();
 
         let leader_slot_idx = leader_slot_index(bank.slot());
         if leader_slot_idx > 1 {
@@ -3711,7 +3711,7 @@ impl ReplayStage {
                         vote_state.latest_skip_start_slot(),
                         vote_state.latest_skip_end_slot(),
                     ),
-                    (),
+                    VersionedTransaction::default(),
                     *stake,
                 );
             });

@@ -2,6 +2,7 @@ use {
     super::{
         skip_pool::{self, SkipPool},
         vote_certificate::{self, VoteCertificate},
+        vote_signature::VoteSignature,
         Stake,
     },
     alpenglow_vote::vote::Vote,
@@ -47,9 +48,9 @@ impl NewHighestCertificate {
     }
 }
 
-pub struct StartLeaderCertificates {
-    pub notarization_certificate: Vec<VersionedTransaction>,
-    pub skip_certificate: Vec<VersionedTransaction>,
+pub struct StartLeaderCertificates<S: VoteSignature> {
+    pub notarization_certificate: S::Aggregate,
+    pub skip_certificate: S::Aggregate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,24 +71,24 @@ impl CertificateType {
     }
 }
 
-pub struct CertificatePool {
+pub struct CertificatePool<S: VoteSignature> {
     // Notarization and finalization vote certificates
-    certificates: BTreeMap<CertificateId, VoteCertificate>,
+    certificates: BTreeMap<CertificateId, VoteCertificate<S>>,
     // Pool of latest skip votes per validator
-    skip_pool: SkipPool<VersionedTransaction>,
+    skip_pool: SkipPool<S>,
     // Highest slot with a notarized certificate
     highest_notarized_slot: Slot,
     // Highest slot with a finalized certificate
     highest_finalized_slot: Slot,
 }
 
-impl Default for CertificatePool {
+impl<S: VoteSignature> Default for CertificatePool<S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CertificatePool {
+impl<S: VoteSignature> CertificatePool<S> {
     pub fn new() -> Self {
         Self {
             certificates: BTreeMap::default(),
@@ -171,7 +172,7 @@ impl CertificatePool {
             .and_then(|certificate| certificate.is_complete().then_some(certificate.size()))
     }
 
-    pub fn get_notarization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
+    pub fn get_notarization_certificate(&self, slot: Slot) -> Option<S::Aggregate> {
         self.certificates
             .get(&(slot, CertificateType::Notarize))
             .and_then(|certificate| {
@@ -183,7 +184,7 @@ impl CertificatePool {
             })
     }
 
-    pub fn get_finalization_certificate(&self, slot: Slot) -> Option<Vec<VersionedTransaction>> {
+    pub fn get_finalization_certificate(&self, slot: Slot) -> Option<S::Aggregate> {
         self.certificates
             .get(&(slot, CertificateType::Finalize))
             .and_then(|certificate| {
@@ -236,7 +237,7 @@ impl CertificatePool {
         parent_slot: Slot,
         first_alpenglow_slot: Slot,
         total_stake: Stake,
-    ) -> Option<StartLeaderCertificates> {
+    ) -> Option<StartLeaderCertificates<S>> {
         // TODO: for GCE tests we WFSM on 1 so slot 1 is exempt
         let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
@@ -255,7 +256,7 @@ impl CertificatePool {
                     return None;
                 }
             } else {
-                vec![]
+                S::empty_aggregate()
             }
         };
 
@@ -284,7 +285,7 @@ impl CertificatePool {
                     return None;
                 }
             } else {
-                vec![]
+                S::empty_aggregate()
             }
         };
 
@@ -339,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_does_not_start_if_notarization_missing() {
-        let pool = CertificatePool::new();
+        let pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let total_stake = 100;
 
         // No notarization set, pool is default
@@ -360,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_1() {
-        let pool = CertificatePool::new();
+        let pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let total_stake = 100;
 
         // If parent_slot == 0, you don't need a notarization certificate
@@ -385,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_2() {
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let my_pubkey = Pubkey::new_unique();
         let my_stake = 67;
         let total_stake = 100;
@@ -435,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_3() {
-        let pool = CertificatePool::new();
+        let pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let total_stake = 100;
         // If parent_slot == first_alpenglow_slot, and
         // first_alpenglow_slot > 0, you need a notarization certificate
@@ -454,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_4() {
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let my_pubkey = Pubkey::new_unique();
         let my_stake = 67;
         let total_stake = 100;
@@ -505,7 +506,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_5() {
         let my_pubkey = Pubkey::new_unique();
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let my_stake = 67;
         let total_stake = 100;
 
@@ -546,7 +547,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_6() {
         let my_pubkey = Pubkey::new_unique();
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let my_stake = 67;
         let total_stake = 100;
 
@@ -587,7 +588,7 @@ mod tests {
     fn test_make_decision_leader_does_not_start_if_skip_certificate_missing() {
         let my_keypairs = ValidatorVoteKeypairs::new_rand();
         let my_pubkey = my_keypairs.node_keypair.pubkey();
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let bank_forks = create_bank_forks(vec![my_keypairs]);
         let total_stake = 100;
         let my_stake = 67;
@@ -631,7 +632,7 @@ mod tests {
     #[test]
     fn test_make_decision_leader_starts_when_no_skip_required() {
         let my_pubkey = Pubkey::new_unique();
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let my_stake = 67;
         let total_stake = 100;
 
@@ -675,7 +676,7 @@ mod tests {
         let my_pubkey = Pubkey::new_unique();
         let my_stake = 67;
         let total_stake = 100;
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
 
         // Notarize slot 5
         assert_eq!(
@@ -730,7 +731,7 @@ mod tests {
         let my_pubkey = Pubkey::new_unique();
         let my_stake = 67;
         let total_stake = 100;
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
 
         // Notarize slot 5
         assert_eq!(
@@ -790,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_finalize_certificate() {
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
             .add_vote(
@@ -829,7 +830,7 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_notarize_certificate() {
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
             .add_vote(
@@ -868,7 +869,7 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_skip_certificate() {
-        let mut pool = CertificatePool::new();
+        let mut pool: CertificatePool<VersionedTransaction> = CertificatePool::new();
         let pubkey = Pubkey::new_unique();
         assert!(pool
             .add_vote(
