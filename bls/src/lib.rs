@@ -2,6 +2,7 @@ use {
     crate::{
         error::BlsError,
         keypair::{BlsPubkey, BlsSecretKey},
+        proof_of_possession::BlsProofOfPossession,
         signature::BlsSignature,
     },
     blstrs::{pairing, G1Affine, G2Projective},
@@ -10,6 +11,7 @@ use {
 
 pub mod error;
 pub mod keypair;
+pub mod proof_of_possession;
 pub mod signature;
 
 /// Domain separation tag used for hashing messages to curve points to prevent
@@ -17,6 +19,11 @@ pub mod signature;
 /// as the ciphersuite ID string as recommended in the standard
 /// https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#section-4.2.1.
 pub const HASH_TO_POINT_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
+
+/// Domain separation tag used when hashing public keys to G2 in the proof of
+/// possession signing and verification functions. See
+/// https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#section-4.2.3.
+pub const POP_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_POP_";
 
 pub struct Bls;
 impl Bls {
@@ -34,6 +41,26 @@ impl Bls {
         let hashed_message = Bls::hash_message_to_point(message);
         pairing(&public_key.0.into(), &hashed_message.into())
             == pairing(&G1Affine::generator(), &signature.0.into())
+    }
+
+    /// Generate a proof of possession for the given keypair
+    #[allow(clippy::arithmetic_side_effects)]
+    pub(crate) fn generate_proof_of_possession(
+        secret_key: &BlsSecretKey,
+        public_key: &BlsPubkey,
+    ) -> BlsProofOfPossession {
+        let hashed_pubkey_bytes = Self::hash_pubkey_to_g2(public_key);
+        BlsProofOfPossession(hashed_pubkey_bytes * secret_key.0)
+    }
+
+    /// Verify a proof of possession against a public key
+    pub(crate) fn verify_proof_of_possession(
+        public_key: &BlsPubkey,
+        proof: &BlsProofOfPossession,
+    ) -> bool {
+        let hashed_pubkey_bytes = Self::hash_pubkey_to_g2(public_key);
+        pairing(&public_key.0.into(), &hashed_pubkey_bytes.into())
+            == pairing(&G1Affine::generator(), &proof.0.into())
     }
 
     /// Verify a list of signatures against a message and a list of public keys
@@ -59,6 +86,12 @@ impl Bls {
     /// Hash a message to a G2 point
     pub fn hash_message_to_point(message: &[u8]) -> G2Projective {
         G2Projective::hash_to_curve(message, HASH_TO_POINT_DST, &[])
+    }
+
+    /// Hash a pubkey to a G2 point
+    pub(crate) fn hash_pubkey_to_g2(public_key: &BlsPubkey) -> G2Projective {
+        let pubkey_bytes = public_key.0.to_compressed();
+        G2Projective::hash_to_curve(&pubkey_bytes, POP_DST, &[])
     }
 }
 
@@ -124,5 +157,19 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, BlsError::EmptyAggregation);
+    }
+
+    #[test]
+    fn test_proof_of_possession() {
+        let keypair = BlsKeypair::new();
+        let proof = Bls::generate_proof_of_possession(&keypair.secret, &keypair.public);
+        assert!(Bls::verify_proof_of_possession(&keypair.public, &proof));
+
+        let invalid_secret_key = BlsSecretKey::new();
+        let invalid_proof = Bls::generate_proof_of_possession(&invalid_secret_key, &keypair.public);
+        assert!(!Bls::verify_proof_of_possession(
+            &keypair.public,
+            &invalid_proof
+        ));
     }
 }
