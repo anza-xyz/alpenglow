@@ -1,5 +1,7 @@
 use {
-    crate::{error::BlsError, signature::BlsSignature, Bls},
+    crate::{
+        error::BlsError, proof_of_possession::BlsProofOfPossession, signature::BlsSignature, Bls,
+    },
     blst::{blst_keygen, blst_scalar},
     blstrs::{G1Projective, Scalar},
     ff::Field,
@@ -67,6 +69,12 @@ impl BlsSecretKey {
         Self::derive(signature.as_ref())
     }
 
+    /// Generate a proof of possession for the corresponding pubkey
+    pub fn proof_of_possession(&self) -> BlsProofOfPossession {
+        let pubkey = BlsPubkey::from_secret(self);
+        Bls::generate_proof_of_possession(self, &pubkey)
+    }
+
     /// Sign a message using the provided secret key
     pub fn sign(&self, message: &[u8]) -> BlsSignature {
         Bls::sign(self, message)
@@ -87,6 +95,11 @@ impl BlsPubkey {
     /// Verify a signature against a message and a public key
     pub fn verify(&self, signature: &BlsSignature, message: &[u8]) -> bool {
         Bls::verify(self, signature, message)
+    }
+
+    /// Verify a proof of possession against a public key
+    pub fn verify_proof_of_possession(&self, proof: &BlsProofOfPossession) -> bool {
+        Bls::verify_proof_of_possession(self, proof)
     }
 
     /// Aggregate a list of public keys into an existing aggregate
@@ -157,6 +170,11 @@ impl BlsKeypair {
         let secret = BlsSecretKey::derive_from_signer(signer, public_seed)?;
         let public = BlsPubkey::from_secret(&secret);
         Ok(Self { secret, public })
+    }
+
+    /// Generate a proof of possession for the given keypair
+    pub fn proof_of_possession(&self) -> BlsProofOfPossession {
+        Bls::generate_proof_of_possession(&self.secret, &self.public)
     }
 
     /// Sign a message using the provided secret key
