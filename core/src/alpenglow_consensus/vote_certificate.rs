@@ -150,11 +150,15 @@ impl VoteCertificate {
         self.certificate.len()
     }
 
-    // Return an iterator of CertificateMap
-    pub(crate) fn get_certificate_iter(
+    // Return an iterator of CertificateMap, only return Some if the certificate is complete
+    pub(crate) fn get_certificate_iter_for_complete_cert(
         &self,
-    ) -> std::collections::hash_map::Iter<'_, Pubkey, VoteCertificateEntry> {
-        self.certificate.iter()
+    ) -> Option<std::collections::hash_map::Iter<'_, Pubkey, VoteCertificateEntry>> {
+        if self.is_complete {
+            Some(self.certificate.iter())
+        } else {
+            None
+        }
     }
 }
 

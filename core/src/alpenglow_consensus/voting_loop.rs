@@ -239,7 +239,7 @@ impl VotingLoop {
 
         let _exit = Finalizer::new(exit.clone());
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
-        let mut cert_pool = CertificatePool::new_from_bank(&root_bank_cache.root_bank());
+        let mut cert_pool = CertificatePool::new_from_root_bank(&root_bank_cache.root_bank());
 
         let mut current_slot = root_bank_cache.root_bank().slot() + 1;
         let mut last_leader_block = 0;

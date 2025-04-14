@@ -13,7 +13,7 @@ use {
         transaction::VersionedTransaction,
     },
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{hash_map::Entry, BTreeMap, HashMap},
         hash::Hash,
         sync::Arc,
     },
@@ -91,41 +91,41 @@ pub struct CertificatePool {
     epoch_schedule: EpochSchedule,
     // Cached epoch_stakes_map
     epoch_stakes_map: Arc<HashMap<Epoch, EpochStakes>>,
-    // The epoch at which the epoch_stakes_map is cached
-    epoch_stakes_map_cached_at: Epoch,
-    // The latest slot we did purge on, no need to save
-    // anything before this slot.
-    purged_at_slot: Slot,
+    // The current root, no need to save anything before this slot.
+    root: Slot,
+    // The epoch of current root.
+    root_epoch: Epoch,
 }
 
 impl CertificatePool {
-    pub fn new_from_bank(bank: &Bank) -> Self {
+    pub fn new_from_root_bank(bank: &Bank) -> Self {
         let mut pool = Self::default();
         pool.update_epoch_stakes_map(bank);
-        pool.purged_at_slot = bank.slot();
+        pool.root = bank.slot();
         pool
     }
 
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
-        if self.epoch_stakes_map.is_empty() || epoch > self.epoch_stakes_map_cached_at {
+        if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
-            self.epoch_stakes_map_cached_at = epoch;
+            self.root_epoch = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();
         }
     }
 
+    // Return true if the new slot is greater than the current highest slot.
     fn set_highest_slot(&mut self, certificate_type: CertificateType, slot: Slot) -> bool {
-        // compare with the current highest slot and update if the new slot is higher
-        let current_highest_slot = self
-            .highest_slot_map
-            .entry(certificate_type.clone())
-            .or_default();
-        if slot > *current_highest_slot {
-            self.highest_slot_map.insert(certificate_type, slot);
-            true
-        } else {
-            false
+        match self.highest_slot_map.entry(certificate_type) {
+            Entry::Occupied(mut e) if slot > *e.get() => {
+                e.insert(slot);
+                true
+            }
+            Entry::Vacant(e) => {
+                e.insert(slot);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -196,7 +196,7 @@ impl CertificatePool {
                     continue;
                 }
                 found_non_zero_stake_slot = true;
-                if slot < self.purged_at_slot {
+                if slot < self.root {
                     continue;
                 }
                 if let Some(current_highest_slot) = self.update_certificate_pool(
@@ -222,19 +222,11 @@ impl CertificatePool {
         if !found_non_zero_stake_slot {
             return Err(AddVoteError::ZeroStake);
         }
-        if let Some(highest_slot) = new_highest_slot {
-            match certificate_type {
-                CertificateType::Skip => Ok(Some(NewHighestCertificate::Skip(highest_slot))),
-                CertificateType::Notarize => {
-                    Ok(Some(NewHighestCertificate::Notarize(highest_slot)))
-                }
-                CertificateType::Finalize => {
-                    Ok(Some(NewHighestCertificate::Finalize(highest_slot)))
-                }
-            }
-        } else {
-            Ok(None)
-        }
+        Ok(new_highest_slot.map(|slot| match certificate_type {
+            CertificateType::Skip => NewHighestCertificate::Skip(slot),
+            CertificateType::Notarize => NewHighestCertificate::Notarize(slot),
+            CertificateType::Finalize => NewHighestCertificate::Finalize(slot),
+        }))
     }
 
     /// If complete, returns Some(size), the size of the certificate
@@ -252,16 +244,9 @@ impl CertificatePool {
         self.certificates
             .get(&(slot, certificate_type))
             .and_then(|certificate| {
-                if certificate.is_complete() {
-                    Some(
-                        certificate
-                            .get_certificate_iter()
-                            .map(|(_, entry)| entry.transaction().clone())
-                            .collect(),
-                    )
-                } else {
-                    None
-                }
+                certificate
+                    .get_certificate_iter_for_complete_cert()
+                    .map(|iter| iter.map(|(_, entry)| entry.transaction().clone()).collect())
             })
     }
 
@@ -336,14 +321,10 @@ impl CertificatePool {
         let mut tx_set = HashMap::new();
         for slot in begin_skip_slot..=end_skip_slot {
             let certificate = self.certificates.get(&(slot, CertificateType::Skip))?;
-            if certificate.is_complete() {
-                certificate
-                    .get_certificate_iter()
-                    .for_each(|(pubkey, entry)| {
-                        tx_set.insert((*pubkey, entry.skip_range()), entry.transaction().clone());
-                    });
-            } else {
-                return None;
+            if let Some(iter) = certificate.get_certificate_iter_for_complete_cert() {
+                iter.for_each(|(pubkey, entry)| {
+                    tx_set.insert((*pubkey, entry.skip_range()), entry.transaction().clone());
+                })
             }
         }
         Some(tx_set.values().cloned().collect::<Vec<_>>())
@@ -459,7 +440,7 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_bank(&root_bank.clone()),
+            CertificatePool::new_from_root_bank(&root_bank.clone()),
         )
     }
 

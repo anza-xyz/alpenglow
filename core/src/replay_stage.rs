@@ -40,6 +40,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
+    alpenglow_vote::vote::Vote as AlpenglowVote,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
@@ -85,7 +86,7 @@ use {
         saturating_add_assign,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
@@ -3672,7 +3673,7 @@ impl ReplayStage {
         let mut notarization_size = 0;
         let must_skip_start = parent_slot + 1;
         let must_skip_end = bank.slot() - 1;
-        let mut certificate_pool = CertificatePool::new_from_bank(root_bank);
+        let mut certificate_pool = CertificatePool::new_from_root_bank(root_bank);
         bank.vote_accounts()
             .iter()
             .for_each(|(vote_account_pubkey, (_, account))| {
@@ -3687,9 +3688,12 @@ impl ReplayStage {
                     notarization_stake += stake_in_parent_epoch;
                     notarization_size += 1;
                 }
-                let _ = certificate_pool.add_fake_skip_vote(
-                    vote_state.latest_skip_start_slot(),
-                    vote_state.latest_skip_end_slot(),
+                let _ = certificate_pool.add_vote(
+                    &AlpenglowVote::new_skip_vote(
+                        vote_state.latest_skip_start_slot(),
+                        vote_state.latest_skip_end_slot(),
+                    ),
+                    VersionedTransaction::default(),
                     vote_account_pubkey,
                 );
             });
