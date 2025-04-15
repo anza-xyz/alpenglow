@@ -3671,8 +3671,6 @@ impl ReplayStage {
         let parent_hash = parent_bank.hash();
         let mut notarization_stake = 0;
         let mut notarization_size = 0;
-        let must_skip_start = parent_slot + 1;
-        let must_skip_end = bank.slot() - 1;
         let mut certificate_pool = CertificatePool::new_from_root_bank(root_bank);
 
         let leader_slot_idx = leader_slot_index(bank.slot());
@@ -3767,10 +3765,10 @@ impl ReplayStage {
                     must_skip_start,
                     must_skip_end
                 );
-                return Err(BlockstoreProcessorError::InvalidCert(
+                return Err(BlockstoreProcessorError::InvalidSkipCertificate(
                     bank.slot(),
                     must_skip_start,
-                    "Skip".to_string(),
+                    must_skip_end,
                 ));
             }
         }
@@ -10238,23 +10236,28 @@ pub(crate) mod tests {
         // Test on bank2 should fail because it is not consectuive
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                    &bank2,
-                    &bank0,
-                    ReplayCertificateTracker::new_rw_arc().as_ref(),
-                    true,
-                )
-        {
-            assert_eq!(slot, 2);
-            assert_eq!(cert_slot, 1);
-            assert_eq!(cert, "Skip");
-        } else {
-            panic!("Expected InvalidCert error");
-        }
-        let bank3 = Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3);
+                &bank2,
+                &bank0,
+                ReplayCertificateTracker::new_rw_arc().as_ref(),
+                true,
+            )
+            .unwrap_err(),
+            BlockstoreProcessorError::NonConsecutiveLeaderSlot(2, 0)
+        );
+        let bank3 = Arc::new(Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3));
         // Test on bank3 should fail because it doesn't contain notarization for bank 2.
-        if let Err(BlockstoreProcessorError::InvalidCert(slot, cert_slot, cert)) =
+        assert!(ReplayStage::alpenglow_check_cert_in_bank(
+            &bank3,
+            &bank0,
+            ReplayCertificateTracker::new_rw_arc().as_ref(),
+            true,
+        )
+        .is_ok());
+        let bank4 = Bank::new_from_parent(bank3.clone(), bank3.collector_id(), 4);
+        // bank4 needs a certificate because it is a new leader window (even though it's consecutive and the same leader)
+        assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank4,
                 &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
@@ -10274,7 +10277,7 @@ pub(crate) mod tests {
         );
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank4,
                 &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
@@ -10296,7 +10299,7 @@ pub(crate) mod tests {
         }
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
-                &bank3,
+                &bank4,
                 &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true,
@@ -10476,6 +10479,7 @@ pub(crate) mod tests {
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank4,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true
             )
@@ -10485,6 +10489,7 @@ pub(crate) mod tests {
         // 5 requires no certificate
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &bank5,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10493,6 +10498,7 @@ pub(crate) mod tests {
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bad_bank6,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true
             )
@@ -10501,6 +10507,7 @@ pub(crate) mod tests {
         );
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &good_bank6,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             true
         )
@@ -10509,6 +10516,7 @@ pub(crate) mod tests {
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bad_bank7,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true
             )
@@ -10517,6 +10525,7 @@ pub(crate) mod tests {
         );
         assert!(ReplayStage::alpenglow_check_cert_in_bank(
             &good_bank7,
+            &bank0,
             ReplayCertificateTracker::new_rw_arc().as_ref(),
             false
         )
@@ -10528,6 +10537,7 @@ pub(crate) mod tests {
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank9,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 true
             )
@@ -10537,6 +10547,7 @@ pub(crate) mod tests {
         assert_matches!(
             ReplayStage::alpenglow_check_cert_in_bank(
                 &bank9,
+                &bank0,
                 ReplayCertificateTracker::new_rw_arc().as_ref(),
                 false
             )
