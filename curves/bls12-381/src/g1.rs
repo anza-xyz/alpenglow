@@ -1,9 +1,8 @@
+pub use target_arch::*;
 use {
     crate::scalar::PodScalar,
     bytemuck_derive::{Pod, Zeroable},
 };
-
-pub use target_arch::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
