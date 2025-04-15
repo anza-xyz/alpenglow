@@ -12,8 +12,8 @@ edition = { workspace = true }
 [dependencies]
 bytemuck = { workspace = true }
 bytemuck_derive = { workspace = true }
-thiserror = { workspace = true }
 solana-curve-traits = { workspace = true }
+thiserror = { workspace = true }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 solana-define-syscall = { workspace = true }
