@@ -1,13 +1,7 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
 use {
     crate::{
-        alpenglow_consensus::{
-            certificate_pool::CertificatePool,
-            utils::stake_reached_super_majority,
-            voting_loop::{
-                GenerateVoteTxResult, ReplayCertificateTracker, VotingLoop, VotingLoopConfig,
-            },
-        },
+        alpenglow_consensus::voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
@@ -40,7 +34,6 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    alpenglow_vote::vote::Vote as AlpenglowVote,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
@@ -59,7 +52,7 @@ use {
         },
         entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
-        leader_schedule_utils::{first_of_consecutive_leader_slots, leader_slot_index},
+        leader_schedule_utils::first_of_consecutive_leader_slots,
     },
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::{PohLeaderStatus, PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
@@ -86,7 +79,7 @@ use {
         saturating_add_assign,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::{Transaction, VersionedTransaction},
+        transaction::Transaction,
     },
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
@@ -638,7 +631,6 @@ impl ReplayStage {
                 );
             }
         }
-        let cert_tracker = ReplayCertificateTracker::new_rw_arc();
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
@@ -651,7 +643,6 @@ impl ReplayStage {
                 authorized_voter_keypairs: authorized_voter_keypairs.clone(),
                 blockstore: blockstore.clone(),
                 bank_forks: bank_forks.clone(),
-                cert_tracker: cert_tracker.clone(),
                 cluster_info: cluster_info.clone(),
                 poh_recorder: poh_recorder.clone(),
                 leader_schedule_cache: leader_schedule_cache.clone(),
@@ -830,7 +821,6 @@ impl ReplayStage {
                     &mut purge_repair_slot_counter,
                     &poh_recorder,
                     first_alpenglow_slot,
-                    cert_tracker.as_ref(),
                     (!is_alpenglow_migration_complete).then_some(&mut tbft_structs),
                     &mut is_alpenglow_migration_complete,
                 );
@@ -3337,7 +3327,6 @@ impl ReplayStage {
         my_pubkey: &Pubkey,
         first_alpenglow_slot: Option<Slot>,
         poh_recorder: &RwLock<PohRecorder>,
-        cert_tracker: &RwLock<ReplayCertificateTracker>,
         is_alpenglow_migration_complete: &mut bool,
         mut tbft_structs: Option<&mut TowerBFTStructures>,
     ) -> Vec<Slot> {
@@ -3432,35 +3421,6 @@ impl ReplayStage {
                         );
                         // don't try to run the remaining normal processing for the completed bank
                         continue;
-                    }
-                }
-
-                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-                    if let Some(parent_bank) = bank.parent() {
-                        if bank.slot() > first_alpenglow_slot {
-                            let root_bank = bank_forks.read().unwrap().root_bank();
-                            if let Err(e) = Self::alpenglow_check_cert_in_bank(
-                                bank,
-                                &root_bank,
-                                cert_tracker,
-                                parent_bank.slot() >= first_alpenglow_slot,
-                            ) {
-                                Self::mark_dead_slot(
-                                    blockstore,
-                                    bank,
-                                    root_bank.slot(),
-                                    &e,
-                                    rpc_subscriptions,
-                                    slot_status_notifier,
-                                    progress,
-                                    duplicate_slots_to_repair,
-                                    ancestor_hashes_replay_update_sender,
-                                    purge_repair_slot_counter,
-                                    &mut tbft_structs,
-                                );
-                                continue;
-                            }
-                        }
                     }
                 }
 
@@ -3654,132 +3614,6 @@ impl ReplayStage {
         new_frozen_slots
     }
 
-    // The bank must contain notarization cert for parent bank and skip cert for all slots between parent and current bank.
-    fn alpenglow_check_cert_in_bank(
-        bank: &Bank,
-        root_bank: &Bank,
-        cert_tracker: &RwLock<ReplayCertificateTracker>,
-        check_notarization: bool,
-    ) -> Result<(), BlockstoreProcessorError> {
-        let Some(parent_bank) = bank.parent() else {
-            return Ok(());
-        };
-        let parent_slot = parent_bank.slot();
-        let parent_epoch_stakes = parent_bank
-            .epoch_stakes(parent_bank.epoch())
-            .expect("epoch stakes must exist");
-        let parent_hash = parent_bank.hash();
-        let mut notarization_stake = 0;
-        let mut notarization_size = 0;
-        let mut certificate_pool = CertificatePool::new_from_root_bank(root_bank);
-
-        let leader_slot_idx = leader_slot_index(bank.slot());
-        if leader_slot_idx > 1 {
-            // The last two leaders blocks must be always built consecutively
-            if parent_slot + 1 != bank.slot() {
-                return Err(BlockstoreProcessorError::NonConsecutiveLeaderSlot(
-                    bank.slot(),
-                    parent_slot,
-                ));
-            }
-            // No certificates required
-            return Ok(());
-        }
-
-        if leader_slot_idx == 1 && parent_slot + 1 == bank.slot() {
-            // No certificates required
-            return Ok(());
-        }
-
-        // Certificates are required
-        bank.vote_accounts()
-            .iter()
-            .for_each(|(vote_account_pubkey, (_, account))| {
-                let Some(vote_state) = account.alpenglow_vote_state() else {
-                    return;
-                };
-                let stake_in_parent_epoch =
-                    parent_epoch_stakes.vote_account_stake(vote_account_pubkey);
-                if vote_state.latest_notarized_slot() == Some(parent_slot)
-                    && vote_state.latest_notarized_bank_hash() == &parent_hash
-                {
-                    notarization_stake += stake_in_parent_epoch;
-                    notarization_size += 1;
-                }
-                let _ = certificate_pool.add_vote(
-                    &AlpenglowVote::new_skip_vote(
-                        vote_state.latest_skip_start_slot(),
-                        vote_state.latest_skip_end_slot(),
-                    ),
-                    VersionedTransaction::default(),
-                    vote_account_pubkey,
-                );
-            });
-        // Alpenglow VoteState can't store any vote for slot 0. This is okay because bank 0
-        // is genesis bank and doesn't need to be notarized.
-        // TODO: for GCE tests we WFSM on slot 1, so exempt here
-        if parent_slot > 1
-            && check_notarization
-            && !stake_reached_super_majority(
-                notarization_stake,
-                parent_bank
-                    .epoch_total_stake(parent_bank.epoch())
-                    .expect("stake must exist"),
-            )
-        {
-            warn!(
-                "Notarization stake for bank {} parent {} is less than supermajority",
-                bank.slot(),
-                parent_slot
-            );
-            return Err(BlockstoreProcessorError::InvalidNotarizationCertificate(
-                bank.slot(),
-                parent_slot,
-            ));
-        }
-        // TODO(ashwin): Track by block id / hash
-        cert_tracker
-            .write()
-            .unwrap()
-            .add_notarization_certificate(parent_slot, notarization_size);
-        let must_skip_start = parent_slot + 1;
-        // At this point we know we are either the first or second leader block in the window
-        // For the second leader block we do not require a skip certificate on the first leader block
-        let Some(must_skip_end) = first_of_consecutive_leader_slots(bank.slot()).checked_sub(1)
-        else {
-            // This is immediately after genesis no skip required
-            return Ok(());
-        };
-
-        if must_skip_start > must_skip_end {
-            // No skip certificate needed, these are consecutive blocks
-            return Ok(());
-        }
-
-        for slot in must_skip_start..=must_skip_end {
-            if !certificate_pool.skip_certified(slot) {
-                warn!(
-                    "Skip range for bank {} does not cover {} in {} to {}",
-                    bank.slot(),
-                    slot,
-                    must_skip_start,
-                    must_skip_end
-                );
-                return Err(BlockstoreProcessorError::InvalidSkipCertificate(
-                    bank.slot(),
-                    must_skip_start,
-                    must_skip_end,
-                ));
-            }
-        }
-        cert_tracker
-            .write()
-            .unwrap()
-            .add_skip_certificates(must_skip_start, must_skip_end);
-
-        Ok(())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn replay_active_banks(
         blockstore: &Blockstore,
@@ -3810,7 +3644,6 @@ impl ReplayStage {
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
         poh_recorder: &RwLock<PohRecorder>,
         first_alpenglow_slot: Option<Slot>,
-        cert_tracker: &RwLock<ReplayCertificateTracker>,
         tbft_structs: Option<&mut TowerBFTStructures>,
         is_alpenglow_migration_complete: &mut bool,
     ) -> Vec<Slot> /* completed slots */ {
@@ -3891,7 +3724,6 @@ impl ReplayStage {
             my_pubkey,
             first_alpenglow_slot,
             poh_recorder,
-            cert_tracker,
             is_alpenglow_migration_complete,
             tbft_structs,
         )
@@ -4769,13 +4601,11 @@ pub(crate) mod tests {
             staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
-        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         blockstore_processor::{
             confirm_full_slot, fill_blockstore_slot_with_ticks, process_bank_0, ProcessOptions,
         },
         crossbeam_channel::unbounded,
         itertools::Itertools,
-        solana_account::{AccountSharedData, WritableAccount},
         solana_client::connection_cache::ConnectionCache,
         solana_entry::entry::{self, Entry},
         solana_gossip::{cluster_info::Node, crds::Cursor},
@@ -4794,10 +4624,7 @@ pub(crate) mod tests {
         solana_runtime::{
             accounts_background_service::AbsRequestSender,
             commitment::{BlockCommitment, VOTE_THRESHOLD_SIZE},
-            genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts_no_program, GenesisConfigInfo,
-                ValidatorVoteKeypairs,
-            },
+            genesis_utils::{GenesisConfigInfo, ValidatorVoteKeypairs},
         },
         solana_sdk::{
             clock::NUM_CONSECUTIVE_LEADER_SLOTS,
@@ -4812,7 +4639,7 @@ pub(crate) mod tests {
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         solana_transaction_status::VersionedTransactionWithStatusMeta,
-        solana_vote::{vote_account::VoteAccount, vote_transaction},
+        solana_vote::vote_transaction,
         solana_vote_program::vote_state::{self, TowerSync, VoteStateVersions},
         std::{
             fs::remove_dir_all,
@@ -10166,393 +9993,6 @@ pub(crate) mod tests {
             &mut DuplicateSlotsToRepair::default(),
             &ancestor_hashes_replay_update_sender,
             &mut PurgeRepairSlotCounter::default(),
-        );
-    }
-
-    fn store_alpenglow_vote_account(
-        bank: &Bank,
-        pubkey: &Pubkey,
-        latest_notarized_slot: Slot,
-        latest_notarized_bank_hash: Hash,
-        latest_skip_start_slot: Option<Slot>,
-        latest_skip_end_slot: Option<Slot>,
-        lamports: u64,
-    ) {
-        solana_logger::setup();
-        let mut account =
-            AccountSharedData::new(lamports, AlpenglowVoteState::size(), &alpenglow_vote::id());
-        let mut vote_state = AlpenglowVoteState::new_for_tests(*pubkey, *pubkey, 0, *pubkey, 0);
-        vote_state.set_latest_notarized_slot(latest_notarized_slot);
-        vote_state.set_latest_notarized_bank_hash(latest_notarized_bank_hash);
-        if let Some(slot) = latest_skip_start_slot {
-            vote_state.set_latest_skip_start_slot(slot);
-        }
-        if let Some(slot) = latest_skip_end_slot {
-            vote_state.set_latest_skip_end_slot(slot);
-        }
-        vote_state.serialize_into(account.data_as_mut_slice());
-        let vote_account = VoteAccount::try_from(account).unwrap();
-        bank.store_account(pubkey, vote_account.account());
-    }
-
-    #[test]
-    fn test_alpenglow_check_cert_in_bank() {
-        let validator_voting_keypairs: Vec<_> =
-            (0..4).map(|_| ValidatorVoteKeypairs::new_rand()).collect();
-        let my_keypairs = &validator_voting_keypairs[0];
-        let lamports = 10_000;
-        let GenesisConfigInfo { genesis_config, .. } =
-            create_genesis_config_with_alpenglow_vote_accounts_no_program(
-                lamports,
-                &validator_voting_keypairs,
-                vec![100; validator_voting_keypairs.len()],
-            );
-        let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
-        bank0.freeze();
-        // Test on bank0 should always succeed
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank0,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok());
-        let bank1 = Bank::new_from_parent(bank0.clone(), &Pubkey::new_unique(), 1);
-        bank1.freeze();
-        // Test on bank1 should succeed because bank 0 doesn't need to be notarized.
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank1,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok());
-        let bank2 = Arc::new(Bank::new_from_parent(
-            bank0.clone(),
-            &Pubkey::new_unique(),
-            2,
-        ));
-        bank2.freeze();
-        // Test on bank2 should fail because it is not consectuive
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank2,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::NonConsecutiveLeaderSlot(2, 0)
-        );
-        let bank3 = Arc::new(Bank::new_from_parent(bank2.clone(), &Pubkey::default(), 3));
-        // Test on bank3 should fail because it doesn't contain notarization for bank 2.
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank3,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true,
-        )
-        .is_ok());
-        let bank4 = Bank::new_from_parent(bank3.clone(), bank3.collector_id(), 4);
-        // bank4 needs a certificate because it is a new leader window (even though it's consecutive and the same leader)
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank4,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
-        );
-        // We have 4 validators, let's add my own vote in there, it's < 2/3 so verification should fail
-        store_alpenglow_vote_account(
-            &bank4,
-            &my_keypairs.vote_keypair.pubkey(),
-            3,
-            bank3.hash(),
-            None,
-            None,
-            lamports,
-        );
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank4,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
-        );
-        // Wrong hash will also make notarization cert check fail.
-        for keypair in &validator_voting_keypairs {
-            store_alpenglow_vote_account(
-                &bank4,
-                &keypair.vote_keypair.pubkey(),
-                3,
-                Hash::default(),
-                None,
-                None,
-                lamports,
-            );
-        }
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank4,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 3)
-        );
-        // Now let's add more votes with correct Hash, this should get us over 2/3 so verification should succeed
-        for keypair in &validator_voting_keypairs {
-            store_alpenglow_vote_account(
-                &bank4,
-                &keypair.vote_keypair.pubkey(),
-                3,
-                bank3.hash(),
-                None,
-                None,
-                lamports,
-            );
-        }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank4,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok());
-
-        // Create bank5 which links off bank2, has notarization cert for bank2 but no skip certs.
-        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::new_unique(), 5);
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank5,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(5, 2)
-        );
-        for keypair in &validator_voting_keypairs {
-            store_alpenglow_vote_account(
-                &bank5,
-                &keypair.vote_keypair.pubkey(),
-                2,
-                bank2.hash(),
-                None,
-                None,
-                lamports,
-            );
-        }
-        // We don't need a skip cert for 4 since it's our leader block in the same window
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank5,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidSkipCertificate(5, 3, 3)
-        );
-        // Now add skip certs, this should succeed
-        for keypair in &validator_voting_keypairs {
-            store_alpenglow_vote_account(
-                &bank5,
-                &keypair.vote_keypair.pubkey(),
-                2,
-                bank2.hash(),
-                Some(3),
-                Some(3),
-                lamports,
-            );
-        }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank5,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok());
-        // Let's say we have bank 5 which links to bank 2, and asked not to check notarization,
-        // then it should succeed only with skip cert.
-        let bank5 = Bank::new_from_parent(bank2.clone(), &Pubkey::new_unique(), 5);
-        for keypair in &validator_voting_keypairs {
-            store_alpenglow_vote_account(
-                &bank5,
-                &keypair.vote_keypair.pubkey(),
-                0,
-                Hash::default(),
-                Some(3),
-                Some(3),
-                lamports,
-            );
-        }
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank5,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            false
-        )
-        .is_ok());
-        // But if we are asked to check notarization, it should fail.
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank5,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true,
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(5, 2)
-        );
-    }
-
-    #[test]
-    fn test_alpenglow_check_cert_in_bank_consecutive() {
-        let kps: Vec<_> = (0..2).map(|_| ValidatorVoteKeypairs::new_rand()).collect();
-        let lamports = 10_000;
-        let GenesisConfigInfo { genesis_config, .. } =
-            create_genesis_config_with_alpenglow_vote_accounts_no_program(
-                lamports,
-                &kps,
-                vec![100; kps.len()],
-            );
-
-        let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
-        bank0.freeze();
-
-        //         /- bad 7
-        //        /   /- bad 6
-        // 0 -> 2 -> 4 -> 5 - good 6 - good 7
-        //      \------------------------------ 9
-        // A    A    B    B        B        B   A
-        let bank2 = Arc::new(Bank::new_from_parent(
-            bank0.clone(),
-            &kps[0].node_keypair.pubkey(),
-            2,
-        ));
-        let bank4 = Arc::new(Bank::new_from_parent(
-            bank2.clone(),
-            &kps[1].node_keypair.pubkey(),
-            4,
-        ));
-        let bank5 = Arc::new(Bank::new_from_parent(
-            bank4.clone(),
-            &kps[1].node_keypair.pubkey(),
-            5,
-        ));
-        let bad_bank6 = Arc::new(Bank::new_from_parent(
-            bank4.clone(),
-            &kps[1].node_keypair.pubkey(),
-            6,
-        ));
-        let good_bank6 = Arc::new(Bank::new_from_parent(
-            bank5.clone(),
-            &kps[1].node_keypair.pubkey(),
-            6,
-        ));
-        let bad_bank7 = Arc::new(Bank::new_from_parent(
-            bank2.clone(),
-            &kps[1].node_keypair.pubkey(),
-            7,
-        ));
-        let good_bank7 = Arc::new(Bank::new_from_parent(
-            good_bank6.clone(),
-            &kps[1].node_keypair.pubkey(),
-            7,
-        ));
-
-        let bank9 = Arc::new(Bank::new_from_parent(
-            bank2.clone(),
-            &kps[0].node_keypair.pubkey(),
-            9,
-        ));
-
-        // 4 requires a notarization certificate on 2 as it is a leader handoff
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank4,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(4, 2)
-        );
-        // 5 requires no certificate
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &bank5,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok(),);
-        // 6 must be built off of 5, and it requires no certificate
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bad_bank6,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::NonConsecutiveLeaderSlot(6, 4)
-        );
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &good_bank6,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            true
-        )
-        .is_ok(),);
-        // 7 must be built off of 6, and it requires no certificate
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bad_bank7,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::NonConsecutiveLeaderSlot(7, 2)
-        );
-        assert!(ReplayStage::alpenglow_check_cert_in_bank(
-            &good_bank7,
-            &bank0,
-            ReplayCertificateTracker::new_rw_arc().as_ref(),
-            false
-        )
-        .is_ok());
-
-        // Although 9 is built off of 2 (same leader), since there was a leader in between
-        // it requires a notarization certificate and a skip certificate since 7. We do not
-        // require a skip certificate for 8
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank9,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                true
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidNotarizationCertificate(9, 2)
-        );
-        assert_matches!(
-            ReplayStage::alpenglow_check_cert_in_bank(
-                &bank9,
-                &bank0,
-                ReplayCertificateTracker::new_rw_arc().as_ref(),
-                false
-            )
-            .unwrap_err(),
-            BlockstoreProcessorError::InvalidSkipCertificate(9, 3, 7)
         );
     }
 }
