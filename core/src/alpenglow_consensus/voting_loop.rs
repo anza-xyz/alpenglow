@@ -243,7 +243,7 @@ impl VotingLoop {
 
         let _exit = Finalizer::new(exit.clone());
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
-        let mut cert_pool = CertificatePool::new();
+        let mut cert_pool = CertificatePool::new_from_root_bank(&root_bank_cache.root_bank());
 
         let mut current_slot = root_bank_cache.root_bank().slot() + 1;
         let mut last_leader_block = 0;
@@ -333,7 +333,6 @@ impl VotingLoop {
                 ) && !Self::skip_certified(
                     &my_pubkey,
                     current_slot,
-                    &mut root_bank_cache,
                     &mut cert_pool,
                     cert_tracker.as_ref(),
                 ) {
@@ -514,19 +513,11 @@ impl VotingLoop {
     fn skip_certified(
         my_pubkey: &Pubkey,
         slot: Slot,
-        root_bank_cache: &mut RootBankCache,
         cert_pool: &mut CertificatePool,
         cert_tracker: &RwLock<ReplayCertificateTracker>,
     ) -> bool {
-        let root_bank = root_bank_cache.root_bank();
-        let epoch = root_bank.epoch_schedule().get_epoch(slot);
-        // TODO(ashwin): once we figure out how to handle skip ranges across
-        // epoch boundaries, cache this accordingly
-        let total_stake = root_bank
-            .epoch_total_stake(epoch)
-            .expect("Current epoch must exist in root bank");
         // TODO(ashwin): can include cert size for debugging
-        if cert_pool.skip_certified(slot, total_stake) {
+        if cert_pool.skip_certified(slot) {
             info!("{my_pubkey}: Skip Certified: Slot {}", slot,);
             return true;
         }
@@ -641,9 +632,6 @@ impl VotingLoop {
         }
 
         let root_slot = ctx.bank_forks.read().unwrap().root();
-        let total_stake = parent_bank
-            .epoch_total_stake(parent_bank.epoch_schedule().get_epoch(slot))
-            .expect("my_leader_slot - 1 got a certificate, so we must be in a known epoch range");
         info!(
             "{}: Checking leader decision slot {slot} parent {parent_slot}",
             ctx.my_pubkey
@@ -658,15 +646,13 @@ impl VotingLoop {
             // TODO(ashwin): plumb in to support migration
             /*first_alpenglow_slot*/
             0,
-            total_stake,
         )
         else {
             if slot > parent_slot + 1 {
                 let r_cert_tracker = ctx.cert_tracker.read().unwrap();
-                if ((parent_slot + 1)..slot).all(|s| {
-                    r_cert_tracker.replay_skip_certified(s)
-                        || cert_pool.skip_certified(s, total_stake)
-                }) {
+                if ((parent_slot + 1)..slot)
+                    .all(|s| r_cert_tracker.replay_skip_certified(s) || cert_pool.skip_certified(s))
+                {
                     // A block has been frozen that has the skip certificate for the required range
                     // Certificate pool ingestion is lagging behind, we cannot build our block now
                     // but reevaluate later.
@@ -767,7 +753,7 @@ impl VotingLoop {
         })?;
         info!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
-        cert_pool.purge(new_root);
+        cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
         ctx.cert_tracker.write().unwrap().set_root(new_root);
         if let Err(e) = ReplayStage::check_and_handle_new_root(
             &ctx.my_pubkey,
@@ -938,13 +924,9 @@ impl VotingLoop {
         let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result else {
             return;
         };
-        if let Err(e) = cert_pool.add_vote(
-            &vote,
-            vote_tx.clone().into(),
-            &context.vote_account_pubkey,
-            bank.epoch_vote_account_stake(&context.vote_account_pubkey),
-            bank.total_epoch_stake(),
-        ) {
+        if let Err(e) =
+            cert_pool.add_vote(&vote, vote_tx.clone().into(), &context.vote_account_pubkey)
+        {
             if !is_refresh {
                 warn!("Unable to push our own vote into the pool {}", e);
                 return;
@@ -1087,14 +1069,7 @@ impl VotingLoop {
                     return None;
                 }
 
-                let total_stake = root_bank.epoch_total_stake(epoch)?;
-                match cert_pool.add_vote(
-                    &vote,
-                    tx,
-                    &vote_account_pubkey,
-                    validator_stake,
-                    total_stake,
-                ) {
+                match cert_pool.add_vote(&vote, tx, &vote_account_pubkey) {
                     Ok(Some(cert)) if cert.is_notarization_or_skip() => {
                         info!("{my_pubkey}: Ingested new certificate {cert:?}");
                         Some(cert.slot())
