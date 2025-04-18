@@ -174,7 +174,7 @@ check-cfg = [
 
 [workspace.dependencies]
 Inflector = "0.11.4"
-alpenglow-vote = { git = "ssh://git@github.com/solana-program/alpenglow-vote.git", rev = "f5bbc58" }
+alpenglow-vote = { git = "ssh://git@github.com/solana-program/alpenglow-vote.git", rev = "c84cec6" }
 # alpenglow-vote = { path = "../alpenglow-vote/program" }
 axum = "0.7.9"
 agave-banking-stage-ingress-types = { path = "banking-stage-ingress-types", version = "=2.3.0" }

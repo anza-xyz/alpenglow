@@ -7384,7 +7384,6 @@ pub mod test_utils {
     use {
         super::Bank,
         crate::installed_scheduler_pool::BankWithScheduler,
-        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         solana_sdk::{
             account::{ReadableAccount, WritableAccount},
             hash::hashv,
@@ -7414,21 +7413,12 @@ pub mod test_utils {
         timestamp: BlockTimestamp,
         bank: &Bank,
         vote_pubkey: &Pubkey,
-        is_alpenglow: bool,
     ) {
         let mut vote_account = bank.get_account(vote_pubkey).unwrap_or_default();
-        if is_alpenglow {
-            let vote_state = &mut AlpenglowVoteState::deserialize(vote_account.data())
-                .unwrap()
-                .clone();
-            vote_state.set_latest_timestamp(timestamp.slot, timestamp.timestamp);
-            vote_state.serialize_into(vote_account.data_as_mut_slice());
-        } else {
-            let mut vote_state = vote_state::from(&vote_account).unwrap_or_default();
-            vote_state.last_timestamp = timestamp;
-            let versioned = VoteStateVersions::new_current(vote_state);
-            vote_state::to(&versioned, &mut vote_account).unwrap();
-        }
+        let mut vote_state = vote_state::from(&vote_account).unwrap_or_default();
+        vote_state.last_timestamp = timestamp;
+        let versioned = VoteStateVersions::new_current(vote_state);
+        vote_state::to(&versioned, &mut vote_account).unwrap();
         bank.store_account(vote_pubkey, &vote_account);
     }
 

@@ -1360,8 +1360,8 @@ impl VoteStateWrapper {
         match self {
             VoteStateWrapper::VoteState(vote_state) => vote_state.last_timestamp.clone(),
             VoteStateWrapper::AlpenglowVoteState(vote_state) => BlockTimestamp {
-                slot: vote_state.latest_timestamp().slot(),
-                timestamp: vote_state.latest_timestamp().timestamp(),
+                slot: vote_state.latest_timestamp_legacy_format().slot,
+                timestamp: vote_state.latest_timestamp_legacy_format().timestamp,
             },
         }
     }
