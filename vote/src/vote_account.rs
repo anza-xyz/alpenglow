@@ -189,8 +189,7 @@ impl VoteAccount {
             VoteAccountState::TowerBFT(vote_state_view) => vote_state_view.last_timestamp(),
             VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
                 .unwrap()
-                .latest_timestamp()
-                .into(),
+                .latest_timestamp_legacy_format(),
         }
     }
 
