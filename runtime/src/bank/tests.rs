@@ -10,9 +10,8 @@ use {
         bank_forks::BankForks,
         genesis_utils::{
             self, activate_all_features, activate_feature, bootstrap_validator_stake_lamports,
-            create_genesis_config_with_leader, create_genesis_config_with_leader_enable_alpenglow,
-            create_genesis_config_with_vote_accounts, genesis_sysvar_and_builtin_program_lamports,
-            GenesisConfigInfo, ValidatorVoteKeypairs,
+            create_genesis_config_with_leader, create_genesis_config_with_vote_accounts,
+            genesis_sysvar_and_builtin_program_lamports, GenesisConfigInfo, ValidatorVoteKeypairs,
         },
         snapshot_bank_utils, snapshot_utils,
         stake_history::StakeHistory,
@@ -21,7 +20,6 @@ use {
     },
     agave_transaction_view::static_account_keys_frame::MAX_STATIC_ACCOUNTS_PER_PACKET,
     assert_matches::assert_matches,
-    build_alpenglow_vote::ALPENGLOW_VOTE_SO_PATH,
     crossbeam_channel::{bounded, unbounded},
     itertools::Itertools,
     rand::Rng,
@@ -8209,21 +8207,14 @@ fn test_adjust_sysvar_balance_for_rent() {
     assert_eq!(smaller_sample_sysvar.lamports(), excess_lamports);
 }
 
-#[test_case(true; "alpenglow")]
-#[test_case(false; "towerbft")]
-fn test_update_clock_timestamp(is_alpenglow: bool) {
+#[test]
+fn test_update_clock_timestamp() {
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(
-        5,
-        &leader_pubkey,
-        3,
-        alpenglow_vote_so_path,
-    );
+    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
     let mut bank = Bank::new_for_tests(&genesis_config);
     // Advance past slot 0, which has special handling.
     bank = new_from_parent(Arc::new(bank));
@@ -8246,7 +8237,6 @@ fn test_update_clock_timestamp(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -8261,7 +8251,6 @@ fn test_update_clock_timestamp(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -8276,7 +8265,6 @@ fn test_update_clock_timestamp(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -8293,7 +8281,6 @@ fn test_update_clock_timestamp(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
     bank.update_clock(None);
     assert_eq!(
@@ -8313,9 +8300,8 @@ fn poh_estimate_offset(bank: &Bank) -> Duration {
         * Duration::from_nanos(bank.ns_per_slot as u64)
 }
 
-#[test_case(true; "alpenglow")]
-#[test_case(false; "towerbft")]
-fn test_timestamp_slow(is_alpenglow: bool) {
+#[test]
+fn test_timestamp_slow() {
     fn max_allowable_delta_since_epoch(bank: &Bank, max_allowable_drift: u32) -> i64 {
         let poh_estimate_offset = poh_estimate_offset(bank);
         (poh_estimate_offset.as_secs()
@@ -8323,17 +8309,11 @@ fn test_timestamp_slow(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(
-        5,
-        &leader_pubkey,
-        3,
-        alpenglow_vote_so_path,
-    );
+    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);
@@ -8349,7 +8329,6 @@ fn test_timestamp_slow(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
 
     // additional_secs greater than MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2 for an epoch
@@ -8365,9 +8344,8 @@ fn test_timestamp_slow(is_alpenglow: bool) {
     }
 }
 
-#[test_case(true; "alpenglow")]
-#[test_case(false; "towerbft")]
-fn test_timestamp_fast(is_alpenglow: bool) {
+#[test]
+fn test_timestamp_fast() {
     fn max_allowable_delta_since_epoch(bank: &Bank, max_allowable_drift: u32) -> i64 {
         let poh_estimate_offset = poh_estimate_offset(bank);
         (poh_estimate_offset.as_secs()
@@ -8375,17 +8353,11 @@ fn test_timestamp_fast(is_alpenglow: bool) {
     }
 
     let leader_pubkey = solana_pubkey::new_rand();
-    let alpenglow_vote_so_path = is_alpenglow.then_some(ALPENGLOW_VOTE_SO_PATH);
     let GenesisConfigInfo {
         mut genesis_config,
         voting_keypair,
         ..
-    } = create_genesis_config_with_leader_enable_alpenglow(
-        5,
-        &leader_pubkey,
-        3,
-        alpenglow_vote_so_path,
-    );
+    } = create_genesis_config_with_leader(5, &leader_pubkey, 3);
     let slots_in_epoch = 32;
     genesis_config.epoch_schedule = EpochSchedule::new(slots_in_epoch);
     let mut bank = Bank::new_for_tests(&genesis_config);
@@ -8399,7 +8371,6 @@ fn test_timestamp_fast(is_alpenglow: bool) {
         },
         &bank,
         &voting_keypair.pubkey(),
-        is_alpenglow,
     );
 
     // additional_secs greater than MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST for an epoch

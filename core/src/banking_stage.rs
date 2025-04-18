@@ -756,51 +756,7 @@ pub fn update_bank_forks_and_poh_recorder_for_new_tpu_bank(
         .set_bank(tpu_bank, track_transaction_indexes);
 }
 
-pub fn alpenglow_update_bank_forks_and_poh_recorder_for_new_tpu_bank(
-    bank_forks: &RwLock<BankForks>,
-    poh_recorder: &RwLock<PohRecorder>,
-    transaction_recorder: &TransactionRecorder,
-    tpu_bank: Bank,
-    track_transaction_indexes: bool,
-    notarization_certificate: Vec<VersionedTransaction>,
-    skip_certificate: Vec<VersionedTransaction>,
-) -> bool {
-    let tpu_bank = bank_forks.write().unwrap().insert(tpu_bank);
-    let parent_slot = tpu_bank.parent_slot();
-
-    // Transaction processing blocked until certificates are committed first
-    let poh_bank_start = poh_recorder
-        .write()
-        .unwrap()
-        .set_bank(tpu_bank, track_transaction_indexes);
-    let poh_bank = poh_bank_start.working_bank;
-
-    // Commit the notarization certificate
-    if !commit_certificate(&poh_bank, transaction_recorder, notarization_certificate) {
-        error!(
-            "Commit certificate (notarize) for leader slot {} with parent {} failed",
-            poh_bank.slot(),
-            parent_slot
-        );
-        return false;
-    }
-
-    // Commit the skip certificate if needed
-    if !commit_certificate(&poh_bank, transaction_recorder, skip_certificate) {
-        error!(
-            "Commit certificate (skip) for leader slot {} with parent {} failed",
-            poh_bank.slot(),
-            parent_slot
-        );
-        return false;
-    }
-    // Enable transaction processing
-    poh_bank_start
-        .contains_valid_certificate
-        .store(true, Ordering::Relaxed);
-    true
-}
-
+#[allow(dead_code)]
 pub fn commit_certificate(
     bank: &Arc<Bank>,
     transaction_recorder: &TransactionRecorder,
