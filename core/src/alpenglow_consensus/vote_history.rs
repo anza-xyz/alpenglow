@@ -39,7 +39,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "39yKx75e8AkYF6S2MWepw2d26XfnyMtpz9B4xS3SpK7W")
+    frozen_abi(digest = "ExgvEVV4ECJVrNkF19hQgHHQbhGfgajiYAJ1ft4dhqhP")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct VoteHistory {
@@ -71,19 +71,14 @@ impl VoteHistory {
     }
 
     pub fn push_skip_vote(&mut self, new_skip_vote: Vote) {
-        let new_skip_range = new_skip_vote.skip_range().unwrap();
-
         match self.skip_votes.last_mut() {
-            Some(last_vote)
-                if last_vote.skip_range().unwrap().start() == new_skip_range.start() =>
-            {
-                assert!(new_skip_range.end() >= last_vote.skip_range().unwrap().end());
-                // The new vote is a superset of the last vote, so just replace the last vote
+            Some(last_vote) if last_vote.slot() == new_skip_vote.slot() => {
+                // Refresh vote, replace the last vote
                 *last_vote = new_skip_vote;
             }
             Some(last_vote) => {
                 // Skip votes must be monotonically increasing
-                assert!(new_skip_range.start() > last_vote.skip_range().unwrap().end());
+                assert!(new_skip_vote.slot() > last_vote.slot());
                 self.skip_votes.push(new_skip_vote);
             }
             None => self.skip_votes.push(new_skip_vote),
@@ -91,25 +86,12 @@ impl VoteHistory {
     }
 
     pub fn is_slot_skipped(&self, slot: Slot) -> bool {
-        self.skip_votes.iter().any(|vote| {
-            vote.skip_range()
-                .expect("must be a skip vote")
-                .contains(&slot)
-        })
-    }
-
-    /// Returns the start slot of the skip vote that contains `slot`
-    pub fn prev_skip_start(&self, slot: Slot) -> Option<Slot> {
-        self.skip_votes.iter().find_map(|vote| {
-            let range = vote.skip_range().expect("must be a skip vote");
-            range.contains(&slot).then_some(*range.start())
-        })
+        self.skip_votes.iter().any(|vote| vote.slot() == slot)
     }
 
     pub fn set_root(&mut self, root: Slot) {
         self.root = root;
-        self.skip_votes
-            .retain(|skip_vote| *skip_vote.skip_range().expect("must be a skip vote").end() > root)
+        self.skip_votes.retain(|skip_vote| skip_vote.slot() > root)
     }
 }
 

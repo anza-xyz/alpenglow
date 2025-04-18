@@ -39,8 +39,12 @@ impl ParsedVoteTransaction {
             ParsedVoteTransaction::Tower(tx) => tx.last_voted_slot_hash(),
             ParsedVoteTransaction::Alpenglow(tx) => match tx {
                 AlpenglowVote::Notarize(vote) => Some((vote.slot(), *vote.replayed_bank_hash())),
-                AlpenglowVote::Finalize(vote) => Some((vote.slot(), *vote.replayed_bank_hash())),
+                AlpenglowVote::Finalize(_vote) => None,
+                AlpenglowVote::NotarizeFallback(vote) => {
+                    Some((vote.slot(), *vote.replayed_bank_hash()))
+                }
                 AlpenglowVote::Skip(_vote) => None,
+                AlpenglowVote::SkipFallback(_vote) => None,
             },
         }
     }
@@ -358,28 +362,28 @@ mod test {
         let bank_hash = Hash::new_unique();
         let block_id = Hash::new_unique();
         run_test_parse_alpenglow_vote_transaction_from_sanitized(
-            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, None),
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction_from_sanitized(
-            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, Some(1742941768)),
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction_from_sanitized(
-            AlpenglowVote::new_finalization_vote(43, block_id, bank_hash),
+            AlpenglowVote::new_finalization_vote(43),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction_from_sanitized(
-            AlpenglowVote::new_skip_vote(35, 39),
+            AlpenglowVote::new_skip_vote(35),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
@@ -426,28 +430,28 @@ mod test {
         let bank_hash = Hash::new_unique();
         let block_id = Hash::new_unique();
         run_test_parse_alpenglow_vote_transaction(
-            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, None),
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction(
-            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash, Some(1742941768)),
+            AlpenglowVote::new_notarization_vote(42, block_id, bank_hash),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction(
-            AlpenglowVote::new_finalization_vote(43, block_id, bank_hash),
+            AlpenglowVote::new_finalization_vote(43),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,
         );
 
         run_test_parse_alpenglow_vote_transaction(
-            AlpenglowVote::new_skip_vote(35, 39),
+            AlpenglowVote::new_skip_vote(35),
             &node_keypair,
             &vote_keypair,
             &authorized_voter_keypair,

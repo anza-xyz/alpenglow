@@ -76,8 +76,7 @@ where
     R: CryptoRng + RngCore,
 {
     let slot = rng.gen();
-    let vote =
-        AlpenglowVote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique(), None);
+    let vote = AlpenglowVote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique());
     let keypair = Keypair::new();
     let vote_ix = vote.to_vote_instruction(keypair.pubkey(), keypair.pubkey());
 
