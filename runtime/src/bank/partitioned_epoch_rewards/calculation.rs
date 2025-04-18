@@ -369,7 +369,9 @@ impl Bank {
                     let stake_pubkey = **stake_pubkey;
                     let vote_pubkey = stake_account.delegation().voter_pubkey;
                     let vote_account = get_vote_account(&vote_pubkey)?;
-                    if vote_account.owner() != &solana_vote_program {
+                    if vote_account.owner() != &solana_vote_program
+                        && !alpenglow_vote::check_id(vote_account.owner())
+                    {
                         return None;
                     }
                     let mut stake_state = *stake_account.stake_state();
