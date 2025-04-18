@@ -135,15 +135,19 @@ impl CertificatePool {
             .certificates
             .entry((slot, certificate_type.clone()))
             .or_insert_with(|| VoteCertificate::new(slot));
-        certificate.add_vote(
+        if !certificate.add_vote(
             validator_vote_key,
             transaction,
             validator_stake,
             total_stake,
-        );
+        ) {
+            return None;
+        }
+
         if certificate.is_complete() && self.set_highest_slot(certificate_type, slot) {
             return Some(slot);
         }
+
         None
     }
 
