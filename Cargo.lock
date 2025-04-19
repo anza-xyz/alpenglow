@@ -6811,6 +6811,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-bls12-381"
+version = "2.3.0"
+dependencies = [
+ "blst",
+ "bytemuck",
+ "bytemuck_derive",
+ "solana-curve-traits",
+ "solana-define-syscall",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "solana-bn254"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6852,10 +6864,12 @@ dependencies = [
  "solana-big-mod-exp",
  "solana-bincode",
  "solana-blake3-hasher",
+ "solana-bls12-381",
  "solana-bn254",
  "solana-bpf-loader-program",
  "solana-clock",
  "solana-cpi",
+ "solana-curve-traits",
  "solana-curve25519",
  "solana-epoch-rewards",
  "solana-epoch-schedule",
@@ -7662,12 +7676,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-curve-traits"
+version = "2.3.0"
+
+[[package]]
 name = "solana-curve25519"
 version = "2.3.0"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
  "curve25519-dalek 4.1.3",
+ "solana-curve-traits",
  "solana-define-syscall",
  "subtle",
  "thiserror 2.0.12",
