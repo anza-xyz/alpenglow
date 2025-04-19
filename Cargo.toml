@@ -45,6 +45,8 @@ members = [
     "connection-cache",
     "core",
     "cost-model",
+    "curves/bls12-381",
+    "curves/curve-traits",
     "curves/curve25519",
     "dos",
     "download-utils",
@@ -379,6 +381,7 @@ solana-bincode = "=2.2.1"
 solana-blake3-hasher = "=2.2.1"
 solana-bloom = { path = "bloom", version = "=2.3.0" }
 solana-bls = { path = "bls", version = "=2.3.0" }
+solana-bls12-381 = { path = "curves/bls12-381", version = "=2.3.0" }
 solana-bn254 = "=2.2.1"
 solana-borsh = "=2.2.1"
 solana-bpf-loader-program = { path = "programs/bpf_loader", version = "=2.3.0" }
@@ -408,6 +411,7 @@ solana-core = { path = "core", version = "=2.3.0" }
 solana-cost-model = { path = "cost-model", version = "=2.3.0" }
 solana-cpi = "=2.2.1"
 solana-curve25519 = { path = "curves/curve25519", version = "=2.3.0" }
+solana-curve-traits = { path = "curves/curve-traits", version = "=2.3.0" }
 solana-decode-error = "=2.2.1"
 solana-define-syscall = "=2.2.1"
 solana-derivation-path = "=2.2.1"
