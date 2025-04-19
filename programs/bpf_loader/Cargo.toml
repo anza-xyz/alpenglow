@@ -20,9 +20,11 @@ solana-account-info = { workspace = true }
 solana-big-mod-exp = { workspace = true }
 solana-bincode = { workspace = true }
 solana-blake3-hasher = { workspace = true }
+solana-bls12-381 = { workspace = true }
 solana-bn254 = { workspace = true }
 solana-clock = { workspace = true }
 solana-cpi = { workspace = true }
+solana-curve-traits = { workspace = true }
 solana-curve25519 = { workspace = true }
 solana-feature-set = { workspace = true }
 solana-hash = { workspace = true }
@@ -64,7 +66,9 @@ solana-program = { workspace = true }
 solana-pubkey = { workspace = true, features = ["rand"] }
 solana-rent = { workspace = true }
 solana-slot-hashes = { workspace = true }
-solana-transaction-context = { workspace = true, features = ["dev-context-only-utils"] }
+solana-transaction-context = { workspace = true, features = [
+    "dev-context-only-utils",
+] }
 static_assertions = { workspace = true }
 test-case = { workspace = true }
 
@@ -89,6 +93,6 @@ metrics = ["solana-program-runtime/metrics"]
 shuttle-test = [
     "solana-type-overrides/shuttle-test",
     "solana-program-runtime/shuttle-test",
-    "solana-sbpf/shuttle-test"
+    "solana-sbpf/shuttle-test",
 ]
 svm-internal = []
