@@ -37,7 +37,10 @@ use {
     },
     solana_streamer::socket::SocketAddrSpace,
     solana_tpu_client::tpu_client::{TpuClient, TpuClientConfig, TpuSenderError},
-    solana_vote::vote_transaction::{self, VoteTransaction},
+    solana_vote::{
+        vote_parser::ParsedVoteTransaction,
+        vote_transaction::{self},
+    },
     solana_vote_program::vote_state::TowerSync,
     std::{
         collections::{HashMap, HashSet, VecDeque},
@@ -517,6 +520,9 @@ fn poll_all_nodes_for_signature(
     Ok(())
 }
 
+/// Represents a service that monitors the gossip network for votes, processes them according to
+/// provided filters and callbacks, and maintains a connection to the gossip network. Often used as
+/// a "spy" representing a Byzantine node in a cluster.
 pub struct GossipVoter {
     pub gossip_service: GossipService,
     pub tcp_listener: Option<TcpListener>,
@@ -533,16 +539,22 @@ impl GossipVoter {
     }
 }
 
-/// Reads votes from gossip and runs them through `vote_filter` to filter votes that then
-/// get passed to `generate_vote_tx` to create votes that are then pushed into gossip as if
-/// sent by a node with identity `node_keypair`.
+/// Creates and starts a gossip voter service that monitors the gossip network for votes.
+/// This service:
+/// 1. Connects to the gossip network at the specified address using the node's keypair
+/// 2. Waits for a specified number of peers to join before becoming active
+/// 3. Continuously polls for new votes in the network
+/// 4. Filters incoming votes through the provided `vote_filter` function
+/// 5. Processes filtered votes using the `process_vote_tx` callback
+/// 6. Maintains a queue of recent votes and periodically refreshes them
+/// 7. Returns a GossipVoter struct that can be used to control and shut down the service
 pub fn start_gossip_voter(
     gossip_addr: &SocketAddr,
     node_keypair: &Keypair,
-    vote_filter: impl Fn((CrdsValueLabel, Transaction)) -> Option<(VoteTransaction, Transaction)>
+    vote_filter: impl Fn((CrdsValueLabel, Transaction)) -> Option<(ParsedVoteTransaction, Transaction)>
         + std::marker::Send
         + 'static,
-    mut process_vote_tx: impl FnMut(Slot, &Transaction, &VoteTransaction, &ClusterInfo)
+    mut process_vote_tx: impl FnMut(Slot, &Transaction, &ParsedVoteTransaction, &ClusterInfo)
         + std::marker::Send
         + 'static,
     sleep_ms: u64,
@@ -569,7 +581,7 @@ pub fn start_gossip_voter(
     }
 
     let mut latest_voted_slot = 0;
-    let mut refreshable_votes: VecDeque<(Transaction, VoteTransaction)> = VecDeque::new();
+    let mut refreshable_votes: VecDeque<(Transaction, ParsedVoteTransaction)> = VecDeque::new();
     let mut latest_push_attempt = Instant::now();
 
     let t_voter = {

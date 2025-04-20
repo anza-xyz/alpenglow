@@ -14,6 +14,8 @@ use {
     solana_vote_interface::instruction::VoteInstruction,
 };
 
+/// Represents a parsed vote transaction, which can be either a traditional Tower
+/// vote or an Alpenglow vote. This enum allows unified handling of different vote types.
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum ParsedVoteTransaction {
     Tower(VoteTransaction),
@@ -50,10 +52,7 @@ impl ParsedVoteTransaction {
     }
 
     pub fn is_alpenglow_vote(&self) -> bool {
-        match self {
-            ParsedVoteTransaction::Tower(_tx) => false,
-            ParsedVoteTransaction::Alpenglow(_tx) => true,
-        }
+        matches!(self, ParsedVoteTransaction::Alpenglow(_))
     }
 
     pub fn is_full_tower_vote(&self) -> bool {
@@ -63,11 +62,44 @@ impl ParsedVoteTransaction {
         }
     }
 
-    pub fn try_into_tower_transaction(self) -> Option<VoteTransaction> {
+    pub fn as_tower_transaction(self) -> Option<VoteTransaction> {
         match self {
             ParsedVoteTransaction::Tower(tx) => Some(tx),
             ParsedVoteTransaction::Alpenglow(_tx) => None,
         }
+    }
+
+    pub fn as_alpenglow_transaction(self) -> Option<AlpenglowVote> {
+        match self {
+            ParsedVoteTransaction::Tower(_tx) => None,
+            ParsedVoteTransaction::Alpenglow(tx) => Some(tx),
+        }
+    }
+
+    pub fn as_tower_transaction_ref(&self) -> Option<&VoteTransaction> {
+        match self {
+            ParsedVoteTransaction::Tower(tx) => Some(tx),
+            ParsedVoteTransaction::Alpenglow(_tx) => None,
+        }
+    }
+
+    pub fn as_alpenglow_transaction_ref(&self) -> Option<&AlpenglowVote> {
+        match self {
+            ParsedVoteTransaction::Tower(_tx) => None,
+            ParsedVoteTransaction::Alpenglow(tx) => Some(tx),
+        }
+    }
+}
+
+impl From<VoteTransaction> for ParsedVoteTransaction {
+    fn from(value: VoteTransaction) -> Self {
+        ParsedVoteTransaction::Tower(value)
+    }
+}
+
+impl From<AlpenglowVote> for ParsedVoteTransaction {
+    fn from(value: alpenglow_vote::vote::Vote) -> Self {
+        ParsedVoteTransaction::Alpenglow(value)
     }
 }
 
