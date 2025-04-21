@@ -1,10 +1,20 @@
-use {
-    crate::{
-        error::BlsError,
-        keypair::{PubkeyProjective, SecretKey},
-        proof_of_possession::ProofOfPossessionProjective,
-        signature::SignatureProjective,
+pub use crate::{
+    error::BlsError,
+    keypair::{
+        Pubkey, PubkeyCompressed, PubkeyProjective, SecretKey, BLS_PUBLIC_KEY_AFFINE_SIZE,
+        BLS_PUBLIC_KEY_COMPRESSED_SIZE, BLS_SECRET_KEY_SIZE,
     },
+    proof_of_possession::{
+        ProofOfPossession, ProofOfPossessionCompressed, ProofOfPossessionProjective,
+        BLS_PROOF_OF_POSSESSION_AFFINE_SIZE, BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE,
+    },
+    signature::{
+        Signature, SignatureCompressed, SignatureProjective, BLS_SIGNATURE_AFFINE_SIZE,
+        BLS_SIGNATURE_COMPRESSED_SIZE,
+    },
+};
+
+use {
     blstrs::{pairing, G1Affine, G2Projective},
     group::prime::PrimeCurveAffine,
 };
