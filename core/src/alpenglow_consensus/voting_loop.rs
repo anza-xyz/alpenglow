@@ -314,7 +314,6 @@ impl VotingLoop {
                     // TODO(ashwin): we could block here & use return value if we've skipped and are
                     // waiting on a cert to avoid tight spin
                     Self::ingest_votes_into_certificate_pool(
-                        &my_pubkey,
                         &vote_receiver,
                         &mut cert_pool,
                         bank_forks.as_ref(),
@@ -408,7 +407,7 @@ impl VotingLoop {
     }
 
     fn branch_notarized(my_pubkey: &Pubkey, slot: Slot, cert_pool: &CertificatePool) -> bool {
-        if let Some(size) = cert_pool.is_notarization_certificate_complete(slot) {
+        if let Some(size) = cert_pool.get_notarization_cert_size(slot) {
             info!(
                 "{my_pubkey}: Branch Notarized: Slot {} from {} validators",
                 slot, size
@@ -601,7 +600,8 @@ impl VotingLoop {
             ctx.my_pubkey
         );
         let new_root = (old_root + 1..=slot).rev().find(|slot| {
-            cert_pool.is_finalized_slot(*slot) && ctx.bank_forks.read().unwrap().is_frozen(*slot)
+            cert_pool.get_finalization_cert_size(*slot).is_some()
+                && ctx.bank_forks.read().unwrap().is_frozen(*slot)
         })?;
         info!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
@@ -708,11 +708,7 @@ impl VotingLoop {
             // Check if we have the certificates to vote on this block
             // TODO(ashwin): track by hash,
             // TODO: fix WFSM hack for 1
-            if cert_pool
-                .is_notarization_certificate_complete(parent_slot)
-                .is_none()
-                && parent_slot > 1
-            {
+            if cert_pool.get_notarization_cert_size(parent_slot).is_none() && parent_slot > 1 {
                 // Need to ingest more votes
                 return false;
             }
@@ -936,38 +932,31 @@ impl VotingLoop {
     ///
     /// Returns the highest slot of the newly created notarization/skip certificates
     fn ingest_votes_into_certificate_pool(
-        my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool,
         bank_forks: &RwLock<BankForks>,
-    ) -> Option<Slot> {
+    ) {
         let mut cached_root_bank = None;
 
         vote_receiver
             .try_iter()
-            .filter_map(|(vote, vote_account_pubkey, tx)| {
+            .for_each(|(vote, vote_account_pubkey, tx)| {
                 let root_bank =
                     cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
                 let epoch = root_bank.epoch_schedule().get_epoch(vote.slot());
-                let epoch_stakes = root_bank.epoch_stakes(epoch)?;
+                let Some(epoch_stakes) = root_bank.epoch_stakes(epoch) else {
+                    return;
+                };
                 let validator_stake = epoch_stakes.vote_account_stake(&vote_account_pubkey);
                 if validator_stake == 0 {
-                    return None;
+                    return;
                 }
 
-                match cert_pool.add_vote(&vote, tx, &vote_account_pubkey) {
-                    Ok(Some(cert)) if cert.is_notarization_or_skip() => {
-                        info!("{my_pubkey}: Ingested new certificate {cert:?}");
-                        Some(cert.slot())
-                    }
-                    Ok(_) => None,
-                    Err(_) => {
-                        // TODO(ashwin): increment metrics on non duplicate failures
-                        None
-                    }
+                if let Err(e) = cert_pool.add_vote(&vote, tx, &vote_account_pubkey) {
+                    // TODO(ashwin): increment metrics on non duplicate failures
+                    warn!("Unable to push vote into the pool {}", e);
                 }
             })
-            .max()
     }
 
     fn alpenglow_update_commitment_cache(
