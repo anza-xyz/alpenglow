@@ -79,7 +79,11 @@ impl VotePool {
         true
     }
 
-    pub fn has_prev_vote(
+    pub fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
+        self.prev_votes.contains_key(validator_key)
+    }
+
+    pub fn has_same_prev_vote(
         &self,
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
@@ -90,7 +94,9 @@ impl VotePool {
             .is_some_and(|vote_keys| vote_keys.contains(&VoteKey { bankhash, blockid }))
     }
 
-    pub fn has_different_prev_vote(
+    // This is only used in safe_to_notar, where only 1 vote is allowed per validator in Notarize.
+    // So we only need to check if the first vote is the same to make the decision.
+    pub fn first_prev_vote_different(
         &self,
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
@@ -98,7 +104,7 @@ impl VotePool {
     ) -> bool {
         self.prev_votes
             .get(validator_key)
-            .is_some_and(|vote_keys| !vote_keys.contains(&VoteKey { bankhash, blockid }))
+            .is_some_and(|vote_keys| vote_keys[0] != VoteKey { bankhash, blockid })
     }
 
     pub fn total_stake_by_key(&self, bankhash: Option<Hash>, blockid: Option<Hash>) -> Stake {
@@ -140,15 +146,22 @@ mod test {
         assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 10);
+        assert!(vote_pool.has_prev_vote(&my_pubkey));
+        assert!(vote_pool.has_same_prev_vote(&my_pubkey, None, None));
+        assert!(!vote_pool.first_prev_vote_different(&my_pubkey, None, None));
 
         // Adding the same key again should fail
         assert!(!vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
-        assert!(vote_pool.add_vote(&Pubkey::new_unique(), None, None, transaction.clone(), 60),);
+        let new_pubkey = Pubkey::new_unique();
+        assert!(vote_pool.add_vote(&new_pubkey, None, None, transaction.clone(), 60),);
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 70);
+        assert!(vote_pool.has_prev_vote(&new_pubkey));
+        assert!(vote_pool.has_same_prev_vote(&new_pubkey, None, None));
+        assert!(!vote_pool.first_prev_vote_different(&new_pubkey, None, None));
     }
 
     #[test]
@@ -171,6 +184,9 @@ mod test {
             vote_pool.total_stake_by_key(Some(bank_hash), Some(block_id)),
             10
         );
+        assert!(vote_pool.has_prev_vote(&my_pubkey));
+        assert!(vote_pool.has_same_prev_vote(&my_pubkey, Some(bank_hash), Some(block_id)));
+        assert!(!vote_pool.first_prev_vote_different(&my_pubkey, Some(bank_hash), Some(block_id)));
 
         // Adding the same key again should fail
         assert!(!vote_pool.add_vote(
@@ -191,10 +207,14 @@ mod test {
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
+        assert!(vote_pool.has_prev_vote(&my_pubkey));
+        assert!(vote_pool.has_same_prev_vote(&my_pubkey, Some(bank_hash), Some(block_id)));
+        assert!(!vote_pool.first_prev_vote_different(&my_pubkey, Some(bank_hash), Some(block_id)));
 
         // Adding a different key should succeed
+        let new_pubkey = Pubkey::new_unique();
         assert!(vote_pool.add_vote(
-            &Pubkey::new_unique(),
+            &new_pubkey,
             Some(bank_hash),
             Some(block_id),
             transaction.clone(),
@@ -205,10 +225,14 @@ mod test {
             vote_pool.total_stake_by_key(Some(bank_hash), Some(block_id)),
             70
         );
+        assert!(vote_pool.has_prev_vote(&new_pubkey));
+        assert!(vote_pool.has_same_prev_vote(&new_pubkey, Some(bank_hash), Some(block_id)));
+        assert!(!vote_pool.first_prev_vote_different(&new_pubkey, Some(bank_hash), Some(block_id)));
     }
 
     #[test]
     fn test_notarization_fallback_pool() {
+        solana_logger::setup();
         let mut vote_pool = VotePool::new(3);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
@@ -230,6 +254,34 @@ mod test {
                 vote_pool.total_stake_by_key(Some(bank_hashes[i]), Some(block_ids[i])),
                 10
             );
+            assert!(vote_pool.has_prev_vote(&my_pubkey));
+            assert!(vote_pool.has_same_prev_vote(
+                &my_pubkey,
+                Some(bank_hashes[i]),
+                Some(block_ids[i])
+            ));
+            warn!(
+                "{} {}",
+                i,
+                vote_pool.first_prev_vote_different(
+                    &my_pubkey,
+                    Some(bank_hashes[i]),
+                    Some(block_ids[i])
+                )
+            );
+            if i == 0 {
+                assert!(!vote_pool.first_prev_vote_different(
+                    &my_pubkey,
+                    Some(bank_hashes[i]),
+                    Some(block_ids[i])
+                ));
+            } else {
+                assert!(vote_pool.first_prev_vote_different(
+                    &my_pubkey,
+                    Some(bank_hashes[i]),
+                    Some(block_ids[i])
+                ));
+            }
         }
         // Adding the 4th vote should fail
         assert!(!vote_pool.add_vote(
@@ -260,6 +312,25 @@ mod test {
                 vote_pool.total_stake_by_key(Some(bank_hashes[i]), Some(block_ids[i])),
                 70
             );
+            assert!(vote_pool.has_prev_vote(&new_pubkey));
+            assert!(vote_pool.has_same_prev_vote(
+                &new_pubkey,
+                Some(bank_hashes[i]),
+                Some(block_ids[i])
+            ));
+            if i == 1 {
+                assert!(!vote_pool.first_prev_vote_different(
+                    &new_pubkey,
+                    Some(bank_hashes[i]),
+                    Some(block_ids[i])
+                ));
+            } else {
+                assert!(vote_pool.first_prev_vote_different(
+                    &new_pubkey,
+                    Some(bank_hashes[i]),
+                    Some(block_ids[i])
+                ));
+            }
         }
 
         // The new key only added 2 votes, so adding bank_hashes[3] should succeed
@@ -275,6 +346,17 @@ mod test {
             vote_pool.total_stake_by_key(Some(bank_hashes[3]), Some(block_ids[3])),
             60
         );
+        assert!(vote_pool.has_prev_vote(&new_pubkey));
+        assert!(vote_pool.has_same_prev_vote(
+            &new_pubkey,
+            Some(bank_hashes[3]),
+            Some(block_ids[3])
+        ));
+        assert!(vote_pool.first_prev_vote_different(
+            &new_pubkey,
+            Some(bank_hashes[3]),
+            Some(block_ids[3])
+        ));
 
         // Now if adding the same key again, it should fail
         assert!(!vote_pool.add_vote(

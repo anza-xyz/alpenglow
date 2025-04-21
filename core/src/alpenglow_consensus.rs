@@ -26,6 +26,12 @@ pub enum VoteType {
     SkipFallback,
 }
 
+pub const CONFLICTING_VOTETYPES: [(VoteType, VoteType); 3] = [
+    (VoteType::Finalize, VoteType::NotarizeFallback),
+    (VoteType::Finalize, VoteType::Skip),
+    (VoteType::Notarize, VoteType::Skip),
+];
+
 pub const CERTIFICATE_LIMITS: [(CertificateType, (f64, &[VoteType])); 5] = [
     (CertificateType::FinalizeFast, (0.8, &[VoteType::Notarize])),
     (CertificateType::Finalize, (0.6, &[VoteType::Finalize])),

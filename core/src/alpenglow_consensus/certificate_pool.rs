@@ -1,8 +1,9 @@
 use {
     super::{vote_pool::VotePool, Stake},
     crate::alpenglow_consensus::{
-        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        CertificateType, VoteType, CERTIFICATE_LIMITS, CONFLICTING_VOTETYPES,
+        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
@@ -70,6 +71,9 @@ impl VoteCertificate {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
+    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
+    ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
+
     #[error("Epoch stakes missing for epoch: {0}")]
     EpochStakesNotFound(Epoch),
 
@@ -117,6 +121,8 @@ pub struct CertificatePool {
     certificate_limits_map: HashMap<CertificateType, (f64, Vec<VoteType>)>,
     // Reverse lookup table of vote types to possible certificates it's affecting.
     vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
+    // Lookup table for checking conflicting vote types.
+    conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
     // Highest slot with each certificate
     highest_slot_map: HashMap<CertificateType, Slot>,
     // Cached epoch_schedule
@@ -144,6 +150,18 @@ impl CertificatePool {
                     .or_insert_with(Vec::new);
                 entry.push(cert_type.clone());
             }
+        }
+
+        // Initialize the conflicting_vote_types map
+        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
+            pool.conflicting_vote_types
+                .entry(*vote_type_1)
+                .or_insert_with(Vec::new)
+                .push(*vote_type_2);
+            pool.conflicting_vote_types
+                .entry(*vote_type_2)
+                .or_insert_with(Vec::new)
+                .push(*vote_type_1);
         }
 
         // Update the epoch_stakes_map and root
@@ -257,6 +275,23 @@ impl CertificatePool {
         Ok(())
     }
 
+    fn has_conflicting_vote(
+        &self,
+        slot: Slot,
+        vote_type: VoteType,
+        validator_vote_key: &Pubkey,
+    ) -> Option<VoteType> {
+        let conflicting_types = self.conflicting_vote_types.get(&vote_type)?;
+        for conflicting_type in conflicting_types {
+            if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
+                if pool.has_prev_vote(validator_vote_key) {
+                    return Some(*conflicting_type);
+                }
+            }
+        }
+        None
+    }
+
     pub fn add_vote(
         &mut self,
         vote: &Vote,
@@ -291,6 +326,16 @@ impl CertificatePool {
             }
             _ => (None, None),
         };
+        if let Some(conflicting_type) =
+            self.has_conflicting_vote(slot, vote_type, validator_vote_key)
+        {
+            return Err(AddVoteError::ConflictingVoteType(
+                vote_type,
+                conflicting_type,
+                slot,
+                *validator_vote_key,
+            ));
+        }
         //TODO(wen): add checks here, e.g. one pubkey can't vote both skip and notarize on the same slot.
         if self.update_vote_pool(
             slot,
@@ -385,14 +430,14 @@ impl CertificatePool {
         if self
             .vote_pools
             .get(&(slot, VoteType::Skip))
-            .is_some_and(|pool| pool.has_prev_vote(my_pubkey, None, None))
+            .is_some_and(|pool| pool.has_same_prev_vote(my_pubkey, None, None))
         {
             return true;
         }
         let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
             return false;
         };
-        notarize_pool.has_different_prev_vote(my_pubkey, bank_hash, block_id)
+        notarize_pool.first_prev_vote_different(my_pubkey, bank_hash, block_id)
     }
 
     pub fn safe_to_notar(&self, my_pubkey: &Pubkey, bank: &Bank) -> bool {
@@ -448,7 +493,7 @@ impl CertificatePool {
             return false;
         };
         // Check if I voted notarize for some hash
-        if !notarize_pool.has_different_prev_vote(my_pubkey, None, None) {
+        if !notarize_pool.first_prev_vote_different(my_pubkey, None, None) {
             return false;
         }
         let voted_stake = notarize_pool.total_stake()
@@ -809,7 +854,11 @@ mod tests {
         // Should start leader block even if the beginning of the range is from
         // before your last notarized slot
         for slot in 4..=9 {
-            add_certificate(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
+            add_certificate(
+                &mut pool,
+                &validator_keypairs,
+                Vote::new_skip_fallback_vote(slot),
+            );
         }
 
         let my_leader_slot = 10;
@@ -1365,5 +1414,44 @@ mod tests {
                 .is_ok());
         }
         assert!(pool.safe_to_skip(&my_pubkey, 2));
+    }
+
+    fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
+        match vote_type {
+            VoteType::Notarize => {
+                Vote::new_notarization_vote(slot, Hash::default(), Hash::default())
+            }
+            VoteType::NotarizeFallback => {
+                Vote::new_notarization_fallback_vote(slot, Hash::default(), Hash::default())
+            }
+            VoteType::Skip => Vote::new_skip_vote(slot),
+            VoteType::SkipFallback => Vote::new_skip_fallback_vote(slot),
+            VoteType::Finalize => Vote::new_finalization_vote(slot),
+        }
+    }
+
+    fn test_reject_conflicting_vote(
+        pool: &mut CertificatePool,
+        pubkey: &Pubkey,
+        vote_type_1: VoteType,
+        vote_type_2: VoteType,
+        slot: Slot,
+    ) {
+        let vote_1 = create_new_vote(vote_type_1, slot);
+        let vote_2 = create_new_vote(vote_type_2, slot);
+        assert!(pool.add_vote(&vote_1, dummy_transaction(), pubkey).is_ok());
+        assert!(pool.add_vote(&vote_2, dummy_transaction(), pubkey).is_err());
+    }
+
+    #[test]
+    fn test_reject_conflicting_votes() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        let mut slot = 2;
+        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
+            let pubkey = validator_keypairs[0].vote_keypair.pubkey();
+            test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_1, *vote_type_2, slot);
+            test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_2, *vote_type_1, slot + 1);
+            slot += 2;
+        }
     }
 }
