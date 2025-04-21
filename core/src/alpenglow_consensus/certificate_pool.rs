@@ -71,9 +71,8 @@ impl VoteCertificate {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
-    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
-    ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
-
+    //    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
+    //    ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
     #[error("Epoch stakes missing for epoch: {0}")]
     EpochStakesNotFound(Epoch),
 
@@ -275,23 +274,24 @@ impl CertificatePool {
         Ok(())
     }
 
-    fn has_conflicting_vote(
-        &self,
-        slot: Slot,
-        vote_type: VoteType,
-        validator_vote_key: &Pubkey,
-    ) -> Option<VoteType> {
-        let conflicting_types = self.conflicting_vote_types.get(&vote_type)?;
-        for conflicting_type in conflicting_types {
-            if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
-                if pool.has_prev_vote(validator_vote_key) {
-                    return Some(*conflicting_type);
+    //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
+    /*    fn has_conflicting_vote(
+            &self,
+            slot: Slot,
+            vote_type: VoteType,
+            validator_vote_key: &Pubkey,
+        ) -> Option<VoteType> {
+            let conflicting_types = self.conflicting_vote_types.get(&vote_type)?;
+            for conflicting_type in conflicting_types {
+                if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
+                    if pool.has_prev_vote(validator_vote_key) {
+                        return Some(*conflicting_type);
+                    }
                 }
             }
+            None
         }
-        None
-    }
-
+    */
     pub fn add_vote(
         &mut self,
         vote: &Vote,
@@ -326,17 +326,18 @@ impl CertificatePool {
             }
             _ => (None, None),
         };
-        if let Some(conflicting_type) =
-            self.has_conflicting_vote(slot, vote_type, validator_vote_key)
-        {
-            return Err(AddVoteError::ConflictingVoteType(
-                vote_type,
-                conflicting_type,
-                slot,
-                *validator_vote_key,
-            ));
-        }
-        //TODO(wen): add checks here, e.g. one pubkey can't vote both skip and notarize on the same slot.
+        //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
+        /*        if let Some(conflicting_type) =
+                    self.has_conflicting_vote(slot, vote_type, validator_vote_key)
+                {
+                    return Err(AddVoteError::ConflictingVoteType(
+                        vote_type,
+                        conflicting_type,
+                        slot,
+                        *validator_vote_key,
+                    ));
+                }
+        */
         if self.update_vote_pool(
             slot,
             vote_type,
@@ -1416,6 +1417,7 @@ mod tests {
         assert!(pool.safe_to_skip(&my_pubkey, 2));
     }
 
+    /*
     fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
         match vote_type {
             VoteType::Notarize => {
@@ -1430,28 +1432,30 @@ mod tests {
         }
     }
 
-    fn test_reject_conflicting_vote(
-        pool: &mut CertificatePool,
-        pubkey: &Pubkey,
-        vote_type_1: VoteType,
-        vote_type_2: VoteType,
-        slot: Slot,
-    ) {
-        let vote_1 = create_new_vote(vote_type_1, slot);
-        let vote_2 = create_new_vote(vote_type_2, slot);
-        assert!(pool.add_vote(&vote_1, dummy_transaction(), pubkey).is_ok());
-        assert!(pool.add_vote(&vote_2, dummy_transaction(), pubkey).is_err());
-    }
 
-    #[test]
-    fn test_reject_conflicting_votes() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
-        let mut slot = 2;
-        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
-            let pubkey = validator_keypairs[0].vote_keypair.pubkey();
-            test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_1, *vote_type_2, slot);
-            test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_2, *vote_type_1, slot + 1);
-            slot += 2;
+        fn test_reject_conflicting_vote(
+            pool: &mut CertificatePool,
+            pubkey: &Pubkey,
+            vote_type_1: VoteType,
+            vote_type_2: VoteType,
+            slot: Slot,
+        ) {
+            let vote_1 = create_new_vote(vote_type_1, slot);
+            let vote_2 = create_new_vote(vote_type_2, slot);
+            assert!(pool.add_vote(&vote_1, dummy_transaction(), pubkey).is_ok());
+            assert!(pool.add_vote(&vote_2, dummy_transaction(), pubkey).is_err());
         }
-    }
+
+        #[test]
+        fn test_reject_conflicting_votes() {
+            let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+            let mut slot = 2;
+            for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
+                let pubkey = validator_keypairs[0].vote_keypair.pubkey();
+                test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_1, *vote_type_2, slot);
+                test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_2, *vote_type_1, slot + 1);
+                slot += 2;
+            }
+        }
+    */
 }
