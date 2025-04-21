@@ -1,13 +1,25 @@
-use {
-    crate::{
-        error::BlsError,
-        keypair::{BlsPubkey, BlsSecretKey},
-        proof_of_possession::BlsProofOfPossession,
-        signature::BlsSignature,
+pub use crate::{
+    error::BlsError,
+    keypair::{
+        Pubkey, PubkeyCompressed, PubkeyProjective, SecretKey, BLS_PUBLIC_KEY_AFFINE_SIZE,
+        BLS_PUBLIC_KEY_COMPRESSED_SIZE, BLS_SECRET_KEY_SIZE,
     },
+    proof_of_possession::{
+        ProofOfPossession, ProofOfPossessionCompressed, ProofOfPossessionProjective,
+        BLS_PROOF_OF_POSSESSION_AFFINE_SIZE, BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE,
+    },
+    signature::{
+        Signature, SignatureCompressed, SignatureProjective, BLS_SIGNATURE_AFFINE_SIZE,
+        BLS_SIGNATURE_COMPRESSED_SIZE,
+    },
+};
+use {
     blstrs::{pairing, G1Affine, G2Projective},
     group::prime::PrimeCurveAffine,
 };
+
+// TODO: add conversion between compressed and uncompressed representation of
+// signatures, pubkeys, and proof of possessions
 
 pub mod error;
 pub mod keypair;
@@ -29,15 +41,19 @@ pub struct Bls;
 impl Bls {
     /// Sign a message using the provided secret key
     #[allow(clippy::arithmetic_side_effects)]
-    pub(crate) fn sign(secret_key: &BlsSecretKey, message: &[u8]) -> BlsSignature {
+    pub(crate) fn sign(secret_key: &SecretKey, message: &[u8]) -> SignatureProjective {
         let hashed_message = Bls::hash_message_to_point(message);
-        BlsSignature(hashed_message * secret_key.0)
+        SignatureProjective(hashed_message * secret_key.0)
     }
 
     /// Verify a signature against a message and a public key
     ///
     /// TODO: Verify by invoking pairing just once
-    pub(crate) fn verify(public_key: &BlsPubkey, signature: &BlsSignature, message: &[u8]) -> bool {
+    pub(crate) fn verify(
+        public_key: &PubkeyProjective,
+        signature: &SignatureProjective,
+        message: &[u8],
+    ) -> bool {
         let hashed_message = Bls::hash_message_to_point(message);
         pairing(&public_key.0.into(), &hashed_message.into())
             == pairing(&G1Affine::generator(), &signature.0.into())
@@ -46,17 +62,17 @@ impl Bls {
     /// Generate a proof of possession for the given keypair
     #[allow(clippy::arithmetic_side_effects)]
     pub(crate) fn generate_proof_of_possession(
-        secret_key: &BlsSecretKey,
-        public_key: &BlsPubkey,
-    ) -> BlsProofOfPossession {
+        secret_key: &SecretKey,
+        public_key: &PubkeyProjective,
+    ) -> ProofOfPossessionProjective {
         let hashed_pubkey_bytes = Self::hash_pubkey_to_g2(public_key);
-        BlsProofOfPossession(hashed_pubkey_bytes * secret_key.0)
+        ProofOfPossessionProjective(hashed_pubkey_bytes * secret_key.0)
     }
 
     /// Verify a proof of possession against a public key
     pub(crate) fn verify_proof_of_possession(
-        public_key: &BlsPubkey,
-        proof: &BlsProofOfPossession,
+        public_key: &PubkeyProjective,
+        proof: &ProofOfPossessionProjective,
     ) -> bool {
         let hashed_pubkey_bytes = Self::hash_pubkey_to_g2(public_key);
         pairing(&public_key.0.into(), &hashed_pubkey_bytes.into())
@@ -70,11 +86,11 @@ impl Bls {
         message: &[u8],
     ) -> Result<bool, BlsError>
     where
-        I: IntoIterator<Item = &'a BlsPubkey>,
-        J: IntoIterator<Item = &'a BlsSignature>,
+        I: IntoIterator<Item = &'a PubkeyProjective>,
+        J: IntoIterator<Item = &'a SignatureProjective>,
     {
-        let aggregate_pubkey = BlsPubkey::aggregate(public_keys)?;
-        let aggregate_signature = BlsSignature::aggregate(signatures)?;
+        let aggregate_pubkey = PubkeyProjective::aggregate(public_keys)?;
+        let aggregate_signature = SignatureProjective::aggregate(signatures)?;
 
         Ok(Self::verify(
             &aggregate_pubkey,
@@ -89,7 +105,7 @@ impl Bls {
     }
 
     /// Hash a pubkey to a G2 point
-    pub(crate) fn hash_pubkey_to_g2(public_key: &BlsPubkey) -> G2Projective {
+    pub(crate) fn hash_pubkey_to_g2(public_key: &PubkeyProjective) -> G2Projective {
         let pubkey_bytes = public_key.0.to_compressed();
         G2Projective::hash_to_curve(&pubkey_bytes, POP_DST, &[])
     }
@@ -97,11 +113,11 @@ impl Bls {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::keypair::BlsKeypair};
+    use {super::*, crate::keypair::Keypair};
 
     #[test]
     fn test_verify() {
-        let keypair = BlsKeypair::new();
+        let keypair = Keypair::new();
         let test_message = b"test message";
         let signature = Bls::sign(&keypair.secret, test_message);
         assert!(Bls::verify(&keypair.public, &signature, test_message));
@@ -111,11 +127,11 @@ mod tests {
     fn test_aggregate_verify() {
         let test_message = b"test message";
 
-        let keypair0 = BlsKeypair::new();
+        let keypair0 = Keypair::new();
         let signature0 = Bls::sign(&keypair0.secret, test_message);
         assert!(Bls::verify(&keypair0.public, &signature0, test_message));
 
-        let keypair1 = BlsKeypair::new();
+        let keypair1 = Keypair::new();
         let signature1 = Bls::sign(&keypair1.secret, test_message);
         assert!(Bls::verify(&keypair1.public, &signature1, test_message));
 
@@ -128,7 +144,8 @@ mod tests {
         .unwrap());
 
         // pre-aggregate the signatures
-        let aggregate_signature = BlsSignature::aggregate([&signature0, &signature1]).unwrap();
+        let aggregate_signature =
+            SignatureProjective::aggregate([&signature0, &signature1]).unwrap();
         assert!(Bls::aggregate_verify(
             vec![&keypair0.public, &keypair1.public],
             vec![&aggregate_signature],
@@ -137,7 +154,8 @@ mod tests {
         .unwrap());
 
         // pre-aggregate the public keys
-        let aggregate_pubkey = BlsPubkey::aggregate([&keypair0.public, &keypair1.public]).unwrap();
+        let aggregate_pubkey =
+            PubkeyProjective::aggregate([&keypair0.public, &keypair1.public]).unwrap();
         assert!(Bls::aggregate_verify(
             vec![&aggregate_pubkey],
             vec![&signature0, &signature1],
@@ -161,11 +179,11 @@ mod tests {
 
     #[test]
     fn test_proof_of_possession() {
-        let keypair = BlsKeypair::new();
+        let keypair = Keypair::new();
         let proof = Bls::generate_proof_of_possession(&keypair.secret, &keypair.public);
         assert!(Bls::verify_proof_of_possession(&keypair.public, &proof));
 
-        let invalid_secret_key = BlsSecretKey::new();
+        let invalid_secret_key = SecretKey::new();
         let invalid_proof = Bls::generate_proof_of_possession(&invalid_secret_key, &keypair.public);
         assert!(!Bls::verify_proof_of_possession(
             &keypair.public,
