@@ -13,7 +13,6 @@ pub use crate::{
         BLS_SIGNATURE_COMPRESSED_SIZE,
     },
 };
-
 use {
     blstrs::{pairing, G1Affine, G2Projective},
     group::prime::PrimeCurveAffine,
