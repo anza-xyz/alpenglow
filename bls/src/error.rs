@@ -8,4 +8,6 @@ pub enum BlsError {
     EmptyAggregation,
     #[error("Key derivation failed")]
     KeyDerivation,
+    #[error("Point representation conversion failed")]
+    PointConversion, // TODO: could be more specific here
 }
