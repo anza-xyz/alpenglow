@@ -23,7 +23,7 @@ pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
 pub const BLS_PUBLIC_KEY_AFFINE_SIZE: usize = 96;
 
 /// A BLS secret key
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SecretKey(pub(crate) Scalar);
 
 impl SecretKey {
@@ -89,13 +89,27 @@ impl SecretKey {
 }
 
 /// A serialized BLS public key in a compressed point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PubkeyCompressed(pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
 
+impl Default for PubkeyCompressed {
+    fn default() -> Self {
+        Self([0; BLS_PUBLIC_KEY_COMPRESSED_SIZE])
+    }
+}
+
 /// A serialized BLS public key in an affine point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Pubkey(pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE]);
 
+impl Default for Pubkey {
+    fn default() -> Self {
+        Self([0; BLS_PUBLIC_KEY_AFFINE_SIZE])
+    }
+}
+
 /// A BLS public key in a projective point representation
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PubkeyProjective(pub(crate) G1Projective);
 
 impl PubkeyProjective {
@@ -173,7 +187,7 @@ impl TryFrom<&Pubkey> for PubkeyProjective {
 }
 
 /// A BLS keypair
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Keypair {
     pub secret: SecretKey,
     pub public: PubkeyProjective,

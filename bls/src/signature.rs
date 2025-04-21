@@ -10,7 +10,7 @@ pub const BLS_SIGNATURE_COMPRESSED_SIZE: usize = 96;
 pub const BLS_SIGNATURE_AFFINE_SIZE: usize = 192;
 
 /// A BLS signature in a projective point representation
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignatureProjective(pub(crate) G2Projective);
 
 impl SignatureProjective {
@@ -51,10 +51,24 @@ impl SignatureProjective {
 }
 
 /// A serialized BLS signature in a compressed point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SignatureCompressed(pub [u8; BLS_SIGNATURE_COMPRESSED_SIZE]);
 
+impl Default for SignatureCompressed {
+    fn default() -> Self {
+        Self([0; BLS_SIGNATURE_COMPRESSED_SIZE])
+    }
+}
+
 /// A serialized BLS signature in an affine point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Signature(pub [u8; BLS_SIGNATURE_AFFINE_SIZE]);
+
+impl Default for Signature {
+    fn default() -> Self {
+        Self([0; BLS_SIGNATURE_AFFINE_SIZE])
+    }
+}
 
 impl From<SignatureProjective> for Signature {
     fn from(proof: SignatureProjective) -> Self {

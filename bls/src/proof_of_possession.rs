@@ -10,6 +10,7 @@ pub const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE: usize = 96;
 pub const BLS_PROOF_OF_POSSESSION_AFFINE_SIZE: usize = 192;
 
 /// A BLS proof of possession in a projective point representation
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofOfPossessionProjective(pub(crate) G2Projective);
 impl ProofOfPossessionProjective {
     /// Verify a proof of possession against a public key
@@ -19,10 +20,24 @@ impl ProofOfPossessionProjective {
 }
 
 /// A serialized BLS signature in a compressed point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProofOfPossessionCompressed(pub [u8; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]);
 
+impl Default for ProofOfPossessionCompressed {
+    fn default() -> Self {
+        Self([0; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE])
+    }
+}
+
 /// A serialized BLS signature in an affine point representation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProofOfPossession(pub [u8; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE]);
+
+impl Default for ProofOfPossession {
+    fn default() -> Self {
+        Self([0; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE])
+    }
+}
 
 impl From<ProofOfPossessionProjective> for ProofOfPossession {
     fn from(proof: ProofOfPossessionProjective) -> Self {
