@@ -1,6 +1,6 @@
 [package]
-name = "solana-bls-keypair"
-description = "Solana BLS keypair"
+name = "solana-bls"
+description = "Solana BLS"
 documentation = "https://docs.rs/solana-bls-keypair"
 version = { workspace = true }
 authors = { workspace = true }
@@ -27,7 +27,7 @@ solana-keypair = { workspace = true }
 solana-signer-derive = ["dep:solana-signer", "dep:solana-signer", "dep:subtle"]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [lints]
 workspace = true
