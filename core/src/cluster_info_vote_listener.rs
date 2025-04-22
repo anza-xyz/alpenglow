@@ -1736,7 +1736,7 @@ mod tests {
             .unwrap();
 
         ClusterInfoVoteListener::track_new_votes_and_notify_confirmations(
-            vote.try_into_tower_transaction().unwrap(),
+            vote.as_tower_transaction().unwrap(),
             &vote_pubkey,
             signature,
             &vote_tracker,
@@ -1769,7 +1769,7 @@ mod tests {
             .unwrap();
 
         ClusterInfoVoteListener::track_new_votes_and_notify_confirmations(
-            vote.try_into_tower_transaction().unwrap(),
+            vote.as_tower_transaction().unwrap(),
             &vote_pubkey,
             signature,
             &vote_tracker,
