@@ -390,6 +390,14 @@ impl LocalCluster {
             leader_server,
         );
 
+        println!(" !! leader_validator !! {:?}", leader_pubkey);
+
+        {
+            let ci = &cluster_leader.info.contact_info;
+            let tpu = ci.tpu(connection_cache.protocol()).unwrap();
+            println!("Leader TPU info :: {}", tpu)
+        }
+
         validators.insert(leader_pubkey, cluster_leader);
 
         let mut cluster = Self {
@@ -416,6 +424,7 @@ impl LocalCluster {
             config.validator_configs[1..].iter(),
             validator_keys[1..].iter(),
         ) {
+            println!(" !! add_validator !! {:?}", key);
             cluster.add_validator(
                 validator_config,
                 *stake,
@@ -423,6 +432,13 @@ impl LocalCluster {
                 node_pubkey_to_vote_key.get(&key.pubkey()).cloned(),
                 socket_addr_space,
             );
+        }
+
+        println!("summary :::");
+        for pk in [&leader_pubkey] {
+            let ci = cluster.get_contact_info(&leader_pubkey).unwrap();
+            let tpu = ci.tpu(cluster.connection_cache.protocol()).unwrap();
+            println!("{} :: {}", pk, tpu)
         }
 
         let mut listener_config = safe_clone_config(&config.validator_configs[0]);
