@@ -6832,7 +6832,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-bls-keypair"
+name = "solana-bls"
 version = "2.3.0"
 dependencies = [
  "blst",
@@ -6840,6 +6840,7 @@ dependencies = [
  "ff",
  "group",
  "rand 0.8.5",
+ "solana-bls12-381",
  "solana-keypair",
  "solana-signature",
  "solana-signer",
