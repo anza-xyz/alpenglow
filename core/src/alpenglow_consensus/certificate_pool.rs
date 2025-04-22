@@ -1,9 +1,8 @@
 use {
     super::{vote_pool::VotePool, Stake},
     crate::alpenglow_consensus::{
-        CertificateType, VoteType, CERTIFICATE_LIMITS, CONFLICTING_VOTETYPES,
-        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
-        MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
@@ -119,7 +118,7 @@ pub struct CertificatePool {
     // Reverse lookup table of vote types to possible certificates it's affecting.
     vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
     // Lookup table for checking conflicting vote types.
-    conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
+    // conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
     // Highest slot with each certificate
     highest_slot_map: HashMap<CertificateType, Slot>,
     // Cached epoch_schedule
@@ -136,7 +135,7 @@ impl CertificatePool {
     pub fn new_from_root_bank(bank: &Bank) -> Self {
         let mut pool = Self::default();
 
-        // Initialize the certificate_limits_map and vote_type_to_certificates map
+        // Initialize the vote_type_to_certificates map
         for (cert_type, (_, vote_types)) in CERTIFICATE_LIMITS.iter() {
             for vote_type in *vote_types {
                 let entry = pool
@@ -147,7 +146,7 @@ impl CertificatePool {
             }
         }
 
-        // Initialize the conflicting_vote_types map
+        /*    // Initialize the conflicting_vote_types map
         for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
             pool.conflicting_vote_types
                 .entry(*vote_type_1)
@@ -157,7 +156,7 @@ impl CertificatePool {
                 .entry(*vote_type_2)
                 .or_insert_with(Vec::new)
                 .push(*vote_type_1);
-        }
+        }*/
 
         // Update the epoch_stakes_map and root
         pool.update_epoch_stakes_map(bank);
