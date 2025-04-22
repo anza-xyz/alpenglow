@@ -116,8 +116,6 @@ pub struct CertificatePool {
     vote_pools: BTreeMap<PoolId, VotePool>,
     // Certificate pools to keep track of the certs.
     certificates: BTreeMap<CertificateId, VoteCertificate>,
-    // Convert CERTIFICATE_LIMITS to a HashMap for faster lookup
-    certificate_limits_map: HashMap<CertificateType, (f64, Vec<VoteType>)>,
     // Reverse lookup table of vote types to possible certificates it's affecting.
     vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
     // Lookup table for checking conflicting vote types.
@@ -139,9 +137,7 @@ impl CertificatePool {
         let mut pool = Self::default();
 
         // Initialize the certificate_limits_map and vote_type_to_certificates map
-        for (cert_type, (stake, vote_types)) in CERTIFICATE_LIMITS.iter() {
-            pool.certificate_limits_map
-                .insert(cert_type.clone(), (*stake, (*vote_types).to_vec()));
+        for (cert_type, (_, vote_types)) in CERTIFICATE_LIMITS.iter() {
             for vote_type in *vote_types {
                 let entry = pool
                     .vote_type_to_certificates
@@ -245,9 +241,9 @@ impl CertificatePool {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let (limit, vote_types) = self
-                .certificate_limits_map
-                .get(&cert_type)
+            let (_, (limit, vote_types)) = CERTIFICATE_LIMITS
+                .iter()
+                .find(|(cert_type_entry, _)| cert_type_entry == &cert_type)
                 .expect("CertificateType {cert_type} not found");
             let accumulated_stake = vote_types
                 .iter()
@@ -259,7 +255,7 @@ impl CertificatePool {
                 .sum::<Stake>();
             if accumulated_stake as f64 / total_stake as f64 >= *limit {
                 let mut transactions = Vec::new();
-                for vote_type in vote_types {
+                for vote_type in *vote_types {
                     if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                         vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                     }
