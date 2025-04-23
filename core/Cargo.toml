@@ -184,7 +184,3 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [lints]
 workspace = true
-
-[profile.release]
-debug = true
-split-debuginfo = "packed"   # optional, but keeps your binary size down
