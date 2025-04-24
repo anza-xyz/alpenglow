@@ -19,6 +19,7 @@ pub trait VoteCertificate: Default {
     fn stake(&self) -> Stake;
 }
 
+// NOTE: This will go away after BLS implementation is finished.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LegacyVoteCertificate {
     // We don't need to send the actual vote transactions out for now.
