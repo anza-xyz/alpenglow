@@ -12,8 +12,11 @@ use {
 pub const NUM_VALIDATORS: usize = 2000;
 pub const NUM_SLOTS: u64 = 1000;
 
-fn add_vote_bench<F>(validator_keypairs: &[ValidatorVoteKeypairs], mut vote_fn: F, pool: &mut CertificatePool)
-where
+fn add_vote_bench<F>(
+    validator_keypairs: &[ValidatorVoteKeypairs],
+    mut vote_fn: F,
+    pool: &mut CertificatePool,
+) where
     F: FnMut(u64) -> Vote,
 {
     for slot in 0..NUM_SLOTS {
@@ -41,13 +44,21 @@ pub fn certificate_pool_add_vote_benchmark(c: &mut Criterion) {
     let mut pool = CertificatePool::new_from_root_bank(&bank);
     c.bench_function("add_vote_notarize", |b| {
         b.iter(|| {
-            add_vote_bench(&validator_keypairs, |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()), black_box(&mut pool));
+            add_vote_bench(
+                &validator_keypairs,
+                |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
+                black_box(&mut pool),
+            );
         })
     });
 
     c.bench_function("add_vote_skip", |b| {
         b.iter(|| {
-            add_vote_bench(&validator_keypairs, Vote::new_skip_vote, black_box(&mut pool));
+            add_vote_bench(
+                &validator_keypairs,
+                Vote::new_skip_vote,
+                black_box(&mut pool),
+            );
         })
     });
 }
