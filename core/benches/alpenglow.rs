@@ -10,7 +10,7 @@ use {
 };
 
 pub const NUM_VALIDATORS: usize = 2000;
-pub const NUM_SLOTS: u64 = 1000;
+pub const NUM_SLOTS: u64 = 96;
 
 fn add_vote_bench<F>(
     validator_keypairs: &[ValidatorVoteKeypairs],
@@ -21,11 +21,26 @@ fn add_vote_bench<F>(
 {
     for slot in 0..NUM_SLOTS {
         let vote = vote_fn(slot);
+        let mut has_error = false;
         for keypair in validator_keypairs {
-            let _ = pool.add_vote(
-                &vote,
-                VersionedTransaction::default(),
-                &keypair.vote_keypair.pubkey(),
+            if pool
+                .add_vote(
+                    &vote,
+                    VersionedTransaction::default(),
+                    &keypair.vote_keypair.pubkey(),
+                )
+                .is_err()
+            {
+                has_error = true;
+            }
+        }
+        if pool.get_notarization_cert_size(slot).is_none() && !pool.skip_certified(slot) {
+            panic!(
+                "Failed to notarize or skip slot {} {} {:?} {}",
+                slot,
+                has_error,
+                pool.get_notarization_cert_size(slot),
+                pool.skip_certified(slot)
             );
         }
     }
@@ -52,6 +67,7 @@ pub fn certificate_pool_add_vote_benchmark(c: &mut Criterion) {
         })
     });
 
+    let mut pool = CertificatePool::new_from_root_bank(&bank);
     c.bench_function("add_vote_skip", |b| {
         b.iter(|| {
             add_vote_bench(
