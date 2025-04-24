@@ -9,6 +9,9 @@ impl AlpenglowVoteTransaction for VersionedTransaction {}
 
 impl AlpenglowVoteTransaction for BlsVoteTransaction {}
 
+/// A vote instruction signed using BLS signatures. This format will be used
+/// for vote communication between validators. This is not inteded to include
+/// real Solana program instructions to be processed on-chain.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlsVoteTransaction {
     /// BLS signature certifying the message
