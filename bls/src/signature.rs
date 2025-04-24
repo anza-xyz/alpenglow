@@ -1,6 +1,7 @@
 use {
     crate::{error::BlsError, keypair::PubkeyProjective, Bls},
     blstrs::{G2Affine, G2Projective},
+    group::Group,
 };
 
 /// Size of a BLS signature in a compressed point representation
@@ -12,6 +13,12 @@ pub const BLS_SIGNATURE_AFFINE_SIZE: usize = 192;
 /// A BLS signature in a projective point representation
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignatureProjective(pub(crate) G2Projective);
+
+impl Default for SignatureProjective {
+    fn default() -> Self {
+        Self(G2Projective::identity())
+    }
+}
 
 impl SignatureProjective {
     /// Verify a signature against a message and a public key

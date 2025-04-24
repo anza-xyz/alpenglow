@@ -18,13 +18,15 @@ pub struct BitVector {
     pub data: [u8; VALIDATOR_BIT_MAP_U8_SIZE], // 2048 bits = 512 * 8 bits
 }
 
-impl BitVector {
-    pub fn new() -> Self {
+impl Default for BitVector {
+    fn default() -> Self {
         Self {
             data: [0u8; VALIDATOR_BIT_MAP_U8_SIZE],
         }
     }
+}
 
+impl BitVector {
     pub fn set_bit(&mut self, index: usize, value: bool) -> Result<(), BitVectorError> {
         if index >= MAXIMUM_VALIDATORS {
             return Err(BitVectorError::IndexOutOfBounds);
@@ -62,7 +64,7 @@ mod test {
 
     #[test]
     fn test_bit_vector() {
-        let mut bit_vector = BitVector::new();
+        let mut bit_vector = BitVector::default();
 
         bit_vector.set_bit(0, true).unwrap();
         bit_vector.set_bit(1, true).unwrap();
