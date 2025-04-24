@@ -99,8 +99,8 @@ pub struct BlsCertificate {
 impl BlsCertificate {
     pub fn new(
         vote_data: CertificateVoteData,
-        validator_pubkey_map: HashMap<ValidatorPubkey, usize>,
-        transactions_map: HashMap<ValidatorPubkey, BlsVoteTransaction>,
+        validator_pubkey_map: &HashMap<ValidatorPubkey, usize>,
+        transactions_map: &HashMap<ValidatorPubkey, BlsVoteTransaction>,
     ) -> Result<Self, BlsCertificateError> {
         let mut aggregate_signature = SignatureProjective::default();
         let mut bit_vector = BitVector::default();
@@ -130,5 +130,36 @@ impl BlsCertificate {
             aggregate_signature: aggregate_signature.into(),
             bit_vector,
         })
+    }
+
+    pub fn add(
+        &mut self,
+        validator_pubkey_map: &HashMap<ValidatorPubkey, usize>,
+        validator_pubkey: &ValidatorPubkey,
+        transaction: &BlsVoteTransaction,
+    ) -> Result<(), BlsCertificateError> {
+        let aggregate_signature: SignatureProjective = self
+            .aggregate_signature
+            .try_into()
+            .map_err(|_| BlsCertificateError::InvalidSignature)?;
+        let new_signature: SignatureProjective = transaction
+            .signature
+            .try_into()
+            .map_err(|_| BlsCertificateError::InvalidSignature)?;
+
+        // the function aggregate fails only on empty signatures, so it is safe to unwrap here
+        // TODO: update this after simplfying signature aggregation interface in `solana_bls`
+        let new_aggregate =
+            SignatureProjective::aggregate([&aggregate_signature, &new_signature]).unwrap();
+        self.aggregate_signature = new_aggregate.into();
+
+        // set bit-vector for the validator
+        let validator_index = validator_pubkey_map
+            .get(validator_pubkey)
+            .ok_or(BlsCertificateError::ValidatorDoesNotExist)?;
+        self.bit_vector
+            .set_bit(*validator_index, true)
+            .map_err(|_| BlsCertificateError::IndexOutOfBound)?;
+        Ok(())
     }
 }
