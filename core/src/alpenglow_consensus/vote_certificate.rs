@@ -105,6 +105,9 @@ impl BlsCertificate {
         let mut aggregate_signature = SignatureProjective::default();
         let mut bit_vector = BitVector::default();
         let pubkey_transactions = transactions_map.iter();
+
+        // TODO: signature aggregation can be done out-of-order;
+        // consider aggregating signatures separately in parallel
         for (pubkey, transaction) in pubkey_transactions {
             // aggregate the signature
             let signature: SignatureProjective = transaction
