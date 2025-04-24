@@ -1,17 +1,12 @@
 use {
     super::{
+        bit_vector::BitVector,
         transaction::{AlpenglowVoteTransaction, BlsVoteTransaction},
         Stake,
     },
-    solana_sdk::transaction::VersionedTransaction,
-    std::sync::Arc,
-};
-
-use {
-    super::bit_vector::BitVector,
     solana_bls::{Signature, SignatureProjective},
-    solana_sdk::pubkey::Pubkey as ValidatorPubkey,
-    std::collections::HashMap,
+    solana_sdk::{pubkey::Pubkey as ValidatorPubkey, transaction::VersionedTransaction},
+    std::{collections::HashMap, sync::Arc},
     thiserror::Error,
 };
 
