@@ -3,7 +3,8 @@ use thiserror::Error;
 /// Maximum number of validators
 const MAXIMUM_VALIDATORS: usize = 4096;
 
-/// 4096 validators / 8
+/// The number of bytes in a bit-vector to represent up to 4096 validators
+/// (4096 validators / 8)
 const VALIDATOR_BIT_MAP_U8_SIZE: usize = 512;
 
 #[derive(Debug, Error, PartialEq)]
