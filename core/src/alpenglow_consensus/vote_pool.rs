@@ -1,7 +1,7 @@
 use {
-    super::Stake,
+    super::{vote_certificate::VoteCertificate, Stake},
     solana_pubkey::Pubkey,
-    solana_sdk::{hash::Hash, transaction::VersionedTransaction},
+    solana_sdk::hash::Hash,
     std::{collections::HashMap, sync::Arc},
 };
 
@@ -12,12 +12,12 @@ struct VoteKey {
 }
 
 #[derive(Debug)]
-struct VoteEntry {
-    pub transactions: Vec<Arc<VersionedTransaction>>,
+struct VoteEntry<VC: VoteCertificate> {
+    pub transactions: Vec<Arc<VC::VoteTransaction>>,
     pub total_stake_by_key: Stake,
 }
 
-impl VoteEntry {
+impl<VC: VoteCertificate> VoteEntry<VC> {
     pub fn new() -> Self {
         Self {
             transactions: Vec::new(),
@@ -26,15 +26,15 @@ impl VoteEntry {
     }
 }
 
-pub struct VotePool {
+pub struct VotePool<VC: VoteCertificate> {
     max_entries_per_pubkey: usize,
-    votes: HashMap<VoteKey, VoteEntry>,
+    votes: HashMap<VoteKey, VoteEntry<VC>>,
     total_stake: Stake,
     prev_votes: HashMap<Pubkey, Vec<VoteKey>>,
     top_entry_stake: Stake,
 }
 
-impl VotePool {
+impl<VC: VoteCertificate> VotePool<VC> {
     pub fn new(max_entries_per_pubkey: usize) -> Self {
         Self {
             max_entries_per_pubkey,
@@ -50,7 +50,7 @@ impl VotePool {
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
         blockid: Option<Hash>,
-        transaction: Arc<VersionedTransaction>,
+        transaction: Arc<VC::VoteTransaction>,
         validator_stake: Stake,
     ) -> bool {
         // Check whether the validator_key already used the same vote_key or exceeded max_entries_per_pubkey
@@ -125,7 +125,7 @@ impl VotePool {
         &self,
         bankhash: Option<Hash>,
         blockid: Option<Hash>,
-        output: &mut Vec<Arc<VersionedTransaction>>,
+        output: &mut Vec<Arc<VC::VoteTransaction>>,
     ) {
         if let Some(vote_entries) = self.votes.get(&VoteKey { bankhash, blockid }) {
             output.extend(vote_entries.transactions.iter().cloned());
@@ -135,11 +135,15 @@ impl VotePool {
 
 #[cfg(test)]
 mod test {
-    use {super::*, solana_sdk::transaction::VersionedTransaction, std::sync::Arc};
+    use {
+        super::{super::vote_certificate::LegacyVoteCertificate, *},
+        solana_sdk::transaction::VersionedTransaction,
+        std::sync::Arc,
+    };
 
     #[test]
     fn test_skip_vote_pool() {
-        let mut vote_pool = VotePool::new(1);
+        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
 
@@ -166,7 +170,7 @@ mod test {
 
     #[test]
     fn test_notarization_ppool() {
-        let mut vote_pool = VotePool::new(1);
+        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
@@ -233,7 +237,7 @@ mod test {
     #[test]
     fn test_notarization_fallback_pool() {
         solana_logger::setup();
-        let mut vote_pool = VotePool::new(3);
+        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(3);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
 

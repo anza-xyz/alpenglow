@@ -5,6 +5,7 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
+            vote_certificate::LegacyVoteCertificate,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -179,7 +180,9 @@ impl VotingLoop {
 
         let _exit = Finalizer::new(exit.clone());
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
-        let mut cert_pool = CertificatePool::new_from_root_bank(&root_bank_cache.root_bank());
+        let mut cert_pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(
+            &root_bank_cache.root_bank(),
+        );
 
         let mut current_slot = root_bank_cache.root_bank().slot() + 1;
         let mut last_leader_block = 0;
@@ -406,7 +409,11 @@ impl VotingLoop {
         }
     }
 
-    fn branch_notarized(my_pubkey: &Pubkey, slot: Slot, cert_pool: &CertificatePool) -> bool {
+    fn branch_notarized(
+        my_pubkey: &Pubkey,
+        slot: Slot,
+        cert_pool: &CertificatePool<LegacyVoteCertificate>,
+    ) -> bool {
         if let Some(size) = cert_pool.get_notarization_cert_size(slot) {
             info!(
                 "{my_pubkey}: Branch Notarized: Slot {} from {} validators",
@@ -418,7 +425,11 @@ impl VotingLoop {
         false
     }
 
-    fn skip_certified(my_pubkey: &Pubkey, slot: Slot, cert_pool: &CertificatePool) -> bool {
+    fn skip_certified(
+        my_pubkey: &Pubkey,
+        slot: Slot,
+        cert_pool: &CertificatePool<LegacyVoteCertificate>,
+    ) -> bool {
         // TODO(ashwin): can include cert size for debugging
         if cert_pool.skip_certified(slot) {
             info!("{my_pubkey}: Skip Certified: Slot {}", slot,);
@@ -443,7 +454,7 @@ impl VotingLoop {
     fn maybe_start_leader(
         leader: &Option<Pubkey>,
         slot: Slot,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         slot_status_notifier: &Option<SlotStatusNotifier>,
         track_transaction_indexes: bool,
         ctx: &SharedContext,
@@ -587,7 +598,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -648,7 +659,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -667,7 +678,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -683,7 +694,7 @@ impl VotingLoop {
     fn refresh_skip(
         my_pubkey: &Pubkey,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) {
         // TODO(ashwin): Fix when doing voting loop for v0
@@ -702,7 +713,11 @@ impl VotingLoop {
     /// Determines if we can vote notarize at this time.
     /// If this is the first leader block of the window, we check for certificates,
     /// otherwise we ensure that the parent slot is consecutive.
-    fn can_vote_notarize(slot: Slot, parent_slot: Slot, cert_pool: &CertificatePool) -> bool {
+    fn can_vote_notarize(
+        slot: Slot,
+        parent_slot: Slot,
+        cert_pool: &CertificatePool<LegacyVoteCertificate>,
+    ) -> bool {
         let leader_slot_index = leader_slot_index(slot);
         if leader_slot_index == 0 {
             // Check if we have the certificates to vote on this block
@@ -738,7 +753,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -794,7 +809,7 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         context: &mut VotingContext,
     ) {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
@@ -933,7 +948,7 @@ impl VotingLoop {
     /// Returns the highest slot of the newly created notarization/skip certificates
     fn ingest_votes_into_certificate_pool(
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool,
+        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         bank_forks: &RwLock<BankForks>,
     ) {
         let mut cached_root_bank = None;
