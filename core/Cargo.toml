@@ -108,7 +108,6 @@ tokio = { workspace = true, features = ["full"] }
 trees = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true, features = ["html_reports"] }
 fs_extra = { workspace = true }
 serde_json = { workspace = true }
 serial_test = { workspace = true }
@@ -177,7 +176,6 @@ name = "sigverify_stage"
 
 [[bench]]
 name = "alpenglow"
-harness = false
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
