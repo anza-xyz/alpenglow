@@ -1,5 +1,8 @@
+pub mod bit_vector;
 pub mod certificate_pool;
+pub mod transaction;
 pub mod utils;
+pub mod vote_certificate;
 pub mod vote_history;
 pub mod vote_history_storage;
 pub mod vote_pool;
