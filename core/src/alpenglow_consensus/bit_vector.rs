@@ -1,10 +1,14 @@
 use thiserror::Error;
 
 /// Maximum number of validators
+///
+/// There are around 1300 validators currently. For a clean power-of-two
+/// implementation, we should chosoe either 2048 or 4096. Choose a more
+/// conservative number 4096 for now.
 const MAXIMUM_VALIDATORS: usize = 4096;
 
 /// The number of bytes in a bit-vector to represent up to 4096 validators
-/// (4096 validators / 8)
+/// (`MAXIMUM_VALIDATORS` / 8)
 const VALIDATOR_BIT_MAP_U8_SIZE: usize = 512;
 
 #[derive(Debug, Error, PartialEq)]
