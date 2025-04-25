@@ -7587,6 +7587,7 @@ dependencies = [
  "solana-accounts-db",
  "solana-address-lookup-table-program",
  "solana-bloom",
+ "solana-bls",
  "solana-build-alpenglow-vote",
  "solana-builtins-default-costs",
  "solana-client",
