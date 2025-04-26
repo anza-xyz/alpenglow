@@ -4,7 +4,9 @@ extern crate test;
 
 use {
     alpenglow_vote::vote::Vote,
-    solana_core::alpenglow_consensus::certificate_pool::CertificatePool,
+    solana_core::alpenglow_consensus::{
+        certificate_pool::CertificatePool, vote_certificate::LegacyVoteCertificate,
+    },
     solana_runtime::{
         bank::Bank,
         genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
@@ -19,8 +21,8 @@ pub const NUM_SLOTS: u64 = 96;
 fn add_vote_bench(
     validator_keypairs: &[ValidatorVoteKeypairs],
     vote_fn: fn(u64) -> Vote,
-    check_fn: fn(&CertificatePool, u64) -> bool,
-    pool: &mut CertificatePool,
+    check_fn: fn(&CertificatePool<LegacyVoteCertificate>, u64) -> bool,
+    pool: &mut CertificatePool<LegacyVoteCertificate>,
 ) {
     for slot in 0..NUM_SLOTS {
         let vote = vote_fn(slot);
@@ -46,7 +48,7 @@ fn add_vote_bench(
 fn certificate_pool_add_vote_benchmark(
     b: &mut Bencher,
     vote_fn: fn(u64) -> Vote,
-    check_fn: fn(&CertificatePool, u64) -> bool,
+    check_fn: fn(&CertificatePool<LegacyVoteCertificate>, u64) -> bool,
 ) {
     let validator_keypairs = (0..NUM_VALIDATORS)
         .map(|_| ValidatorVoteKeypairs::new_rand())
@@ -58,7 +60,7 @@ fn certificate_pool_add_vote_benchmark(
     );
     let bank = Bank::new_for_tests(&genesis.genesis_config);
     b.iter(|| {
-        let mut pool = CertificatePool::new_from_root_bank(&bank);
+        let mut pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(&bank);
         add_vote_bench(&validator_keypairs, vote_fn, check_fn, &mut pool);
     });
 }
