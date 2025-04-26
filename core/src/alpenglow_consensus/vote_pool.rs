@@ -1,8 +1,14 @@
 use {
     super::{vote_certificate::VoteCertificate, Stake},
+    crate::alpenglow_consensus::{
+        VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+    },
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -26,7 +32,142 @@ impl<VC: VoteCertificate> VoteEntry<VC> {
     }
 }
 
-pub struct VotePool<VC: VoteCertificate> {
+pub fn new_vote_pool<VC: VoteCertificate + 'static>(vote_type: VoteType) -> Box<dyn VotePool<VC>> {
+    match vote_type {
+        VoteType::NotarizeFallback => Box::new(NotarizeVotePool::<VC>::new(
+            MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        )),
+        VoteType::Notarize => Box::new(NotarizeVotePool::new(
+            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        )),
+        _ => Box::new(SkipOrFinalizeVotePool::<VC>::new(1)),
+    }
+}
+
+pub trait VotePool<VC: VoteCertificate + 'static> {
+    fn new(max_entries_per_pubkey: usize) -> Self
+    where
+        Self: Sized;
+
+    fn add_vote(
+        &mut self,
+        validator_key: &Pubkey,
+        bankhash: Option<Hash>,
+        blockid: Option<Hash>,
+        transaction: Arc<VC::VoteTransaction>,
+        validator_stake: Stake,
+    ) -> bool;
+    fn has_prev_vote(&self, validator_key: &Pubkey) -> bool;
+    fn has_same_prev_vote(
+        &self,
+        validator_key: &Pubkey,
+        bankhash: Option<Hash>,
+        blockid: Option<Hash>,
+    ) -> bool;
+    fn first_prev_vote_different(
+        &self,
+        validator_key: &Pubkey,
+        bankhash: Option<Hash>,
+        blockid: Option<Hash>,
+    ) -> bool;
+    fn total_stake_by_key(&self, bankhash: Option<Hash>, blockid: Option<Hash>) -> Stake;
+    fn total_stake(&self) -> Stake;
+    fn top_entry_stake(&self) -> Stake;
+    fn copy_out_transactions(
+        &self,
+        bankhash: Option<Hash>,
+        blockid: Option<Hash>,
+        output: &mut Vec<Arc<VC::VoteTransaction>>,
+    );
+}
+
+pub struct SkipOrFinalizeVotePool<VC: VoteCertificate> {
+    transactions: Vec<Arc<VC::VoteTransaction>>,
+    total_stake: Stake,
+    prev_votes: HashSet<Pubkey>,
+}
+
+impl<VC: VoteCertificate + 'static> SkipOrFinalizeVotePool<VC> {
+    pub fn new(_: usize) -> Self {
+        Self {
+            transactions: Vec::new(),
+            total_stake: 0,
+            prev_votes: HashSet::new(),
+        }
+    }
+}
+
+impl<VC: VoteCertificate + 'static> VotePool<VC> for SkipOrFinalizeVotePool<VC> {
+    fn new(_: usize) -> Self {
+        Self {
+            transactions: Vec::new(),
+            total_stake: 0,
+            prev_votes: HashSet::new(),
+        }
+    }
+
+    fn add_vote(
+        &mut self,
+        validator_key: &Pubkey,
+        _bankhash: Option<Hash>,
+        _blockid: Option<Hash>,
+        transaction: Arc<VC::VoteTransaction>,
+        validator_stake: Stake,
+    ) -> bool {
+        if self.prev_votes.insert(*validator_key) {
+            self.transactions.push(transaction);
+            self.total_stake += validator_stake;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
+        self.prev_votes.contains(validator_key)
+    }
+
+    fn has_same_prev_vote(
+        &self,
+        validator_key: &Pubkey,
+        _bankhash: Option<Hash>,
+        _blockid: Option<Hash>,
+    ) -> bool {
+        self.has_prev_vote(validator_key)
+    }
+
+    fn first_prev_vote_different(
+        &self,
+        _validator_key: &Pubkey,
+        _bankhash: Option<Hash>,
+        _blockid: Option<Hash>,
+    ) -> bool {
+        false
+    }
+
+    fn total_stake_by_key(&self, _bankhash: Option<Hash>, _blockid: Option<Hash>) -> Stake {
+        self.total_stake
+    }
+
+    fn total_stake(&self) -> Stake {
+        self.total_stake
+    }
+
+    fn top_entry_stake(&self) -> Stake {
+        self.total_stake
+    }
+
+    fn copy_out_transactions(
+        &self,
+        _bankhash: Option<Hash>,
+        _blockid: Option<Hash>,
+        output: &mut Vec<Arc<VC::VoteTransaction>>,
+    ) {
+        output.extend(self.transactions.iter().cloned());
+    }
+}
+
+pub struct NotarizeVotePool<VC: VoteCertificate> {
     max_entries_per_pubkey: usize,
     votes: HashMap<VoteKey, VoteEntry<VC>>,
     total_stake: Stake,
@@ -34,8 +175,8 @@ pub struct VotePool<VC: VoteCertificate> {
     top_entry_stake: Stake,
 }
 
-impl<VC: VoteCertificate> VotePool<VC> {
-    pub fn new(max_entries_per_pubkey: usize) -> Self {
+impl<VC: VoteCertificate + 'static> VotePool<VC> for NotarizeVotePool<VC> {
+    fn new(max_entries_per_pubkey: usize) -> Self {
         Self {
             max_entries_per_pubkey,
             votes: HashMap::new(),
@@ -45,7 +186,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         }
     }
 
-    pub fn add_vote(
+    fn add_vote(
         &mut self,
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
@@ -79,11 +220,11 @@ impl<VC: VoteCertificate> VotePool<VC> {
         true
     }
 
-    pub fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
+    fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
         self.prev_votes.contains_key(validator_key)
     }
 
-    pub fn has_same_prev_vote(
+    fn has_same_prev_vote(
         &self,
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
@@ -96,7 +237,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
 
     // This is only used in safe_to_notar, where only 1 vote is allowed per validator in Notarize.
     // So we only need to check if the first vote is the same to make the decision.
-    pub fn first_prev_vote_different(
+    fn first_prev_vote_different(
         &self,
         validator_key: &Pubkey,
         bankhash: Option<Hash>,
@@ -107,21 +248,21 @@ impl<VC: VoteCertificate> VotePool<VC> {
             .is_some_and(|vote_keys| vote_keys[0] != VoteKey { bankhash, blockid })
     }
 
-    pub fn total_stake_by_key(&self, bankhash: Option<Hash>, blockid: Option<Hash>) -> Stake {
+    fn total_stake_by_key(&self, bankhash: Option<Hash>, blockid: Option<Hash>) -> Stake {
         self.votes
             .get(&VoteKey { bankhash, blockid })
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn total_stake(&self) -> Stake {
+    fn total_stake(&self) -> Stake {
         self.total_stake
     }
 
-    pub fn top_entry_stake(&self) -> Stake {
+    fn top_entry_stake(&self) -> Stake {
         self.top_entry_stake
     }
 
-    pub fn copy_out_transactions(
+    fn copy_out_transactions(
         &self,
         bankhash: Option<Hash>,
         blockid: Option<Hash>,
@@ -143,7 +284,7 @@ mod test {
 
     #[test]
     fn test_skip_vote_pool() {
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
+        let mut vote_pool = SkipOrFinalizeVotePool::<LegacyVoteCertificate>::new(1);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
 
@@ -170,7 +311,7 @@ mod test {
 
     #[test]
     fn test_notarization_ppool() {
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
+        let mut vote_pool = NotarizeVotePool::<LegacyVoteCertificate>::new(1);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
@@ -237,7 +378,7 @@ mod test {
     #[test]
     fn test_notarization_fallback_pool() {
         solana_logger::setup();
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(3);
+        let mut vote_pool = NotarizeVotePool::<LegacyVoteCertificate>::new(3);
         let transaction = Arc::new(VersionedTransaction::default());
         let my_pubkey = Pubkey::new_unique();
 

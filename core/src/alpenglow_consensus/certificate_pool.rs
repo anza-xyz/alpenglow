@@ -1,10 +1,13 @@
 use {
-    super::{vote_certificate::VoteCertificate, vote_pool::VotePool, Stake},
+    super::{
+        vote_certificate::VoteCertificate,
+        vote_pool::{new_vote_pool, VotePool},
+        Stake,
+    },
     crate::alpenglow_consensus::{
-        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
-        SAFE_TO_SKIP_THRESHOLD,
+        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_SLOT_AGE,
+        SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
+        SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::vote::Vote,
     itertools::Itertools,
@@ -82,7 +85,7 @@ impl NewHighestCertificate {
 #[derive(Default)]
 pub struct CertificatePool<VC: VoteCertificate> {
     // Vote pools to do bean counting for votes.
-    vote_pools: BTreeMap<PoolId, VotePool<VC>>,
+    vote_pools: BTreeMap<PoolId, Box<dyn VotePool<VC>>>,
     // Certificate pools to keep track of the certs.
     certificates: BTreeMap<CertificateId, VC>,
     // Reverse lookup table of vote types to possible certificates it's affecting.
@@ -101,7 +104,7 @@ pub struct CertificatePool<VC: VoteCertificate> {
     root_epoch: Epoch,
 }
 
-impl<VC: VoteCertificate> CertificatePool<VC> {
+impl<VC: VoteCertificate + 'static> CertificatePool<VC> {
     pub fn new_from_root_bank(bank: &Bank) -> Self {
         let mut pool = Self::default();
 
@@ -159,13 +162,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         }
     }
 
-    fn new_vote_pool(vote_type: VoteType) -> VotePool<VC> {
-        match vote_type {
-            VoteType::NotarizeFallback => VotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
-            _ => VotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
-        }
-    }
-
     fn update_vote_pool(
         &mut self,
         slot: Slot,
@@ -179,7 +175,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         let pool = self
             .vote_pools
             .entry((slot, vote_type))
-            .or_insert_with(|| Self::new_vote_pool(vote_type));
+            .or_insert_with(|| new_vote_pool(vote_type));
         pool.add_vote(
             validator_vote_key,
             bank_hash,
