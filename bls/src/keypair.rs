@@ -89,7 +89,7 @@ impl SecretKey {
 }
 
 /// A serialized BLS public key in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PubkeyCompressed(pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
 
 impl Default for PubkeyCompressed {
@@ -99,7 +99,7 @@ impl Default for PubkeyCompressed {
 }
 
 /// A serialized BLS public key in an affine point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub struct Pubkey(pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE]);
 
 impl Default for Pubkey {
@@ -109,8 +109,14 @@ impl Default for Pubkey {
 }
 
 /// A BLS public key in a projective point representation
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PubkeyProjective(pub(crate) G1Projective);
+
+impl Default for PubkeyProjective {
+    fn default() -> Self {
+        Self(G1Projective::identity())
+    }
+}
 
 impl PubkeyProjective {
     /// Construct a corresponding `BlsPubkey` for a `BlsSecretKey`

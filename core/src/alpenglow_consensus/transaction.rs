@@ -14,6 +14,7 @@ impl AlpenglowVoteTransaction for BlsVoteTransaction {}
 /// real Solana program instructions to be processed on-chain.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlsVoteTransaction {
+    pub pubkey: Pubkey,
     /// BLS signature certifying the message
     pub signature: Signature,
     /// Message signed
@@ -25,7 +26,12 @@ impl BlsVoteTransaction {
     pub fn new(message: VersionedMessage, keypair: &Keypair) -> Self {
         let message_data = message.serialize();
         let signature = keypair.sign(&message_data).into();
-        Self { signature, message }
+        let pubkey: Pubkey = keypair.public.into();
+        Self {
+            pubkey,
+            signature,
+            message,
+        }
     }
 
     /// Verifies a signed versioned message

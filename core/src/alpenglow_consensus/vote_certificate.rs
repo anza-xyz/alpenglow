@@ -4,8 +4,8 @@ use {
         transaction::{AlpenglowVoteTransaction, BlsVoteTransaction},
         Stake,
     },
-    solana_bls::{Signature, SignatureProjective},
-    solana_sdk::{pubkey::Pubkey as ValidatorPubkey, transaction::VersionedTransaction},
+    solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
+    solana_sdk::transaction::VersionedTransaction,
     std::{collections::HashMap, sync::Arc},
     thiserror::Error,
 };
@@ -67,7 +67,7 @@ impl VoteCertificate for BlsCertificate {
     }
 
     fn stake(&self) -> Stake {
-        unimplemented!()
+        self.stake
     }
 }
 
@@ -75,41 +75,46 @@ impl VoteCertificate for BlsCertificate {
 pub enum BlsCertificateError {
     #[error("Index out of bounds")]
     IndexOutOfBound,
+    #[error("Invalid pubkey")]
+    InvalidPubkey,
     #[error("Invalid signature")]
     InvalidSignature,
     #[error("Validator does not exist")]
     ValidatorDoesNotExist,
 }
 
-/// Vote data included in a BLS certificate
-#[derive(Debug, Default, Eq, Clone, PartialEq)]
-pub struct CertificateVoteData {
-    // TODO: decide on vote data to be included in cert
-}
-
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct BlsCertificate {
-    /// Vote message
-    pub vote_data: CertificateVoteData,
+    /// BLS aggregate pubkey
+    pub aggregate_pubkey: BlsPubkey,
     /// BLS aggregate signature
     pub aggregate_signature: Signature,
     /// Bit-vector indicating which votes are invluded in the aggregate signature
     pub bit_vector: BitVector,
+    /// Total stake in the certificate
+    pub stake: Stake,
 }
 
 impl BlsCertificate {
     pub fn new(
-        vote_data: CertificateVoteData,
-        validator_pubkey_map: &HashMap<ValidatorPubkey, usize>,
-        transactions_map: &HashMap<ValidatorPubkey, BlsVoteTransaction>,
+        stake: Stake,
+        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+        transactions: Vec<Arc<BlsVoteTransaction>>,
     ) -> Result<Self, BlsCertificateError> {
+        let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();
         let mut bit_vector = BitVector::default();
-        let pubkey_transactions = transactions_map.iter();
 
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
-        for (pubkey, transaction) in pubkey_transactions {
+        for transaction in transactions {
+            // aggregate the pubkey
+            let bls_pubkey: PubkeyProjective = transaction
+                .pubkey
+                .try_into()
+                .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+            aggregate_pubkey.aggregate_with([&bls_pubkey]);
+
             // aggregate the signature
             let signature: SignatureProjective = transaction
                 .signature
@@ -118,8 +123,8 @@ impl BlsCertificate {
             aggregate_signature.aggregate_with([&signature]);
 
             // set bit-vector for the validator
-            let validator_index = validator_pubkey_map
-                .get(pubkey)
+            let validator_index = validator_bls_pubkey_map
+                .get(&transaction.pubkey)
                 .ok_or(BlsCertificateError::ValidatorDoesNotExist)?;
             bit_vector
                 .set_bit(*validator_index, true)
@@ -127,18 +132,28 @@ impl BlsCertificate {
         }
 
         Ok(Self {
-            vote_data,
+            aggregate_pubkey: aggregate_pubkey.into(),
             aggregate_signature: aggregate_signature.into(),
             bit_vector,
+            stake,
         })
     }
 
     pub fn add(
         &mut self,
-        validator_pubkey_map: &HashMap<ValidatorPubkey, usize>,
-        validator_pubkey: &ValidatorPubkey,
+        stake: Stake,
+        validator_pubkey_map: &HashMap<BlsPubkey, usize>,
         transaction: &BlsVoteTransaction,
     ) -> Result<(), BlsCertificateError> {
+        let aggregate_pubkey: PubkeyProjective = self
+            .aggregate_pubkey
+            .try_into()
+            .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+        let new_pubkey: PubkeyProjective = transaction
+            .pubkey
+            .try_into()
+            .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+
         let aggregate_signature: SignatureProjective = self
             .aggregate_signature
             .try_into()
@@ -148,19 +163,26 @@ impl BlsCertificate {
             .try_into()
             .map_err(|_| BlsCertificateError::InvalidSignature)?;
 
-        // the function aggregate fails only on empty signatures, so it is safe to unwrap here
-        // TODO: update this after simplfying signature aggregation interface in `solana_bls`
-        let new_aggregate =
+        // the function aggregate fails only on empty pubkeys or signatures,
+        // so it is safe to unwrap here
+        // TODO: update this after simplfying aggregation interface in `solana_bls`
+        let new_aggregate_pubkey =
+            PubkeyProjective::aggregate([&aggregate_pubkey, &new_pubkey]).unwrap();
+        self.aggregate_pubkey = new_aggregate_pubkey.into();
+
+        let new_aggregate_signature =
             SignatureProjective::aggregate([&aggregate_signature, &new_signature]).unwrap();
-        self.aggregate_signature = new_aggregate.into();
+        self.aggregate_signature = new_aggregate_signature.into();
 
         // set bit-vector for the validator
         let validator_index = validator_pubkey_map
-            .get(validator_pubkey)
+            .get(&transaction.pubkey)
             .ok_or(BlsCertificateError::ValidatorDoesNotExist)?;
         self.bit_vector
             .set_bit(*validator_index, true)
             .map_err(|_| BlsCertificateError::IndexOutOfBound)?;
+
+        self.stake += stake;
         Ok(())
     }
 }
