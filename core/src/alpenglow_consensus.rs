@@ -43,6 +43,10 @@ pub const CONFLICTING_VOTETYPES: [(VoteType, VoteType); 5] = [
     (VoteType::Skip, VoteType::SkipFallback),
 ];
 
+/// Lookup from `CertificateType` to the `VoteType`s that contribute,
+/// as well as the stake fraction required for certificate completion.
+///
+/// Must be in sync with `vote_type_to_certificate_type`
 pub const fn certificate_limits_and_vote_types(
     cert_type: CertificateType,
 ) -> (f64, &'static [VoteType]) {
@@ -57,6 +61,9 @@ pub const fn certificate_limits_and_vote_types(
     }
 }
 
+/// Lookup from `VoteType` to the `CertificateType`s the vote accounts for
+///
+/// Must be in sync with `certificate_limits_and_vote_types`
 pub const fn vote_type_to_certificate_type(vote_type: VoteType) -> &'static [CertificateType] {
     match vote_type {
         VoteType::Notarize => &[
