@@ -16,13 +16,12 @@ use {
 pub const NUM_VALIDATORS: usize = 2000;
 pub const NUM_SLOTS: u64 = 96;
 
-fn add_vote_bench<F>(
+fn add_vote_bench(
     validator_keypairs: &[ValidatorVoteKeypairs],
-    mut vote_fn: F,
+    vote_fn: fn(u64) -> Vote,
+    check_fn: fn(&CertificatePool, u64) -> bool,
     pool: &mut CertificatePool,
-) where
-    F: FnMut(u64) -> Vote,
-{
+) {
     for slot in 0..NUM_SLOTS {
         let vote = vote_fn(slot);
         let mut has_error = false;
@@ -38,20 +37,17 @@ fn add_vote_bench<F>(
                 has_error = true;
             }
         }
-/*        if pool.get_notarization_cert_size(slot).is_none() && !pool.skip_certified(slot) {
+        if !check_fn(pool, slot) {
             panic!(
-                "Failed to notarize or skip slot {} {} {:?} {}",
+                "Failed to verify cert for slot {} {}",
                 slot,
                 has_error,
-                pool.get_notarization_cert_size(slot),
-                pool.skip_certified(slot)
             );
-        }*/
+        }
     }
 }
 
-#[bench]
-fn certificate_pool_add_vote_notarize_benchmark(b: &mut Bencher) {
+fn certificate_pool_add_vote_benchmark(b: &mut Bencher, vote_fn: fn(u64) -> Vote, check_fn: fn(&CertificatePool, u64) -> bool,) {
     let validator_keypairs = (0..NUM_VALIDATORS)
         .map(|_| ValidatorVoteKeypairs::new_rand())
         .collect::<Vec<_>>();
@@ -65,29 +61,33 @@ fn certificate_pool_add_vote_notarize_benchmark(b: &mut Bencher) {
         let mut pool = CertificatePool::new_from_root_bank(&bank);
         add_vote_bench(
             &validator_keypairs,
-            |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
+            vote_fn,
+            check_fn,
             &mut pool,
         );
     });
 }
 
 #[bench]
-fn certificate_pool_add_vote_skip_benchmark(b: &mut Bencher) {
-    let validator_keypairs = (0..NUM_VALIDATORS)
-    .map(|_| ValidatorVoteKeypairs::new_rand())
-    .collect::<Vec<_>>();
-    let genesis = create_genesis_config_with_vote_accounts(
-    1_000_000_000,
-    &validator_keypairs,
-    vec![100; NUM_VALIDATORS],
+fn certificate_pool_add_vote_notarization_benchmark(b: &mut Bencher) {
+    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
+        |pool, slot| {
+            pool.get_notarization_cert_size(slot).is_some()
+        },
     );
-    let bank = Bank::new_for_tests(&genesis.genesis_config);
-        b.iter(|| {
-            let mut pool = CertificatePool::new_from_root_bank(&bank);
-            add_vote_bench(
-                &validator_keypairs,
-                Vote::new_skip_vote,
-                &mut pool,
-            );
-    });
+}
+
+#[bench]
+fn certificate_pool_add_vote_skip_benchmark(b: &mut Bencher) {
+    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_skip_vote(slot), |pool, slot| {
+        pool.skip_certified(slot)
+    },
+);
+}
+
+#[bench]
+fn certificate_pool_add_vote_finalization_benchmark(b: &mut Bencher) {
+    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_finalization_vote(slot), |pool, slot| {
+        pool.get_finalization_cert_size(slot).is_some()
+    },);
 }
