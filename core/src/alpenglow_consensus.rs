@@ -11,13 +11,19 @@ pub mod voting_loop;
 pub type Stake = u64;
 pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateType {
     Finalize,
     FinalizeFast,
     Notarize,
     NotarizeFallback,
     Skip,
+}
+
+impl CertificateType {
+    pub(crate) fn is_finalization_variant(&self) -> bool {
+        matches!(self, Self::Finalize | Self::FinalizeFast)
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,19 +43,40 @@ pub const CONFLICTING_VOTETYPES: [(VoteType, VoteType); 5] = [
     (VoteType::Skip, VoteType::SkipFallback),
 ];
 
-pub const CERTIFICATE_LIMITS: [(CertificateType, (f64, &[VoteType])); 5] = [
-    (CertificateType::FinalizeFast, (0.8, &[VoteType::Notarize])),
-    (CertificateType::Finalize, (0.6, &[VoteType::Finalize])),
-    (CertificateType::Notarize, (0.6, &[VoteType::Notarize])),
-    (
-        CertificateType::NotarizeFallback,
-        (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback]),
-    ),
-    (
-        CertificateType::Skip,
-        (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
-    ),
-];
+/// Lookup from `CertificateType` to the `VoteType`s that contribute,
+/// as well as the stake fraction required for certificate completion.
+///
+/// Must be in sync with `vote_type_to_certificate_type`
+pub const fn certificate_limits_and_vote_types(
+    cert_type: CertificateType,
+) -> (f64, &'static [VoteType]) {
+    match cert_type {
+        CertificateType::Notarize => (0.6, &[VoteType::Notarize]),
+        CertificateType::NotarizeFallback => {
+            (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
+        }
+        CertificateType::FinalizeFast => (0.8, &[VoteType::Notarize]),
+        CertificateType::Finalize => (0.6, &[VoteType::Finalize]),
+        CertificateType::Skip => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+    }
+}
+
+/// Lookup from `VoteType` to the `CertificateType`s the vote accounts for
+///
+/// Must be in sync with `certificate_limits_and_vote_types`
+pub const fn vote_type_to_certificate_type(vote_type: VoteType) -> &'static [CertificateType] {
+    match vote_type {
+        VoteType::Notarize => &[
+            CertificateType::Notarize,
+            CertificateType::NotarizeFallback,
+            CertificateType::FinalizeFast,
+        ],
+        VoteType::NotarizeFallback => &[CertificateType::NotarizeFallback],
+        VoteType::Finalize => &[CertificateType::Finalize],
+        VoteType::Skip => &[CertificateType::Skip],
+        VoteType::SkipFallback => &[CertificateType::Skip],
+    }
+}
 
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 
