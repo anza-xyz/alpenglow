@@ -58,12 +58,6 @@ pub trait VotePool<VC: VoteCertificate + 'static> {
         validator_stake: Stake,
     ) -> bool;
     fn has_prev_vote(&self, validator_key: &Pubkey) -> bool;
-    fn has_same_prev_vote(
-        &self,
-        validator_key: &Pubkey,
-        bankhash: Option<Hash>,
-        blockid: Option<Hash>,
-    ) -> bool;
     fn first_prev_vote_different(
         &self,
         validator_key: &Pubkey,
@@ -125,15 +119,6 @@ impl<VC: VoteCertificate + 'static> VotePool<VC> for SkipOrFinalizeVotePool<VC> 
 
     fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
         self.prev_votes.contains(validator_key)
-    }
-
-    fn has_same_prev_vote(
-        &self,
-        validator_key: &Pubkey,
-        _bankhash: Option<Hash>,
-        _blockid: Option<Hash>,
-    ) -> bool {
-        self.has_prev_vote(validator_key)
     }
 
     fn first_prev_vote_different(
@@ -224,17 +209,6 @@ impl<VC: VoteCertificate + 'static> VotePool<VC> for NotarizeVotePool<VC> {
         self.prev_votes.contains_key(validator_key)
     }
 
-    fn has_same_prev_vote(
-        &self,
-        validator_key: &Pubkey,
-        bankhash: Option<Hash>,
-        blockid: Option<Hash>,
-    ) -> bool {
-        self.prev_votes
-            .get(validator_key)
-            .is_some_and(|vote_keys| vote_keys.contains(&VoteKey { bankhash, blockid }))
-    }
-
     // This is only used in safe_to_notar, where only 1 vote is allowed per validator in Notarize.
     // So we only need to check if the first vote is the same to make the decision.
     fn first_prev_vote_different(
@@ -292,7 +266,6 @@ mod test {
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 10);
         assert!(vote_pool.has_prev_vote(&my_pubkey));
-        assert!(vote_pool.has_same_prev_vote(&my_pubkey, None, None));
         assert!(!vote_pool.first_prev_vote_different(&my_pubkey, None, None));
 
         // Adding the same key again should fail
@@ -305,7 +278,6 @@ mod test {
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 70);
         assert!(vote_pool.has_prev_vote(&new_pubkey));
-        assert!(vote_pool.has_same_prev_vote(&new_pubkey, None, None));
         assert!(!vote_pool.first_prev_vote_different(&new_pubkey, None, None));
     }
 
@@ -330,7 +302,6 @@ mod test {
             10
         );
         assert!(vote_pool.has_prev_vote(&my_pubkey));
-        assert!(vote_pool.has_same_prev_vote(&my_pubkey, Some(bank_hash), Some(block_id)));
         assert!(!vote_pool.first_prev_vote_different(&my_pubkey, Some(bank_hash), Some(block_id)));
 
         // Adding the same key again should fail
@@ -353,7 +324,6 @@ mod test {
         ));
         assert_eq!(vote_pool.total_stake(), 10);
         assert!(vote_pool.has_prev_vote(&my_pubkey));
-        assert!(vote_pool.has_same_prev_vote(&my_pubkey, Some(bank_hash), Some(block_id)));
         assert!(!vote_pool.first_prev_vote_different(&my_pubkey, Some(bank_hash), Some(block_id)));
 
         // Adding a different key should succeed
@@ -371,7 +341,6 @@ mod test {
             70
         );
         assert!(vote_pool.has_prev_vote(&new_pubkey));
-        assert!(vote_pool.has_same_prev_vote(&new_pubkey, Some(bank_hash), Some(block_id)));
         assert!(!vote_pool.first_prev_vote_different(&new_pubkey, Some(bank_hash), Some(block_id)));
     }
 
@@ -400,20 +369,6 @@ mod test {
                 10
             );
             assert!(vote_pool.has_prev_vote(&my_pubkey));
-            assert!(vote_pool.has_same_prev_vote(
-                &my_pubkey,
-                Some(bank_hashes[i]),
-                Some(block_ids[i])
-            ));
-            warn!(
-                "{} {}",
-                i,
-                vote_pool.first_prev_vote_different(
-                    &my_pubkey,
-                    Some(bank_hashes[i]),
-                    Some(block_ids[i])
-                )
-            );
             if i == 0 {
                 assert!(!vote_pool.first_prev_vote_different(
                     &my_pubkey,
@@ -458,11 +413,6 @@ mod test {
                 70
             );
             assert!(vote_pool.has_prev_vote(&new_pubkey));
-            assert!(vote_pool.has_same_prev_vote(
-                &new_pubkey,
-                Some(bank_hashes[i]),
-                Some(block_ids[i])
-            ));
             if i == 1 {
                 assert!(!vote_pool.first_prev_vote_different(
                     &new_pubkey,
@@ -492,11 +442,6 @@ mod test {
             60
         );
         assert!(vote_pool.has_prev_vote(&new_pubkey));
-        assert!(vote_pool.has_same_prev_vote(
-            &new_pubkey,
-            Some(bank_hashes[3]),
-            Some(block_ids[3])
-        ));
         assert!(vote_pool.first_prev_vote_different(
             &new_pubkey,
             Some(bank_hashes[3]),
