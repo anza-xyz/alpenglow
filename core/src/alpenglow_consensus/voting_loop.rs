@@ -983,7 +983,7 @@ impl VotingLoop {
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
-    fn add_vote_and_maybe_update_commitment<VC: VoteCertificate>(
+    fn add_vote_and_maybe_update_commitment<VC: VoteCertificate + 'static>(
         vote: &Vote,
         vote_account_pubkey: &Pubkey,
         tx: VC::VoteTransaction,
