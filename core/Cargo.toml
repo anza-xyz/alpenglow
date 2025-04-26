@@ -51,6 +51,7 @@ serde_derive = { workspace = true }
 slab = { workspace = true }
 solana-accounts-db = { workspace = true }
 solana-bloom = { workspace = true }
+solana-bls = { workspace = true }
 solana-builtins-default-costs = { workspace = true }
 solana-client = { workspace = true }
 solana-compute-budget = { workspace = true }

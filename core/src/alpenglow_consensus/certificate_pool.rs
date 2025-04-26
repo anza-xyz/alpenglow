@@ -1,5 +1,5 @@
 use {
-    super::{vote_pool::VotePool, Stake},
+    super::{vote_certificate::VoteCertificate, vote_pool::VotePool, Stake},
     crate::alpenglow_consensus::{
         CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
         MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
@@ -14,7 +14,6 @@ use {
         clock::{Epoch, Slot},
         epoch_schedule::EpochSchedule,
         hash::Hash,
-        transaction::VersionedTransaction,
     },
     std::{
         collections::{hash_map::Entry, BTreeMap, HashMap},
@@ -38,35 +37,6 @@ impl VoteType {
 pub type PoolId = (Slot, VoteType);
 
 pub type CertificateId = (Slot, CertificateType);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VoteCertificate {
-    // We don't need to send the actual vote transactions out for now.
-    transactions: Vec<Arc<VersionedTransaction>>,
-    // Total stake of all the slots in the certificate
-    stake: Stake,
-}
-
-impl VoteCertificate {
-    pub fn new(stake: Stake, transactions: Vec<Arc<VersionedTransaction>>) -> Self {
-        Self {
-            stake,
-            transactions,
-        }
-    }
-
-    pub fn size(&self) -> Option<usize> {
-        Some(self.transactions.len())
-    }
-
-    pub fn transactions(&self) -> Vec<Arc<VersionedTransaction>> {
-        self.transactions.clone()
-    }
-
-    pub fn stake(&self) -> Stake {
-        self.stake
-    }
-}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
@@ -110,11 +80,11 @@ impl NewHighestCertificate {
 }
 
 #[derive(Default)]
-pub struct CertificatePool {
+pub struct CertificatePool<VC: VoteCertificate> {
     // Vote pools to do bean counting for votes.
-    vote_pools: BTreeMap<PoolId, VotePool>,
+    vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     // Certificate pools to keep track of the certs.
-    certificates: BTreeMap<CertificateId, VoteCertificate>,
+    certificates: BTreeMap<CertificateId, VC>,
     // Reverse lookup table of vote types to possible certificates it's affecting.
     vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
     // Lookup table for checking conflicting vote types.
@@ -131,7 +101,7 @@ pub struct CertificatePool {
     root_epoch: Epoch,
 }
 
-impl CertificatePool {
+impl<VC: VoteCertificate> CertificatePool<VC> {
     pub fn new_from_root_bank(bank: &Bank) -> Self {
         let mut pool = Self::default();
 
@@ -189,7 +159,7 @@ impl CertificatePool {
         }
     }
 
-    fn new_vote_pool(vote_type: VoteType) -> VotePool {
+    fn new_vote_pool(vote_type: VoteType) -> VotePool<VC> {
         match vote_type {
             VoteType::NotarizeFallback => VotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
             _ => VotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
@@ -202,7 +172,7 @@ impl CertificatePool {
         vote_type: VoteType,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: Arc<VersionedTransaction>,
+        transaction: Arc<VC::VoteTransaction>,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
     ) -> bool {
@@ -261,7 +231,7 @@ impl CertificatePool {
                 }
                 self.certificates.insert(
                     (slot, cert_type.clone()),
-                    VoteCertificate::new(accumulated_stake, transactions),
+                    VC::new(accumulated_stake, transactions),
                 );
                 self.set_highest_slot(cert_type.clone(), slot);
             }
@@ -290,7 +260,7 @@ impl CertificatePool {
     pub fn add_vote(
         &mut self,
         vote: &Vote,
-        transaction: VersionedTransaction,
+        transaction: VC::VoteTransaction,
         validator_vote_key: &Pubkey,
     ) -> Result<(), AddVoteError> {
         let slot = vote.slot();
@@ -557,7 +527,7 @@ impl CertificatePool {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{super::vote_certificate::LegacyVoteCertificate, *},
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
@@ -588,7 +558,10 @@ mod tests {
         BankForks::new_rw_arc(bank0)
     }
 
-    fn create_keypairs_and_pool() -> (Vec<ValidatorVoteKeypairs>, CertificatePool) {
+    fn create_keypairs_and_pool() -> (
+        Vec<ValidatorVoteKeypairs>,
+        CertificatePool<LegacyVoteCertificate>,
+    ) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
@@ -602,7 +575,7 @@ mod tests {
     }
 
     fn add_certificate(
-        pool: &mut CertificatePool,
+        pool: &mut CertificatePool<LegacyVoteCertificate>,
         validator_keypairs: &[ValidatorVoteKeypairs],
         vote: Vote,
     ) {
@@ -627,7 +600,12 @@ mod tests {
         }
     }
 
-    fn add_skip_vote_range(pool: &mut CertificatePool, start: Slot, end: Slot, pubkey: Pubkey) {
+    fn add_skip_vote_range(
+        pool: &mut CertificatePool<LegacyVoteCertificate>,
+        start: Slot,
+        end: Slot,
+        pubkey: Pubkey,
+    ) {
         for slot in start..=end {
             assert!(pool
                 .add_vote(&Vote::new_skip_vote(slot), dummy_transaction(), &pubkey,)
@@ -1091,7 +1069,7 @@ mod tests {
     }
 
     fn assert_single_certificate_range(
-        pool: &CertificatePool,
+        pool: &CertificatePool<LegacyVoteCertificate>,
         exp_range_start: Slot,
         exp_range_end: Slot,
     ) {
