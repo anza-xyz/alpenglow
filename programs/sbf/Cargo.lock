@@ -760,6 +760,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitvec"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bc2832c24239b0141d5674bb9174f9d68a8b5b3f2753311927c172ca46f7e9c"
+dependencies = [
+ "funty",
+ "radium",
+ "tap",
+ "wyz",
+]
+
+[[package]]
 name = "blake3"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5515,6 +5527,19 @@ dependencies = [
  "serde_derive",
  "solana-sanitize",
  "solana-time-utils",
+]
+
+[[package]]
+name = "solana-bls"
+version = "2.3.0"
+dependencies = [
+ "blst",
+ "blstrs",
+ "ff",
+ "group",
+ "rand 0.8.5",
+ "solana-bls12-381",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
