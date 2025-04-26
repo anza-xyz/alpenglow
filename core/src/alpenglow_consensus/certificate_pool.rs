@@ -1,7 +1,10 @@
 use {
-    super::{vote_certificate::VoteCertificate, vote_pool::VotePool, Stake},
+    super::{
+        certificate_limits_and_vote_types, vote_certificate::VoteCertificate, vote_pool::VotePool,
+        vote_type_to_certificate_type, Stake,
+    },
     crate::alpenglow_consensus::{
-        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        CertificateType, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
         MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
@@ -85,8 +88,6 @@ pub struct CertificatePool<VC: VoteCertificate> {
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     // Certificate pools to keep track of the certs.
     certificates: BTreeMap<CertificateId, VC>,
-    // Reverse lookup table of vote types to possible certificates it's affecting.
-    vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
     // Lookup table for checking conflicting vote types.
     // conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
     // Highest slot with each certificate
@@ -104,17 +105,6 @@ pub struct CertificatePool<VC: VoteCertificate> {
 impl<VC: VoteCertificate> CertificatePool<VC> {
     pub fn new_from_root_bank(bank: &Bank) -> Self {
         let mut pool = Self::default();
-
-        // Initialize the vote_type_to_certificates map
-        for (cert_type, (_, vote_types)) in CERTIFICATE_LIMITS.iter() {
-            for vote_type in *vote_types {
-                let entry = pool
-                    .vote_type_to_certificates
-                    .entry(*vote_type)
-                    .or_insert_with(Vec::new);
-                entry.push(cert_type.clone());
-            }
-        }
 
         /*    // Initialize the conflicting_vote_types map
         for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
@@ -189,6 +179,12 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         )
     }
 
+    /// For a new vote `slot` , `vote_type` checks if any
+    /// of the related certificates are newly complete.
+    /// For each newly constructed certificate
+    /// - Insert it into `self.certificates`
+    /// - Potentially update the new highest certificate slot
+    /// - If this the new highest certificate, return the type and slot
     fn update_certificates(
         &mut self,
         slot: Slot,
@@ -196,47 +192,42 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
         total_stake: Stake,
-    ) -> Result<(), AddVoteError> {
-        let cert_types = self
-            .vote_type_to_certificates
-            .get(&vote_type)
-            .unwrap_or_else(|| {
-                panic!("VoteType {vote_type:?} not found in vote_type_to_certificates")
-            })
-            .clone();
-        for cert_type in cert_types {
-            // If the certificate is already complete, skip it
-            if self.certificates.contains_key(&(slot, cert_type.clone())) {
-                continue;
-            }
-            // Otherwise check whether the certificate is complete
-            let (_, (limit, vote_types)) = CERTIFICATE_LIMITS
-                .iter()
-                .find(|(cert_type_entry, _)| cert_type_entry == &cert_type)
-                .expect("CertificateType {cert_type} not found");
-            let accumulated_stake = vote_types
-                .iter()
-                .filter_map(|vote_type| {
-                    self.vote_pools
-                        .get(&(slot, *vote_type))
-                        .map(|vote_pool| vote_pool.total_stake_by_key(bank_hash, block_id))
-                })
-                .sum::<Stake>();
-            if accumulated_stake as f64 / total_stake as f64 >= *limit {
-                let mut transactions = Vec::new();
-                for vote_type in *vote_types {
-                    if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                        vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
-                    }
+    ) -> Vec<(CertificateType, Slot)> {
+        vote_type_to_certificate_type(vote_type)
+            .iter()
+            .filter_map(|&cert_type| {
+                // If the certificate is already complete, skip it
+                if self.certificates.contains_key(&(slot, cert_type)) {
+                    return None;
                 }
-                self.certificates.insert(
-                    (slot, cert_type.clone()),
-                    VC::new(accumulated_stake, transactions),
-                );
-                self.set_highest_slot(cert_type.clone(), slot);
-            }
-        }
-        Ok(())
+                // Otherwise check whether the certificate is complete
+                let (limit, vote_types) = certificate_limits_and_vote_types(cert_type);
+                let accumulated_stake = vote_types
+                    .iter()
+                    .filter_map(|vote_type| {
+                        Some(
+                            self.vote_pools
+                                .get(&(slot, *vote_type))?
+                                .total_stake_by_key(bank_hash, block_id),
+                        )
+                    })
+                    .sum::<Stake>();
+                if accumulated_stake as f64 / (total_stake as f64) < limit {
+                    return None;
+                }
+                let mut transactions = Vec::new();
+                for vote_type in vote_types {
+                    let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
+                        continue;
+                    };
+                    vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
+                }
+                self.certificates
+                    .insert((slot, cert_type), VC::new(accumulated_stake, transactions));
+                self.set_highest_slot(cert_type, slot)
+                    .then_some((cert_type, slot))
+            })
+            .collect()
     }
 
     //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
@@ -257,12 +248,17 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             None
         }
     */
+
+    /// Adds the new vote the the certificate pool.
+    ///
+    /// If this resulted in a new highest Finalize or FastFinalize certificate,
+    /// return the slot
     pub fn add_vote(
         &mut self,
         vote: &Vote,
         transaction: VC::VoteTransaction,
         validator_vote_key: &Pubkey,
-    ) -> Result<(), AddVoteError> {
+    ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
         let transaction = Arc::new(transaction);
         let epoch = self.epoch_schedule.get_epoch(slot);
@@ -303,7 +299,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     ));
                 }
         */
-        if self.update_vote_pool(
+        if !self.update_vote_pool(
             slot,
             vote_type,
             bank_hash,
@@ -312,9 +308,14 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             validator_vote_key,
             validator_stake,
         ) {
-            self.update_certificates(slot, vote_type, bank_hash, block_id, total_stake)?;
+            return Ok(None);
         }
-        Ok(())
+        let new_certs = self.update_certificates(slot, vote_type, bank_hash, block_id, total_stake);
+        Ok(new_certs
+            .iter()
+            .filter_map(|(ct, s)| ct.is_finalization_variant().then_some(s))
+            .max()
+            .copied())
     }
 
     pub fn highest_not_skip_certificate_slot(&self) -> Slot {
@@ -359,11 +360,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     ) -> Option<usize> {
         certificate_types
             .iter()
-            .filter_map(|cert_type| {
-                self.certificates
-                    .get(&(slot, cert_type.clone()))
-                    .map(|x| x.size())
-            })
+            .filter_map(|&cert_type| self.certificates.get(&(slot, cert_type)).map(|x| x.size()))
             .find_or_first(|x| x.is_some())?
     }
 
