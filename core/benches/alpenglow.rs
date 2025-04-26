@@ -38,16 +38,16 @@ fn add_vote_bench(
             }
         }
         if !check_fn(pool, slot) {
-            panic!(
-                "Failed to verify cert for slot {} {}",
-                slot,
-                has_error,
-            );
+            panic!("Failed to verify cert for slot {} {}", slot, has_error,);
         }
     }
 }
 
-fn certificate_pool_add_vote_benchmark(b: &mut Bencher, vote_fn: fn(u64) -> Vote, check_fn: fn(&CertificatePool, u64) -> bool,) {
+fn certificate_pool_add_vote_benchmark(
+    b: &mut Bencher,
+    vote_fn: fn(u64) -> Vote,
+    check_fn: fn(&CertificatePool, u64) -> bool,
+) {
     let validator_keypairs = (0..NUM_VALIDATORS)
         .map(|_| ValidatorVoteKeypairs::new_rand())
         .collect::<Vec<_>>();
@@ -59,35 +59,29 @@ fn certificate_pool_add_vote_benchmark(b: &mut Bencher, vote_fn: fn(u64) -> Vote
     let bank = Bank::new_for_tests(&genesis.genesis_config);
     b.iter(|| {
         let mut pool = CertificatePool::new_from_root_bank(&bank);
-        add_vote_bench(
-            &validator_keypairs,
-            vote_fn,
-            check_fn,
-            &mut pool,
-        );
+        add_vote_bench(&validator_keypairs, vote_fn, check_fn, &mut pool);
     });
 }
 
 #[bench]
 fn certificate_pool_add_vote_notarization_benchmark(b: &mut Bencher) {
-    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
-        |pool, slot| {
-            pool.get_notarization_cert_size(slot).is_some()
-        },
+    certificate_pool_add_vote_benchmark(
+        b,
+        |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
+        |pool, slot| pool.get_notarization_cert_size(slot).is_some(),
     );
 }
 
 #[bench]
 fn certificate_pool_add_vote_skip_benchmark(b: &mut Bencher) {
-    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_skip_vote(slot), |pool, slot| {
+    certificate_pool_add_vote_benchmark(b, Vote::new_skip_vote, |pool, slot| {
         pool.skip_certified(slot)
-    },
-);
+    });
 }
 
 #[bench]
 fn certificate_pool_add_vote_finalization_benchmark(b: &mut Bencher) {
-    certificate_pool_add_vote_benchmark(b, |slot| Vote::new_finalization_vote(slot), |pool, slot| {
+    certificate_pool_add_vote_benchmark(b, Vote::new_finalization_vote, |pool, slot| {
         pool.get_finalization_cert_size(slot).is_some()
-    },);
+    });
 }
