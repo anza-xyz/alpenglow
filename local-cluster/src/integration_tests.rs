@@ -63,6 +63,12 @@ use {
 pub const RUST_LOG_FILTER: &str =
     "error,solana_core::replay_stage=warn,solana_local_cluster=info,local_cluster=info";
 
+pub const AG_DEBUG_LOG_FILTER: &str = "error,solana_core::replay_stage=info,\
+        solana_local_cluster=info,local_cluster=info,\
+        solana_poh::poh_recorder=trace,solana_poh::poh_service=trace,\
+        solana_core::alpenglow_consensus::voting_loop=trace,\
+        solana_core::alpenglow_consensus::block_creation_loop=trace";
+
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {

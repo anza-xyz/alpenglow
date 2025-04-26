@@ -650,7 +650,7 @@ impl ReplayStage {
                 banking_tracer: banking_tracer.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
                 voting_sender: voting_sender.clone(),
-                lockouts_sender: lockouts_sender.clone(),
+                commitment_sender: lockouts_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
                 slot_status_notifier: slot_status_notifier.clone(),
