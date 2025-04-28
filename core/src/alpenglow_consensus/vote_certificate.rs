@@ -19,7 +19,6 @@ pub trait VoteCertificate: Default {
         transactions: &HashMap<BlsPubkey, usize>,
     ) -> Self;
     fn vote_count(&self) -> Option<usize>;
-    fn transactions(&self) -> Vec<Arc<Self::VoteTransaction>>;
     fn stake(&self) -> Stake;
 }
 
@@ -50,10 +49,6 @@ impl VoteCertificate for LegacyVoteCertificate {
         Some(self.transactions.len())
     }
 
-    fn transactions(&self) -> Vec<Arc<VersionedTransaction>> {
-        self.transactions.clone()
-    }
-
     fn stake(&self) -> Stake {
         self.stake
     }
@@ -75,10 +70,6 @@ impl VoteCertificate for BlsCertificate {
 
     fn vote_count(&self) -> Option<usize> {
         Some(self.vote_count.into())
-    }
-
-    fn transactions(&self) -> Vec<Arc<BlsVoteTransaction>> {
-        unimplemented!()
     }
 
     fn stake(&self) -> Stake {
