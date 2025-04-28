@@ -13,7 +13,11 @@ use {
 pub trait VoteCertificate: Default {
     type VoteTransaction: AlpenglowVoteTransaction;
 
-    fn new(stake: Stake, transactions: Vec<Arc<Self::VoteTransaction>>) -> Self;
+    fn new(
+        stake: Stake,
+        transactions: Vec<Arc<Self::VoteTransaction>>,
+        transactions: &HashMap<BlsPubkey, usize>,
+    ) -> Self;
     fn size(&self) -> Option<usize>;
     fn transactions(&self) -> Vec<Arc<Self::VoteTransaction>>;
     fn stake(&self) -> Stake;
@@ -31,7 +35,11 @@ pub struct LegacyVoteCertificate {
 impl VoteCertificate for LegacyVoteCertificate {
     type VoteTransaction = VersionedTransaction;
 
-    fn new(stake: Stake, transactions: Vec<Arc<VersionedTransaction>>) -> Self {
+    fn new(
+        stake: Stake,
+        transactions: Vec<Arc<VersionedTransaction>>,
+        _validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+    ) -> Self {
         Self {
             stake,
             transactions,
@@ -54,8 +62,15 @@ impl VoteCertificate for LegacyVoteCertificate {
 impl VoteCertificate for BlsCertificate {
     type VoteTransaction = BlsVoteTransaction;
 
-    fn new(_stake: Stake, _transactions: Vec<Arc<BlsVoteTransaction>>) -> Self {
-        unimplemented!()
+    fn new(
+        stake: Stake,
+        transactions: Vec<Arc<BlsVoteTransaction>>,
+        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+    ) -> Self {
+        // TODO: unwrapping here for now for simplicity, but we should handle
+        // this error properly once error handling is set in place for the
+        // alpenglow implementation
+        BlsCertificate::new(stake, transactions, validator_bls_pubkey_map).unwrap()
     }
 
     fn size(&self) -> Option<usize> {
@@ -98,8 +113,8 @@ pub struct BlsCertificate {
 impl BlsCertificate {
     pub fn new(
         stake: Stake,
-        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
         transactions: Vec<Arc<BlsVoteTransaction>>,
+        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
     ) -> Result<Self, BlsCertificateError> {
         let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();

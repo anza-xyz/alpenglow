@@ -200,6 +200,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 if self.certificates.contains_key(&(slot, cert_type)) {
                     return None;
                 }
+<<<<<<< HEAD
                 // Otherwise check whether the certificate is complete
                 let (limit, vote_types) = certificate_limits_and_vote_types(cert_type);
                 let accumulated_stake = vote_types
@@ -222,8 +223,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     };
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
+                // TODO: use an empty hash map of pubkeys for now since it is not clear
+                // where to get the sorted list of validators yet
                 self.certificates
-                    .insert((slot, cert_type), VC::new(accumulated_stake, transactions));
+                    .insert((slot, cert_type), VC::new(accumulated_stake, transactions, &HashMap::default()));
                 self.set_highest_slot(cert_type, slot)
                     .then_some((cert_type, slot))
             })
