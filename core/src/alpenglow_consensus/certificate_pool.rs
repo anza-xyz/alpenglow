@@ -200,7 +200,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 if self.certificates.contains_key(&(slot, cert_type)) {
                     return None;
                 }
-<<<<<<< HEAD
                 // Otherwise check whether the certificate is complete
                 let (limit, vote_types) = certificate_limits_and_vote_types(cert_type);
                 let accumulated_stake = vote_types
@@ -225,8 +224,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 }
                 // TODO: use an empty hash map of pubkeys for now since it is not clear
                 // where to get the sorted list of validators yet
-                self.certificates
-                    .insert((slot, cert_type), VC::new(accumulated_stake, transactions, &HashMap::default()));
+                self.certificates.insert(
+                    (slot, cert_type),
+                    VC::new(accumulated_stake, transactions, &HashMap::default()),
+                );
                 self.set_highest_slot(cert_type, slot)
                     .then_some((cert_type, slot))
             })
@@ -363,7 +364,11 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     ) -> Option<usize> {
         certificate_types
             .iter()
-            .filter_map(|&cert_type| self.certificates.get(&(slot, cert_type)).map(|x| x.size()))
+            .filter_map(|&cert_type| {
+                self.certificates
+                    .get(&(slot, cert_type))
+                    .map(|x| x.vote_count())
+            })
             .find_or_first(|x| x.is_some())?
     }
 

@@ -18,7 +18,7 @@ pub trait VoteCertificate: Default {
         transactions: Vec<Arc<Self::VoteTransaction>>,
         transactions: &HashMap<BlsPubkey, usize>,
     ) -> Self;
-    fn size(&self) -> Option<usize>;
+    fn vote_count(&self) -> Option<usize>;
     fn transactions(&self) -> Vec<Arc<Self::VoteTransaction>>;
     fn stake(&self) -> Stake;
 }
@@ -46,7 +46,7 @@ impl VoteCertificate for LegacyVoteCertificate {
         }
     }
 
-    fn size(&self) -> Option<usize> {
+    fn vote_count(&self) -> Option<usize> {
         Some(self.transactions.len())
     }
 
@@ -73,8 +73,8 @@ impl VoteCertificate for BlsCertificate {
         BlsCertificate::new(stake, transactions, validator_bls_pubkey_map).unwrap()
     }
 
-    fn size(&self) -> Option<usize> {
-        unimplemented!()
+    fn vote_count(&self) -> Option<usize> {
+        Some(self.vote_count.into())
     }
 
     fn transactions(&self) -> Vec<Arc<BlsVoteTransaction>> {
@@ -108,6 +108,8 @@ pub struct BlsCertificate {
     pub bit_vector: BitVector,
     /// Total stake in the certificate
     pub stake: Stake,
+    /// Number of votes accumulated
+    pub vote_count: u16, // u16 covers up to 65k votes
 }
 
 impl BlsCertificate {
@@ -119,6 +121,7 @@ impl BlsCertificate {
         let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();
         let mut bit_vector = BitVector::default();
+        let vote_count = transactions.len() as u16;
 
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
@@ -151,6 +154,7 @@ impl BlsCertificate {
             aggregate_signature: aggregate_signature.into(),
             bit_vector,
             stake,
+            vote_count,
         })
     }
 
@@ -198,6 +202,7 @@ impl BlsCertificate {
             .map_err(|_| BlsCertificateError::IndexOutOfBound)?;
 
         self.stake += stake;
+        self.vote_count += 1;
         Ok(())
     }
 }
