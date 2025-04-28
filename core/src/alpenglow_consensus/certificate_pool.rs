@@ -393,7 +393,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         if self
             .vote_pools
             .get(&(slot, VoteType::Skip))
-            .is_some_and(|pool| pool.has_same_prev_vote(my_pubkey, None, None))
+            .is_some_and(|pool| pool.has_prev_vote(my_pubkey))
         {
             return true;
         }
