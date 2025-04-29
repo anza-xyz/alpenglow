@@ -11,6 +11,7 @@ impl AlpenglowVoteTransaction for BlsVoteTransaction {}
 /// real Solana program instructions to be processed on-chain.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlsVoteTransaction {
+    /// Bls pubkey associated with the transaction
     pub pubkey: Pubkey,
     /// BLS signature certifying the message
     pub signature: Signature,
