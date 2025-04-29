@@ -1,6 +1,8 @@
 use {
     super::{
-        certificate_limits_and_vote_types, vote_certificate::VoteCertificate, vote_pool::VotePool,
+        certificate_limits_and_vote_types,
+        vote_certificate::{CertificateError, VoteCertificate},
+        vote_pool::VotePool,
         vote_type_to_certificate_type, Stake,
     },
     crate::alpenglow_consensus::{
@@ -56,6 +58,9 @@ pub enum AddVoteError {
 
     #[error("Slot in the future")]
     SlotInFuture,
+
+    #[error("Certificate error: {0}")]
+    Certificate(#[from] CertificateError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,8 +227,14 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     };
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
-                self.certificates
-                    .insert((slot, cert_type), VC::new(accumulated_stake, transactions));
+                // TODO: use an empty hash map of pubkeys for now since it is not clear
+                // where to get the sorted list of validators yet
+
+                // TODO: remove unwrap and properly handle unwrap
+                self.certificates.insert(
+                    (slot, cert_type),
+                    VC::new(accumulated_stake, transactions, &HashMap::default()).unwrap(),
+                );
                 self.set_highest_slot(cert_type, slot)
                     .then_some((cert_type, slot))
             })
@@ -360,7 +371,11 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     ) -> Option<usize> {
         certificate_types
             .iter()
-            .filter_map(|&cert_type| self.certificates.get(&(slot, cert_type)).map(|x| x.size()))
+            .filter_map(|&cert_type| {
+                self.certificates
+                    .get(&(slot, cert_type))
+                    .map(|x| x.vote_count())
+            })
             .find_or_first(|x| x.is_some())?
     }
 
