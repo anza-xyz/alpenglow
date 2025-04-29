@@ -10,6 +10,18 @@ use {
     thiserror::Error,
 };
 
+#[derive(Debug, Error, PartialEq)]
+pub enum CertificateError {
+    #[error("Index out of bounds")]
+    IndexOutOfBound,
+    #[error("Invalid pubkey")]
+    InvalidPubkey,
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("Validator does not exist")]
+    ValidatorDoesNotExist,
+}
+
 pub trait VoteCertificate: Default {
     type VoteTransaction: AlpenglowVoteTransaction;
 
@@ -17,7 +29,7 @@ pub trait VoteCertificate: Default {
         stake: Stake,
         transactions: Vec<Arc<Self::VoteTransaction>>,
         transactions: &HashMap<BlsPubkey, usize>,
-    ) -> Self;
+    ) -> Result<Self, CertificateError>;
     fn vote_count(&self) -> Option<usize>;
     fn stake(&self) -> Stake;
 }
@@ -38,11 +50,11 @@ impl VoteCertificate for LegacyVoteCertificate {
         stake: Stake,
         transactions: Vec<Arc<VersionedTransaction>>,
         _validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, CertificateError> {
+        Ok(Self {
             stake,
             transactions,
-        }
+        })
     }
 
     fn vote_count(&self) -> Option<usize> {
@@ -61,11 +73,8 @@ impl VoteCertificate for BlsCertificate {
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
         validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
-    ) -> Self {
-        // TODO: unwrapping here for now for simplicity, but we should handle
-        // this error properly once error handling is set in place for the
-        // alpenglow implementation
-        BlsCertificate::new(stake, transactions, validator_bls_pubkey_map).unwrap()
+    ) -> Result<Self, CertificateError> {
+        BlsCertificate::new(stake, transactions, validator_bls_pubkey_map)
     }
 
     fn vote_count(&self) -> Option<usize> {
@@ -75,18 +84,6 @@ impl VoteCertificate for BlsCertificate {
     fn stake(&self) -> Stake {
         self.stake
     }
-}
-
-#[derive(Debug, Error, PartialEq)]
-pub enum BlsCertificateError {
-    #[error("Index out of bounds")]
-    IndexOutOfBound,
-    #[error("Invalid pubkey")]
-    InvalidPubkey,
-    #[error("Invalid signature")]
-    InvalidSignature,
-    #[error("Validator does not exist")]
-    ValidatorDoesNotExist,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
@@ -108,7 +105,7 @@ impl BlsCertificate {
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
         validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
-    ) -> Result<Self, BlsCertificateError> {
+    ) -> Result<Self, CertificateError> {
         let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();
         let mut bit_vector = BitVector::default();
@@ -121,23 +118,23 @@ impl BlsCertificate {
             let bls_pubkey: PubkeyProjective = transaction
                 .pubkey
                 .try_into()
-                .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+                .map_err(|_| CertificateError::InvalidPubkey)?;
             aggregate_pubkey.aggregate_with([&bls_pubkey]);
 
             // aggregate the signature
             let signature: SignatureProjective = transaction
                 .signature
                 .try_into()
-                .map_err(|_| BlsCertificateError::InvalidSignature)?;
+                .map_err(|_| CertificateError::InvalidSignature)?;
             aggregate_signature.aggregate_with([&signature]);
 
             // set bit-vector for the validator
             let validator_index = validator_bls_pubkey_map
                 .get(&transaction.pubkey)
-                .ok_or(BlsCertificateError::ValidatorDoesNotExist)?;
+                .ok_or(CertificateError::ValidatorDoesNotExist)?;
             bit_vector
                 .set_bit(*validator_index, true)
-                .map_err(|_| BlsCertificateError::IndexOutOfBound)?;
+                .map_err(|_| CertificateError::IndexOutOfBound)?;
         }
 
         Ok(Self {
@@ -154,24 +151,24 @@ impl BlsCertificate {
         stake: Stake,
         validator_pubkey_map: &HashMap<BlsPubkey, usize>,
         transaction: &BlsVoteTransaction,
-    ) -> Result<(), BlsCertificateError> {
+    ) -> Result<(), CertificateError> {
         let aggregate_pubkey: PubkeyProjective = self
             .aggregate_pubkey
             .try_into()
-            .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+            .map_err(|_| CertificateError::InvalidPubkey)?;
         let new_pubkey: PubkeyProjective = transaction
             .pubkey
             .try_into()
-            .map_err(|_| BlsCertificateError::InvalidPubkey)?;
+            .map_err(|_| CertificateError::InvalidPubkey)?;
 
         let aggregate_signature: SignatureProjective = self
             .aggregate_signature
             .try_into()
-            .map_err(|_| BlsCertificateError::InvalidSignature)?;
+            .map_err(|_| CertificateError::InvalidSignature)?;
         let new_signature: SignatureProjective = transaction
             .signature
             .try_into()
-            .map_err(|_| BlsCertificateError::InvalidSignature)?;
+            .map_err(|_| CertificateError::InvalidSignature)?;
 
         // the function aggregate fails only on empty pubkeys or signatures,
         // so it is safe to unwrap here
@@ -187,10 +184,10 @@ impl BlsCertificate {
         // set bit-vector for the validator
         let validator_index = validator_pubkey_map
             .get(&transaction.pubkey)
-            .ok_or(BlsCertificateError::ValidatorDoesNotExist)?;
+            .ok_or(CertificateError::ValidatorDoesNotExist)?;
         self.bit_vector
             .set_bit(*validator_index, true)
-            .map_err(|_| BlsCertificateError::IndexOutOfBound)?;
+            .map_err(|_| CertificateError::IndexOutOfBound)?;
 
         self.stake += stake;
         self.vote_count += 1;
