@@ -28,7 +28,7 @@ pub trait VoteCertificate: Default {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<Self::VoteTransaction>>,
-        transactions: &HashMap<BlsPubkey, usize>,
+        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
     ) -> Result<Self, CertificateError>;
     fn vote_count(&self) -> Option<usize>;
     fn stake(&self) -> Stake;
