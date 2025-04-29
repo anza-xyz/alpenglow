@@ -1,4 +1,5 @@
 pub mod bit_vector;
+pub mod bls_vote_transaction;
 pub mod certificate_pool;
 pub mod transaction;
 pub mod utils;

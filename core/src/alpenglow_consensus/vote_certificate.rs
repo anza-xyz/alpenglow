@@ -1,8 +1,7 @@
 use {
     super::{
-        bit_vector::BitVector,
-        transaction::{AlpenglowVoteTransaction, BlsVoteTransaction},
-        Stake,
+        bit_vector::BitVector, bls_vote_transaction::BlsVoteTransaction,
+        transaction::AlpenglowVoteTransaction, Stake,
     },
     solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_sdk::transaction::VersionedTransaction,
