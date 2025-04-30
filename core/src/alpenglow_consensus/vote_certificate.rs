@@ -192,4 +192,28 @@ impl BlsCertificate {
         self.vote_count += 1;
         Ok(())
     }
+
+    /// Given a bit vector and a list of validator BLS pubkeys, generate an
+    /// aggregate BLS pubkey.
+    ///
+    /// TODO: Defining this to be a static function for now, but it more
+    /// naturally belongs to where we keep the sorted list of BLS pubkeys
+    pub fn aggregate_pubkey(
+        bit_vector: &BitVector,
+        validator_bls_pubkeys: &[&BlsPubkey],
+    ) -> Result<BlsPubkey, CertificateError> {
+        let mut aggregate_pubkey = PubkeyProjective::default();
+        for (i, pubkey) in validator_bls_pubkeys.iter().enumerate() {
+            if bit_vector
+                .get_bit(i)
+                .map_err(|_| CertificateError::IndexOutOfBound)?
+            {
+                let pubkey_projective: PubkeyProjective = (*pubkey)
+                    .try_into()
+                    .map_err(|_| CertificateError::InvalidPubkey)?;
+                aggregate_pubkey.aggregate_with([&pubkey_projective]);
+            }
+        }
+        Ok(aggregate_pubkey.into())
+    }
 }
