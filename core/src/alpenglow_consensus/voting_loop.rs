@@ -235,7 +235,9 @@ impl VotingLoop {
                 // TODO: We max with root here, as the snapshot slot might not have a certificate.
                 // Think about this more and fix if necessary.
                 let parent_slot = cert_pool
-                    .highest_not_skip_certificate_slot()
+                    .highest_notarized_fallback()
+                    // TODO(ashwin): Check hash when dealing with duplicate blocks
+                    .map_or(0, |(s, _, _)| s)
                     .max(root_bank_cache.root_bank().slot());
                 Self::notify_block_creation_loop_of_leader_window(
                     &my_pubkey,
@@ -388,7 +390,7 @@ impl VotingLoop {
         slot: Slot,
         cert_pool: &CertificatePool<LegacyVoteCertificate>,
     ) -> bool {
-        if let Some(size) = cert_pool.get_notarization_cert_size(slot) {
+        if let Some(size) = cert_pool.block_notarized(slot) {
             info!(
                 "{my_pubkey}: Branch Notarized: Slot {} from {} validators",
                 slot, size
@@ -427,14 +429,13 @@ impl VotingLoop {
         ctx: &mut SharedContext,
         vctx: &mut VotingContext,
     ) -> Option<Slot> {
-        let old_root = vctx.vote_history.root;
+        let old_root = vctx.vote_history.root();
         info!(
             "{}: Checking for finalization certificates between {old_root} and {slot}",
             ctx.my_pubkey
         );
         let new_root = (old_root + 1..=slot).rev().find(|slot| {
-            cert_pool.get_finalization_cert_size(*slot).is_some()
-                && ctx.bank_forks.read().unwrap().is_frozen(*slot)
+            cert_pool.is_finalized(*slot) && ctx.bank_forks.read().unwrap().is_frozen(*slot)
         })?;
         trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
@@ -520,7 +521,7 @@ impl VotingLoop {
         voting_context: &mut VotingContext,
     ) {
         // TODO(ashwin): Fix when doing voting loop for v0
-        let Some(skip_vote) = voting_context.vote_history.skip_votes.last().copied() else {
+        let Some(skip_vote) = voting_context.vote_history.latest_skip_vote() else {
             return;
         };
         let bank = root_bank_cache.root_bank();
@@ -545,7 +546,7 @@ impl VotingLoop {
             // Check if we have the certificates to vote on this block
             // TODO(ashwin): track by hash,
             // TODO: fix WFSM hack for 1
-            if cert_pool.get_notarization_cert_size(parent_slot).is_none() && parent_slot > 1 {
+            if cert_pool.block_notarized(parent_slot).is_none() && parent_slot > 1 {
                 // Need to ingest more votes
                 return false;
             }
@@ -663,12 +664,7 @@ impl VotingLoop {
         };
 
         // Update and save the vote history
-        match vote {
-            Vote::Notarize(_) => context.vote_history.latest_notarize_vote = vote,
-            Vote::Skip(..) => context.vote_history.push_skip_vote(vote),
-            Vote::Finalize(_) => context.vote_history.latest_finalize_vote = vote,
-            _ => todo!(),
-        }
+        context.vote_history.add_vote(vote);
         let saved_vote_history =
             SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
                 |err| {
