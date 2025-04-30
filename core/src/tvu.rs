@@ -167,6 +167,7 @@ impl Tvu {
         wen_restart_repair_slots: Option<Arc<RwLock<Vec<Slot>>>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
+        voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -346,6 +347,7 @@ impl Tvu {
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
             bank_forks.clone(),
+            voting_service_additional_listeners.cloned(),
         );
 
         let warm_quic_cache_service = create_cache_warmer_if_needed(
@@ -605,6 +607,7 @@ pub mod tests {
             wen_restart_repair_slots,
             None,
             Arc::new(connection_cache),
+            None,
         )
         .expect("assume success");
         if enable_wen_restart {
