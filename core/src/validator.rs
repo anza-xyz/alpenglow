@@ -317,6 +317,7 @@ pub struct ValidatorConfig {
     pub replay_transactions_threads: NonZeroUsize,
     pub tvu_shred_sigverify_threads: NonZeroUsize,
     pub delay_leader_block_for_pending_fork: bool,
+    pub voting_service_additional_listeners: Option<Vec<SocketAddr>>,
 }
 
 impl Default for ValidatorConfig {
@@ -391,6 +392,7 @@ impl Default for ValidatorConfig {
             replay_transactions_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             tvu_shred_sigverify_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             delay_leader_block_for_pending_fork: false,
+            voting_service_additional_listeners: None,
         }
     }
 }
@@ -1555,6 +1557,7 @@ impl Validator {
             wen_restart_repair_slots.clone(),
             slot_status_notifier,
             vote_connection_cache,
+            config.voting_service_additional_listeners.as_ref(),
         )
         .map_err(ValidatorError::Other)?;
 
