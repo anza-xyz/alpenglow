@@ -46,6 +46,10 @@ impl CertificateId {
     pub(crate) fn is_notarize_fallback(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _))
     }
+
+    pub(crate) fn is_critical(&self) -> bool {
+        matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

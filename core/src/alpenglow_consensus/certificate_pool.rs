@@ -13,6 +13,7 @@ use {
         SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::vote::Vote,
+    crossbeam_channel::Sender,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
     solana_sdk::{
@@ -81,11 +82,20 @@ pub struct CertificatePool<VC: VoteCertificate> {
     root: Slot,
     // The epoch of current root.
     root_epoch: Epoch,
+    /// The certificate sender, if set, newly created certificates will be sent here
+    certificate_sender: Option<Sender<(CertificateId, VC)>>,
 }
 
 impl<VC: VoteCertificate> CertificatePool<VC> {
-    pub fn new_from_root_bank(bank: &Bank) -> Self {
-        let mut pool = Self::default();
+    pub fn new_from_root_bank(
+        bank: &Bank,
+        certificate_sender: Option<Sender<(CertificateId, VC)>>,
+    ) -> Self {
+        let mut pool = Self {
+            root: bank.slot(),
+            certificate_sender,
+            ..Self::default()
+        };
 
         /*    // Initialize the conflicting_vote_types map
         for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
@@ -154,6 +164,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     /// For each newly constructed certificate
     /// - Insert it into `self.certificates`
     /// - Potentially update `self.highest_notarized_fallback`,
+    /// - If it is a `is_critical` certificate, send via the certificate sender
     /// - Potentially update `self.highest_finalized_slot`,
     /// - If we have a new highest finalized slot, return it
     fn update_certificates(
@@ -197,11 +208,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 // where to get the sorted list of validators yet
 
                 // TODO: remove unwrap and properly handle unwrap
-                self.completed_certificates.insert(
-                    cert_id,
-                    VC::new(accumulated_stake, transactions, None).unwrap(),
-                );
-                // TODO(ashwin): Send to blockstore so that repair can serve. Also broadcast to other nodes
+                let vote_certificate = VC::new(accumulated_stake, transactions, None).unwrap();
+                self.completed_certificates
+                    .insert(cert_id, vote_certificate.clone());
+                if let Some(sender) = &self.certificate_sender {
+                    if cert_id.is_critical() {
+                        if let Err(e) = sender.try_send((cert_id, vote_certificate)) {
+                            error!("Unable to send certificate {cert_id:?}: {e:?}");
+                        }
+                    }
+                }
 
                 if cert_id.is_notarize_fallback()
                     && self
@@ -243,7 +259,8 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         }
     */
 
-    /// Adds the new vote the the certificate pool.
+    /// Adds the new vote the the certificate pool. If a new certificate is created
+    /// as a result of this, send it via the `self.certificate_sender`
     ///
     /// If this resulted in a new highest Finalize or FastFinalize certificate,
     /// return the slot
@@ -580,7 +597,7 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(&root_bank.clone()),
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None),
         )
     }
 
@@ -1613,7 +1630,7 @@ mod tests {
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
         let mut pool: CertificatePool<LegacyVoteCertificate> =
-            CertificatePool::new_from_root_bank(&root_bank.clone());
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None);
         assert_eq!(pool.root(), 0);
 
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));

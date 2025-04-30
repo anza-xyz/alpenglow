@@ -3,7 +3,9 @@ use {
     crate::{
         alpenglow_consensus::{
             block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
+            vote_certificate::LegacyVoteCertificate,
             voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
+            CertificateId,
         },
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
@@ -292,6 +294,7 @@ pub struct ReplaySenders {
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub alpenglow_vote_sender: AlpenglowVoteSender,
+    pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
 }
 
 pub struct ReplayReceivers {
@@ -593,6 +596,7 @@ impl ReplayStage {
             block_metadata_notifier,
             dumped_slots_sender,
             alpenglow_vote_sender,
+            certificate_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -665,6 +669,7 @@ impl ReplayStage {
                 bank_notification_sender: bank_notification_sender.clone(),
                 vote_receiver: alpenglow_vote_receiver,
                 leader_window_notifier,
+                certificate_sender,
             };
             Some(VotingLoop::new(voting_loop_config))
         } else {

@@ -4,6 +4,7 @@ use {
     super::{
         block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
         certificate_pool::AddVoteError,
+        CertificateId,
     },
     crate::{
         alpenglow_consensus::{
@@ -78,6 +79,7 @@ pub struct VotingLoopConfig {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
 
     // Receivers
     pub vote_receiver: VoteReceiver,
@@ -167,6 +169,7 @@ impl VotingLoop {
             drop_bank_sender,
             bank_notification_sender,
             leader_window_notifier,
+            certificate_sender,
             vote_receiver,
         } = config;
 
@@ -174,6 +177,7 @@ impl VotingLoop {
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
         let mut cert_pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(
             &root_bank_cache.root_bank(),
+            Some(certificate_sender),
         );
 
         let mut current_leader = None;
