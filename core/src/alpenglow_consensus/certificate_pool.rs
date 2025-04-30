@@ -130,6 +130,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         pool
     }
 
+    pub fn root(&self) -> Slot {
+        self.root
+    }
+
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
         if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
@@ -525,6 +529,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
 
     /// Cleanup old finalized slots from the certificate pool
     pub fn handle_new_root(&mut self, bank: Arc<Bank>) {
+        self.root = bank.slot();
         // `certificates`` now only contains entries >= `finalized_slot`
         self.certificates = self
             .certificates
@@ -1443,4 +1448,23 @@ mod tests {
             }
         }
     */
+
+    #[test]
+    fn test_handle_new_root() {
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let bank_forks = create_bank_forks(&validator_keypairs);
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        let mut pool: CertificatePool<LegacyVoteCertificate> =
+            CertificatePool::new_from_root_bank(&root_bank.clone());
+        assert_eq!(pool.root(), 0);
+
+        let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));
+        pool.handle_new_root(new_bank.clone());
+        assert_eq!(pool.root(), 2);
+        let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
+        pool.handle_new_root(new_bank);
+        assert_eq!(pool.root(), 3);
+    }
 }
