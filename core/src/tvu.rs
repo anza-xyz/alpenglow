@@ -224,6 +224,7 @@ impl Tvu {
         cluster_slots: Arc<ClusterSlots>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
+        voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
         votor_init: AlpenglowInitializationState,
     ) -> Result<Self, String> {
         let migration_status = bank_forks.read().unwrap().migration_status();
@@ -532,6 +533,7 @@ impl Tvu {
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
             bank_forks.clone(),
+            voting_service_additional_listeners.cloned(),
         );
 
         let bls_voting_service = BLSVotingService::new(
@@ -823,6 +825,7 @@ pub mod tests {
             cluster_slots,
             None, // slot_status_notifier
             Arc::new(connection_cache),
+            None,
             AlpenglowInitializationState {
                 leader_window_info_sender,
                 replay_highest_frozen,

@@ -842,6 +842,7 @@ pub fn execute(
             .is_present("delay_leader_block_for_pending_fork"),
         turbine_disabled: Arc::<AtomicBool>::default(),
         broadcast_stage_type: BroadcastStageType::Standard,
+        voting_service_additional_listeners: None,
         block_verification_method: value_t_or_exit!(
             matches,
             "block_verification_method",

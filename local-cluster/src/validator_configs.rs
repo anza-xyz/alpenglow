@@ -80,6 +80,7 @@ pub fn safe_clone_config(config: &ValidatorConfig) -> ValidatorConfig {
         delay_leader_block_for_pending_fork: config.delay_leader_block_for_pending_fork,
         voting_service_test_override: config.voting_service_test_override.clone(),
         repair_handler_type: config.repair_handler_type.clone(),
+        voting_service_additional_listeners: config.voting_service_additional_listeners.clone(),
         snapshot_packager_niceness_adj: config.snapshot_packager_niceness_adj,
     }
 }

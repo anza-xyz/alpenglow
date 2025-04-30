@@ -409,6 +409,7 @@ pub struct ValidatorConfig {
     pub repair_handler_type: RepairHandlerType,
     // Thread niceness adjustment for snapshot packager service
     pub snapshot_packager_niceness_adj: i8,
+    pub voting_service_additional_listeners: Option<Vec<SocketAddr>>,
 }
 
 impl ValidatorConfig {
@@ -489,6 +490,7 @@ impl ValidatorConfig {
             voting_service_test_override: None,
             repair_handler_type: RepairHandlerType::default(),
             snapshot_packager_niceness_adj: 0,
+            voting_service_additional_listeners: None,
         }
     }
 
@@ -1684,6 +1686,7 @@ impl Validator {
             cluster_slots.clone(),
             slot_status_notifier,
             vote_connection_cache,
+            config.voting_service_additional_listeners.as_ref(),
             AlpenglowInitializationState {
                 leader_window_info_sender,
                 replay_highest_frozen: replay_highest_frozen.clone(),
