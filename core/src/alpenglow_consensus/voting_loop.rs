@@ -855,7 +855,7 @@ impl VotingLoop {
         let mut l_window_info = leader_window_notifier.window_info.lock().unwrap();
         if let Some(window_info) = l_window_info.as_ref() {
             error!(
-                "{my_pubkey}: Attempting to start leader window for {start_slot}, however there is \
+                "{my_pubkey}: Attempting to start leader window for {start_slot}-{end_slot}, however there is \
                 already a pending window to produce {}-{}. Something has gone wrong, Overwriting in favor \
                 of the newer window",
                 window_info.start_slot,
