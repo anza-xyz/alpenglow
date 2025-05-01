@@ -638,7 +638,12 @@ impl ReplayStage {
                 );
             }
         }
-        let mut highest_frozen_slot = 0;
+        let mut highest_frozen_slot = bank_forks
+            .read()
+            .unwrap()
+            .highest_frozen_bank()
+            .map_or(0, |hfs| hfs.slot());
+        *replay_highest_frozen.highest_frozen_slot.lock().unwrap() = highest_frozen_slot;
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
