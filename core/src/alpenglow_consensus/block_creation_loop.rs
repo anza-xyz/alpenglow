@@ -245,7 +245,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             }
 
             assert!(!poh_recorder.read().unwrap().has_bank());
-            // TODO(ashwin): Is this necesary?
             PohService::read_record_receiver_and_process(
                 &poh_recorder,
                 &record_receiver,
@@ -259,6 +258,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 break;
             }
 
+            // Although `slot - 1`has been cleared from `poh_recorder`, it might not have finished processing in
+            // `replay_stage`, which is why we use `start_leader_retry_replay`
             if let Err(e) = start_leader_retry_replay(slot, slot - 1, skip_timer, &ctx) {
                 error!("{my_pubkey}: Unable to produce {slot}, skipping rest of leader window {slot} - {end_slot}: {e:?}");
                 break;
