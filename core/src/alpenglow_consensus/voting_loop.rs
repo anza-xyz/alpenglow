@@ -830,8 +830,8 @@ impl VotingLoop {
             .highest_not_skip_certificate_slot()
             .max(root_bank_cache.root_bank().slot());
 
-        // Check if we missed our slot
-        if cert_pool.skip_certified(start_slot) {
+        // Check if we missed our window
+        if (start_slot..=end_slot).any(|s| cert_pool.skip_certified(s)) {
             warn!(
                 "{my_pubkey}: Leader slot {start_slot} has already been skip certified, \
                 skipping production of {start_slot}-{end_slot}"
