@@ -6699,6 +6699,7 @@ version = "2.3.0"
 dependencies = [
  "blst",
  "blstrs",
+ "bytemuck",
  "ff",
  "group",
  "rand 0.8.5",

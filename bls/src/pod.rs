@@ -1,3 +1,5 @@
+use bytemuck::{Pod, Zeroable};
+
 /// Size of a BLS signature in a compressed point representation
 pub const BLS_SIGNATURE_COMPRESSED_SIZE: usize = 96;
 
@@ -6,6 +8,7 @@ pub const BLS_SIGNATURE_AFFINE_SIZE: usize = 192;
 
 /// A serialized BLS signature in a compressed point representation
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct SignatureCompressed(pub [u8; BLS_SIGNATURE_COMPRESSED_SIZE]);
 
 impl Default for SignatureCompressed {
@@ -16,6 +19,7 @@ impl Default for SignatureCompressed {
 
 /// A serialized BLS signature in an affine point representation
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct Signature(pub [u8; BLS_SIGNATURE_AFFINE_SIZE]);
 
 impl Default for Signature {
@@ -32,6 +36,7 @@ pub const BLS_PROOF_OF_POSSESSION_AFFINE_SIZE: usize = 192;
 
 /// A serialized BLS signature in a compressed point representation
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct ProofOfPossessionCompressed(pub [u8; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]);
 
 impl Default for ProofOfPossessionCompressed {
@@ -42,6 +47,7 @@ impl Default for ProofOfPossessionCompressed {
 
 /// A serialized BLS signature in an affine point representation
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct ProofOfPossession(pub [u8; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE]);
 
 impl Default for ProofOfPossession {
@@ -58,6 +64,7 @@ pub const BLS_PUBLIC_KEY_AFFINE_SIZE: usize = 96;
 
 /// A serialized BLS public key in a compressed point representation
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(transparent)]
 pub struct PubkeyCompressed(pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
 
 impl Default for PubkeyCompressed {
@@ -68,6 +75,7 @@ impl Default for PubkeyCompressed {
 
 /// A serialized BLS public key in an affine point representation
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct Pubkey(pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE]);
 
 impl Default for Pubkey {
@@ -75,3 +83,23 @@ impl Default for Pubkey {
         Self([0; BLS_PUBLIC_KEY_AFFINE_SIZE])
     }
 }
+
+// Directly implement the `Pod` and `Zeroable` traits for types that are
+// wrappers around byte arrays.
+unsafe impl Zeroable for PubkeyCompressed {}
+unsafe impl Pod for PubkeyCompressed {}
+
+unsafe impl Zeroable for Pubkey {}
+unsafe impl Pod for Pubkey {}
+
+unsafe impl Zeroable for Signature {}
+unsafe impl Pod for Signature {}
+
+unsafe impl Zeroable for SignatureCompressed {}
+unsafe impl Pod for SignatureCompressed {}
+
+unsafe impl Zeroable for ProofOfPossessionCompressed {}
+unsafe impl Pod for ProofOfPossessionCompressed {}
+
+unsafe impl Zeroable for ProofOfPossession {}
+unsafe impl Pod for ProofOfPossession {}
