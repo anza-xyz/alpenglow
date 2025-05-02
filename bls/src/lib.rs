@@ -11,7 +11,6 @@ pub use crate::{
     proof_of_possession::ProofOfPossessionProjective,
     signature::SignatureProjective,
 };
-
 #[cfg(not(target_os = "solana"))]
 use {
     blstrs::{pairing, G1Affine, G2Projective},
