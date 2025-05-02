@@ -1,7 +1,10 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
-    super::{certificate_pool::AddVoteError, BLOCKTIME, DELTA, DELTA_TIMEOUT},
+    super::{
+        block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
+        certificate_pool::AddVoteError,
+    },
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
@@ -9,7 +12,6 @@ use {
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
-        banking_trace::BankingTracer,
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
@@ -27,17 +29,13 @@ use {
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_measure::measure::Measure,
-    solana_poh::poh_recorder::PohRecorder,
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
-        rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier,
+        rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
-        accounts_background_service::AbsRequestSender,
-        bank::{Bank, NewBankOptions},
-        bank_forks::BankForks,
-        installed_scheduler_pool::BankWithScheduler,
-        root_bank_cache::RootBankCache,
+        accounts_background_service::AbsRequestSender, bank::Bank, bank_forks::BankForks,
+        installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
         vote_sender_types::AlpenglowVoteReceiver as VoteReceiver,
     },
     solana_sdk::{
@@ -45,7 +43,7 @@ use {
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::Transaction,
+        transaction::{Transaction, VersionedTransaction},
     },
     std::{
         sync::{
@@ -53,7 +51,7 @@ use {
             Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
-        time::Instant,
+        time::{Duration, Instant},
     },
 };
 
@@ -62,27 +60,24 @@ pub struct VotingLoopConfig {
     pub exit: Arc<AtomicBool>,
     // Validator config
     pub vote_account: Pubkey,
-    pub wait_for_vote_to_start_leader: bool,
     pub wait_to_vote_slot: Option<Slot>,
-    pub track_transaction_indexes: bool,
+    pub wait_for_vote_to_start_leader: bool,
 
     // Shared state
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub blockstore: Arc<Blockstore>,
     pub bank_forks: Arc<RwLock<BankForks>>,
     pub cluster_info: Arc<ClusterInfo>,
-    pub poh_recorder: Arc<RwLock<PohRecorder>>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Arc<RpcSubscriptions>,
-    pub banking_tracer: Arc<BankingTracer>,
 
-    // Senders
+    // Senders / Notifiers
     pub accounts_background_request_sender: AbsRequestSender,
     pub voting_sender: Sender<VoteOp>,
     pub commitment_sender: Sender<CommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
-    pub slot_status_notifier: Option<SlotStatusNotifier>,
+    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
 
     // Receivers
     pub vote_receiver: VoteReceiver,
@@ -106,9 +101,8 @@ struct SharedContext {
     blockstore: Arc<Blockstore>,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     bank_forks: Arc<RwLock<BankForks>>,
-    poh_recorder: Arc<RwLock<PohRecorder>>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
-    banking_tracer: Arc<BankingTracer>,
+    vote_receiver: VoteReceiver,
     // TODO(ashwin): share this with replay (currently empty)
     progress: ProgressMap,
     // TODO(ashwin): integrate with gossip set-identity
@@ -159,23 +153,20 @@ impl VotingLoop {
         let VotingLoopConfig {
             exit,
             vote_account,
-            wait_for_vote_to_start_leader,
             wait_to_vote_slot,
-            track_transaction_indexes,
+            wait_for_vote_to_start_leader,
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
             cluster_info,
-            poh_recorder,
             leader_schedule_cache,
             rpc_subscriptions,
-            banking_tracer,
             accounts_background_request_sender,
             voting_sender,
             commitment_sender,
             drop_bank_sender,
             bank_notification_sender,
-            slot_status_notifier,
+            leader_window_notifier,
             vote_receiver,
         } = config;
 
@@ -185,9 +176,8 @@ impl VotingLoop {
             &root_bank_cache.root_bank(),
         );
 
-        let mut current_slot = root_bank_cache.root_bank().slot() + 1;
-        let mut last_leader_block = 0;
         let mut current_leader = None;
+        let mut current_slot = root_bank_cache.root_bank().slot() + 1;
 
         let identity_keypair = cluster_info.keypair().clone();
         let my_pubkey = identity_keypair.pubkey();
@@ -215,53 +205,66 @@ impl VotingLoop {
             blockstore: blockstore.clone(),
             leader_schedule_cache: leader_schedule_cache.clone(),
             bank_forks: bank_forks.clone(),
-            poh_recorder: poh_recorder.clone(),
             rpc_subscriptions: rpc_subscriptions.clone(),
-            banking_tracer,
+            vote_receiver,
             progress: ProgressMap::default(),
             my_pubkey,
         };
-
-        // Reset poh recorder to root bank for things that still depend on poh accuracy
-        ReplayStage::reset_poh_recorder(
-            &my_pubkey,
-            blockstore.as_ref(),
-            root_bank_cache.root_bank(),
-            poh_recorder.as_ref(),
-            &leader_schedule_cache,
-        );
 
         // TODO(ashwin): Start loop once migration is complete current_slot from vote history
         loop {
             let leader_end_slot = last_of_consecutive_leader_slots(current_slot);
             let mut skipped = false;
 
-            // TODO(ashwin): Do maybe_leader for all 4 blocks here, right now
-            // instead we build each block synchronously below
-            // if leader_schedule_cache.slot_leader_at(current_slot) {
-
-            // }
+            let Some(leader_pubkey) = leader_schedule_cache
+                .slot_leader_at(current_slot, Some(root_bank_cache.root_bank().as_ref()))
+            else {
+                error!("Unable to compute the leader at slot {current_slot}. Something is wrong, exiting");
+                return;
+            };
+            let is_leader = leader_pubkey == my_pubkey;
 
             // Create a timer for the leader window
             let skip_timer = Instant::now();
-            let timeouts: Vec<_> = (1..=(NUM_CONSECUTIVE_LEADER_SLOTS as u128))
-                .map(|i| DELTA_TIMEOUT + i * BLOCKTIME + DELTA)
+            let timeouts: Vec<_> = (0..(NUM_CONSECUTIVE_LEADER_SLOTS as usize))
+                .map(crate::alpenglow_consensus::skip_timeout)
                 .collect();
+
+            if is_leader {
+                // Let the block creation loop know it is time for it to produce the window
+                // TODO: We max with root here, as the snapshot slot might not have a certificate.
+                // Think about this more and fix if necessary.
+                let parent_slot = cert_pool
+                    .highest_not_skip_certificate_slot()
+                    .max(root_bank_cache.root_bank().slot());
+                Self::notify_block_creation_loop_of_leader_window(
+                    &my_pubkey,
+                    &cert_pool,
+                    &leader_window_notifier,
+                    current_slot,
+                    leader_end_slot,
+                    parent_slot,
+                    skip_timer,
+                );
+            }
+
+            ReplayStage::log_leader_change(
+                &my_pubkey,
+                current_slot,
+                &mut current_leader,
+                &leader_pubkey,
+            );
 
             while current_slot <= leader_end_slot {
                 let leader_slot_index = leader_slot_index(current_slot);
                 let timeout = timeouts[leader_slot_index];
                 let cert_log_timer = Instant::now();
                 let mut skip_refresh_timer = Instant::now();
-
-                let leader_pubkey = leader_schedule_cache
-                    .slot_leader_at(current_slot, Some(root_bank_cache.root_bank().as_ref()));
-                let is_leader = leader_pubkey.map(|pk| pk == my_pubkey).unwrap_or(false);
                 let mut notarized = false;
 
                 info!(
-                    "{my_pubkey}: Starting timer for slot: {current_slot}, is_leader: {is_leader}. Skip timer {} vs timeout {}",
-                    skip_timer.elapsed().as_millis(), timeout
+                    "{my_pubkey}: Entering voting loop for slot: {current_slot}, is_leader: {is_leader}. Skip timer {} vs timeout {}",
+                    skip_timer.elapsed().as_millis(), timeout.as_millis()
                 );
 
                 while !Self::branch_notarized(&my_pubkey, current_slot, &cert_pool)
@@ -270,28 +273,18 @@ impl VotingLoop {
                     if exit.load(Ordering::Relaxed) {
                         return;
                     }
-                    // If we're the leader try to start building a block
-                    if last_leader_block < current_slot
-                        && !poh_recorder.read().unwrap().has_bank()
-                        && Self::maybe_start_leader(
-                            &leader_pubkey,
-                            current_slot,
-                            &mut cert_pool,
-                            &slot_status_notifier,
-                            track_transaction_indexes,
-                            &shared_context,
-                        )
-                    {
-                        last_leader_block = current_slot;
-                        ReplayStage::log_leader_change(
-                            &my_pubkey,
-                            current_slot,
-                            &mut current_leader,
-                            &my_pubkey,
-                        );
-                    }
 
-                    if !skipped && skip_timer.elapsed().as_millis() > timeout {
+                    // We use a blocking receive if skipped is true,
+                    // as we can only progress on a certificate
+                    Self::ingest_votes_into_certificate_pool(
+                        &my_pubkey,
+                        &shared_context.vote_receiver,
+                        /* block */ skipped,
+                        &mut cert_pool,
+                        &voting_context.commitment_sender,
+                    );
+
+                    if !skipped && skip_timer.elapsed().as_millis() > timeout.as_millis() {
                         skipped = true;
                         Self::vote_skip(
                             &my_pubkey,
@@ -316,29 +309,19 @@ impl VotingLoop {
                         skip_refresh_timer = Instant::now();
                     }
 
-                    // TODO(ashwin): we could block here & use return value if we've skipped and are
-                    // waiting on a cert to avoid tight spin
-                    Self::ingest_votes_into_certificate_pool(
-                        &vote_receiver,
-                        &mut cert_pool,
-                        bank_forks.as_ref(),
-                        &voting_context.commitment_sender,
-                    );
-
                     if skipped || notarized {
                         continue;
                     }
 
-                    // Check if replay has successfully completed
+                    // Check if replay has successfully completed and the bank passes
+                    // the validation conditions
                     let Some(bank) = bank_forks.read().unwrap().get(current_slot) else {
                         continue;
                     };
                     if !bank.is_frozen() {
                         continue;
                     };
-                    let parent_slot = bank.parent_slot();
-
-                    if !Self::can_vote_notarize(current_slot, parent_slot, &cert_pool) {
+                    if !Self::can_vote_notarize(current_slot, bank.parent_slot(), &cert_pool) {
                         continue;
                     }
 
@@ -359,7 +342,7 @@ impl VotingLoop {
                     "{my_pubkey}: Slot {current_slot} certificate observed in {} ms. Skip timer {} vs timeout {}",
                     cert_log_timer.elapsed().as_millis(),
                     skip_timer.elapsed().as_millis(),
-                    timeout,
+                    timeout.as_millis(),
                 );
 
                 if !skipped && Self::branch_notarized(&my_pubkey, current_slot, &cert_pool) {
@@ -430,158 +413,6 @@ impl VotingLoop {
         false
     }
 
-    /// Checks if we are set to produce a leader block for `slot`:
-    /// - Does `my_pubkey` match the leader pubkey
-    /// - Is the highest notarization/finalized slot from `cert_pool` frozen
-    /// - Startup verification is complete
-    /// - Bank forks does not already contain a bank for `slot`
-    /// - If `wait_for_vote_to_start_leader` is set, we have landed a vote
-    ///
-    /// If checks pass we return true and:
-    /// - Reset poh to the `parent_slot` (highest notarized/finalized slot)
-    /// - Create a new bank for `slot` with parent `parent_slot`
-    /// - Insert into bank_forks and poh recorder
-    /// - Add the transactions for the notarization certificate and skip certificate
-    fn maybe_start_leader(
-        leader: &Option<Pubkey>,
-        slot: Slot,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
-        slot_status_notifier: &Option<SlotStatusNotifier>,
-        track_transaction_indexes: bool,
-        ctx: &SharedContext,
-    ) -> bool {
-        let Some(leader) = leader else {
-            warn!(
-                "{}: No leader information available for slot {slot},
-                skipping leader pipeline",
-                ctx.my_pubkey
-            );
-            return false;
-        };
-
-        if *leader != ctx.my_pubkey {
-            // Not our leader slot
-            return false;
-        }
-
-        // TODO(ashwin): We max with root here, as the snapshot slot might not have a certificate.
-        // Think about this more and fix if necessary.
-        let parent_slot = cert_pool
-            .highest_not_skip_certificate_slot()
-            .max(ctx.bank_forks.read().unwrap().root());
-
-        if parent_slot >= slot {
-            // We have missed our leader slot
-            warn!(
-                "Slot {parent_slot} has already been notarized / finalized,
-                skipping production of {slot}"
-            );
-            return false;
-        }
-
-        let Some(parent_bank) = ctx.bank_forks.read().unwrap().get(parent_slot) else {
-            info!(
-                "{}: We want to produce {slot} off of notarized slot {parent_slot},
-                however {parent_slot} is not yet in bank forks,
-                we are running behind so delaying our leader block",
-                ctx.my_pubkey
-            );
-            return false;
-        };
-
-        if !parent_bank.is_frozen() {
-            info!(
-                "{}: We want to produce {slot} off of notarized slot {parent_slot},
-                however {parent_slot} has not finished replay,
-                we are running behind so delaying our leader block",
-                ctx.my_pubkey
-            );
-            return false;
-        }
-
-        if !ReplayStage::common_maybe_start_leader_checks(
-            &ctx.my_pubkey,
-            ctx.leader_schedule_cache.as_ref(),
-            parent_bank.as_ref(),
-            ctx.bank_forks.as_ref(),
-            slot,
-            // TODO(ashwin): plug this in from replay
-            /*has_new_vote_been_rooted*/
-            true,
-        ) {
-            return false;
-        }
-
-        let root_slot = ctx.bank_forks.read().unwrap().root();
-        info!(
-            "{}: Checking leader decision slot {slot} parent {parent_slot}",
-            ctx.my_pubkey
-        );
-        if !cert_pool.make_start_leader_decision(
-            slot,
-            parent_slot,
-            // We only need skip certificates for slots > the slot at which alpenglow is enabled
-            // TODO(ashwin): plumb in to support migration
-            /*first_alpenglow_slot*/
-            0,
-        ) {
-            panic!(
-                "Unable to get notarization or skip certificate to build a leader block
-                for slot {slot} descending from parent slot {parent_slot}. Something has gone wrong with the timer loop"
-            );
-        };
-
-        if ctx.poh_recorder.read().unwrap().start_slot() != parent_slot {
-            // Important to keep Poh somewhat accurate for
-            // parts of the system relying on PohRecorder::would_be_leader()
-            //
-            // TODO: On migration need to keep the ticks around for parent slots in previous epoch
-            // because reset below will delete those ticks
-            ReplayStage::reset_poh_recorder(
-                &ctx.my_pubkey,
-                ctx.blockstore.as_ref(),
-                parent_bank.clone(),
-                ctx.poh_recorder.as_ref(),
-                ctx.leader_schedule_cache.as_ref(),
-            );
-        }
-
-        let tpu_bank = ReplayStage::new_bank_from_parent_with_notify(
-            parent_bank.clone(),
-            slot,
-            root_slot,
-            &ctx.my_pubkey,
-            &ctx.rpc_subscriptions,
-            slot_status_notifier,
-            NewBankOptions::default(),
-        );
-        // make sure parent is frozen for finalized hashes via the above
-        // new()-ing of its child bank
-        ctx.banking_tracer.hash_event(
-            parent_bank.slot(),
-            &parent_bank.last_blockhash(),
-            &parent_bank.hash(),
-        );
-
-        // Insert the bank
-        let tpu_bank = ctx.bank_forks.write().unwrap().insert(tpu_bank);
-        let poh_bank_start = ctx
-            .poh_recorder
-            .write()
-            .unwrap()
-            .set_bank(tpu_bank, track_transaction_indexes);
-        // TODO: cleanup, this is no longer needed
-        poh_bank_start
-            .contains_valid_certificate
-            .store(true, Ordering::Relaxed);
-
-        info!(
-            "{}: new fork:{} parent:{} (leader) root:{}",
-            ctx.my_pubkey, slot, parent_slot, root_slot
-        );
-        true
-    }
-
     /// Checks if any slots between `vote_history`'s current root
     /// and `slot` have received a finalization certificate and are frozen
     ///
@@ -605,7 +436,7 @@ impl VotingLoop {
             cert_pool.get_finalization_cert_size(*slot).is_some()
                 && ctx.bank_forks.read().unwrap().is_frozen(*slot)
         })?;
-        info!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
+        trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
         cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
         if let Err(e) = ReplayStage::check_and_handle_new_root(
@@ -818,6 +649,7 @@ impl VotingLoop {
         };
 
         if let Err(e) = Self::add_vote_and_maybe_update_commitment(
+            &context.identity_keypair.pubkey(),
             &vote,
             &context.vote_account_pubkey,
             vote_tx.clone().into(),
@@ -948,28 +780,16 @@ impl VotingLoop {
     ///
     /// Returns the highest slot of the newly created notarization/skip certificates
     fn ingest_votes_into_certificate_pool(
+        my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
+        block: bool,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
-        bank_forks: &RwLock<BankForks>,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) {
-        let mut cached_root_bank = None;
-
-        vote_receiver
-            .try_iter()
-            .for_each(|(vote, vote_account_pubkey, tx)| {
-                let root_bank =
-                    cached_root_bank.get_or_insert_with(|| bank_forks.read().unwrap().root_bank());
-                let epoch = root_bank.epoch_schedule().get_epoch(vote.slot());
-                let Some(epoch_stakes) = root_bank.epoch_stakes(epoch) else {
-                    return;
-                };
-                let validator_stake = epoch_stakes.vote_account_stake(&vote_account_pubkey);
-                if validator_stake == 0 {
-                    return;
-                }
-
+        let add_to_cert_pool =
+            |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
                 if let Err(e) = Self::add_vote_and_maybe_update_commitment(
+                    my_pubkey,
                     &vote,
                     &vote_account_pubkey,
                     tx,
@@ -977,13 +797,82 @@ impl VotingLoop {
                     commitment_sender,
                 ) {
                     // TODO(ashwin): increment metrics on non duplicate failures
-                    warn!("Unable to push vote into the pool {}", e);
+                    trace!("{my_pubkey}: unable to push vote into the pool {}", e);
                 }
-            })
+            };
+
+        if block {
+            let Ok(first) = vote_receiver.recv_timeout(Duration::from_secs(1)) else {
+                // Either timeout or sender disconnected, return so we can check exit
+                return;
+            };
+            std::iter::once(first)
+                .chain(vote_receiver.try_iter())
+                .for_each(add_to_cert_pool)
+        } else {
+            vote_receiver.try_iter().for_each(add_to_cert_pool)
+        }
+    }
+
+    /// Notifies the block creation loop of a new leader window to produce.
+    /// Caller should use the highest certified slot (not skip) as the `parent_slot`
+    ///
+    /// Fails to notify and returns false if the leader window has already
+    /// been skipped, or if the parent is greater than or equal to the first leader slot
+    fn notify_block_creation_loop_of_leader_window<VC: VoteCertificate>(
+        my_pubkey: &Pubkey,
+        cert_pool: &CertificatePool<VC>,
+        leader_window_notifier: &LeaderWindowNotifier,
+        start_slot: Slot,
+        end_slot: Slot,
+        parent_slot: Slot,
+        skip_timer: Instant,
+    ) -> bool {
+        // Check if we missed our window
+        if (start_slot..=end_slot).any(|s| cert_pool.skip_certified(s)) {
+            warn!(
+                "{my_pubkey}: Leader slot {start_slot} has already been skip certified, \
+                skipping production of {start_slot}-{end_slot}"
+            );
+            return false;
+        }
+        if parent_slot >= start_slot {
+            warn!(
+                "{my_pubkey}: Leader slot {start_slot} has a higher certified slot {parent_slot}, \
+                skipping production of {start_slot}-{end_slot}"
+            );
+            return false;
+        }
+
+        // Sanity check for certificates
+        if !cert_pool.make_start_leader_decision(start_slot, parent_slot, 0) {
+            panic!("Something has gone wrong with the voting loop: {start_slot} {parent_slot}");
+        }
+
+        // Notify the block creation loop.
+        let mut l_window_info = leader_window_notifier.window_info.lock().unwrap();
+        if let Some(window_info) = l_window_info.as_ref() {
+            error!(
+                "{my_pubkey}: Attempting to start leader window for {start_slot}-{end_slot}, however there is \
+                already a pending window to produce {}-{}. Something has gone wrong, Overwriting in favor \
+                of the newer window",
+                window_info.start_slot,
+                window_info.end_slot,
+            );
+        }
+        *l_window_info = Some(LeaderWindowInfo {
+            start_slot,
+            end_slot,
+            parent_slot,
+            skip_timer,
+        });
+        leader_window_notifier.window_notification.notify_one();
+        true
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
     fn add_vote_and_maybe_update_commitment<VC: VoteCertificate>(
+        my_pubkey: &Pubkey,
         vote: &Vote,
         vote_account_pubkey: &Pubkey,
         tx: VC::VoteTransaction,
@@ -993,7 +882,7 @@ impl VotingLoop {
         let Some(new_finalized_slot) = cert_pool.add_vote(vote, tx, vote_account_pubkey)? else {
             return Ok(());
         };
-        trace!("New finalization certificate for {new_finalized_slot}");
+        trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
         Self::alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Finalized,
             new_finalized_slot,

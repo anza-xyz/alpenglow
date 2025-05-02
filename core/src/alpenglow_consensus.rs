@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 pub mod bit_vector;
+pub mod block_creation_loop;
 pub mod bls_vote_transaction;
 pub mod certificate_pool;
 pub mod transaction;
@@ -92,13 +95,29 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 
-/// The amount of time a leader has to build their block in ms
-pub const BLOCKTIME: u128 = 400;
+/// Alpenglow block constants
+/// The amount of time a leader has to build their block
+pub const BLOCKTIME: Duration = Duration::from_millis(400);
 
-/// The maximum message delay in ms
-pub const DELTA: u128 = 100;
+/// The maximum message delay
+pub const DELTA: Duration = Duration::from_millis(100);
 
-/// The Maximum delay a node can observe between entering the loop iteration
+/// The maximum delay a node can observe between entering the loop iteration
 /// for a window and receiving any shred of the first block of the leader.
 /// As a conservative global constant we set this to 3 * DELTA
-pub const DELTA_TIMEOUT: u128 = 300;
+pub const DELTA_TIMEOUT: Duration = DELTA.saturating_mul(3);
+
+/// The timeout in ms for the leader block index within the leader window
+#[inline]
+pub fn skip_timeout(leader_block_index: usize) -> Duration {
+    DELTA_TIMEOUT + (leader_block_index as u32 + 1) * BLOCKTIME + DELTA
+}
+
+/// Block timeout, when we should publish the final shred for the leader block index
+/// within the leader window
+#[inline]
+pub fn block_timeout(leader_block_index: usize) -> Duration {
+    // TODO: What should be a reasonable buffer for this?
+    // Release the final shred `DELTA`ms before the skip timeout
+    skip_timeout(leader_block_index).saturating_sub(DELTA)
+}
