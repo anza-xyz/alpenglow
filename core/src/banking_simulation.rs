@@ -752,6 +752,7 @@ impl BankingSimulator {
             DEFAULT_PINNED_CPU_CORE,
             DEFAULT_HASHES_PER_BATCH,
             record_receiver,
+            || {},
         );
 
         // Enable BankingTracer to approximate the real environment as close as possible because

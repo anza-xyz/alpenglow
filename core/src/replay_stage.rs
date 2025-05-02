@@ -1,7 +1,10 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
 use {
     crate::{
-        alpenglow_consensus::voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
+        alpenglow_consensus::{
+            block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
+            voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
+        },
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
@@ -267,6 +270,8 @@ pub struct ReplayStageConfig {
     pub log_messages_bytes_limit: Option<usize>,
     pub prioritization_fee_cache: Arc<PrioritizationFeeCache>,
     pub banking_tracer: Arc<BankingTracer>,
+    pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
 }
 
 pub struct ReplaySenders {
@@ -566,6 +571,8 @@ impl ReplayStage {
             log_messages_bytes_limit,
             prioritization_fee_cache,
             banking_tracer,
+            replay_highest_frozen,
+            leader_window_notifier,
         } = config;
 
         let ReplaySenders {
@@ -631,6 +638,12 @@ impl ReplayStage {
                 );
             }
         }
+        let mut highest_frozen_slot = bank_forks
+            .read()
+            .unwrap()
+            .highest_frozen_bank()
+            .map_or(0, |hfs| hfs.slot());
+        *replay_highest_frozen.highest_frozen_slot.lock().unwrap() = highest_frozen_slot;
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
@@ -639,22 +652,19 @@ impl ReplayStage {
                 vote_account,
                 wait_for_vote_to_start_leader,
                 wait_to_vote_slot,
-                track_transaction_indexes: transaction_status_sender.is_some(),
                 authorized_voter_keypairs: authorized_voter_keypairs.clone(),
                 blockstore: blockstore.clone(),
                 bank_forks: bank_forks.clone(),
                 cluster_info: cluster_info.clone(),
-                poh_recorder: poh_recorder.clone(),
                 leader_schedule_cache: leader_schedule_cache.clone(),
                 rpc_subscriptions: rpc_subscriptions.clone(),
-                banking_tracer: banking_tracer.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
                 voting_sender: voting_sender.clone(),
                 commitment_sender: lockouts_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
-                slot_status_notifier: slot_status_notifier.clone(),
                 vote_receiver: alpenglow_vote_receiver,
+                leader_window_notifier,
             };
             Some(VotingLoop::new(voting_loop_config))
         } else {
@@ -758,13 +768,16 @@ impl ReplayStage {
                 .build()
                 .expect("new rayon threadpool");
 
-            Self::reset_poh_recorder(
-                &my_pubkey,
-                &blockstore,
-                working_bank,
-                &poh_recorder,
-                &leader_schedule_cache,
-            );
+            if !is_alpenglow_migration_complete {
+                // This reset is handled in block creation loop for alpenglow
+                Self::reset_poh_recorder(
+                    &my_pubkey,
+                    &blockstore,
+                    working_bank,
+                    &poh_recorder,
+                    &leader_schedule_cache,
+                );
+            }
 
             loop {
                 // Stop getting entries if we get exit signal
@@ -825,6 +838,18 @@ impl ReplayStage {
                     &mut is_alpenglow_migration_complete,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
+                if is_alpenglow_migration_complete {
+                    if let Some(highest) = new_frozen_slots.iter().max() {
+                        if *highest > highest_frozen_slot {
+                            highest_frozen_slot = *highest;
+                            let mut l_highest_frozen =
+                                replay_highest_frozen.highest_frozen_slot.lock().unwrap();
+                            // Let the block creation loop know about this new frozen slot
+                            *l_highest_frozen = *highest;
+                            replay_highest_frozen.freeze_notification.notify_one();
+                        }
+                    }
+                }
                 replay_active_banks_time.stop();
 
                 let forks_root = bank_forks.read().unwrap().root();
@@ -2142,7 +2167,7 @@ impl ReplayStage {
         }
     }
 
-    pub(crate) fn common_maybe_start_leader_checks(
+    fn common_maybe_start_leader_checks(
         my_pubkey: &Pubkey,
         leader_schedule_cache: &LeaderScheduleCache,
         parent_bank: &Bank,
@@ -3061,7 +3086,7 @@ impl ReplayStage {
         }
     }
 
-    pub(crate) fn reset_poh_recorder(
+    fn reset_poh_recorder(
         my_pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank: Arc<Bank>,

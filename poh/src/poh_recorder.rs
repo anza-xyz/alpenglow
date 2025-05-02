@@ -1207,6 +1207,7 @@ fn do_create_test_recorder(
         crate::poh_service::DEFAULT_PINNED_CPU_CORE,
         crate::poh_service::DEFAULT_HASHES_PER_BATCH,
         record_receiver,
+        || {},
     );
 
     (

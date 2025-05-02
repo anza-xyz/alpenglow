@@ -214,6 +214,7 @@ impl Consumer {
             ..
         } = process_transactions_summary;
 
+        // TODO(ashwin): add a minus delta
         if reached_max_poh_height || !bank_start.should_working_bank_still_be_processing_txs() {
             payload.reached_end_of_slot = true;
         }
