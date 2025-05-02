@@ -1,4 +1,8 @@
-use std::time::Duration;
+use {
+    alpenglow_vote::vote::Vote,
+    solana_sdk::{clock::Slot, hash::Hash},
+    std::time::Duration,
+};
 
 pub mod bit_vector;
 pub mod block_creation_loop;
@@ -16,17 +20,31 @@ pub type Stake = u64;
 pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CertificateType {
-    Finalize,
-    FinalizeFast,
-    Notarize,
-    NotarizeFallback,
-    Skip,
+pub enum CertificateId {
+    Finalize(Slot),
+    FinalizeFast(Slot, Hash, Hash),
+    Notarize(Slot, Hash, Hash),
+    NotarizeFallback(Slot, Hash, Hash),
+    Skip(Slot),
 }
 
-impl CertificateType {
+impl CertificateId {
+    #[allow(dead_code)]
+    pub fn slot(&self) -> Slot {
+        match self {
+            CertificateId::Finalize(slot)
+            | CertificateId::FinalizeFast(slot, _, _)
+            | CertificateId::Notarize(slot, _, _)
+            | CertificateId::NotarizeFallback(slot, _, _)
+            | CertificateId::Skip(slot) => *slot,
+        }
+    }
     pub(crate) fn is_finalization_variant(&self) -> bool {
-        matches!(self, Self::Finalize | Self::FinalizeFast)
+        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
+    }
+
+    pub(crate) fn is_notarize_fallback(&self) -> bool {
+        matches!(self, Self::NotarizeFallback(_, _, _))
     }
 }
 
@@ -47,38 +65,46 @@ pub const CONFLICTING_VOTETYPES: [(VoteType, VoteType); 5] = [
     (VoteType::Skip, VoteType::SkipFallback),
 ];
 
-/// Lookup from `CertificateType` to the `VoteType`s that contribute,
+/// Lookup from `CertificateId` to the `VoteType`s that contribute,
 /// as well as the stake fraction required for certificate completion.
 ///
-/// Must be in sync with `vote_type_to_certificate_type`
+/// Must be in sync with `vote_to_certificate_ids`
 pub const fn certificate_limits_and_vote_types(
-    cert_type: CertificateType,
+    cert_type: CertificateId,
 ) -> (f64, &'static [VoteType]) {
     match cert_type {
-        CertificateType::Notarize => (0.6, &[VoteType::Notarize]),
-        CertificateType::NotarizeFallback => {
+        CertificateId::Notarize(_, _, _) => (0.6, &[VoteType::Notarize]),
+        CertificateId::NotarizeFallback(_, _, _) => {
             (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
         }
-        CertificateType::FinalizeFast => (0.8, &[VoteType::Notarize]),
-        CertificateType::Finalize => (0.6, &[VoteType::Finalize]),
-        CertificateType::Skip => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+        CertificateId::FinalizeFast(_, _, _) => (0.8, &[VoteType::Notarize]),
+        CertificateId::Finalize(_) => (0.6, &[VoteType::Finalize]),
+        CertificateId::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
     }
 }
 
-/// Lookup from `VoteType` to the `CertificateType`s the vote accounts for
+/// Lookup from `Vote` to the `CertificateId`s the vote accounts for
 ///
-/// Must be in sync with `certificate_limits_and_vote_types`
-pub const fn vote_type_to_certificate_type(vote_type: VoteType) -> &'static [CertificateType] {
-    match vote_type {
-        VoteType::Notarize => &[
-            CertificateType::Notarize,
-            CertificateType::NotarizeFallback,
-            CertificateType::FinalizeFast,
+/// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
+pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<CertificateId> {
+    match vote {
+        Vote::Notarize(vote) => vec![
+            CertificateId::Notarize(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
+            CertificateId::NotarizeFallback(
+                vote.slot(),
+                *vote.block_id(),
+                *vote.replayed_bank_hash(),
+            ),
+            CertificateId::FinalizeFast(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
         ],
-        VoteType::NotarizeFallback => &[CertificateType::NotarizeFallback],
-        VoteType::Finalize => &[CertificateType::Finalize],
-        VoteType::Skip => &[CertificateType::Skip],
-        VoteType::SkipFallback => &[CertificateType::Skip],
+        Vote::NotarizeFallback(vote) => vec![CertificateId::NotarizeFallback(
+            vote.slot(),
+            *vote.block_id(),
+            *vote.replayed_bank_hash(),
+        )],
+        Vote::Finalize(vote) => vec![CertificateId::Finalize(vote.slot())],
+        Vote::Skip(vote) => vec![CertificateId::Skip(vote.slot())],
+        Vote::SkipFallback(vote) => vec![CertificateId::Skip(vote.slot())],
     }
 }
 
