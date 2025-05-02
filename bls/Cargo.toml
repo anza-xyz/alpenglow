@@ -28,6 +28,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 solana-keypair = { workspace = true }
+bincode = { workspace = true }
 
 [features]
 solana-signer-derive = ["dep:solana-signer", "dep:solana-signer", "dep:subtle"]

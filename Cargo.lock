@@ -6697,6 +6697,7 @@ dependencies = [
 name = "solana-bls"
 version = "2.3.0"
 dependencies = [
+ "bincode",
  "blst",
  "blstrs",
  "bytemuck",

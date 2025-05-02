@@ -127,3 +127,86 @@ unsafe impl Pod for ProofOfPossessionCompressed {}
 
 unsafe impl Zeroable for ProofOfPossession {}
 unsafe impl Pod for ProofOfPossession {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_and_deserialize_pubkey() {
+        let original = Pubkey::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: Pubkey = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = Pubkey([1; BLS_PUBLIC_KEY_AFFINE_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: Pubkey = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_pubkey_compressed() {
+        let original = PubkeyCompressed::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: PubkeyCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = PubkeyCompressed([1; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: PubkeyCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_signature() {
+        let original = Signature::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: Signature = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = Signature([1; BLS_SIGNATURE_AFFINE_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: Signature = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_signature_compressed() {
+        let original = SignatureCompressed::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: SignatureCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = SignatureCompressed([1; BLS_SIGNATURE_COMPRESSED_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: SignatureCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_proof_of_possession() {
+        let original = ProofOfPossession::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: ProofOfPossession = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = ProofOfPossession([1; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: ProofOfPossession = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_proof_of_possession_compressed() {
+        let original = ProofOfPossessionCompressed::default();
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: ProofOfPossessionCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = ProofOfPossessionCompressed([1; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]);
+        let serialized = bincode::serialize(&original).unwrap();
+        let deserialized: ProofOfPossessionCompressed = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+}
