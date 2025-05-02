@@ -11,6 +11,8 @@ edition = { workspace = true }
 
 [dependencies]
 bytemuck = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_with = { workspace = true, features = ["macros"] }
 
 [target.'cfg(not(target_os = "solana"))'.dependencies]
 blst = { workspace = true }

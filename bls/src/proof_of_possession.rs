@@ -1,10 +1,5 @@
 use {
-    crate::{
-        error::BlsError,
-        keypair::PubkeyProjective,
-        pod::ProofOfPossession,
-        Bls,
-    },
+    crate::{error::BlsError, keypair::PubkeyProjective, pod::ProofOfPossession, Bls},
     blstrs::{G2Affine, G2Projective},
 };
 

@@ -1,4 +1,8 @@
-use bytemuck::{Pod, Zeroable};
+use {
+    bytemuck::{Pod, Zeroable},
+    serde::{Deserialize, Serialize},
+    serde_with::serde_as,
+};
 
 /// Size of a BLS signature in a compressed point representation
 pub const BLS_SIGNATURE_COMPRESSED_SIZE: usize = 96;
@@ -7,9 +11,12 @@ pub const BLS_SIGNATURE_COMPRESSED_SIZE: usize = 96;
 pub const BLS_SIGNATURE_AFFINE_SIZE: usize = 192;
 
 /// A serialized BLS signature in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde_with::serde_as]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct SignatureCompressed(pub [u8; BLS_SIGNATURE_COMPRESSED_SIZE]);
+pub struct SignatureCompressed(
+    #[serde_as(as = "[_; BLS_SIGNATURE_COMPRESSED_SIZE]")] pub [u8; BLS_SIGNATURE_COMPRESSED_SIZE],
+);
 
 impl Default for SignatureCompressed {
     fn default() -> Self {
@@ -18,9 +25,12 @@ impl Default for SignatureCompressed {
 }
 
 /// A serialized BLS signature in an affine point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde_with::serde_as]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct Signature(pub [u8; BLS_SIGNATURE_AFFINE_SIZE]);
+pub struct Signature(
+    #[serde_as(as = "[_; BLS_SIGNATURE_AFFINE_SIZE]")] pub [u8; BLS_SIGNATURE_AFFINE_SIZE],
+);
 
 impl Default for Signature {
     fn default() -> Self {
@@ -35,9 +45,13 @@ pub const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE: usize = 96;
 pub const BLS_PROOF_OF_POSSESSION_AFFINE_SIZE: usize = 192;
 
 /// A serialized BLS signature in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde_as]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct ProofOfPossessionCompressed(pub [u8; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]);
+pub struct ProofOfPossessionCompressed(
+    #[serde_as(as = "[_; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]")]
+    pub  [u8; BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE],
+);
 
 impl Default for ProofOfPossessionCompressed {
     fn default() -> Self {
@@ -46,9 +60,13 @@ impl Default for ProofOfPossessionCompressed {
 }
 
 /// A serialized BLS signature in an affine point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde_as]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct ProofOfPossession(pub [u8; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE]);
+pub struct ProofOfPossession(
+    #[serde_as(as = "[_; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE]")]
+    pub  [u8; BLS_PROOF_OF_POSSESSION_AFFINE_SIZE],
+);
 
 impl Default for ProofOfPossession {
     fn default() -> Self {
@@ -63,9 +81,12 @@ pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
 pub const BLS_PUBLIC_KEY_AFFINE_SIZE: usize = 96;
 
 /// A serialized BLS public key in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[serde_as]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct PubkeyCompressed(pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
+pub struct PubkeyCompressed(
+    #[serde_as(as = "[_; BLS_PUBLIC_KEY_COMPRESSED_SIZE]")] pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE],
+);
 
 impl Default for PubkeyCompressed {
     fn default() -> Self {
@@ -74,9 +95,12 @@ impl Default for PubkeyCompressed {
 }
 
 /// A serialized BLS public key in an affine point representation
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+#[serde_as]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[repr(transparent)]
-pub struct Pubkey(pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE]);
+pub struct Pubkey(
+    #[serde_as(as = "[_; BLS_PUBLIC_KEY_AFFINE_SIZE]")] pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE],
+);
 
 impl Default for Pubkey {
     fn default() -> Self {
