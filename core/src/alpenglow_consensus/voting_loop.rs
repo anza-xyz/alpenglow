@@ -232,13 +232,18 @@ impl VotingLoop {
 
             if is_leader {
                 // Let the block creation loop know it is time for it to produce the window
+                // TODO: We max with root here, as the snapshot slot might not have a certificate.
+                // Think about this more and fix if necessary.
+                let parent_slot = cert_pool
+                    .highest_not_skip_certificate_slot()
+                    .max(root_bank_cache.root_bank().slot());
                 Self::notify_block_creation_loop_of_leader_window(
                     &my_pubkey,
                     &cert_pool,
                     &leader_window_notifier,
-                    &mut root_bank_cache,
                     current_slot,
                     leader_end_slot,
+                    parent_slot,
                     skip_timer,
                 );
             }
@@ -810,26 +815,19 @@ impl VotingLoop {
     }
 
     /// Notifies the block creation loop of a new leader window to produce.
-    /// Uses the highest certified slot (not skip) as the parent for the first
-    /// leader slot.
+    /// Caller should use the highest certified slot (not skip) as the `parent_slot`
     ///
-    /// Fails to notify and returns false if the first leader slot has already
+    /// Fails to notify and returns false if the leader window has already
     /// been skipped, or if the parent is greater than or equal to the first leader slot
     fn notify_block_creation_loop_of_leader_window<VC: VoteCertificate>(
         my_pubkey: &Pubkey,
         cert_pool: &CertificatePool<VC>,
         leader_window_notifier: &LeaderWindowNotifier,
-        root_bank_cache: &mut RootBankCache,
         start_slot: Slot,
         end_slot: Slot,
+        parent_slot: Slot,
         skip_timer: Instant,
     ) -> bool {
-        // TODO: We max with root here, as the snapshot slot might not have a certificate.
-        // Think about this more and fix if necessary.
-        let parent_slot = cert_pool
-            .highest_not_skip_certificate_slot()
-            .max(root_bank_cache.root_bank().slot());
-
         // Check if we missed our window
         if (start_slot..=end_slot).any(|s| cert_pool.skip_certified(s)) {
             warn!(
@@ -846,7 +844,7 @@ impl VotingLoop {
             return false;
         }
 
-        // Sanity check
+        // Sanity check for certificates
         if !cert_pool.make_start_leader_decision(start_slot, parent_slot, 0) {
             panic!("Something has gone wrong with the voting loop: {start_slot} {parent_slot}");
         }
