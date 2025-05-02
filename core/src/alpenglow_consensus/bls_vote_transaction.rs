@@ -4,7 +4,19 @@ use {
     solana_sdk::message::VersionedMessage,
 };
 
-impl AlpenglowVoteTransaction for BlsVoteTransaction {}
+impl AlpenglowVoteTransaction for BlsVoteTransaction {
+    fn new_for_test() -> Self {
+        let message = VersionedMessage::default();
+        let bls_keypair = Keypair::new();
+        let pubkey: Pubkey = bls_keypair.public.into();
+        let signature = bls_keypair.sign(&message.serialize()).into();
+        Self {
+            pubkey,
+            signature,
+            message,
+        }
+    }
+}
 
 /// A vote instruction signed using BLS signatures. This format will be used
 /// for vote communication between validators. This is not inteded to include
