@@ -125,15 +125,25 @@ impl<VC: VoteCertificate> VotePool<VC> {
 #[cfg(test)]
 mod test {
     use {
-        super::{super::vote_certificate::LegacyVoteCertificate, *},
-        solana_sdk::transaction::VersionedTransaction,
+        super::{
+            super::{
+                transaction::AlpenglowVoteTransaction,
+                vote_certificate::{BlsCertificate, LegacyVoteCertificate},
+            },
+            *,
+        },
         std::sync::Arc,
     };
 
     #[test]
     fn test_skip_vote_pool() {
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
-        let transaction = Arc::new(VersionedTransaction::default());
+        test_skip_vote_pool_for_type::<LegacyVoteCertificate>();
+        test_skip_vote_pool_for_type::<BlsCertificate>();
+    }
+
+    fn test_skip_vote_pool_for_type<VC: VoteCertificate>() {
+        let mut vote_pool = VotePool::<VC>::new(1);
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
         let my_pubkey = Pubkey::new_unique();
 
         assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
@@ -156,9 +166,14 @@ mod test {
     }
 
     #[test]
-    fn test_notarization_ppool() {
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(1);
-        let transaction = Arc::new(VersionedTransaction::default());
+    fn test_notarization_pool() {
+        test_notarization_pool_for_type::<LegacyVoteCertificate>();
+        test_notarization_pool_for_type::<BlsCertificate>();
+    }
+
+    fn test_notarization_pool_for_type<VC: VoteCertificate>() {
+        let mut vote_pool = VotePool::<VC>::new(1);
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
@@ -220,9 +235,14 @@ mod test {
 
     #[test]
     fn test_notarization_fallback_pool() {
+        test_notarization_fallback_pool_for_type::<LegacyVoteCertificate>();
+        test_notarization_fallback_pool_for_type::<BlsCertificate>();
+    }
+
+    fn test_notarization_fallback_pool_for_type<VC: VoteCertificate>() {
         solana_logger::setup();
-        let mut vote_pool = VotePool::<LegacyVoteCertificate>::new(3);
-        let transaction = Arc::new(VersionedTransaction::default());
+        let mut vote_pool = VotePool::<VC>::new(3);
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();

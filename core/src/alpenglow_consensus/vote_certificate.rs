@@ -27,7 +27,8 @@ pub trait VoteCertificate: Default {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<Self::VoteTransaction>>,
-        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+        // TODO: make this variable non-option after we have the sorted list of pubkeys
+        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
     ) -> Result<Self, CertificateError>;
     fn vote_count(&self) -> Option<usize>;
     fn stake(&self) -> Stake;
@@ -48,7 +49,7 @@ impl VoteCertificate for LegacyVoteCertificate {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<VersionedTransaction>>,
-        _validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+        _validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
     ) -> Result<Self, CertificateError> {
         Ok(Self {
             stake,
@@ -71,7 +72,7 @@ impl VoteCertificate for BlsCertificate {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
-        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
     ) -> Result<Self, CertificateError> {
         BlsCertificate::new(stake, transactions, validator_bls_pubkey_map)
     }
@@ -103,7 +104,7 @@ impl BlsCertificate {
     pub fn new(
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
-        validator_bls_pubkey_map: &HashMap<BlsPubkey, usize>,
+        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
     ) -> Result<Self, CertificateError> {
         let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();
@@ -127,13 +128,16 @@ impl BlsCertificate {
                 .map_err(|_| CertificateError::InvalidSignature)?;
             aggregate_signature.aggregate_with([&signature]);
 
-            // set bit-vector for the validator
-            let validator_index = validator_bls_pubkey_map
-                .get(&transaction.pubkey)
-                .ok_or(CertificateError::ValidatorDoesNotExist)?;
-            bit_vector
-                .set_bit(*validator_index, true)
-                .map_err(|_| CertificateError::IndexOutOfBound)?;
+            // TODO: remove this if condition once validator hashmap becomes non-option
+            if let Some(validator_bls_pubkey_map) = validator_bls_pubkey_map {
+                // set bit-vector for the validator
+                let validator_index = validator_bls_pubkey_map
+                    .get(&transaction.pubkey)
+                    .ok_or(CertificateError::ValidatorDoesNotExist)?;
+                bit_vector
+                    .set_bit(*validator_index, true)
+                    .map_err(|_| CertificateError::IndexOutOfBound)?;
+            }
         }
 
         Ok(Self {
@@ -191,5 +195,29 @@ impl BlsCertificate {
         self.stake += stake;
         self.vote_count += 1;
         Ok(())
+    }
+
+    /// Given a bit vector and a list of validator BLS pubkeys, generate an
+    /// aggregate BLS pubkey.
+    ///
+    /// TODO: Defining this to be a static function for now, but it more
+    /// naturally belongs to where we keep the sorted list of BLS pubkeys
+    pub fn aggregate_pubkey(
+        bit_vector: &BitVector,
+        validator_bls_pubkeys: &[&BlsPubkey],
+    ) -> Result<BlsPubkey, CertificateError> {
+        let mut aggregate_pubkey = PubkeyProjective::default();
+        for (i, pubkey) in validator_bls_pubkeys.iter().enumerate() {
+            if bit_vector
+                .get_bit(i)
+                .map_err(|_| CertificateError::IndexOutOfBound)?
+            {
+                let pubkey_projective: PubkeyProjective = (*pubkey)
+                    .try_into()
+                    .map_err(|_| CertificateError::InvalidPubkey)?;
+                aggregate_pubkey.aggregate_with([&pubkey_projective]);
+            }
+        }
+        Ok(aggregate_pubkey.into())
     }
 }
