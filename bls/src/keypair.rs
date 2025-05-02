@@ -1,6 +1,6 @@
 use {
     crate::{
-        error::BlsError, proof_of_possession::ProofOfPossessionProjective,
+        error::BlsError, pod::Pubkey, proof_of_possession::ProofOfPossessionProjective,
         signature::SignatureProjective, Bls,
     },
     blst::{blst_keygen, blst_scalar},
@@ -15,12 +15,6 @@ use {solana_signature::Signature, solana_signer::Signer, subtle::ConstantTimeEq}
 
 /// Size of BLS secret key in bytes
 pub const BLS_SECRET_KEY_SIZE: usize = 32;
-
-/// Size of a BLS public key in a compressed point representation
-pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
-
-/// Size of a BLS public key in an affine point representation
-pub const BLS_PUBLIC_KEY_AFFINE_SIZE: usize = 96;
 
 /// A BLS secret key
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,26 +79,6 @@ impl SecretKey {
     /// Sign a message using the provided secret key
     pub fn sign(&self, message: &[u8]) -> SignatureProjective {
         Bls::sign(self, message)
-    }
-}
-
-/// A serialized BLS public key in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct PubkeyCompressed(pub [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]);
-
-impl Default for PubkeyCompressed {
-    fn default() -> Self {
-        Self([0; BLS_PUBLIC_KEY_COMPRESSED_SIZE])
-    }
-}
-
-/// A serialized BLS public key in an affine point representation
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
-pub struct Pubkey(pub [u8; BLS_PUBLIC_KEY_AFFINE_SIZE]);
-
-impl Default for Pubkey {
-    fn default() -> Self {
-        Self([0; BLS_PUBLIC_KEY_AFFINE_SIZE])
     }
 }
 

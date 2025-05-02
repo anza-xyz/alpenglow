@@ -1,14 +1,8 @@
 use {
-    crate::{error::BlsError, keypair::PubkeyProjective, Bls},
+    crate::{error::BlsError, keypair::PubkeyProjective, pod::Signature, Bls},
     blstrs::{G2Affine, G2Projective},
     group::Group,
 };
-
-/// Size of a BLS signature in a compressed point representation
-pub const BLS_SIGNATURE_COMPRESSED_SIZE: usize = 96;
-
-/// Size of a BLS signature in an affine point representation
-pub const BLS_SIGNATURE_AFFINE_SIZE: usize = 192;
 
 /// A BLS signature in a projective point representation
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,26 +48,6 @@ impl SignatureProjective {
         } else {
             Err(BlsError::EmptyAggregation)
         }
-    }
-}
-
-/// A serialized BLS signature in a compressed point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SignatureCompressed(pub [u8; BLS_SIGNATURE_COMPRESSED_SIZE]);
-
-impl Default for SignatureCompressed {
-    fn default() -> Self {
-        Self([0; BLS_SIGNATURE_COMPRESSED_SIZE])
-    }
-}
-
-/// A serialized BLS signature in an affine point representation
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Signature(pub [u8; BLS_SIGNATURE_AFFINE_SIZE]);
-
-impl Default for Signature {
-    fn default() -> Self {
-        Self([0; BLS_SIGNATURE_AFFINE_SIZE])
     }
 }
 
