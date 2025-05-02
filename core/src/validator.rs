@@ -5,7 +5,12 @@ use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        alpenglow_consensus::vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+        alpenglow_consensus::{
+            block_creation_loop::{
+                self, BlockCreationLoopConfig, LeaderWindowNotifier, ReplayHighestFrozen,
+            },
+            vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+        },
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
@@ -958,11 +963,15 @@ impl Validator {
         let startup_verification_complete;
         let (poh_recorder, entry_receiver, record_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
-            let highest_frozen_bank = &bank_forks.read().unwrap().highest_frozen_bank();
+            let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
             startup_verification_complete = Arc::clone(bank.get_startup_verification_complete());
-            let first_alpenglow_slot = highest_frozen_bank
-                .feature_set
-                .activated_slot(&solana_feature_set::secp256k1_program_enabled::id());
+            let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
+                hfb.feature_set
+                    .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())
+            });
+            let is_alpenglow_enabled = highest_frozen_bank
+                .zip(first_alpenglow_slot)
+                .is_some_and(|(hfs, fas)| hfs.slot() >= fas);
             PohRecorder::new_with_clear_signal(
                 bank.tick_height(),
                 bank.last_blockhash(),
@@ -976,7 +985,7 @@ impl Validator {
                 &genesis_config.poh_config,
                 Some(poh_timing_point_sender),
                 exit.clone(),
-                highest_frozen_bank.slot() >= first_alpenglow_slot.unwrap_or(u64::MAX),
+                is_alpenglow_enabled,
             )
         };
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
@@ -1343,6 +1352,28 @@ impl Validator {
         let wait_for_vote_to_start_leader =
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
+        let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
+        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
+        let block_creation_loop_config = BlockCreationLoopConfig {
+            exit: exit.clone(),
+            wait_for_vote_to_start_leader,
+            track_transaction_indexes: transaction_status_sender.is_some(),
+            bank_forks: bank_forks.clone(),
+            blockstore: blockstore.clone(),
+            cluster_info: cluster_info.clone(),
+            poh_recorder: poh_recorder.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            rpc_subscriptions: rpc_subscriptions.clone(),
+            banking_tracer: banking_tracer.clone(),
+            slot_status_notifier: slot_status_notifier.clone(),
+            record_receiver: record_receiver.clone(),
+            leader_window_notifier: leader_window_notifier.clone(),
+            replay_highest_frozen: replay_highest_frozen.clone(),
+        };
+        let block_creation_loop = || {
+            block_creation_loop::start_loop(block_creation_loop_config);
+        };
+
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,
@@ -1351,6 +1382,7 @@ impl Validator {
             config.poh_pinned_cpu_core,
             config.poh_hashes_per_batch,
             record_receiver,
+            block_creation_loop,
         );
         assert_eq!(
             blockstore.get_new_shred_signals_len(),
@@ -1557,6 +1589,8 @@ impl Validator {
             wen_restart_repair_slots.clone(),
             slot_status_notifier,
             vote_connection_cache,
+            replay_highest_frozen,
+            leader_window_notifier,
             config.voting_service_additional_listeners.as_ref(),
         )
         .map_err(ValidatorError::Other)?;
