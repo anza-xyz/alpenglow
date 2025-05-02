@@ -30,7 +30,7 @@ pub trait VoteCertificate: Default {
         // TODO: make this variable non-option after we have the sorted list of pubkeys
         validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
     ) -> Result<Self, CertificateError>;
-    fn vote_count(&self) -> Option<usize>;
+    fn vote_count(&self) -> usize;
     fn stake(&self) -> Stake;
 }
 
@@ -57,8 +57,8 @@ impl VoteCertificate for LegacyVoteCertificate {
         })
     }
 
-    fn vote_count(&self) -> Option<usize> {
-        Some(self.transactions.len())
+    fn vote_count(&self) -> usize {
+        self.transactions.len()
     }
 
     fn stake(&self) -> Stake {
@@ -77,8 +77,8 @@ impl VoteCertificate for BlsCertificate {
         BlsCertificate::new(stake, transactions, validator_bls_pubkey_map)
     }
 
-    fn vote_count(&self) -> Option<usize> {
-        Some(self.vote_count.into())
+    fn vote_count(&self) -> usize {
+        self.vote_count.into()
     }
 
     fn stake(&self) -> Stake {
