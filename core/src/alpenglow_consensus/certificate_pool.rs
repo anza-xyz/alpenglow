@@ -153,8 +153,9 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     /// of the related certificates are newly complete.
     /// For each newly constructed certificate
     /// - Insert it into `self.certificates`
+    /// - Potentially update `self.highest_notarized_fallback`,
     /// - Potentially update `self.highest_finalized_slot`,
-    /// - If this the new highest finalized slot, return the certificate ID
+    /// - If we have a new highest finalized slot, return it
     fn update_certificates(
         &mut self,
         vote: &Vote,
@@ -205,18 +206,14 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 if cert_id.is_notarize_fallback()
                     && self
                         .highest_notarized_fallback
-                        .map(|(s, _, _)| s < slot)
-                        .unwrap_or(true)
+                        .map_or(true, |(s, _, _)| s < slot)
                 {
                     self.highest_notarized_fallback =
                         Some((slot, block_id.unwrap(), bank_hash.unwrap()));
                 }
 
                 if cert_id.is_finalization_variant()
-                    && self
-                        .highest_finalized_slot
-                        .map(|s| s < slot)
-                        .unwrap_or(true)
+                    && self.highest_finalized_slot.map_or(true, |s| s < slot)
                 {
                     self.highest_finalized_slot = Some(slot);
                     Some(slot)
