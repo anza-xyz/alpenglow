@@ -13,6 +13,7 @@ use {
         SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::vote::Vote,
+    solana_bls::Pubkey as BLSPubkey,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
     solana_sdk::{
@@ -77,6 +78,8 @@ pub struct CertificatePool<VC: VoteCertificate> {
     epoch_schedule: EpochSchedule,
     // Cached epoch_stakes_map
     epoch_stakes_map: Arc<HashMap<Epoch, EpochStakes>>,
+    // Calculate a stake weighted list of pubkey and BLS pubkey based on epoch_stakes_map
+    epoch_validators_map: HashMap<Epoch, HashMap<BLSPubkey, usize>>,
     // The current root, no need to save anything before this slot.
     root: Slot,
     // The epoch of current root.
@@ -110,10 +113,37 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         self.root
     }
 
+    fn update_epoch_validators_map(&mut self, new_root_epoch: Epoch) {
+        for (epoch, stakes) in self.epoch_stakes_map.iter() {
+            if self.epoch_validators_map.contains_key(epoch) || epoch < &new_root_epoch {
+                continue;
+            }
+            let stakes_data = stakes.stakes().vote_accounts().staked_nodes();
+            let mut pubkey_with_stake = stakes_data.iter().collect::<Vec<_>>();
+            // Larger stake first, if equal, sort by pubkey
+            pubkey_with_stake.sort_by(|(a_pubkey, a_stake), (b_pubkey, b_stake)| {
+                if a_stake == b_stake {
+                    b_pubkey.cmp(a_pubkey)
+                } else {
+                    b_stake.cmp(a_stake)
+                }
+            });
+            let mut validator_map = HashMap::new();
+            for (index, _) in pubkey_with_stake.iter().enumerate() {
+                // TODO(wen): replace this with the real BLS pubkey from vote account
+                validator_map.insert(BLSPubkey::default(), index);
+            }
+            self.epoch_validators_map.insert(*epoch, validator_map);
+        }
+        self.epoch_validators_map
+            .retain(|epoch, _| *epoch >= new_root_epoch);
+    }
+
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
         if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
+            self.update_epoch_validators_map(epoch);
             self.root_epoch = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();
         }
@@ -149,6 +179,14 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         )
     }
 
+    pub(crate) fn get_validator_bls_pubkey_map(
+        &self,
+        slot: Slot,
+    ) -> Option<&HashMap<BLSPubkey, usize>> {
+        let epoch = self.epoch_schedule.get_epoch(slot);
+        self.epoch_validators_map.get(&epoch)
+    }
+
     /// For a new vote `slot` , `vote_type` checks if any
     /// of the related certificates are newly complete.
     /// For each newly constructed certificate
@@ -163,6 +201,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         bank_hash: Option<Hash>,
         total_stake: Stake,
     ) -> Option<Slot> {
+        // We already checked that the slot is greater than the root
         let slot = vote.slot();
         vote_to_certificate_ids(vote)
             .iter()
@@ -193,13 +232,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     };
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
-                // TODO: use an empty hash map of pubkeys for now since it is not clear
-                // where to get the sorted list of validators yet
-
-                // TODO: remove unwrap and properly handle unwrap
+                let Some(validator_bls_pubkey_map) = self
+                    .get_validator_bls_pubkey_map(slot) else {
+                    // This should not happen because we checked the slot is valid in add_vote.
+                    // And if it fails for one certificate, it should fail for all.
+                    warn!("CertificatePool::update_certificates: No validator BLS pubkey map found for slot {slot}");
+                    return None;
+                };
                 self.completed_certificates.insert(
                     cert_id,
-                    VC::new(accumulated_stake, transactions, None).unwrap(),
+                    VC::new(accumulated_stake, transactions, Some(validator_bls_pubkey_map)).unwrap(),
                 );
                 // TODO(ashwin): Send to blockstore so that repair can serve. Also broadcast to other nodes
 
@@ -1622,5 +1664,17 @@ mod tests {
         let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
         pool.handle_new_root(new_bank);
         assert_eq!(pool.root(), 3);
+    }
+
+    #[test]
+    fn test_get_validator_bls_pubkey_map() {
+        let (_, pool) = create_keypairs_and_pool::<BlsCertificate>();
+        let validator_map = pool.get_validator_bls_pubkey_map(0);
+        assert!(validator_map.is_some());
+        let validator_map = validator_map.unwrap();
+        // TODO(wen): fix this when we have real BLS pubkeys.
+        assert_eq!(validator_map.len(), 1);
+        assert_eq!(validator_map.get(&BLSPubkey::default()), Some(&9));
+        assert_eq!(pool.get_validator_bls_pubkey_map(1000), None);
     }
 }
