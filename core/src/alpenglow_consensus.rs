@@ -52,7 +52,7 @@ impl CertificateId {
     /// a Skip certificate (SkipCertified) or a NotarizeFallback certificate
     /// (BranchCertified/ParentReady).
     ///
-    /// Note: Notarization certificates necessarily generate a 
+    /// Note: Notarization certificates necessarily generate a
     /// NotarizeFallback certificate as well
     pub(crate) fn is_critical(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))

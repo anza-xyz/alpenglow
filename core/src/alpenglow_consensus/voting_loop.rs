@@ -788,7 +788,7 @@ impl VotingLoop {
     ) {
         let add_to_cert_pool =
             |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
-                if let Err(e) = Self::add_vote_and_maybe_update_commitment(
+                match Self::add_vote_and_maybe_update_commitment(
                     my_pubkey,
                     &vote,
                     &vote_account_pubkey,
@@ -796,8 +796,14 @@ impl VotingLoop {
                     cert_pool,
                     commitment_sender,
                 ) {
-                    // TODO(ashwin): increment metrics on non duplicate failures
-                    trace!("{my_pubkey}: unable to push vote into the pool {}", e);
+                    Err(AddVoteError::CertificateSenderError) => panic!(
+                    "{my_pubkey}: Something has gone wrong with the certificate_service, exiting"
+                ),
+                    Err(e) => {
+                        // TODO(ashwin): increment metrics on non duplicate failures
+                        trace!("{my_pubkey}: unable to push vote into the pool {}", e);
+                    }
+                    Ok(()) => (),
                 }
             };
 
