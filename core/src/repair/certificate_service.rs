@@ -31,11 +31,12 @@ impl CertificateService {
         blockstore: Arc<Blockstore>,
         certificate_receiver: CertificateReceiver,
     ) -> Self {
-        let t_cert_insert = Self::start_certificate_insert(exit, blockstore, certificate_receiver);
+        let t_cert_insert =
+            Self::start_certificate_insert_broadcast(exit, blockstore, certificate_receiver);
         Self { t_cert_insert }
     }
 
-    fn start_certificate_insert(
+    fn start_certificate_insert_broadcast(
         exit: Arc<AtomicBool>,
         blockstore: Arc<Blockstore>,
         certificate_receiver: CertificateReceiver,
@@ -45,7 +46,7 @@ impl CertificateService {
         };
 
         Builder::new()
-            .name("solCertInsert".to_string())
+            .name("solCertInsertBCast".to_string())
             .spawn(move || {
                 while !exit.load(Ordering::Relaxed) {
                     let certs = match Self::receive_new_certificates(&certificate_receiver) {
@@ -61,7 +62,7 @@ impl CertificateService {
 
                     // Insert into blockstore
                     if let Err(e) = certs.into_iter().try_for_each(|(cert_id, cert)| {
-                        Self::run_insert_certificates(blockstore.as_ref(), cert_id, cert)
+                        Self::insert_certificate(blockstore.as_ref(), cert_id, cert)
                     }) {
                         if Self::should_exit_on_error(&e, &handle_error) {
                             break;
@@ -83,7 +84,7 @@ impl CertificateService {
         )
     }
 
-    fn run_insert_certificates(
+    fn insert_certificate(
         blockstore: &Blockstore,
         cert_id: CertificateId,
         vote_certificate: LegacyVoteCertificate,
