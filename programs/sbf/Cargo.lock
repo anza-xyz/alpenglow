@@ -7631,6 +7631,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "solana-accounts-db",
+ "solana-bls",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",

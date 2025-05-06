@@ -8,6 +8,7 @@ use {
     itertools::izip,
     log::*,
     solana_accounts_db::utils::create_accounts_run_and_snapshot_dirs,
+    solana_bls::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_client::connection_cache::ConnectionCache,
     solana_core::{
         alpenglow_consensus::vote_history_storage::FileVoteHistoryStorage,
@@ -282,11 +283,14 @@ impl LocalCluster {
                 .zip(&config.node_stakes)
                 .zip(&vote_keys)
                 .filter_map(|(((node_keypair, in_genesis), stake), vote_keypair)| {
+                    let bls_keypair = BLSKeypair::new();
+                    let bls_pubkey: BLSPubkey = bls_keypair.public.into();
                     info!(
-                        "STARTING LOCAL CLUSTER: key {} vote_key {} has {} stake",
+                        "STARTING LOCAL CLUSTER: key {} vote_key {} has {} stake bls_key {:?}",
                         node_keypair.pubkey(),
                         vote_keypair.pubkey(),
-                        stake
+                        stake,
+                        bls_pubkey,
                     );
                     if *in_genesis {
                         Some((
@@ -294,6 +298,7 @@ impl LocalCluster {
                                 node_keypair: node_keypair.insecure_clone(),
                                 vote_keypair: vote_keypair.insecure_clone(),
                                 stake_keypair: Keypair::new(),
+                                bls_keypair: Some(bls_keypair),
                             },
                             stake,
                         ))

@@ -1,6 +1,7 @@
 use {
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
     log::*,
+    solana_bls::keypair::Keypair as BLSKeypair,
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
     solana_loader_v3_interface::state::UpgradeableLoaderState,
     solana_sdk::{
@@ -52,14 +53,21 @@ pub struct ValidatorVoteKeypairs {
     pub node_keypair: Keypair,
     pub vote_keypair: Keypair,
     pub stake_keypair: Keypair,
+    pub bls_keypair: Option<BLSKeypair>,
 }
 
 impl ValidatorVoteKeypairs {
-    pub fn new(node_keypair: Keypair, vote_keypair: Keypair, stake_keypair: Keypair) -> Self {
+    pub fn new(
+        node_keypair: Keypair,
+        vote_keypair: Keypair,
+        stake_keypair: Keypair,
+        bls_keypair: Option<BLSKeypair>,
+    ) -> Self {
         Self {
             node_keypair,
             vote_keypair,
             stake_keypair,
+            bls_keypair,
         }
     }
 
@@ -68,6 +76,7 @@ impl ValidatorVoteKeypairs {
             node_keypair: Keypair::new(),
             vote_keypair: Keypair::new(),
             stake_keypair: Keypair::new(),
+            bls_keypair: Some(BLSKeypair::new()),
         }
     }
 }
