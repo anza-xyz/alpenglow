@@ -257,6 +257,13 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     };
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
+                let Some(validator_bls_pubkey_map) = self
+                    .get_validator_bls_pubkey_map(slot) else {
+                    // This should not happen because we checked the slot is valid in add_vote.
+                    // And if it fails for one certificate, it should fail for all.
+                    warn!("CertificatePool::update_certificates: No validator BLS pubkey map found for slot {slot}");
+                    return Ok(None);
+                };
                 let vote_certificate = VC::new(accumulated_stake, transactions, Some(validator_bls_pubkey_map)).unwrap();
                 self.completed_certificates
                     .insert(cert_id, vote_certificate.clone());
@@ -649,7 +656,7 @@ mod tests {
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
-        let mut pool = CertificatePool::new_from_root_bank(&root_bank);
+        let mut pool = CertificatePool::new_from_root_bank(&root_bank, None);
         let mut validator_bls_pubkey_map = HashMap::new();
         validator_keypairs
             .iter()
