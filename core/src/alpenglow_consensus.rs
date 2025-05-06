@@ -46,6 +46,17 @@ impl CertificateId {
     pub(crate) fn is_notarize_fallback(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _))
     }
+
+    /// "Critical" certs are the certificates necessary to make progress
+    /// We do not consider the next slot for voting until we've seen either
+    /// a Skip certificate (SkipCertified) or a NotarizeFallback certificate
+    /// (BranchCertified/ParentReady).
+    ///
+    /// Note: Notarization certificates necessarily generate a
+    /// NotarizeFallback certificate as well
+    pub(crate) fn is_critical(&self) -> bool {
+        matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
