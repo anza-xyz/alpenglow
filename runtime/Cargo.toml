@@ -48,8 +48,8 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 solana-accounts-db = { workspace = true }
-solana-bpf-loader-program = { workspace = true }
 solana-bls = { workspace = true }
+solana-bpf-loader-program = { workspace = true }
 solana-bucket-map = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
 solana-builtins = { workspace = true }
