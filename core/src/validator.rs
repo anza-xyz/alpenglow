@@ -323,6 +323,8 @@ pub struct ValidatorConfig {
     pub tvu_shred_sigverify_threads: NonZeroUsize,
     pub delay_leader_block_for_pending_fork: bool,
     pub voting_service_additional_listeners: Option<Vec<SocketAddr>>,
+    pub pen_voting: Arc<AtomicBool>,
+    pub ready_to_vote: Arc<AtomicBool>,
 }
 
 impl Default for ValidatorConfig {
@@ -398,6 +400,8 @@ impl Default for ValidatorConfig {
             tvu_shred_sigverify_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
             delay_leader_block_for_pending_fork: false,
             voting_service_additional_listeners: None,
+            pen_voting: Arc::new(false.into()),
+            ready_to_vote: Arc::new(false.into()),
         }
     }
 }
@@ -1592,6 +1596,8 @@ impl Validator {
             replay_highest_frozen,
             leader_window_notifier,
             config.voting_service_additional_listeners.as_ref(),
+            config.pen_voting.clone(),
+            config.ready_to_vote.clone(),
         )
         .map_err(ValidatorError::Other)?;
 

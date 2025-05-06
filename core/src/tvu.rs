@@ -173,6 +173,8 @@ impl Tvu {
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
         voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
+        pen_voting: Arc<AtomicBool>,
+        ready_to_vote: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -347,6 +349,8 @@ impl Tvu {
             banking_tracer,
             replay_highest_frozen,
             leader_window_notifier,
+            pen_voting,
+            ready_to_vote,
         };
 
         let voting_service = VotingService::new(
@@ -620,6 +624,8 @@ pub mod tests {
             Arc::new(ReplayHighestFrozen::default()),
             Arc::new(LeaderWindowNotifier::default()),
             None,
+            Arc::new(false.into()),
+            Arc::new(false.into()),
         )
         .expect("assume success");
         if enable_wen_restart {

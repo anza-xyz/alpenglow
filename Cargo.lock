@@ -8476,6 +8476,7 @@ version = "2.3.0"
 dependencies = [
  "alpenglow-vote",
  "assert_matches",
+ "bincode",
  "crossbeam-channel",
  "fs_extra",
  "gag",
@@ -8507,6 +8508,7 @@ dependencies = [
  "solana-streamer",
  "solana-thin-client",
  "solana-tpu-client",
+ "solana-transaction",
  "solana-turbine",
  "solana-vote",
  "solana-vote-program",

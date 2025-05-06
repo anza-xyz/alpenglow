@@ -80,6 +80,7 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
+    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -91,6 +92,7 @@ use {
         fs,
         io::Read,
         iter,
+        net::UdpSocket,
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -6093,5 +6095,187 @@ fn test_invalid_forks_persisted_on_restart() {
             "Did not create a new fork off parent {parent} in 30 seconds after restart"
         );
         sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_node_all_nodes_notarize_and_finalize() {
+    // Create node stakes
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    let node_stakes = vec![
+        100 * DEFAULT_NODE_STAKE,
+        DEFAULT_NODE_STAKE,
+        DEFAULT_NODE_STAKE,
+    ];
+    let num_nodes = node_stakes.len();
+
+    // Create leader schedule
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&vec![0, 0, 100]);
+    assert_eq!(num_nodes, validator_keys.len());
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+
+    // Control variables
+    let pen_voting_a = Arc::new(AtomicBool::new(true));
+    let pen_voting_b = Arc::new(AtomicBool::new(false));
+    let pen_voting_c = Arc::new(AtomicBool::new(false));
+
+    // Create validator configs
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener.local_addr().unwrap()]);
+
+    let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
+    validator_configs[0].pen_voting = pen_voting_a.clone();
+    validator_configs[1].pen_voting = pen_voting_b.clone();
+    validator_configs[2].pen_voting = pen_voting_c.clone();
+
+    let ready_to_vote = validator_configs
+        .iter()
+        .map(|conf| conf.ready_to_vote.clone())
+        .collect_vec();
+
+    // Cluster config
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: 1000 * DEFAULT_NODE_STAKE,
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        node_stakes,
+        ticks_per_slot: 8,
+        slots_per_epoch: MINIMUM_SLOTS_PER_EPOCH * 2,
+        stakers_slot_offset: MINIMUM_SLOTS_PER_EPOCH * 2,
+        poh_config: PohConfig {
+            target_tick_duration: PohConfig::default().target_tick_duration,
+            hashes_per_tick: Some(clock::DEFAULT_HASHES_PER_TICK),
+            target_tick_count: None,
+        },
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    let vote_pubkeys = validator_keys
+        .iter()
+        .filter_map(|keypair| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| validator.info.voting_keypair.pubkey())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vote_pubkeys.len(), num_nodes);
+
+    // Keep track of notarization and finalization votes per validator
+    let vote_tracker = Arc::new(Mutex::new(vec![HashMap::<Slot, u8>::new(); num_nodes]));
+    let greatest_slot_with_finalize_vote = Arc::new(Mutex::new(0_u64));
+
+    let vote_observer = std::thread::spawn({
+        let mut buf = [0_u8; 65_535];
+        let vote_tracker = vote_tracker.clone();
+        let greatest_slot_with_finalize_vote = greatest_slot_with_finalize_vote.clone();
+
+        move || loop {
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            let node_ix = vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap();
+
+            let cur_vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+
+            let modifier = if cur_vote.is_notarization() {
+                0x01
+            } else if cur_vote.is_finalize() {
+                let mut greatest_slot_with_finalize_vote =
+                    greatest_slot_with_finalize_vote.lock().unwrap();
+
+                *greatest_slot_with_finalize_vote =
+                    greatest_slot_with_finalize_vote.max(cur_vote.slot());
+
+                0x02
+            } else if cur_vote.is_skip() {
+                0x04
+            } else {
+                panic!("Unknown vote type encountered: {:?}", cur_vote);
+            };
+
+            {
+                let mut cur_vote_tracker = vote_tracker.lock().unwrap();
+                let cur_map = cur_vote_tracker.get_mut(node_ix).unwrap();
+                *cur_map.entry(cur_vote.slot()).or_insert(0) |= modifier;
+            }
+
+            // Once we've seen a vote at or beyond slot 15, we're done.
+            if cur_vote.slot() >= 15 {
+                break;
+            }
+        }
+    });
+
+    loop {
+        let num_ready_to_vote: u8 = ready_to_vote
+            .iter()
+            .map(|b| b.load(Ordering::Relaxed) as u8)
+            .sum();
+
+        sleep(Duration::from_millis(100));
+
+        if num_ready_to_vote == 3 {
+            break;
+        }
+    }
+
+    // Let B and C start issuing skips for a few slots before A starts voting
+    sleep(Duration::from_secs(2));
+
+    pen_voting_a.store(false, Ordering::Relaxed);
+
+    vote_observer.join().unwrap();
+
+    // Out of the last 10 slots, ensure that all nodes have voted notarize and finalize on at least
+    // 5 of them.
+    {
+        let vote_tracker = vote_tracker.lock().unwrap();
+
+        let greatest_slot_with_finalize_vote =
+            { *greatest_slot_with_finalize_vote.lock().unwrap() };
+
+        for cur_vote_tracker in vote_tracker.iter() {
+            let (mut n_notars, mut n_finals) = (0_u8, 0_u8);
+
+            for slot_ix in greatest_slot_with_finalize_vote.saturating_sub(9)
+                ..=greatest_slot_with_finalize_vote
+            {
+                if let Some(votes) = cur_vote_tracker.get(&slot_ix) {
+                    n_notars += *votes & 0x01;
+                    n_finals += (*votes & 0x02) >> 1;
+                }
+            }
+
+            assert!(n_notars >= 5);
+            assert!(n_finals >= 5);
+        }
     }
 }
