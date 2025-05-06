@@ -1,18 +1,17 @@
+pub use crate::pod::{
+    ProofOfPossession, ProofOfPossessionCompressed, Pubkey, PubkeyCompressed, Signature,
+    SignatureCompressed, BLS_PROOF_OF_POSSESSION_AFFINE_SIZE,
+    BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE, BLS_PUBLIC_KEY_AFFINE_SIZE,
+    BLS_PUBLIC_KEY_COMPRESSED_SIZE, BLS_SIGNATURE_AFFINE_SIZE, BLS_SIGNATURE_COMPRESSED_SIZE,
+};
+#[cfg(not(target_os = "solana"))]
 pub use crate::{
     error::BlsError,
-    keypair::{
-        Pubkey, PubkeyCompressed, PubkeyProjective, SecretKey, BLS_PUBLIC_KEY_AFFINE_SIZE,
-        BLS_PUBLIC_KEY_COMPRESSED_SIZE, BLS_SECRET_KEY_SIZE,
-    },
-    proof_of_possession::{
-        ProofOfPossession, ProofOfPossessionCompressed, ProofOfPossessionProjective,
-        BLS_PROOF_OF_POSSESSION_AFFINE_SIZE, BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE,
-    },
-    signature::{
-        Signature, SignatureCompressed, SignatureProjective, BLS_SIGNATURE_AFFINE_SIZE,
-        BLS_SIGNATURE_COMPRESSED_SIZE,
-    },
+    keypair::{PubkeyProjective, SecretKey, BLS_SECRET_KEY_SIZE},
+    proof_of_possession::ProofOfPossessionProjective,
+    signature::SignatureProjective,
 };
+#[cfg(not(target_os = "solana"))]
 use {
     blstrs::{pairing, G1Affine, G2Projective},
     group::prime::PrimeCurveAffine,
@@ -21,9 +20,14 @@ use {
 // TODO: add conversion between compressed and uncompressed representation of
 // signatures, pubkeys, and proof of possessions
 
+#[cfg(not(target_os = "solana"))]
 pub mod error;
+#[cfg(not(target_os = "solana"))]
 pub mod keypair;
+pub mod pod;
+#[cfg(not(target_os = "solana"))]
 pub mod proof_of_possession;
+#[cfg(not(target_os = "solana"))]
 pub mod signature;
 
 /// Domain separation tag used for hashing messages to curve points to prevent
@@ -37,7 +41,9 @@ pub const HASH_TO_POINT_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NU
 /// https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#section-4.2.3.
 pub const POP_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_POP_";
 
+#[cfg(not(target_os = "solana"))]
 pub struct Bls;
+#[cfg(not(target_os = "solana"))]
 impl Bls {
     /// Sign a message using the provided secret key
     #[allow(clippy::arithmetic_side_effects)]

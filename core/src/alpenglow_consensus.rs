@@ -1,4 +1,12 @@
+use {
+    alpenglow_vote::vote::Vote,
+    solana_sdk::{clock::Slot, hash::Hash},
+    std::time::Duration,
+};
+
 pub mod bit_vector;
+pub mod block_creation_loop;
+pub mod bls_vote_transaction;
 pub mod certificate_pool;
 pub mod transaction;
 pub mod utils;
@@ -11,13 +19,44 @@ pub mod voting_loop;
 pub type Stake = u64;
 pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CertificateType {
-    Finalize,
-    FinalizeFast,
-    Notarize,
-    NotarizeFallback,
-    Skip,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CertificateId {
+    Finalize(Slot),
+    FinalizeFast(Slot, Hash, Hash),
+    Notarize(Slot, Hash, Hash),
+    NotarizeFallback(Slot, Hash, Hash),
+    Skip(Slot),
+}
+
+impl CertificateId {
+    #[allow(dead_code)]
+    pub fn slot(&self) -> Slot {
+        match self {
+            CertificateId::Finalize(slot)
+            | CertificateId::FinalizeFast(slot, _, _)
+            | CertificateId::Notarize(slot, _, _)
+            | CertificateId::NotarizeFallback(slot, _, _)
+            | CertificateId::Skip(slot) => *slot,
+        }
+    }
+    pub(crate) fn is_finalization_variant(&self) -> bool {
+        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
+    }
+
+    pub(crate) fn is_notarize_fallback(&self) -> bool {
+        matches!(self, Self::NotarizeFallback(_, _, _))
+    }
+
+    /// "Critical" certs are the certificates necessary to make progress
+    /// We do not consider the next slot for voting until we've seen either
+    /// a Skip certificate (SkipCertified) or a NotarizeFallback certificate
+    /// (BranchCertified/ParentReady).
+    ///
+    /// Note: Notarization certificates necessarily generate a
+    /// NotarizeFallback certificate as well
+    pub(crate) fn is_critical(&self) -> bool {
+        matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,19 +76,48 @@ pub const CONFLICTING_VOTETYPES: [(VoteType, VoteType); 5] = [
     (VoteType::Skip, VoteType::SkipFallback),
 ];
 
-pub const CERTIFICATE_LIMITS: [(CertificateType, (f64, &[VoteType])); 5] = [
-    (CertificateType::FinalizeFast, (0.8, &[VoteType::Notarize])),
-    (CertificateType::Finalize, (0.6, &[VoteType::Finalize])),
-    (CertificateType::Notarize, (0.6, &[VoteType::Notarize])),
-    (
-        CertificateType::NotarizeFallback,
-        (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback]),
-    ),
-    (
-        CertificateType::Skip,
-        (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
-    ),
-];
+/// Lookup from `CertificateId` to the `VoteType`s that contribute,
+/// as well as the stake fraction required for certificate completion.
+///
+/// Must be in sync with `vote_to_certificate_ids`
+pub const fn certificate_limits_and_vote_types(
+    cert_type: CertificateId,
+) -> (f64, &'static [VoteType]) {
+    match cert_type {
+        CertificateId::Notarize(_, _, _) => (0.6, &[VoteType::Notarize]),
+        CertificateId::NotarizeFallback(_, _, _) => {
+            (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
+        }
+        CertificateId::FinalizeFast(_, _, _) => (0.8, &[VoteType::Notarize]),
+        CertificateId::Finalize(_) => (0.6, &[VoteType::Finalize]),
+        CertificateId::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+    }
+}
+
+/// Lookup from `Vote` to the `CertificateId`s the vote accounts for
+///
+/// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
+pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<CertificateId> {
+    match vote {
+        Vote::Notarize(vote) => vec![
+            CertificateId::Notarize(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
+            CertificateId::NotarizeFallback(
+                vote.slot(),
+                *vote.block_id(),
+                *vote.replayed_bank_hash(),
+            ),
+            CertificateId::FinalizeFast(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
+        ],
+        Vote::NotarizeFallback(vote) => vec![CertificateId::NotarizeFallback(
+            vote.slot(),
+            *vote.block_id(),
+            *vote.replayed_bank_hash(),
+        )],
+        Vote::Finalize(vote) => vec![CertificateId::Finalize(vote.slot())],
+        Vote::Skip(vote) => vec![CertificateId::Skip(vote.slot())],
+        Vote::SkipFallback(vote) => vec![CertificateId::Skip(vote.slot())],
+    }
+}
 
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 
@@ -64,13 +132,29 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 
-/// The amount of time a leader has to build their block in ms
-pub const BLOCKTIME: u128 = 400;
+/// Alpenglow block constants
+/// The amount of time a leader has to build their block
+pub const BLOCKTIME: Duration = Duration::from_millis(400);
 
-/// The maximum message delay in ms
-pub const DELTA: u128 = 100;
+/// The maximum message delay
+pub const DELTA: Duration = Duration::from_millis(100);
 
-/// The Maximum delay a node can observe between entering the loop iteration
+/// The maximum delay a node can observe between entering the loop iteration
 /// for a window and receiving any shred of the first block of the leader.
 /// As a conservative global constant we set this to 3 * DELTA
-pub const DELTA_TIMEOUT: u128 = 300;
+pub const DELTA_TIMEOUT: Duration = DELTA.saturating_mul(3);
+
+/// The timeout in ms for the leader block index within the leader window
+#[inline]
+pub fn skip_timeout(leader_block_index: usize) -> Duration {
+    DELTA_TIMEOUT + (leader_block_index as u32 + 1) * BLOCKTIME + DELTA
+}
+
+/// Block timeout, when we should publish the final shred for the leader block index
+/// within the leader window
+#[inline]
+pub fn block_timeout(leader_block_index: usize) -> Duration {
+    // TODO: What should be a reasonable buffer for this?
+    // Release the final shred `DELTA`ms before the skip timeout
+    skip_timeout(leader_block_index).saturating_sub(DELTA)
+}

@@ -1,13 +1,19 @@
 use {
-    super::{vote_certificate::VoteCertificate, vote_pool::VotePool, Stake},
+    super::{
+        certificate_limits_and_vote_types,
+        vote_certificate::{CertificateError, VoteCertificate},
+        vote_history::VoteHistory,
+        vote_pool::{VoteKey, VotePool},
+        vote_to_certificate_ids, Stake,
+    },
     crate::alpenglow_consensus::{
-        CertificateType, VoteType, CERTIFICATE_LIMITS, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
         MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::vote::Vote,
-    itertools::Itertools,
+    crossbeam_channel::Sender,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
     solana_sdk::{
@@ -16,7 +22,7 @@ use {
         hash::Hash,
     },
     std::{
-        collections::{hash_map::Entry, BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap},
         sync::Arc,
     },
     thiserror::Error,
@@ -36,8 +42,6 @@ impl VoteType {
 
 pub type PoolId = (Slot, VoteType);
 
-pub type CertificateId = (Slot, CertificateType);
-
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
     //    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
@@ -53,44 +57,26 @@ pub enum AddVoteError {
 
     #[error("Slot in the future")]
     SlotInFuture,
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NewHighestCertificate {
-    Notarize(Slot),
-    Skip(Slot),
-    Finalize(Slot),
-}
+    #[error("Certificate error: {0}")]
+    Certificate(#[from] CertificateError),
 
-impl NewHighestCertificate {
-    pub fn is_notarization_or_skip(&self) -> bool {
-        matches!(
-            self,
-            NewHighestCertificate::Notarize(_) | NewHighestCertificate::Skip(_)
-        )
-    }
-
-    pub fn slot(&self) -> Slot {
-        match self {
-            NewHighestCertificate::Notarize(slot) => *slot,
-            NewHighestCertificate::Skip(slot) => *slot,
-            NewHighestCertificate::Finalize(slot) => *slot,
-        }
-    }
+    #[error("Certificate sender error")]
+    CertificateSenderError,
 }
 
 #[derive(Default)]
 pub struct CertificatePool<VC: VoteCertificate> {
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
-    // Certificate pools to keep track of the certs.
-    certificates: BTreeMap<CertificateId, VC>,
-    // Reverse lookup table of vote types to possible certificates it's affecting.
-    vote_type_to_certificates: HashMap<VoteType, Vec<CertificateType>>,
+    /// Completed certificates
+    completed_certificates: BTreeMap<CertificateId, VC>,
     // Lookup table for checking conflicting vote types.
     // conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
-    // Highest slot with each certificate
-    highest_slot_map: HashMap<CertificateType, Slot>,
+    /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
+    highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
+    /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
+    highest_finalized_slot: Option<Slot>,
     // Cached epoch_schedule
     epoch_schedule: EpochSchedule,
     // Cached epoch_stakes_map
@@ -99,22 +85,20 @@ pub struct CertificatePool<VC: VoteCertificate> {
     root: Slot,
     // The epoch of current root.
     root_epoch: Epoch,
+    /// The certificate sender, if set, newly created certificates will be sent here
+    certificate_sender: Option<Sender<(CertificateId, VC)>>,
 }
 
 impl<VC: VoteCertificate> CertificatePool<VC> {
-    pub fn new_from_root_bank(bank: &Bank) -> Self {
-        let mut pool = Self::default();
-
-        // Initialize the vote_type_to_certificates map
-        for (cert_type, (_, vote_types)) in CERTIFICATE_LIMITS.iter() {
-            for vote_type in *vote_types {
-                let entry = pool
-                    .vote_type_to_certificates
-                    .entry(*vote_type)
-                    .or_insert_with(Vec::new);
-                entry.push(cert_type.clone());
-            }
-        }
+    pub fn new_from_root_bank(
+        bank: &Bank,
+        certificate_sender: Option<Sender<(CertificateId, VC)>>,
+    ) -> Self {
+        let mut pool = Self {
+            root: bank.slot(),
+            certificate_sender,
+            ..Self::default()
+        };
 
         /*    // Initialize the conflicting_vote_types map
         for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
@@ -135,27 +119,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         pool
     }
 
+    pub fn root(&self) -> Slot {
+        self.root
+    }
+
     fn update_epoch_stakes_map(&mut self, bank: &Bank) {
         let epoch = bank.epoch();
         if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
             self.root_epoch = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();
-        }
-    }
-
-    // Return true if the new slot is greater than the current highest slot.
-    fn set_highest_slot(&mut self, certificate_type: CertificateType, slot: Slot) -> bool {
-        match self.highest_slot_map.entry(certificate_type) {
-            Entry::Occupied(mut e) if slot > *e.get() => {
-                e.insert(slot);
-                true
-            }
-            Entry::Vacant(e) => {
-                e.insert(slot);
-                true
-            }
-            _ => false,
         }
     }
 
@@ -189,54 +162,87 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         )
     }
 
+    /// For a new vote `slot` , `vote_type` checks if any
+    /// of the related certificates are newly complete.
+    /// For each newly constructed certificate
+    /// - Insert it into `self.certificates`
+    /// - Potentially update `self.highest_notarized_fallback`,
+    /// - If it is a `is_critical` certificate, send via the certificate sender
+    /// - Potentially update `self.highest_finalized_slot`,
+    /// - If we have a new highest finalized slot, return it
     fn update_certificates(
         &mut self,
-        slot: Slot,
-        vote_type: VoteType,
-        bank_hash: Option<Hash>,
+        vote: &Vote,
         block_id: Option<Hash>,
+        bank_hash: Option<Hash>,
         total_stake: Stake,
-    ) -> Result<(), AddVoteError> {
-        let cert_types = self
-            .vote_type_to_certificates
-            .get(&vote_type)
-            .unwrap_or_else(|| {
-                panic!("VoteType {vote_type:?} not found in vote_type_to_certificates")
-            })
-            .clone();
-        for cert_type in cert_types {
-            // If the certificate is already complete, skip it
-            if self.certificates.contains_key(&(slot, cert_type.clone())) {
-                continue;
-            }
-            // Otherwise check whether the certificate is complete
-            let (_, (limit, vote_types)) = CERTIFICATE_LIMITS
-                .iter()
-                .find(|(cert_type_entry, _)| cert_type_entry == &cert_type)
-                .expect("CertificateType {cert_type} not found");
-            let accumulated_stake = vote_types
-                .iter()
-                .filter_map(|vote_type| {
-                    self.vote_pools
-                        .get(&(slot, *vote_type))
-                        .map(|vote_pool| vote_pool.total_stake_by_key(bank_hash, block_id))
-                })
-                .sum::<Stake>();
-            if accumulated_stake as f64 / total_stake as f64 >= *limit {
+    ) -> Result<Option<Slot>, AddVoteError> {
+        let slot = vote.slot();
+        vote_to_certificate_ids(vote)
+            .iter()
+            .try_fold(None, |highest, &cert_id| {
+                // If the certificate is already complete, skip it
+                if self.completed_certificates.contains_key(&cert_id) {
+                    return Ok(highest);
+                }
+                // Otherwise check whether the certificate is complete
+                let (limit, vote_types) = certificate_limits_and_vote_types(cert_id);
+                let accumulated_stake = vote_types
+                    .iter()
+                    .filter_map(|vote_type| {
+                        Some(
+                            self.vote_pools
+                                .get(&(slot, *vote_type))?
+                                .total_stake_by_key(bank_hash, block_id),
+                        )
+                    })
+                    .sum::<Stake>();
+                if accumulated_stake as f64 / (total_stake as f64) < limit {
+                    return Ok(highest);
+                }
                 let mut transactions = Vec::new();
-                for vote_type in *vote_types {
-                    if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                        vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
+                for vote_type in vote_types {
+                    let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
+                        continue;
+                    };
+                    vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
+                }
+                // TODO: use an empty hash map of pubkeys for now since it is not clear
+                // where to get the sorted list of validators yet
+
+                // TODO: remove unwrap and properly handle unwrap
+                let vote_certificate = VC::new(accumulated_stake, transactions, None).unwrap();
+                self.completed_certificates
+                    .insert(cert_id, vote_certificate.clone());
+                if let Some(sender) = &self.certificate_sender {
+                    if cert_id.is_critical() {
+                        if let Err(e) = sender.try_send((cert_id, vote_certificate)) {
+                            error!("Unable to send certificate {cert_id:?}: {e:?}");
+                            return Err(AddVoteError::CertificateSenderError);
+                        }
                     }
                 }
-                self.certificates.insert(
-                    (slot, cert_type.clone()),
-                    VC::new(accumulated_stake, transactions),
-                );
-                self.set_highest_slot(cert_type.clone(), slot);
-            }
-        }
-        Ok(())
+
+                if cert_id.is_notarize_fallback()
+                    && self
+                        .highest_notarized_fallback
+                        .map_or(true, |(s, _, _)| s < slot)
+                {
+                    self.highest_notarized_fallback =
+                        Some((slot, block_id.unwrap(), bank_hash.unwrap()));
+                }
+
+                if cert_id.is_finalization_variant()
+                    && self.highest_finalized_slot.map_or(true, |s| s < slot)
+                {
+                    self.highest_finalized_slot = Some(slot);
+                    if self.highest_finalized_slot > highest {
+                        return Ok(Some(slot));
+                    }
+                }
+
+                Ok(highest)
+            })
     }
 
     //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
@@ -257,12 +263,18 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             None
         }
     */
+
+    /// Adds the new vote the the certificate pool. If a new certificate is created
+    /// as a result of this, send it via the `self.certificate_sender`
+    ///
+    /// If this resulted in a new highest Finalize or FastFinalize certificate,
+    /// return the slot
     pub fn add_vote(
         &mut self,
         vote: &Vote,
         transaction: VC::VoteTransaction,
         validator_vote_key: &Pubkey,
-    ) -> Result<(), AddVoteError> {
+    ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
         let transaction = Arc::new(transaction);
         let epoch = self.epoch_schedule.get_epoch(slot);
@@ -303,7 +315,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     ));
                 }
         */
-        if self.update_vote_pool(
+        if !self.update_vote_pool(
             slot,
             vote_type,
             bank_hash,
@@ -312,156 +324,169 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             validator_vote_key,
             validator_stake,
         ) {
-            self.update_certificates(slot, vote_type, bank_hash, block_id, total_stake)?;
+            return Ok(None);
         }
-        Ok(())
+        self.update_certificates(vote, block_id, bank_hash, total_stake)
     }
 
-    pub fn highest_not_skip_certificate_slot(&self) -> Slot {
-        self.highest_slot_map
-            .iter()
-            .filter(|(certificate_type, _)| **certificate_type != CertificateType::Skip)
-            .map(|(_, slot)| *slot)
-            .max()
-            .unwrap_or(0)
+    /// The highest notarized fallback slot, for use as the parent slot in leader window
+    pub fn highest_notarized_fallback(&self) -> Option<(Slot, Hash, Hash)> {
+        // TODO(ashwin): When updating voting loop for duplicate blocks, add parent tracker to
+        // make this the true "highest branchCertified block". For now this sufficies.
+        self.highest_notarized_fallback
     }
 
-    pub fn highest_notarized_slot(&self) -> Slot {
+    #[cfg(test)]
+    fn highest_notarized_slot(&self) -> Slot {
         // Return the max of CertificateType::Notarize and CertificateType::NotarizeFallback
-        [CertificateType::Notarize, CertificateType::NotarizeFallback]
+        self.completed_certificates
             .iter()
-            .filter_map(|cert_type| self.highest_slot_map.get(cert_type))
-            .copied()
-            .max()
-            .unwrap_or(0)
-    }
-
-    pub fn highest_skip_slot(&self) -> Slot {
-        self.highest_slot_map
-            .get(&CertificateType::Skip)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    pub fn highest_finalized_slot(&self) -> Slot {
-        [CertificateType::Finalize, CertificateType::FinalizeFast]
-            .iter()
-            .filter_map(|cert_type| self.highest_slot_map.get(cert_type))
-            .copied()
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn find_first_in_certificates(
-        &self,
-        slot: Slot,
-        certificate_types: &[CertificateType],
-    ) -> Option<usize> {
-        certificate_types
-            .iter()
-            .filter_map(|cert_type| {
-                self.certificates
-                    .get(&(slot, cert_type.clone()))
-                    .map(|x| x.size())
+            .filter_map(|(cert_id, _)| match cert_id {
+                CertificateId::Notarize(s, _, _) => Some(s),
+                CertificateId::NotarizeFallback(s, _, _) => Some(s),
+                _ => None,
             })
-            .find_or_first(|x| x.is_some())?
+            .max()
+            .copied()
+            .unwrap_or(0)
     }
 
-    pub fn get_finalization_cert_size(&self, slot: Slot) -> Option<usize> {
-        self.find_first_in_certificates(
-            slot,
-            &[CertificateType::FinalizeFast, CertificateType::Finalize],
-        )
+    #[cfg(test)]
+    fn highest_skip_slot(&self) -> Slot {
+        self.completed_certificates
+            .iter()
+            .filter_map(|(cert_id, _)| match cert_id {
+                CertificateId::Skip(s) => Some(s),
+                _ => None,
+            })
+            .max()
+            .copied()
+            .unwrap_or(0)
     }
 
-    pub fn get_notarization_cert_size(&self, slot: Slot) -> Option<usize> {
-        self.find_first_in_certificates(
-            slot,
-            &[CertificateType::Notarize, CertificateType::NotarizeFallback],
-        )
+    #[cfg(test)]
+    fn highest_finalized_slot(&self) -> Slot {
+        self.completed_certificates
+            .iter()
+            .filter_map(|(cert_id, _)| match cert_id {
+                CertificateId::Finalize(s) => Some(s),
+                CertificateId::FinalizeFast(s, _, _) => Some(s),
+                _ => None,
+            })
+            .max()
+            .copied()
+            .unwrap_or(0)
     }
 
+    /// Checks if any block in the slot `s` is finalized
+    pub fn is_finalized(&self, slot: Slot) -> bool {
+        self.completed_certificates.keys().any(|cert_id| {
+            matches!(cert_id, CertificateId::Finalize(s) | CertificateId::FinalizeFast(s, _, _) if *s == slot)
+        })
+    }
+
+    /// Checks if any block in slot `slot` is notarized, if so return the size of the certificate
+    pub fn block_notarized(&self, slot: Slot) -> Option<usize> {
+        self.completed_certificates
+            .iter()
+            .find_map(|(cert_id, cert)| {
+                matches!(cert_id, CertificateId::Notarize(s,_,_) if *s == slot)
+                    .then_some(cert.vote_count())
+            })
+    }
+
+    /// Checks if the any block in slot `slot` has received a `NotarizeFallback` certificate, if so return
+    /// the size of the certificate
+    pub fn slot_notarized_fallback(&self, slot: Slot) -> Option<usize> {
+        // TODO(ashwin): when updating voting loop for duplicate blocks, add parent tracker to make this
+        // a true "branchCertified". For now this sufficies as branchCertified in the sequential loop
+        self.completed_certificates
+            .iter()
+            .find_map(|(cert_id, cert)| {
+                matches!(cert_id, CertificateId::NotarizeFallback(s,_,_) if *s == slot)
+                    .then_some(cert.vote_count())
+            })
+    }
+
+    /// Checks if `slot` has a `Skip` certificate
     pub fn skip_certified(&self, slot: Slot) -> bool {
-        self.certificates
-            .contains_key(&(slot, CertificateType::Skip))
+        self.completed_certificates
+            .contains_key(&CertificateId::Skip(slot))
     }
 
-    fn check_self_skip_or_notarized_different(
-        &self,
-        my_pubkey: &Pubkey,
-        slot: Slot,
-        bank_hash: Option<Hash>,
-        block_id: Option<Hash>,
-    ) -> bool {
-        if self
-            .vote_pools
-            .get(&(slot, VoteType::Skip))
-            .is_some_and(|pool| pool.has_same_prev_vote(my_pubkey, None, None))
-        {
-            return true;
-        }
-        let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
-            return false;
-        };
-        notarize_pool.first_prev_vote_different(my_pubkey, bank_hash, block_id)
-    }
-
-    pub fn safe_to_notar(&self, my_pubkey: &Pubkey, bank: &Bank) -> bool {
-        if bank.slot() < self.root || !bank.is_frozen() {
-            return false;
-        }
-        let bank_hash = Some(bank.hash());
-        let block_id = bank.block_id();
-        let slot = bank.slot();
-        let Some(epoch_stakes) = self.epoch_stakes_map.get(&bank.epoch()) else {
-            return false;
-        };
+    /// Checks if we have voted to skip `slot` or notarize some block `b' = (block_id', bank_hash')` in `slot`
+    /// Additionally check that for some differernt block `b = (block_id, bank_hash)` in `slot` either:
+    /// (i) At least 40% of stake has voted to notarize `b`
+    /// (ii) At least 20% of stake voted to notarize `b` and at least 60% of stake voted to either notarize `b` or skip `slot`
+    /// If all the above hold, return `Some(block_id, bank_hash)` for the `b`
+    pub fn safe_to_notar(&self, slot: Slot, vote_history: &VoteHistory) -> Option<(Hash, Hash)> {
+        let epoch_stakes = self
+            .epoch_stakes_map
+            .get(&self.epoch_schedule.get_epoch(slot))?;
         let total_stake = epoch_stakes.total_stake();
 
-        // Check if I voted skip or notarize on a different hash
-        if !self.check_self_skip_or_notarized_different(my_pubkey, slot, bank_hash, block_id) {
-            return false;
+        if !vote_history.voted(slot) {
+            return None;
         }
+        let b_prime = vote_history.voted_notar(slot);
 
-        // Check if 40% of stake holders voted notarize
-        let notarized_ratio =
-            self.vote_pools
-                .get(&(slot, VoteType::Notarize))
-                .map_or(0, |pool| pool.total_stake_by_key(bank_hash, block_id)) as f64
-                / total_stake as f64;
-        if notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY {
-            return true;
-        }
-
-        // Now check if 20% notarized, and 60% either notarized or skip
-        if notarized_ratio < SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP {
-            return false;
-        }
         let skip_ratio = self
             .vote_pools
             .get(&(slot, VoteType::Skip))
             .map_or(0, |pool| pool.total_stake_by_key(None, None)) as f64
             / total_stake as f64;
-        notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP
+
+        let notarize_pool = self.vote_pools.get(&(slot, VoteType::Notarize))?;
+        for (
+            VoteKey {
+                bank_hash,
+                block_id,
+            },
+            votes,
+        ) in notarize_pool.votes.iter()
+        {
+            let b_block_id = block_id.unwrap();
+            let b_bank_hash = bank_hash.unwrap();
+            if let Some((prev_block_id, prev_bank_hash)) = b_prime {
+                if prev_block_id == b_block_id && prev_bank_hash == b_bank_hash {
+                    continue;
+                }
+            }
+            // Check if the block fits condition (i) 40% of stake holders voted notarize
+            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
+            if notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY {
+                return Some((b_block_id, b_bank_hash));
+            }
+
+            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+            if notarized_ratio < SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP {
+                continue;
+            }
+            if notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP {
+                return Some((b_block_id, b_bank_hash));
+            }
+        }
+        None
     }
 
-    pub fn safe_to_skip(&self, my_pubkey: &Pubkey, slot: Slot) -> bool {
-        if slot < self.root {
-            return false;
-        }
+    /// Checks if we have already voted to notarize some block in `slot` and additionally that
+    /// votedStake(s) - topNotarStake(s) >= 40% where:
+    /// - votedStake(s) is the cumulative stake of all nodes who voted notarize or skip on s
+    /// - topNotarStake(s) the highest of cumulative notarize stake per block in s
+    pub fn safe_to_skip(&self, slot: Slot, vote_history: &VoteHistory) -> bool {
         let epoch = self.epoch_schedule.get_epoch(slot);
         let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
             return false;
         };
         let total_stake = epoch_stakes.total_stake();
 
+        if vote_history.voted_notar(slot).is_none() {
+            return false;
+        }
+
         let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
             return false;
         };
-        // Check if I voted notarize for some hash
-        if !notarize_pool.first_prev_vote_different(my_pubkey, None, None) {
-            return false;
-        }
         let voted_stake = notarize_pool.total_stake()
             + self
                 .vote_pools
@@ -482,8 +507,8 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
         if needs_notarization_certificate
-            && self.get_notarization_cert_size(parent_slot).is_none()
-            && self.get_finalization_cert_size(parent_slot).is_none()
+            && self.block_notarized(parent_slot).is_none()
+            && !self.is_finalized(parent_slot)
         {
             error!("Missing notarization certificate {parent_slot}");
             return false;
@@ -511,12 +536,18 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         true
     }
 
-    /// Cleanup old finalized slots from the certificate pool
+    /// Cleanup any old slots from the certificate pool
     pub fn handle_new_root(&mut self, bank: Arc<Bank>) {
-        // `certificates`` now only contains entries >= `finalized_slot`
-        self.certificates = self
-            .certificates
-            .split_off(&(bank.slot(), CertificateType::Finalize));
+        self.root = bank.slot();
+        // `completed_certificates`` now only contains entries >= `slot`
+        self.completed_certificates
+            .retain(|cert_id, _| match cert_id {
+                CertificateId::Finalize(s)
+                | CertificateId::FinalizeFast(s, _, _)
+                | CertificateId::Notarize(s, _, _)
+                | CertificateId::NotarizeFallback(s, _, _)
+                | CertificateId::Skip(s) => *s >= self.root,
+            });
         self.vote_pools = self
             .vote_pools
             .split_off(&(bank.slot(), VoteType::Finalize));
@@ -527,21 +558,24 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
 #[cfg(test)]
 mod tests {
     use {
-        super::{super::vote_certificate::LegacyVoteCertificate, *},
+        super::{
+            super::{
+                transaction::AlpenglowVoteTransaction,
+                vote_certificate::{BlsCertificate, LegacyVoteCertificate},
+            },
+            *,
+        },
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
             genesis_utils::{create_genesis_config_with_vote_accounts, ValidatorVoteKeypairs},
         },
-        solana_sdk::{
-            clock::Slot, hash::Hash, pubkey::Pubkey, signer::Signer,
-            transaction::VersionedTransaction,
-        },
+        solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signer::Signer},
         std::sync::{Arc, RwLock},
     };
 
-    fn dummy_transaction() -> VersionedTransaction {
-        VersionedTransaction::default()
+    fn dummy_transaction<VC: VoteCertificate>() -> VC::VoteTransaction {
+        VC::VoteTransaction::new_for_test()
     }
 
     fn create_bank(slot: Slot, parent: Arc<Bank>, pubkey: &Pubkey) -> Bank {
@@ -558,10 +592,8 @@ mod tests {
         BankForks::new_rw_arc(bank0)
     }
 
-    fn create_keypairs_and_pool() -> (
-        Vec<ValidatorVoteKeypairs>,
-        CertificatePool<LegacyVoteCertificate>,
-    ) {
+    fn create_keypairs_and_pool<VC: VoteCertificate>(
+    ) -> (Vec<ValidatorVoteKeypairs>, CertificatePool<VC>) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
@@ -570,24 +602,28 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(&root_bank.clone()),
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None),
         )
     }
 
-    fn add_certificate(
-        pool: &mut CertificatePool<LegacyVoteCertificate>,
+    fn add_certificate<VC: VoteCertificate>(
+        pool: &mut CertificatePool<VC>,
         validator_keypairs: &[ValidatorVoteKeypairs],
         vote: Vote,
     ) {
         for keys in validator_keypairs.iter().take(6) {
             assert!(pool
-                .add_vote(&vote, dummy_transaction(), &keys.vote_keypair.pubkey())
+                .add_vote(
+                    &vote,
+                    dummy_transaction::<VC>(),
+                    &keys.vote_keypair.pubkey()
+                )
                 .is_ok());
         }
         assert!(pool
             .add_vote(
                 &vote,
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -600,22 +636,36 @@ mod tests {
         }
     }
 
-    fn add_skip_vote_range(
-        pool: &mut CertificatePool<LegacyVoteCertificate>,
+    fn add_skip_vote_range<VC: VoteCertificate>(
+        pool: &mut CertificatePool<VC>,
         start: Slot,
         end: Slot,
         pubkey: Pubkey,
     ) {
         for slot in start..=end {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(slot), dummy_transaction(), &pubkey,)
+                .add_vote(
+                    &Vote::new_skip_vote(slot),
+                    dummy_transaction::<VC>(),
+                    &pubkey,
+                )
                 .is_ok());
         }
     }
 
     #[test]
     fn test_make_decision_leader_does_not_start_if_notarization_missing() {
-        let (_, pool) = create_keypairs_and_pool();
+        test_make_decision_leader_does_not_start_if_notarization_missing_with_type::<
+            LegacyVoteCertificate,
+        >();
+        test_make_decision_leader_does_not_start_if_notarization_missing_with_type::<BlsCertificate>(
+        );
+    }
+
+    fn test_make_decision_leader_does_not_start_if_notarization_missing_with_type<
+        VC: VoteCertificate,
+    >() {
+        let (_, pool) = create_keypairs_and_pool::<VC>();
 
         // No notarization set, pool is default
         let parent_slot = 2;
@@ -631,7 +681,12 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_1() {
-        let (_, pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_1_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_1_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_1_with_type<VC: VoteCertificate>() {
+        let (_, pool) = create_keypairs_and_pool::<VC>();
 
         // If parent_slot == 0, you don't need a notarization certificate
         // Because leader_slot == parent_slot + 1, you don't need a skip certificate
@@ -643,7 +698,12 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_2() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_2_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_2_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_2_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // If parent_slot < first_alpenglow_slot, and parent_slot > 0
         // no notarization certificate is required, but a skip
@@ -658,7 +718,7 @@ mod tests {
             first_alpenglow_slot,
         ));
 
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_skip_vote(first_alpenglow_slot),
@@ -669,7 +729,12 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_3() {
-        let (_, pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_3_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_3_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_3_with_type<VC: VoteCertificate>() {
+        let (_, pool) = create_keypairs_and_pool::<VC>();
         // If parent_slot == first_alpenglow_slot, and
         // first_alpenglow_slot > 0, you need a notarization certificate
         let parent_slot = 2;
@@ -684,7 +749,12 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_4() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_4_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_4_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_4_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // If parent_slot < first_alpenglow_slot, and parent_slot == 0,
         // no notarization certificate is required, but a skip certificate will
@@ -699,7 +769,7 @@ mod tests {
             first_alpenglow_slot,
         ));
 
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_skip_vote(first_alpenglow_slot),
@@ -709,11 +779,16 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_5() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_5_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_5_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_5_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
-            add_certificate(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
+            add_certificate::<VC>(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
         }
 
         // Parent slot is equal to 0, so no notarization certificate required
@@ -725,11 +800,16 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_6() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_first_alpenglow_slot_edge_case_6_with_type::<LegacyVoteCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_6_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_first_alpenglow_slot_edge_case_6_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
-            add_certificate(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
+            add_certificate::<VC>(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
         }
         // Parent slot is less than first_alpenglow_slot, so no notarization certificate required
         let my_leader_slot = 10;
@@ -740,7 +820,18 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_does_not_start_if_skip_certificate_missing() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_leader_does_not_start_if_skip_certificate_missing_with_type::<
+            LegacyVoteCertificate,
+        >();
+        test_make_decision_leader_does_not_start_if_skip_certificate_missing_with_type::<
+            BlsCertificate,
+        >();
+    }
+
+    fn test_make_decision_leader_does_not_start_if_skip_certificate_missing_with_type<
+        VC: VoteCertificate,
+    >() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         let bank_forks = create_bank_forks(&validator_keypairs);
         let my_pubkey = validator_keypairs[0].vote_keypair.pubkey();
@@ -751,7 +842,7 @@ mod tests {
         bank_forks.write().unwrap().insert(bank);
 
         // Notarize slot 5
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
@@ -772,10 +863,15 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_when_no_skip_required() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_leader_starts_when_no_skip_required_with_type::<LegacyVoteCertificate>();
+        test_make_decision_leader_starts_when_no_skip_required_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_leader_starts_when_no_skip_required_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // Notarize slot 5
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
@@ -791,10 +887,19 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_notarized_and_skips_valid() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type::<
+            LegacyVoteCertificate,
+        >();
+        test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type<
+        VC: VoteCertificate,
+    >() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // Notarize slot 5
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
@@ -803,7 +908,7 @@ mod tests {
 
         // Valid skip certificate for 6-9 exists
         for slot in 6..=9 {
-            add_certificate(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
+            add_certificate::<VC>(&mut pool, &validator_keypairs, Vote::new_skip_vote(slot));
         }
 
         let my_leader_slot = 10;
@@ -814,10 +919,16 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_skip_range_superset() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_make_decision_leader_starts_if_skip_range_superset_with_type::<LegacyVoteCertificate>(
+        );
+        test_make_decision_leader_starts_if_skip_range_superset_with_type::<BlsCertificate>();
+    }
+
+    fn test_make_decision_leader_starts_if_skip_range_superset_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // Notarize slot 5
-        add_certificate(
+        add_certificate::<VC>(
             &mut pool,
             &validator_keypairs,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
@@ -828,7 +939,7 @@ mod tests {
         // Should start leader block even if the beginning of the range is from
         // before your last notarized slot
         for slot in 4..=9 {
-            add_certificate(
+            add_certificate::<VC>(
                 &mut pool,
                 &validator_keypairs,
                 Vote::new_skip_fallback_vote(slot),
@@ -843,12 +954,17 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_finalize_certificate() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_vote_new_finalize_certificate_with_type::<LegacyVoteCertificate>();
+        test_add_vote_new_finalize_certificate_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_vote_new_finalize_certificate_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let pubkey = validator_keypairs[5].vote_keypair.pubkey();
         assert!(pool
             .add_vote(
                 &Vote::new_finalization_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -857,7 +973,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_finalization_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -866,7 +982,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_finalization_vote(5),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -875,7 +991,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_finalization_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -884,12 +1000,17 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_notarize_certificate() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_vote_new_notarize_certificate_with_type::<LegacyVoteCertificate>();
+        test_add_vote_new_notarize_certificate_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_vote_new_notarize_certificate_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let pubkey = validator_keypairs[5].vote_keypair.pubkey();
         assert!(pool
             .add_vote(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default(),),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -898,7 +1019,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default(),),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -908,7 +1029,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -917,7 +1038,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default(),),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -926,13 +1047,18 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_notarize_fallback_certificate() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_vote_new_notarize_fallback_certificate_with_type::<LegacyVoteCertificate>();
+        test_add_vote_new_notarize_fallback_certificate_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_vote_new_notarize_fallback_certificate_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // 10% voted for notarize_fallback 5
         let pubkey = validator_keypairs[4].vote_keypair.pubkey();
         assert!(pool
             .add_vote(
                 &Vote::new_notarization_fallback_vote(5, Hash::default(), Hash::default(),),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -942,7 +1068,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -951,7 +1077,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -961,7 +1087,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default(),),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[5].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -970,22 +1096,26 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_skip_certificate() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_vote_new_skip_certificate_with_type::<LegacyVoteCertificate>();
+        test_add_vote_new_skip_certificate_with_type::<BlsCertificate>();
+    }
+    fn test_add_vote_new_skip_certificate_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let pubkey = validator_keypairs[5].vote_keypair.pubkey();
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(5), dummy_transaction(), &pubkey)
+            .add_vote(&Vote::new_skip_vote(5), dummy_transaction::<VC>(), &pubkey)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         // Same key voting again shouldn't make a certificate
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(5), dummy_transaction(), &pubkey,)
+            .add_vote(&Vote::new_skip_vote(5), dummy_transaction::<VC>(), &pubkey,)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         for keys in validator_keypairs.iter().take(4) {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_vote(5),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -994,7 +1124,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_skip_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -1003,13 +1133,18 @@ mod tests {
 
     #[test]
     fn test_add_vote_new_skip_fallback_certificate() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_vote_new_skip_fallback_certificate_with_type::<LegacyVoteCertificate>();
+        test_add_vote_new_skip_fallback_certificate_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_vote_new_skip_fallback_certificate_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // 10% voted for skip_fallback 5
         let pubkey = validator_keypairs[5].vote_keypair.pubkey();
         assert!(pool
             .add_vote(
                 &Vote::new_skip_fallback_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey
             )
             .is_ok());
@@ -1018,7 +1153,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_skip_fallback_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &pubkey,
             )
             .is_ok());
@@ -1028,7 +1163,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_vote(5),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -1037,7 +1172,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_fallback_vote(5),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keys.vote_keypair.pubkey(),
                 )
                 .is_ok());
@@ -1047,7 +1182,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &Vote::new_skip_fallback_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
@@ -1056,20 +1191,25 @@ mod tests {
 
     #[test]
     fn test_add_vote_zero_stake() {
-        let (_, mut pool) = create_keypairs_and_pool();
+        test_add_vote_zero_stake_with_type::<LegacyVoteCertificate>();
+        test_add_vote_zero_stake_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_vote_zero_stake_with_type<VC: VoteCertificate>() {
+        let (_, mut pool) = create_keypairs_and_pool::<VC>();
 
         assert_eq!(
             pool.add_vote(
                 &Vote::new_skip_vote(5),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &Pubkey::new_unique()
             ),
             Err(AddVoteError::ZeroStake)
         );
     }
 
-    fn assert_single_certificate_range(
-        pool: &CertificatePool<LegacyVoteCertificate>,
+    fn assert_single_certificate_range<VC: VoteCertificate>(
+        pool: &CertificatePool<VC>,
         exp_range_start: Slot,
         exp_range_end: Slot,
     ) {
@@ -1080,9 +1220,14 @@ mod tests {
 
     #[test]
     fn test_consecutive_slots() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_consecutive_slots_with_type::<LegacyVoteCertificate>();
+        test_consecutive_slots_with_type::<BlsCertificate>();
+    }
 
-        add_certificate(&mut pool, &validator_keypairs, Vote::new_skip_vote(15));
+    fn test_consecutive_slots_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
+
+        add_certificate::<VC>(&mut pool, &validator_keypairs, Vote::new_skip_vote(15));
         assert_eq!(pool.highest_skip_slot(), 15);
 
         for (i, keypairs) in validator_keypairs.iter().enumerate() {
@@ -1091,30 +1236,35 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_vote(slot),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey()
                 )
                 .is_ok());
         }
 
-        assert_single_certificate_range(&pool, 15, 15);
+        assert_single_certificate_range::<VC>(&pool, 15, 15);
     }
 
     #[test]
     fn test_multi_skip_cert() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_multi_skip_cert_with_type::<LegacyVoteCertificate>();
+        test_multi_skip_cert_with_type::<BlsCertificate>();
+    }
+
+    fn test_multi_skip_cert_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // We have 10 validators, 40% voted for (5, 15)
         for pubkeys in validator_keypairs.iter().take(4) {
-            add_skip_vote_range(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
         }
         // 30% voted for (5, 8)
         for pubkeys in validator_keypairs.iter().skip(4).take(3) {
-            add_skip_vote_range(&mut pool, 5, 8, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 8, pubkeys.vote_keypair.pubkey());
         }
         // The rest voted for (11, 15)
         for pubkeys in validator_keypairs.iter().skip(7) {
-            add_skip_vote_range(&mut pool, 11, 15, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 11, 15, pubkeys.vote_keypair.pubkey());
         }
         // Test slots from 5 to 15, (5, 8) and (11, 15) should be certified, the others aren't
         for slot in 5..=15 {
@@ -1128,126 +1278,151 @@ mod tests {
 
     #[test]
     fn test_add_multiple_votes() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_multiple_votes_with_type::<LegacyVoteCertificate>();
+        test_add_multiple_votes_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_multiple_votes_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
 
         // 10 validators, half vote for (5, 15), the other (20, 30)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
         }
         for pubkeys in validator_keypairs.iter().skip(5) {
-            add_skip_vote_range(&mut pool, 20, 30, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 20, 30, pubkeys.vote_keypair.pubkey());
         }
         assert_eq!(pool.highest_skip_slot(), 0);
 
         // Now the first half vote for (5, 30)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 5, 30, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 30, pubkeys.vote_keypair.pubkey());
         }
-        assert_single_certificate_range(&pool, 20, 30);
+        assert_single_certificate_range::<VC>(&pool, 20, 30);
     }
 
     #[test]
     fn test_add_multiple_disjoint_votes() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_add_multiple_disjoint_votes_with_type::<LegacyVoteCertificate>();
+        test_add_multiple_disjoint_votes_with_type::<BlsCertificate>();
+    }
+
+    fn test_add_multiple_disjoint_votes_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // 50% of the validators vote for (1, 10)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 1, 10, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 1, 10, pubkeys.vote_keypair.pubkey());
         }
         // 10% vote for (2, 2)
         assert!(pool
             .add_vote(
                 &Vote::new_skip_vote(2),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey(),
             )
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 2);
 
-        assert_single_certificate_range(&pool, 2, 2);
+        assert_single_certificate_range::<VC>(&pool, 2, 2);
         // 10% vote for (4, 4)
         assert!(pool
             .add_vote(
                 &Vote::new_skip_vote(4),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[7].vote_keypair.pubkey(),
             )
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
 
-        assert_single_certificate_range(&pool, 2, 2);
-        assert_single_certificate_range(&pool, 4, 4);
+        assert_single_certificate_range::<VC>(&pool, 2, 2);
+        assert_single_certificate_range::<VC>(&pool, 4, 4);
         // 10% vote for (3, 3)
         assert!(pool
             .add_vote(
                 &Vote::new_skip_vote(3),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[8].vote_keypair.pubkey(),
             )
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
-        assert_single_certificate_range(&pool, 2, 4);
+        assert_single_certificate_range::<VC>(&pool, 2, 4);
         assert!(pool.skip_certified(3));
         // Let the last 10% vote for (3, 10) now
-        add_skip_vote_range(
+        add_skip_vote_range::<VC>(
             &mut pool,
             3,
             10,
             validator_keypairs[8].vote_keypair.pubkey(),
         );
         assert_eq!(pool.highest_skip_slot(), 10);
-        assert_single_certificate_range(&pool, 2, 10);
+        assert_single_certificate_range::<VC>(&pool, 2, 10);
         assert!(pool.skip_certified(7));
     }
 
     #[test]
     fn test_update_existing_singleton_vote() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_update_existing_singleton_vote_with_type::<LegacyVoteCertificate>();
+        test_update_existing_singleton_vote_with_type::<BlsCertificate>();
+    }
+
+    fn test_update_existing_singleton_vote_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // 50% voted on (1, 6)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 1, 6, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 1, 6, pubkeys.vote_keypair.pubkey());
         }
         // Range expansion on a singleton vote should be ok
         assert!(pool
             .add_vote(
                 &Vote::new_skip_vote(1),
-                dummy_transaction(),
+                dummy_transaction::<VC>(),
                 &validator_keypairs[6].vote_keypair.pubkey()
             )
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 1);
-        add_skip_vote_range(&mut pool, 1, 6, validator_keypairs[6].vote_keypair.pubkey());
+        add_skip_vote_range::<VC>(&mut pool, 1, 6, validator_keypairs[6].vote_keypair.pubkey());
         assert_eq!(pool.highest_skip_slot(), 6);
-        assert_single_certificate_range(&pool, 1, 6);
+        assert_single_certificate_range::<VC>(&pool, 1, 6);
     }
 
     #[test]
     fn test_update_existing_vote() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_update_existing_vote_with_type::<LegacyVoteCertificate>();
+        test_update_existing_vote_with_type::<BlsCertificate>();
+    }
+
+    fn test_update_existing_vote_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // 50% voted for (10, 25)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 10, 25, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 10, 25, pubkeys.vote_keypair.pubkey());
         }
         let pubkey = validator_keypairs[6].vote_keypair.pubkey();
 
-        add_skip_vote_range(&mut pool, 10, 20, pubkey);
+        add_skip_vote_range::<VC>(&mut pool, 10, 20, pubkey);
         assert_eq!(pool.highest_skip_slot(), 20);
-        assert_single_certificate_range(&pool, 10, 20);
+        assert_single_certificate_range::<VC>(&pool, 10, 20);
 
         // AlreadyExists, silently fail
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(20), dummy_transaction(), &pubkey)
+            .add_vote(&Vote::new_skip_vote(20), dummy_transaction::<VC>(), &pubkey)
             .is_ok());
     }
 
     #[test]
     fn test_threshold_not_reached() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_threshold_not_reached_with_type::<LegacyVoteCertificate>();
+        test_threshold_not_reached_with_type::<BlsCertificate>();
+    }
+
+    fn test_threshold_not_reached_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // half voted (5, 15) and the other half voted (20, 30)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
         }
         for pubkeys in validator_keypairs.iter().skip(5) {
-            add_skip_vote_range(&mut pool, 20, 30, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 20, 30, pubkeys.vote_keypair.pubkey());
         }
         for slot in 5..31 {
             assert!(!pool.skip_certified(slot));
@@ -1256,13 +1431,18 @@ mod tests {
 
     #[test]
     fn test_update_and_skip_range_certify() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_update_and_skip_range_certify_with_type::<LegacyVoteCertificate>();
+        test_update_and_skip_range_certify_with_type::<BlsCertificate>();
+    }
+
+    fn test_update_and_skip_range_certify_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         // half voted (5, 15) and the other half voted (10, 30)
         for pubkeys in validator_keypairs.iter().take(5) {
-            add_skip_vote_range(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 5, 15, pubkeys.vote_keypair.pubkey());
         }
         for pubkeys in validator_keypairs.iter().skip(5) {
-            add_skip_vote_range(&mut pool, 10, 30, pubkeys.vote_keypair.pubkey());
+            add_skip_vote_range::<VC>(&mut pool, 10, 30, pubkeys.vote_keypair.pubkey());
         }
         for slot in 5..10 {
             assert!(!pool.skip_certified(slot));
@@ -1270,124 +1450,139 @@ mod tests {
         for slot in 16..31 {
             assert!(!pool.skip_certified(slot));
         }
-        assert_single_certificate_range(&pool, 10, 15);
+        assert_single_certificate_range::<VC>(&pool, 10, 15);
     }
 
     #[test]
     fn test_safe_to_notar() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
-        let bank_forks = create_bank_forks(&validator_keypairs);
+        test_safe_to_notar_with_type::<LegacyVoteCertificate>();
+        test_safe_to_notar_with_type::<BlsCertificate>();
+    }
+
+    fn test_safe_to_notar_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let my_pubkey = validator_keypairs[0].vote_keypair.pubkey();
+        let mut vote_history = VoteHistory::default();
 
         // Create bank 2
-        let bank2 = Arc::new(create_bank(
-            2,
-            bank_forks.read().unwrap().get(0).unwrap(),
-            &my_pubkey,
-        ));
-        bank2.set_block_id(Some(Hash::new_unique()));
-        bank2.freeze();
+        let slot = 2;
+        let block_id = Hash::new_unique();
+        let bank_hash = Hash::new_unique();
 
         // With no votes, this should fail.
-        assert!(!pool.safe_to_notar(&my_pubkey, &bank2.clone()));
+        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
 
         // Add a skip from myself.
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(2), dummy_transaction(), &my_pubkey,)
+            .add_vote(
+                &Vote::new_skip_vote(2),
+                dummy_transaction::<VC>(),
+                &my_pubkey,
+            )
             .is_ok());
+        vote_history.add_vote(Vote::new_skip_vote(2));
         // 40% notarized, should succeed
         for keypairs in validator_keypairs.iter().skip(1).take(4) {
             assert!(pool
                 .add_vote(
-                    &Vote::new_notarization_vote(2, bank2.block_id().unwrap(), bank2.hash()),
-                    dummy_transaction(),
+                    &Vote::new_notarization_vote(2, block_id, bank_hash),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_notar(&my_pubkey, &bank2.clone()));
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history),
+            Some((block_id, bank_hash))
+        );
 
         // Create bank 3
-        let bank3 = Arc::new(create_bank(3, bank2, &my_pubkey));
-        bank3.set_block_id(Some(Hash::new_unique()));
-        bank3.freeze();
+        let slot = 3;
+        let block_id = Hash::new_unique();
+        let bank_hash = Hash::new_unique();
 
         // Add 20% notarize, but no vote from myself, should fail
         for keypairs in validator_keypairs.iter().skip(1).take(2) {
             assert!(pool
                 .add_vote(
-                    &Vote::new_notarization_vote(3, bank3.block_id().unwrap(), bank3.hash()),
-                    dummy_transaction(),
+                    &Vote::new_notarization_vote(3, block_id, bank_hash),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
         }
-        assert!(!pool.safe_to_notar(&my_pubkey, &bank3.clone()));
+        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
+        let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique());
         assert!(pool
-            .add_vote(
-                &Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique()),
-                dummy_transaction(),
-                &my_pubkey,
-            )
+            .add_vote(&vote, dummy_transaction::<VC>(), &my_pubkey,)
             .is_ok());
-        assert!(!pool.safe_to_notar(&my_pubkey, &bank3.clone()));
+        vote_history.add_vote(vote);
+        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
 
         // Now add 40% skip, should succeed
         for keypairs in validator_keypairs.iter().skip(3).take(4) {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_vote(3),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_notar(&my_pubkey, &bank3.clone()));
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history),
+            Some((block_id, bank_hash))
+        );
     }
 
     #[test]
     fn test_safe_to_skip() {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        test_safe_to_skip_with_type::<LegacyVoteCertificate>();
+        test_safe_to_skip_with_type::<BlsCertificate>();
+    }
+
+    fn test_safe_to_skip_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let my_pubkey = validator_keypairs[0].vote_keypair.pubkey();
+        let slot = 2;
+        let mut vote_history = VoteHistory::default();
         // No vote from myself, should fail.
-        assert!(!pool.safe_to_skip(&my_pubkey, 2));
+        assert!(!pool.safe_to_skip(slot, &vote_history));
 
         // Add a notarize from myself.
         let block_id = Hash::new_unique();
         let block_hash = Hash::new_unique();
+        let vote = Vote::new_notarization_vote(2, block_id, block_hash);
         assert!(pool
-            .add_vote(
-                &Vote::new_notarization_vote(2, block_id, block_hash),
-                dummy_transaction(),
-                &my_pubkey,
-            )
+            .add_vote(&vote, dummy_transaction::<VC>(), &my_pubkey,)
             .is_ok());
+        vote_history.add_vote(vote);
         // Should still fail because there are no other votes.
-        assert!(!pool.safe_to_skip(&my_pubkey, 2));
+        assert!(!pool.safe_to_skip(slot, &vote_history));
         // Add 50% skip, should succeed
         for keypairs in validator_keypairs.iter().skip(1).take(5) {
             assert!(pool
                 .add_vote(
                     &Vote::new_skip_vote(2),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_skip(&my_pubkey, 2));
+        assert!(pool.safe_to_skip(slot, &vote_history));
         // Add 10% more notarize, still safe to skip any more because total voted increased.
         for keypairs in validator_keypairs.iter().skip(6).take(1) {
             assert!(pool
                 .add_vote(
                     &Vote::new_notarization_vote(2, block_id, block_hash),
-                    dummy_transaction(),
+                    dummy_transaction::<VC>(),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_skip(&my_pubkey, 2));
+        assert!(pool.safe_to_skip(slot, &vote_history));
     }
 
     /*
@@ -1431,4 +1626,23 @@ mod tests {
             }
         }
     */
+
+    #[test]
+    fn test_handle_new_root() {
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let bank_forks = create_bank_forks(&validator_keypairs);
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        let mut pool: CertificatePool<LegacyVoteCertificate> =
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None);
+        assert_eq!(pool.root(), 0);
+
+        let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));
+        pool.handle_new_root(new_bank.clone());
+        assert_eq!(pool.root(), 2);
+        let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
+        pool.handle_new_root(new_bank);
+        assert_eq!(pool.root(), 3);
+    }
 }

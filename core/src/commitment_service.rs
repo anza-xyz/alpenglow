@@ -22,8 +22,10 @@ use {
 };
 
 pub enum AlpenglowCommitmentType {
+    /// Our node has voted notarize for the slot
     Notarize,
-    Root,
+    /// We have observed a finalization certificate for the slot
+    Finalized,
 }
 pub enum CommitmentAggregationData {
     AlpenglowCommitmentAggregationData(AlpenglowCommitmentAggregationData),
@@ -179,7 +181,7 @@ impl AggregateCommitmentService {
             AlpenglowCommitmentType::Notarize => {
                 w_block_commitment_cache.set_slot(slot);
             }
-            AlpenglowCommitmentType::Root => {
+            AlpenglowCommitmentType::Finalized => {
                 w_block_commitment_cache.set_highest_confirmed_slot(slot);
                 w_block_commitment_cache.set_root(slot);
                 w_block_commitment_cache.set_highest_super_majority_root(slot);

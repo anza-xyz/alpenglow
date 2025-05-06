@@ -92,6 +92,7 @@ impl VotingService {
         vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
+        additional_listeners: Option<Vec<SocketAddr>>,
     ) -> Self {
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
@@ -111,6 +112,7 @@ impl VotingService {
                         vote_history_storage.as_ref(),
                         vote_op,
                         connection_cache.clone(),
+                        additional_listeners.as_ref(),
                         &mut staked_validators_cache,
                     );
                 }
@@ -162,6 +164,7 @@ impl VotingService {
         cluster_info: &ClusterInfo,
         tx: &Transaction,
         connection_cache: Arc<ConnectionCache>,
+        additional_listeners: Option<&Vec<SocketAddr>>,
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         let (staked_validator_tpu_sockets, _) = staked_validators_cache
@@ -170,7 +173,13 @@ impl VotingService {
         if staked_validator_tpu_sockets.is_empty() {
             let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
         } else {
-            for tpu_vote_socket in staked_validator_tpu_sockets {
+            let sockets = additional_listeners
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+                .iter()
+                .chain(staked_validator_tpu_sockets.iter());
+
+            for tpu_vote_socket in sockets {
                 let _ = send_vote_transaction(
                     cluster_info,
                     tx,
@@ -188,6 +197,7 @@ impl VotingService {
         vote_history_storage: &dyn VoteHistoryStorage,
         vote_op: VoteOp,
         connection_cache: Arc<ConnectionCache>,
+        additional_listeners: Option<&Vec<SocketAddr>>,
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         match vote_op {
@@ -226,6 +236,7 @@ impl VotingService {
                     cluster_info,
                     &tx,
                     connection_cache,
+                    additional_listeners,
                     staked_validators_cache,
                 );
 
