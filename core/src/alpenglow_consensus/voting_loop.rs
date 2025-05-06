@@ -282,13 +282,17 @@ impl VotingLoop {
 
                     // We use a blocking receive if skipped is true,
                     // as we can only progress on a certificate
-                    Self::ingest_votes_into_certificate_pool(
+                    if let Err(e) = Self::ingest_votes_into_certificate_pool(
                         &my_pubkey,
                         &shared_context.vote_receiver,
                         /* block */ skipped,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
-                    );
+                    ) {
+                        error!("{my_pubkey}: error ingesting votes into certificate pool, exiting: {e:?}");
+                        // Finalizer will set exit flag
+                        return;
+                    }
 
                     if !skipped && skip_timer.elapsed().as_millis() > timeout.as_millis() {
                         skipped = true;
@@ -785,7 +789,7 @@ impl VotingLoop {
         block: bool,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         commitment_sender: &Sender<CommitmentAggregationData>,
-    ) {
+    ) -> Result<(), AddVoteError> {
         let add_to_cert_pool =
             |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
                 match Self::add_vote_and_maybe_update_commitment(
@@ -796,27 +800,26 @@ impl VotingLoop {
                     cert_pool,
                     commitment_sender,
                 ) {
-                    Err(AddVoteError::CertificateSenderError) => panic!(
-                    "{my_pubkey}: Something has gone wrong with the certificate_service, exiting"
-                ),
+                    err @ Err(AddVoteError::CertificateSenderError) => err,
                     Err(e) => {
                         // TODO(ashwin): increment metrics on non duplicate failures
                         trace!("{my_pubkey}: unable to push vote into the pool {}", e);
+                        Ok(())
                     }
-                    Ok(()) => (),
+                    Ok(()) => Ok(()),
                 }
             };
 
         if block {
             let Ok(first) = vote_receiver.recv_timeout(Duration::from_secs(1)) else {
                 // Either timeout or sender disconnected, return so we can check exit
-                return;
+                return Ok(());
             };
             std::iter::once(first)
                 .chain(vote_receiver.try_iter())
-                .for_each(add_to_cert_pool)
+                .try_for_each(add_to_cert_pool)
         } else {
-            vote_receiver.try_iter().for_each(add_to_cert_pool)
+            vote_receiver.try_iter().try_for_each(add_to_cert_pool)
         }
     }
 
