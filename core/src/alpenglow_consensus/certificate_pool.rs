@@ -83,7 +83,8 @@ pub struct CertificatePool<VC: VoteCertificate> {
     // Cached epoch_stakes_map
     epoch_stakes_map: Arc<HashMap<Epoch, EpochStakes>>,
     // Calculate a stake weighted list of pubkey and BLS pubkey based on epoch_stakes_map
-    bls_key_to_stake_map: HashMap<Epoch, HashMap<BLSPubkey, usize>>,
+    // This maps BLS pubkey to its unique rank.
+    bls_key_to_rank_map: HashMap<Epoch, HashMap<BLSPubkey, usize>>,
     // The current root, no need to save anything before this slot.
     root: Slot,
     // The epoch of current root.
@@ -126,9 +127,9 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         self.root
     }
 
-    fn update_bls_key_to_stake_map(&mut self, new_root_epoch: Epoch) {
+    fn update_bls_key_to_rank_map(&mut self, new_root_epoch: Epoch) {
         for (epoch, stakes) in self.epoch_stakes_map.iter() {
-            if self.bls_key_to_stake_map.contains_key(epoch) || epoch < &new_root_epoch {
+            if self.bls_key_to_rank_map.contains_key(epoch) || epoch < &new_root_epoch {
                 continue;
             }
             let stakes_data = stakes.stakes().vote_accounts().staked_nodes();
@@ -147,9 +148,9 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 .enumerate()
                 .map(|(index, _)| (BLSPubkey::default(), index))
                 .collect();
-            self.bls_key_to_stake_map.insert(*epoch, validator_map);
+            self.bls_key_to_rank_map.insert(*epoch, validator_map);
         }
-        self.bls_key_to_stake_map
+        self.bls_key_to_rank_map
             .retain(|epoch, _| *epoch >= new_root_epoch);
     }
 
@@ -161,7 +162,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         epoch: Epoch,
         validator_bls_pubkey_map: HashMap<BLSPubkey, usize>,
     ) {
-        self.bls_key_to_stake_map
+        self.bls_key_to_rank_map
             .insert(epoch, validator_bls_pubkey_map);
     }
 
@@ -169,7 +170,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         let epoch = bank.epoch();
         if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
             self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
-            self.update_bls_key_to_stake_map(epoch);
+            self.update_bls_key_to_rank_map(epoch);
             self.root_epoch = epoch;
             self.epoch_schedule = bank.epoch_schedule().clone();
         }
@@ -210,7 +211,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         slot: Slot,
     ) -> Option<&HashMap<BLSPubkey, usize>> {
         let epoch = self.epoch_schedule.get_epoch(slot);
-        self.bls_key_to_stake_map.get(&epoch)
+        self.bls_key_to_rank_map.get(&epoch)
     }
 
     /// For a new vote `slot` , `vote_type` checks if any
