@@ -5380,9 +5380,12 @@ version = "2.3.0"
 dependencies = [
  "blst",
  "blstrs",
+ "bytemuck",
  "ff",
  "group",
  "rand 0.8.5",
+ "serde",
+ "serde_with",
  "solana-bls12-381",
  "thiserror 2.0.12",
 ]

@@ -13,7 +13,7 @@ use {
     },
     solana_core::{
         banking_trace::BankingTracer,
-        sigverify::TransactionSigVerifier,
+        sigverify::transaction_sigverifier::TransactionSigVerifier,
         sigverify_stage::{SigVerifier, SigVerifyStage},
     },
     solana_measure::measure::Measure,

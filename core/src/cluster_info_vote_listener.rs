@@ -5,7 +5,6 @@ use {
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         result::{Error, Result},
-        sigverify,
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
     alpenglow_vote::vote::Vote as AlpenglowVote,
@@ -18,7 +17,10 @@ use {
     solana_ledger::blockstore::Blockstore,
     solana_measure::measure::Measure,
     solana_metrics::inc_new_counter_debug,
-    solana_perf::packet::{self, PacketBatch},
+    solana_perf::{
+        packet::{self, PacketBatch},
+        sigverify::ed25519_verify_cpu,
+    },
     solana_rpc::{
         optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSender},
         rpc_subscriptions::RpcSubscriptions,
@@ -284,7 +286,7 @@ impl ClusterInfoVoteListener {
         let mut packet_batches = packet::to_packet_batches(&votes, 1);
 
         // Votes should already be filtered by this point.
-        sigverify::ed25519_verify_cpu(
+        ed25519_verify_cpu(
             &mut packet_batches,
             /*reject_non_vote=*/ false,
             votes.len(),
