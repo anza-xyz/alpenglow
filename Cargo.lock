@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=c84cec6#c84cec6f98add7b993fd5bafece2da9c26e9db8b"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=00df1de#00df1decc40c4851d08b421af6d6b10cc29a2bd7"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -484,6 +484,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-account",
+ "solana-bls",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
@@ -7016,6 +7017,7 @@ dependencies = [
  "serde_json",
  "solana-account",
  "solana-account-decoder",
+ "solana-bls",
  "solana-borsh",
  "solana-bpf-loader-program",
  "solana-clap-utils",

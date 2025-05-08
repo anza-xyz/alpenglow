@@ -18,6 +18,7 @@ use {
     },
     clap::{value_t_or_exit, App, Arg, ArgMatches, SubCommand},
     solana_account::Account,
+    solana_bls::keypair::Keypair as BLSKeypair,
     solana_clap_utils::{
         compute_budget::{compute_unit_price_arg, ComputeUnitLimit, COMPUTE_UNIT_PRICE_ARG},
         fee_payer::{fee_payer_arg, FEE_PAYER_ARG},
@@ -870,11 +871,15 @@ pub fn process_create_vote_account(
         let to_pubkey = &vote_account_address;
 
         let mut ixs = if is_alpenglow {
+            let bls_keypair =
+                BLSKeypair::derive_from_signer(&config.signers[0], "bls_keypair").unwrap();
+            let bls_pubkey = bls_keypair.pubkey();
             let initialize_account_ixn_meta = InitializeAccountInstructionData {
                 node_pubkey,
                 authorized_voter,
                 authorized_withdrawer,
                 commission,
+                bls_pubkey,
             };
 
             let create_ix = solana_system_interface::instruction::create_account(
