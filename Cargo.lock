@@ -6790,9 +6790,9 @@ dependencies = [
 
 [[package]]
 name = "solana-bls"
-version = "2.3.0"
+version = "0.1.0"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#a09580963525e608b5650b8be36f234d980b820c"
 dependencies = [
- "bincode",
  "blst",
  "blstrs",
  "bytemuck",
@@ -6801,11 +6801,6 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_with",
- "solana-bls12-381",
- "solana-keypair",
- "solana-signature",
- "solana-signer",
- "subtle",
  "thiserror 2.0.12",
 ]
 
