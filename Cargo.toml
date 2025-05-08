@@ -27,7 +27,6 @@ members = [
     "bench-tps",
     "bench-vote",
     "bloom",
-    "bls",
     "bucket_map",
     "build-alpenglow-vote",
     "builtins",
@@ -380,7 +379,7 @@ solana-big-mod-exp = "=2.2.1"
 solana-bincode = "=2.2.1"
 solana-blake3-hasher = "=2.2.1"
 solana-bloom = { path = "bloom", version = "=2.3.0" }
-solana-bls = { path = "bls", version = "=2.3.0" }
+solana-bls = { version = "0.1.0", git = "https://github.com/anza-xyz/solana-sdk", branch = "bls" } # TODO: update this when `solana-bls` crate is released and merged into master branch
 solana-bls12-381 = { path = "curves/bls12-381", version = "=2.3.0" }
 solana-bn254 = "=2.2.1"
 solana-borsh = "=2.2.1"
