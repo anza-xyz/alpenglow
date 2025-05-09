@@ -535,7 +535,6 @@ mod tests {
         assert_eq!(dbank.epoch_reward_status, EpochRewardStatus::Inactive);
     }
 
-    /*
     #[cfg(feature = "frozen-abi")]
     mod test_bank_serialize {
         use {
@@ -615,5 +614,5 @@ mod tests {
                 StoredMetaWriteVersion::default(),
             )
         }
-    }*/
+    }
 }
