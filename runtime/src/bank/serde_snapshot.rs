@@ -6,7 +6,8 @@ mod tests {
                 epoch_accounts_hash_utils, test_utils as bank_test_utils, Bank, EpochRewardStatus,
             },
             epoch_stakes::{
-                EpochAuthorizedVoters, EpochStakes, NodeIdToVoteAccounts, VersionedEpochStakes,
+                BLSPubkeyToRankMap, EpochAuthorizedVoters, EpochStakes, NodeIdToVoteAccounts,
+                VersionedEpochStakes,
             },
             genesis_utils::activate_all_features,
             runtime_config::RuntimeConfig,
@@ -346,6 +347,7 @@ mod tests {
                 total_stake: 42,
                 node_id_to_vote_accounts: Arc::<NodeIdToVoteAccounts>::default(),
                 epoch_authorized_voters: Arc::<EpochAuthorizedVoters>::default(),
+                bls_pubkey_to_rank_map: Arc::<BLSPubkeyToRankMap>::default(),
             }),
         );
         assert_eq!(bank.epoch_stakes.len(), 3);
