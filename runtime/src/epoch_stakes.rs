@@ -9,7 +9,52 @@ use {
 
 pub type NodeIdToVoteAccounts = HashMap<Pubkey, NodeVoteAccounts>;
 pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
-pub type BLSPubkeyToRankMap = HashMap<BLSPubkey, u16>;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
+pub struct BLSPubkeyToRankMap {
+    //TODO(wen): use BLSPubkey instead of String after figuring out AbiExample for BLSPubkey
+    rank_map: HashMap<String, u16>,
+}
+
+impl BLSPubkeyToRankMap {
+    pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
+        let mut pubkey_stake_pair_vec: Vec<(BLSPubkey, u64)> = epoch_vote_accounts_hash_map
+            .iter()
+            .filter_map(|(_, (stake, account))| {
+                if *stake > 0 {
+                    account.bls_pubkey().map(|bls_pubkey| (*bls_pubkey, *stake))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        pubkey_stake_pair_vec.sort_by(|(_a_pubkey, a_stake), (_b_pubkey, b_stake)| {
+            // TODO(wen): should compare pubkey if stake is equal
+            b_stake.cmp(a_stake)
+        });
+        let mut bls_pubkey_to_rank_map = HashMap::new();
+        for (rank, (bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+            bls_pubkey_to_rank_map.insert(format!("{:?}", bls_pubkey), rank as u16);
+        }
+        Self {
+            rank_map: bls_pubkey_to_rank_map,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rank_map.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rank_map.len()
+    }
+
+    pub fn get(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
+        self.rank_map.get(&format!("{:?}", bls_pubkey))
+    }
+}
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Clone, Serialize, Debug, Deserialize, Default, PartialEq, Eq)]
@@ -35,15 +80,14 @@ impl EpochStakes {
         let epoch_vote_accounts = stakes.vote_accounts();
         let (total_stake, node_id_to_vote_accounts, epoch_authorized_voters) =
             Self::parse_epoch_vote_accounts(epoch_vote_accounts.as_ref(), leader_schedule_epoch);
-        let mut result = Self {
+        let bls_pubkey_to_rank_map = BLSPubkeyToRankMap::new(epoch_vote_accounts.as_ref());
+        Self {
             stakes,
             total_stake,
             node_id_to_vote_accounts: Arc::new(node_id_to_vote_accounts),
             epoch_authorized_voters: Arc::new(epoch_authorized_voters),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
-        };
-        result.calculate_bls_pubkey_to_rank_map();
-        result
+            bls_pubkey_to_rank_map: Arc::new(bls_pubkey_to_rank_map),
+        }
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -136,30 +180,6 @@ impl EpochStakes {
             epoch_authorized_voters,
         )
     }
-
-    pub(crate) fn calculate_bls_pubkey_to_rank_map(&mut self) {
-        let epoch_vote_accounts_hash_map: &VoteAccountsHashMap =
-            self.stakes.vote_accounts().as_ref();
-        let mut pubkey_stake_pair_vec: Vec<(BLSPubkey, u64)> = epoch_vote_accounts_hash_map
-            .iter()
-            .filter_map(|(_, (stake, account))| {
-                if *stake > 0 {
-                    account.bls_pubkey().map(|bls_pubkey| (*bls_pubkey, *stake))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        pubkey_stake_pair_vec.sort_by(|(_a_pubkey, a_stake), (_b_pubkey, b_stake)| {
-            // TODO(wen): should compare pubkey if stake is equal
-            b_stake.cmp(a_stake)
-        });
-        let mut bls_pubkey_to_rank_map = BLSPubkeyToRankMap::new();
-        for (rank, (bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
-        }
-        self.bls_pubkey_to_rank_map = Arc::new(bls_pubkey_to_rank_map);
-    }
 }
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
@@ -183,15 +203,18 @@ impl From<VersionedEpochStakes> for EpochStakes {
             epoch_authorized_voters,
         } = versioned;
 
-        let mut result = Self {
-            stakes: Arc::new(stakes.into()),
+        let stakes = match stakes {
+            SerdeStakesToStakeFormat::Account(stakes) => Arc::new(StakesEnum::Accounts(stakes)),
+            SerdeStakesToStakeFormat::Stake(stakes) => Arc::new(StakesEnum::Stakes(stakes)),
+        };
+        let bls_pubkey_to_rank_map = BLSPubkeyToRankMap::new(stakes.vote_accounts().as_ref());
+        Self {
+            stakes,
             total_stake,
             node_id_to_vote_accounts,
             epoch_authorized_voters,
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
-        };
-        result.calculate_bls_pubkey_to_rank_map();
-        result
+            bls_pubkey_to_rank_map: Arc::new(bls_pubkey_to_rank_map),
+        }
     }
 }
 
@@ -454,7 +477,7 @@ pub(crate) mod tests {
             total_stake: 100,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch, epoch_stakes.clone());
 
@@ -476,7 +499,7 @@ pub(crate) mod tests {
             total_stake: 100,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch, epoch_stakes.clone());
 
@@ -506,7 +529,7 @@ pub(crate) mod tests {
             total_stake: 100,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch, epoch_stakes.clone());
 
@@ -537,7 +560,7 @@ pub(crate) mod tests {
             total_stake: 100,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch1, epoch_stakes1);
 
@@ -549,7 +572,7 @@ pub(crate) mod tests {
             total_stake: 200,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch2, epoch_stakes2);
 
@@ -561,7 +584,7 @@ pub(crate) mod tests {
             total_stake: 300,
             node_id_to_vote_accounts: Arc::new(HashMap::new()),
             epoch_authorized_voters: Arc::new(HashMap::new()),
-            bls_pubkey_to_rank_map: Arc::new(HashMap::new()),
+            bls_pubkey_to_rank_map: Arc::new(BLSPubkeyToRankMap::default()),
         };
         bank_epoch_stakes.insert(epoch3, epoch_stakes3);
 
