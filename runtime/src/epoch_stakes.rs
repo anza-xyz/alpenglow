@@ -14,8 +14,7 @@ pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 pub struct BLSPubkeyToRankMap {
-    //TODO(wen): use BLSPubkey instead of String after figuring out AbiExample for BLSPubkey
-    rank_map: HashMap<String, u16>,
+    rank_map: HashMap<BLSPubkey, u16>,
 }
 
 impl BLSPubkeyToRankMap {
@@ -30,13 +29,12 @@ impl BLSPubkeyToRankMap {
                 }
             })
             .collect();
-        pubkey_stake_pair_vec.sort_by(|(_a_pubkey, a_stake), (_b_pubkey, b_stake)| {
-            // TODO(wen): should compare pubkey if stake is equal
-            b_stake.cmp(a_stake)
+        pubkey_stake_pair_vec.sort_by(|(a_pubkey, a_stake), (b_pubkey, b_stake)| {
+            b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
         });
         let mut bls_pubkey_to_rank_map = HashMap::new();
         for (rank, (bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            bls_pubkey_to_rank_map.insert(format!("{:?}", bls_pubkey), rank as u16);
+            bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
             rank_map: bls_pubkey_to_rank_map,
@@ -52,7 +50,7 @@ impl BLSPubkeyToRankMap {
     }
 
     pub fn get(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
-        self.rank_map.get(&format!("{:?}", bls_pubkey))
+        self.rank_map.get(bls_pubkey)
     }
 }
 

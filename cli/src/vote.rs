@@ -871,6 +871,7 @@ pub fn process_create_vote_account(
         let to_pubkey = &vote_account_address;
 
         let mut ixs = if is_alpenglow {
+            //TODO(wen): After the bls crate is merged into main, we can use derived key.
             let bls_keypair = BLSKeypair::new();
             //                BLSKeypair::derive_from_signer(config.signers[0], b"bls_keypair").unwrap();
             let bls_pubkey: BLSPubkey = bls_keypair.public.into();
