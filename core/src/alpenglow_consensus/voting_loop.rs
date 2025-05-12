@@ -63,6 +63,8 @@ pub struct VotingLoopConfig {
     pub vote_account: Pubkey,
     pub wait_to_vote_slot: Option<Slot>,
     pub wait_for_vote_to_start_leader: bool,
+    pub pen_voting: Arc<AtomicBool>,
+    pub ready_to_vote: Arc<AtomicBool>,
 
     // Shared state
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
@@ -171,6 +173,8 @@ impl VotingLoop {
             leader_window_notifier,
             certificate_sender,
             vote_receiver,
+            pen_voting,
+            ready_to_vote,
         } = config;
 
         let _exit = Finalizer::new(exit.clone());
@@ -214,6 +218,12 @@ impl VotingLoop {
             progress: ProgressMap::default(),
             my_pubkey,
         };
+
+        // Indicate that we're ready to start voting
+        ready_to_vote.store(true, Ordering::Relaxed);
+
+        // Spin while we're waiting to start voting
+        while pen_voting.load(Ordering::Relaxed) {}
 
         // TODO(ashwin): Start loop once migration is complete current_slot from vote history
         loop {
@@ -494,10 +504,12 @@ impl VotingLoop {
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
+
         info!(
             "{my_pubkey}: Voting skip for slot range [{start},{end}] with blockhash from {}",
             bank.slot()
         );
+
         for slot in start..=end {
             let vote = Vote::new_skip_vote(slot);
             Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
@@ -590,6 +602,7 @@ impl VotingLoop {
         debug_assert!(bank.is_frozen());
         let slot = bank.slot();
         let hash = bank.hash();
+
         let Some(block_id) = blockstore
             .check_last_fec_set_and_get_block_id(
                 slot,

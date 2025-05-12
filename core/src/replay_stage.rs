@@ -274,6 +274,8 @@ pub struct ReplayStageConfig {
     pub banking_tracer: Arc<BankingTracer>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub pen_voting: Arc<AtomicBool>,
+    pub ready_to_vote: Arc<AtomicBool>,
 }
 
 pub struct ReplaySenders {
@@ -576,6 +578,8 @@ impl ReplayStage {
             banking_tracer,
             replay_highest_frozen,
             leader_window_notifier,
+            pen_voting,
+            ready_to_vote,
         } = config;
 
         let ReplaySenders {
@@ -656,6 +660,8 @@ impl ReplayStage {
                 vote_account,
                 wait_for_vote_to_start_leader,
                 wait_to_vote_slot,
+                pen_voting,
+                ready_to_vote,
                 authorized_voter_keypairs: authorized_voter_keypairs.clone(),
                 blockstore: blockstore.clone(),
                 bank_forks: bank_forks.clone(),
