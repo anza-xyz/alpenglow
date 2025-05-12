@@ -201,10 +201,7 @@ impl From<VersionedEpochStakes> for EpochStakes {
             epoch_authorized_voters,
         } = versioned;
 
-        let stakes = match stakes {
-            SerdeStakesToStakeFormat::Account(stakes) => Arc::new(StakesEnum::Accounts(stakes)),
-            SerdeStakesToStakeFormat::Stake(stakes) => Arc::new(StakesEnum::Stakes(stakes)),
-        };
+        let stakes: Arc<StakesEnum> = Arc::new(stakes.into());
         let bls_pubkey_to_rank_map = BLSPubkeyToRankMap::new(stakes.vote_accounts().as_ref());
         Self {
             stakes,
