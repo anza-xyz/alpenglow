@@ -5518,14 +5518,15 @@ dependencies = [
 
 [[package]]
 name = "solana-bls"
-version = "2.3.0"
+version = "0.1.1"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
 dependencies = [
+ "base64 0.22.1",
  "blst",
  "blstrs",
  "ff",
  "group",
  "rand 0.8.5",
- "solana-bls12-381",
  "thiserror 2.0.12",
 ]
 

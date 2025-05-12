@@ -92,7 +92,6 @@ use {
         fs,
         io::Read,
         iter,
-        net::UdpSocket,
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -6112,7 +6111,7 @@ fn test_alpenglow_node_all_nodes_notarize_and_finalize() {
 
     // Create leader schedule
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&vec![0, 0, 100]);
+        create_custom_leader_schedule_with_random_keys(&[0, 0, 100]);
     assert_eq!(num_nodes, validator_keys.len());
 
     let leader_schedule = FixedSchedule {
@@ -6120,7 +6119,7 @@ fn test_alpenglow_node_all_nodes_notarize_and_finalize() {
     };
 
     // Create our UDP socket to listen to votes
-    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let vote_listener = solana_net_utils::bind_to_localhost().unwrap();
 
     // Control variables
     let pen_voting_a = Arc::new(AtomicBool::new(true));
@@ -6193,7 +6192,7 @@ fn test_alpenglow_node_all_nodes_notarize_and_finalize() {
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
-            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
 
             let (vote_pubkey, parsed_vote, ..) =
                 vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
