@@ -154,7 +154,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=6510246#65102460d0106fb4c9d81f3203a08de0f32938f3"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=208474b#208474b9efb3db7825bc37b1051d2463ca428db5"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -5377,17 +5377,21 @@ dependencies = [
 
 [[package]]
 name = "solana-bls"
-version = "0.1.0"
-source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#a09580963525e608b5650b8be36f234d980b820c"
+version = "0.1.1"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
 dependencies = [
+ "base64 0.22.1",
  "blst",
  "blstrs",
  "bytemuck",
+ "cfg_eval",
  "ff",
  "group",
  "rand 0.8.5",
  "serde",
  "serde_with",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
  "thiserror 2.0.12",
 ]
 
@@ -6201,6 +6205,37 @@ dependencies = [
  "serde_derive",
  "solana-message",
  "solana-native-token",
+]
+
+[[package]]
+name = "solana-frozen-abi"
+version = "2.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bdd72d99751bcd646dc6a32772bf181c7b49f5379e4a4c8946920f3082b0ec6"
+dependencies = [
+ "bs58",
+ "bv",
+ "bytes",
+ "im",
+ "log",
+ "memmap2 0.5.10",
+ "serde",
+ "serde_derive",
+ "serde_with",
+ "sha2 0.10.8",
+ "solana-frozen-abi-macro",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "solana-frozen-abi-macro"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b83f88a126213cbcb57672c5e70ddb9791eff9b480e9f39fe9285fd2abca66fa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.96",
 ]
 
 [[package]]
