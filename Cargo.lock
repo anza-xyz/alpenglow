@@ -6709,8 +6709,6 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_with",
- "solana-frozen-abi",
- "solana-frozen-abi-macro",
  "solana-signature",
  "solana-signer",
  "subtle",
