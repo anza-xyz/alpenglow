@@ -31,6 +31,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true }
+solana-bls = { workspace = true, features = ["solana-signer-derive"] }
 solana-borsh = { workspace = true }
 solana-bpf-loader-program = { workspace = true }
 solana-clap-utils = { workspace = true }
