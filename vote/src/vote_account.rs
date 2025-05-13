@@ -7,6 +7,7 @@ use {
         ser::{Serialize, Serializer},
     },
     solana_account::{AccountSharedData, ReadableAccount},
+    solana_bls::Pubkey as BLSPubkey,
     solana_instruction::error::InstructionError,
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
@@ -190,6 +191,17 @@ impl VoteAccount {
             VoteAccountState::Alpenglow => AlpenglowVoteState::deserialize(self.0.account.data())
                 .unwrap()
                 .latest_timestamp_legacy_format(),
+        }
+    }
+
+    pub fn bls_pubkey(&self) -> Option<&BLSPubkey> {
+        match &self.0.vote_state_view {
+            VoteAccountState::TowerBFT(_) => None,
+            VoteAccountState::Alpenglow => Some(
+                AlpenglowVoteState::deserialize(self.0.account.data())
+                    .unwrap()
+                    .bls_pubkey(),
+            ),
         }
     }
 
@@ -581,6 +593,7 @@ mod tests {
         bincode::Options,
         rand::Rng,
         solana_account::WritableAccount,
+        solana_bls::keypair::Keypair as BLSKeypair,
         solana_clock::Clock,
         solana_pubkey::Pubkey,
         solana_vote_interface::state::{VoteInit, VoteState, VoteStateVersions},
@@ -617,12 +630,14 @@ mod tests {
         rng: &mut R,
         node_pubkey: Option<Pubkey>,
     ) -> (AccountSharedData, AlpenglowVoteState) {
+        let bls_keypair = BLSKeypair::new();
         let alpenglow_vote_state = AlpenglowVoteState::new_for_tests(
             node_pubkey.unwrap_or_else(Pubkey::new_unique),
             Pubkey::new_unique(),
             rng.gen(),
             Pubkey::new_unique(),
             rng.gen(),
+            bls_keypair.public.into(),
         );
         let mut account = AccountSharedData::new(
             rng.gen(), // lamports
