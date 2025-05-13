@@ -15,6 +15,7 @@ pub mod vote_pool;
 pub mod voting_loop;
 
 pub type Stake = u64;
+pub type Block = (Slot, Hash, Hash);
 pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,12 +38,28 @@ impl CertificateId {
             | CertificateId::Skip(slot) => *slot,
         }
     }
+
+    pub(crate) fn is_fast_finalization(&self) -> bool {
+        matches!(self, Self::FinalizeFast(_, _, _))
+    }
+
     pub(crate) fn is_finalization_variant(&self) -> bool {
         matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
     }
 
     pub(crate) fn is_notarize_fallback(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _))
+    }
+
+    pub(crate) fn to_block(self) -> Option<Block> {
+        match self {
+            CertificateId::Finalize(_) | CertificateId::Skip(_) => None,
+            CertificateId::Notarize(slot, block_id, bank_hash)
+            | CertificateId::NotarizeFallback(slot, block_id, bank_hash)
+            | CertificateId::FinalizeFast(slot, block_id, bank_hash) => {
+                Some((slot, block_id, bank_hash))
+            }
+        }
     }
 
     /// "Critical" certs are the certificates necessary to make progress

@@ -3,7 +3,8 @@
 use {
     super::{
         block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
-        certificate_pool::AddVoteError,
+        certificate_pool::{self, AddVoteError},
+        vote_history_storage::VoteHistoryStorage,
         CertificateId,
     },
     crate::{
@@ -63,6 +64,8 @@ pub struct VotingLoopConfig {
     pub vote_account: Pubkey,
     pub wait_to_vote_slot: Option<Slot>,
     pub wait_for_vote_to_start_leader: bool,
+    pub vote_history: VoteHistory,
+    pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
 
     // Shared state
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
@@ -157,6 +160,8 @@ impl VotingLoop {
             vote_account,
             wait_to_vote_slot,
             wait_for_vote_to_start_leader,
+            vote_history,
+            vote_history_storage: _, // TODO: set-identity
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
@@ -175,24 +180,39 @@ impl VotingLoop {
 
         let _exit = Finalizer::new(exit.clone());
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
-        let mut cert_pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(
-            &root_bank_cache.root_bank(),
-            Some(certificate_sender),
-        );
-
-        let mut current_leader = None;
-        let mut current_slot = root_bank_cache.root_bank().slot() + 1;
 
         let identity_keypair = cluster_info.keypair().clone();
         let my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
-        // TODO: Properly initialize VoteHistory from storage
-        let vote_history = VoteHistory::new(my_pubkey, root_bank_cache.root_bank().slot());
         // TODO(ashwin): handle set identity here and in loop
         // reminder prev 3 need to be mutable
         if my_pubkey != vote_history.node_pubkey {
             todo!();
         }
+
+        let mut current_leader = None;
+        let mut current_slot = {
+            let bank_forks_slot = root_bank_cache.root_bank().slot();
+            let vote_history_slot = vote_history.root();
+            if bank_forks_slot != vote_history_slot {
+                panic!(
+                    "{my_pubkey}: Mismatch bank forks root {bank_forks_slot} vs vote history root {vote_history_slot}"
+                );
+            }
+            let slot = bank_forks_slot + 1;
+            info!(
+                "{my_pubkey}: Starting voting loop from {slot}: root {}",
+                root_bank_cache.root_bank().slot()
+            );
+            slot
+        };
+
+        let mut cert_pool = certificate_pool::load_from_blockstore(
+            &my_pubkey,
+            &root_bank_cache.root_bank(),
+            blockstore.as_ref(),
+            Some(certificate_sender),
+        );
 
         let mut voting_context = VotingContext {
             vote_history,
@@ -260,6 +280,7 @@ impl VotingLoop {
                 &leader_pubkey,
             );
 
+            let mut fast_forward = None;
             while current_slot <= leader_end_slot {
                 let leader_slot_index = leader_slot_index(current_slot);
                 let timeout = timeouts[leader_slot_index];
@@ -350,9 +371,9 @@ impl VotingLoop {
                         &mut voting_context,
                     );
 
-                    // Refresh votes if no progress is made
+                    // Refresh votes and latest finalization certificate if no progress is made
                     if refresh_timer.elapsed() > Duration::from_secs(1) {
-                        Self::refresh_votes(
+                        Self::refresh_votes_and_cert(
                             &my_pubkey,
                             current_slot,
                             &mut root_bank_cache,
@@ -361,6 +382,26 @@ impl VotingLoop {
                         );
                         refresh_timer = Instant::now();
                     }
+
+                    // Check if we can fast forward
+                    // TODO(ashwin): for duplicate blocks, ensure that we have the correct chain up to this
+                    let Some((slot, _, _)) = cert_pool.highest_fast_finalized() else {
+                        continue;
+                    };
+                    if slot > current_slot {
+                        fast_forward = Some(slot);
+                        break;
+                    }
+                }
+
+                if let Some(slot) = fast_forward {
+                    info!(
+                        "{my_pubkey}: While waiting for certificate on {current_slot} we observed fast finalization certificate for {slot}. \
+                        Fast forwarding to {}",
+                        slot + 1,
+                    );
+                    current_slot = slot + 1;
+                    break;
                 }
 
                 info!(
@@ -378,6 +419,13 @@ impl VotingLoop {
                     &mut voting_context,
                 );
                 current_slot += 1;
+            }
+
+            // We intentionally do not set root if we were fast forwarding, we could
+            // end up rooting a slot that has not yet been considered for voting by the above loop
+            // causing the bank to be removed from bank forks.
+            if fast_forward.is_some() {
+                continue;
             }
 
             // Set new root
@@ -759,23 +807,33 @@ impl VotingLoop {
         true
     }
 
-    /// Refresh all cast votes for `slot`
-    fn refresh_votes(
+    /// Refresh the highest recent finalization certificate
+    /// For each slot past this, refresh our votes
+    fn refresh_votes_and_cert(
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) {
-        for vote in voting_context.vote_history.votes_cast(slot) {
-            info!("{my_pubkey}: Refreshing vote {vote:?}");
-            Self::send_vote(
-                vote,
-                true,
-                root_bank_cache.root_bank().as_ref(),
-                cert_pool,
-                voting_context,
-            );
+        // TODO: handle slow finalization after cert pool refactor
+        let highest_finalization_slot = if let Some(block) = cert_pool.highest_fast_finalized() {
+            // TODO: rebroadcast cert for block once we have BLS
+            block.0
+        } else {
+            0
+        };
+        for s in highest_finalization_slot..=slot {
+            for vote in voting_context.vote_history.votes_cast(s) {
+                info!("{my_pubkey}: Refreshing vote {vote:?}");
+                Self::send_vote(
+                    vote,
+                    true,
+                    root_bank_cache.root_bank().as_ref(),
+                    cert_pool,
+                    voting_context,
+                );
+            }
         }
     }
 

@@ -1,6 +1,9 @@
 use {
+    super::vote_history_storage::{
+        Result, SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
+    },
     alpenglow_vote::vote::Vote,
-    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey},
+    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
     std::collections::{HashMap, HashSet},
     thiserror::Error,
 };
@@ -187,6 +190,26 @@ impl VoteHistory {
         self.skipped.retain(|s| *s >= root);
         self.its_over.retain(|s| *s >= root);
         self.votes_cast.retain(|s, _| *s >= root);
+    }
+
+    #[allow(dead_code)]
+    /// Save the vote history to `vote_history_storage` signed by `node_keypair`
+    pub fn save(
+        &self,
+        vote_history_storage: &dyn VoteHistoryStorage,
+        node_keypair: &Keypair,
+    ) -> Result<()> {
+        let saved_vote_history = SavedVoteHistory::new(self, node_keypair)?;
+        vote_history_storage.store(&SavedVoteHistoryVersions::from(saved_vote_history))?;
+        Ok(())
+    }
+
+    /// Restore the saved vote history from `vote_history_storage` for `node_pubkey`
+    pub fn restore(
+        vote_history_storage: &dyn VoteHistoryStorage,
+        node_pubkey: &Pubkey,
+    ) -> Result<Self> {
+        vote_history_storage.load(node_pubkey)
     }
 }
 
