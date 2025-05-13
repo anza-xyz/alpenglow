@@ -400,12 +400,46 @@ pub fn check_for_new_roots(
     connection_cache: &Arc<ConnectionCache>,
     test_name: &str,
 ) {
-    let mut roots = vec![HashSet::new(); contact_infos.len()];
+    check_for_new_commitment_slots(
+        num_new_roots,
+        contact_infos,
+        connection_cache,
+        test_name,
+        CommitmentConfig::finalized(),
+    );
+}
+
+/// For alpenglow, CommitmentConfig::processed() refers to the current voting loop slot,
+/// so this is more accurate for determining that each node is voting when stake distribution is
+/// uneven
+pub fn check_for_new_processed(
+    num_new_processed: usize,
+    contact_infos: &[ContactInfo],
+    connection_cache: &Arc<ConnectionCache>,
+    test_name: &str,
+) {
+    check_for_new_commitment_slots(
+        num_new_processed,
+        contact_infos,
+        connection_cache,
+        test_name,
+        CommitmentConfig::processed(),
+    );
+}
+
+fn check_for_new_commitment_slots(
+    num_new_slots: usize,
+    contact_infos: &[ContactInfo],
+    connection_cache: &Arc<ConnectionCache>,
+    test_name: &str,
+    commitment: CommitmentConfig,
+) {
+    let mut slots = vec![HashSet::new(); contact_infos.len()];
     let mut done = false;
     let mut last_print = Instant::now();
     let loop_start = Instant::now();
     let loop_timeout = Duration::from_secs(180);
-    let mut num_roots_map = HashMap::new();
+    let mut num_slots_map = HashMap::new();
     while !done {
         assert!(loop_start.elapsed() < loop_timeout);
 
@@ -413,16 +447,16 @@ pub fn check_for_new_roots(
             let client = new_tpu_quic_client(ingress_node, connection_cache.clone()).unwrap();
             let root_slot = client
                 .rpc_client()
-                .get_slot_with_commitment(CommitmentConfig::finalized())
+                .get_slot_with_commitment(commitment)
                 .unwrap_or(0);
-            roots[i].insert(root_slot);
-            num_roots_map.insert(*ingress_node.pubkey(), roots[i].len());
-            let num_roots = roots.iter().map(|r| r.len()).min().unwrap();
-            done = num_roots >= num_new_roots;
+            slots[i].insert(root_slot);
+            num_slots_map.insert(*ingress_node.pubkey(), slots[i].len());
+            let num_slots = slots.iter().map(|r| r.len()).min().unwrap();
+            done = num_slots >= num_new_slots;
             if done || last_print.elapsed().as_secs() > 3 {
                 info!(
-                    "{} waiting for {} new roots.. observed: {:?}",
-                    test_name, num_new_roots, num_roots_map
+                    "{} waiting for {} new {:?} slots.. observed: {:?}",
+                    test_name, num_new_slots, commitment.commitment, num_slots_map
                 );
                 last_print = Instant::now();
             }
