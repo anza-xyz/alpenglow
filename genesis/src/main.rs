@@ -8,6 +8,7 @@ use {
     itertools::Itertools,
     solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
     solana_accounts_db::hardened_unpack::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
+    solana_bls::keypair::Keypair as BLSKeypair,
     solana_clap_utils::{
         input_parsers::{
             cluster_type_of, pubkey_of, pubkeys_of, unix_timestamp_from_rfc3339_datetime,
@@ -267,12 +268,15 @@ fn add_validator_accounts(
         );
 
         let vote_account = if is_alpenglow {
+            let keypair = BLSKeypair::new();
+            let bls_pubkey = keypair.public.into();
             AlpenglowVoteState::create_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
                 commission,
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
+                bls_pubkey,
             )
         } else {
             vote_state::create_account_with_authorized(

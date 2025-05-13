@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=c84cec6#c84cec6f98add7b993fd5bafece2da9c26e9db8b"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=070c5b1#070c5b1d365dba5f2b0e092d3fd5bf0ed110c2f1"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -484,6 +484,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-account",
+ "solana-bls",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
@@ -2613,9 +2614,9 @@ dependencies = [
 
 [[package]]
 name = "five8_core"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b2a72055cd9cffc40c9f75f1e5810c80559e158796cf2202292ce4745889588"
+checksum = "2551bf44bc5f776c15044b9b94153a00198be06743e262afaaa61f11ac7523a5"
 
 [[package]]
 name = "fixedbitset"
@@ -6790,17 +6791,24 @@ dependencies = [
 
 [[package]]
 name = "solana-bls"
-version = "0.1.0"
-source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#a09580963525e608b5650b8be36f234d980b820c"
+version = "0.1.1"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
 dependencies = [
+ "base64 0.22.1",
  "blst",
  "blstrs",
  "bytemuck",
+ "cfg_eval",
  "ff",
  "group",
  "rand 0.8.5",
  "serde",
  "serde_with",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-signature",
+ "solana-signer",
+ "subtle",
  "thiserror 2.0.12",
 ]
 
@@ -7110,6 +7118,7 @@ dependencies = [
  "serde_json",
  "solana-account",
  "solana-account-decoder",
+ "solana-bls",
  "solana-borsh",
  "solana-bpf-loader-program",
  "solana-clap-utils",
@@ -8060,6 +8069,7 @@ dependencies = [
  "serde_yaml 0.9.34+deprecated",
  "solana-account",
  "solana-accounts-db",
+ "solana-bls",
  "solana-borsh",
  "solana-clap-utils",
  "solana-cli-config",
@@ -9685,6 +9695,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "solana-accounts-db",
+ "solana-bls",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",
@@ -10539,6 +10550,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "solana-accounts-db",
+ "solana-bls",
  "solana-cli-output",
  "solana-compute-budget",
  "solana-core",
@@ -11135,6 +11147,7 @@ dependencies = [
  "serde_derive",
  "solana-account",
  "solana-bincode",
+ "solana-bls",
  "solana-clock",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
