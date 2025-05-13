@@ -1,7 +1,7 @@
 use {
     super::{
         certificate_limits_and_vote_types,
-        vote_certificate::{CertificateError, VoteCertificate},
+        vote_certificate::{CertificateError, LegacyVoteCertificate, VoteCertificate},
         vote_history::VoteHistory,
         vote_pool::{VoteKey, VotePool},
         vote_to_certificate_ids, Stake,
@@ -14,6 +14,7 @@ use {
     },
     alpenglow_vote::vote::Vote,
     crossbeam_channel::Sender,
+    solana_ledger::blockstore::{Blockstore, BlockstoreError},
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
     solana_sdk::{
@@ -245,6 +246,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             })
     }
 
+    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VC) {
+        self.completed_certificates.insert(cert_id, cert);
+    }
+
     //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
     /*    fn has_conflicting_vote(
             &self,
@@ -334,6 +339,15 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         // TODO(ashwin): When updating voting loop for duplicate blocks, add parent tracker to
         // make this the true "highest branchCertified block". For now this sufficies.
         self.highest_notarized_fallback
+    }
+
+    /// The highest fast finalized block, for use in catchup
+    pub fn highest_fast_finalized(&self) -> Option<(Slot, Hash, Hash)> {
+        self.completed_certificates
+            .keys()
+            .filter(|cert| cert.is_fast_finalization())
+            .max()?
+            .to_block()
     }
 
     #[cfg(test)]
@@ -570,6 +584,37 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             .split_off(&(bank.slot(), VoteType::Finalize));
         self.update_epoch_stakes_map(&bank);
     }
+}
+
+pub(crate) fn load_from_blockstore(
+    my_pubkey: &Pubkey,
+    root_bank: &Bank,
+    blockstore: &Blockstore,
+    certificate_sender: Option<Sender<(CertificateId, LegacyVoteCertificate)>>,
+) -> Result<CertificatePool<LegacyVoteCertificate>, BlockstoreError> {
+    let mut cert_pool = CertificatePool::new_from_root_bank(root_bank, certificate_sender);
+    for (slot, slot_cert) in blockstore.slot_certificates_iterator(root_bank.slot())? {
+        for ((block_id, bank_hash), cert) in slot_cert.notarize_fallback_certificates.into_iter() {
+            // TODO: this will be migrated to BLS
+            let cert_id = CertificateId::NotarizeFallback(slot, block_id, bank_hash);
+            let cert = cert.into_iter().map(Arc::from).collect();
+            trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
+            cert_pool
+                .insert_certificate(cert_id, LegacyVoteCertificate::new(0, cert, None).unwrap());
+        }
+
+        let Some(cert) = slot_cert.skip_certificate else {
+            continue;
+        };
+        // TODO: this will be migrated to BLS
+        let cert_id = CertificateId::Skip(slot);
+        let cert = cert.into_iter().map(Arc::from).collect();
+        trace!(
+            "{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool"
+        );
+        cert_pool.insert_certificate(cert_id, LegacyVoteCertificate::new(0, cert, None).unwrap());
+    }
+    Ok(cert_pool)
 }
 
 #[cfg(test)]
