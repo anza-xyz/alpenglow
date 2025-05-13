@@ -178,6 +178,11 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         total_stake: Stake,
     ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
+        let epoch = self.epoch_schedule.get_epoch(slot);
+        let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
+            return Err(AddVoteError::EpochStakesNotFound(epoch));
+        };
+        let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         vote_to_certificate_ids(vote)
             .iter()
             .try_fold(None, |highest, &cert_id| {
@@ -207,11 +212,9 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     };
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
-                // TODO: use an empty hash map of pubkeys for now since it is not clear
-                // where to get the sorted list of validators yet
-
                 // TODO: remove unwrap and properly handle unwrap
-                let vote_certificate = VC::new(accumulated_stake, transactions, None).unwrap();
+                let vote_certificate =
+                    VC::new(accumulated_stake, transactions, bls_pubkey_to_rank_map).unwrap();
                 self.completed_certificates
                     .insert(cert_id, vote_certificate.clone());
                 if let Some(sender) = &self.certificate_sender {
