@@ -154,7 +154,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=c84cec6#c84cec6f98add7b993fd5bafece2da9c26e9db8b"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=070c5b1#070c5b1d365dba5f2b0e092d3fd5bf0ed110c2f1"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -166,6 +166,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-account",
+ "solana-bls",
  "solana-hash",
  "solana-program",
  "solana-signature",
@@ -5395,14 +5396,19 @@ dependencies = [
 
 [[package]]
 name = "solana-bls"
-version = "2.3.0"
+version = "0.1.1"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
 dependencies = [
+ "base64 0.22.1",
  "blst",
  "blstrs",
+ "bytemuck",
+ "cfg_eval",
  "ff",
  "group",
  "rand 0.8.5",
- "solana-bls12-381",
+ "serde",
+ "serde_with",
  "thiserror 2.0.12",
 ]
 
@@ -7484,6 +7490,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "solana-accounts-db",
+ "solana-bls",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",
@@ -8225,6 +8232,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "solana-accounts-db",
+ "solana-bls",
  "solana-cli-output",
  "solana-compute-budget",
  "solana-core",
@@ -8631,6 +8639,7 @@ dependencies = [
  "serde_derive",
  "solana-account",
  "solana-bincode",
+ "solana-bls",
  "solana-clock",
  "solana-hash",
  "solana-instruction",
