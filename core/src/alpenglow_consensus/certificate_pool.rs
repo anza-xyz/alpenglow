@@ -582,6 +582,7 @@ mod tests {
             },
             *,
         },
+        itertools::Itertools,
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
@@ -1551,6 +1552,41 @@ mod tests {
         assert_eq!(
             pool.safe_to_notar(slot, &vote_history),
             vec![(block_id, bank_hash)]
+        );
+
+        // Add 20% notarization for another block, we should notify on both
+        let duplicate_block_id = Hash::new_unique();
+        let duplicate_bank_hash = Hash::new_unique();
+        for keypairs in validator_keypairs.iter().skip(7).take(2) {
+            assert!(pool
+                .add_vote(
+                    &Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash),
+                    dummy_transaction::<VC>(),
+                    &keypairs.vote_keypair.pubkey(),
+                )
+                .is_ok());
+        }
+
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history)
+                .into_iter()
+                .sorted()
+                .collect::<Vec<_>>(),
+            vec![
+                (block_id, bank_hash),
+                (duplicate_block_id, duplicate_bank_hash),
+            ]
+            .into_iter()
+            .sorted()
+            .collect::<Vec<_>>()
+        );
+
+        // Vote notar fallback, safe to notar should now only notify for the other block
+        let vote = Vote::new_notarization_fallback_vote(3, block_id, bank_hash);
+        vote_history.add_vote(vote);
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history),
+            vec![(duplicate_block_id, duplicate_bank_hash)]
         );
     }
 
