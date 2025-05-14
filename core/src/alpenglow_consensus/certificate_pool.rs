@@ -462,18 +462,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     continue;
                 }
             }
-            // Check if the block fits condition (i) 40% of stake holders voted notarize
-            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
-            if notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY {
-                safe_to_notar.push((b_block_id, b_bank_hash));
-                continue;
-            }
 
-            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-            if notarized_ratio < SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP {
-                continue;
-            }
-            if notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP {
+            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
+            let qualifies =
+                // Check if the block fits condition (i) 40% of stake holders voted notarize
+                notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
+                // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+                || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
+                    && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP);
+
+            if qualifies {
                 safe_to_notar.push((b_block_id, b_bank_hash));
             }
         }
