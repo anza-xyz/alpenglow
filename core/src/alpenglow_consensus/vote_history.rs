@@ -90,16 +90,19 @@ impl VoteHistory {
 
     /// Have we cast a notarization or skip vote for `slot`
     pub fn voted(&self, slot: Slot) -> bool {
+        assert!(slot >= self.root);
         self.voted.contains(&slot)
     }
 
     /// The block for which we voted notarize in slot `slot`
     pub fn voted_notar(&self, slot: Slot) -> Option<(Hash, Hash)> {
+        assert!(slot >= self.root);
         self.voted_notar.get(&slot).copied()
     }
 
     /// Whether we voted notarize fallback in `slot` for block `(block_id, bank_hash)`
     pub fn voted_notar_fallback(&self, slot: Slot, block_id: Hash, bank_hash: Hash) -> bool {
+        assert!(slot >= self.root);
         self.voted_notar_fallback
             .get(&slot)
             .is_some_and(|v| v.contains(&(block_id, bank_hash)))
@@ -107,21 +110,25 @@ impl VoteHistory {
 
     /// Whether we voted skip fallback for `slot`
     pub fn voted_skip_fallback(&self, slot: Slot) -> bool {
+        assert!(slot >= self.root);
         self.voted_skip_fallback.contains(&slot)
     }
 
     /// Have we cast any skip vote variation for `slot`
     pub fn skipped(&self, slot: Slot) -> bool {
+        assert!(slot >= self.root);
         self.skipped.contains(&slot)
     }
 
     /// Have we casted a finalization vote for `slot`
     pub fn its_over(&self, slot: Slot) -> bool {
+        assert!(slot >= self.root);
         self.its_over.contains(&slot)
     }
 
     /// All votes in a slot, for use in refresh
     pub fn votes_cast(&self, slot: Slot) -> Vec<Vote> {
+        assert!(slot >= self.root);
         self.votes_cast.get(&slot).cloned().unwrap_or_default()
     }
 
@@ -132,6 +139,7 @@ impl VoteHistory {
 
     /// Add a new vote to the voting history
     pub fn add_vote(&mut self, vote: Vote) {
+        assert!(vote.slot() >= self.root);
         // TODO: these assert!s are for my debugging, can consider removing
         // in final version
         match vote {
