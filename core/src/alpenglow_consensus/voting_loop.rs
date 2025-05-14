@@ -604,7 +604,7 @@ impl VotingLoop {
             if voting_context.vote_history.voted_notar(parent_slot)
                 != Some((parent_block_id, parent_bank_hash))
             {
-                // Must have voted for the parent block
+                // Voted skip or notarize on a different version of the parent
                 return false;
             }
         }
