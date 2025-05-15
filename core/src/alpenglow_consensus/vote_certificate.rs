@@ -4,8 +4,9 @@ use {
         transaction::AlpenglowVoteTransaction, Stake,
     },
     solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
+    solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_sdk::transaction::VersionedTransaction,
-    std::{collections::HashMap, sync::Arc},
+    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -27,8 +28,7 @@ pub trait VoteCertificate: Default + Clone {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<Self::VoteTransaction>>,
-        // TODO: make this variable non-option after we have the sorted list of pubkeys
-        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
+        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError>;
     fn vote_count(&self) -> usize;
     fn stake(&self) -> Stake;
@@ -60,7 +60,7 @@ impl VoteCertificate for LegacyVoteCertificate {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<VersionedTransaction>>,
-        _validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
+        _bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError> {
         Ok(Self {
             stake,
@@ -83,7 +83,7 @@ impl VoteCertificate for BlsCertificate {
     fn new(
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
-        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
+        validator_bls_pubkey_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError> {
         BlsCertificate::new(stake, transactions, validator_bls_pubkey_map)
     }
@@ -115,7 +115,7 @@ impl BlsCertificate {
     pub fn new(
         stake: Stake,
         transactions: Vec<Arc<BlsVoteTransaction>>,
-        validator_bls_pubkey_map: Option<&HashMap<BlsPubkey, usize>>,
+        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError> {
         let mut aggregate_pubkey = PubkeyProjective::default();
         let mut aggregate_signature = SignatureProjective::default();
@@ -139,16 +139,13 @@ impl BlsCertificate {
                 .map_err(|_| CertificateError::InvalidSignature)?;
             aggregate_signature.aggregate_with([&signature]);
 
-            // TODO: remove this if condition once validator hashmap becomes non-option
-            if let Some(validator_bls_pubkey_map) = validator_bls_pubkey_map {
-                // set bit-vector for the validator
-                let validator_index = validator_bls_pubkey_map
-                    .get(&transaction.pubkey)
-                    .ok_or(CertificateError::ValidatorDoesNotExist)?;
-                bit_vector
-                    .set_bit(*validator_index, true)
-                    .map_err(|_| CertificateError::IndexOutOfBound)?;
-            }
+            // set bit-vector for the validator
+            let validator_index = bls_pubkey_to_rank_map
+                .get(&transaction.pubkey)
+                .ok_or(CertificateError::ValidatorDoesNotExist)?;
+            bit_vector
+                .set_bit(*validator_index as usize, true)
+                .map_err(|_| CertificateError::IndexOutOfBound)?;
         }
 
         Ok(Self {
@@ -163,7 +160,7 @@ impl BlsCertificate {
     pub fn add(
         &mut self,
         stake: Stake,
-        validator_pubkey_map: &HashMap<BlsPubkey, usize>,
+        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
         transaction: &BlsVoteTransaction,
     ) -> Result<(), CertificateError> {
         let aggregate_pubkey: PubkeyProjective = self
@@ -196,11 +193,11 @@ impl BlsCertificate {
         self.aggregate_signature = new_aggregate_signature.into();
 
         // set bit-vector for the validator
-        let validator_index = validator_pubkey_map
+        let validator_index = bls_pubkey_to_rank_map
             .get(&transaction.pubkey)
             .ok_or(CertificateError::ValidatorDoesNotExist)?;
         self.bit_vector
-            .set_bit(*validator_index, true)
+            .set_bit(*validator_index as usize, true)
             .map_err(|_| CertificateError::IndexOutOfBound)?;
 
         self.stake += stake;
