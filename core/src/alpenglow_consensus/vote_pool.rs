@@ -124,6 +124,7 @@ mod test {
             },
             *,
         },
+        solana_bls::keypair::Keypair as BLSKeypair,
         std::sync::Arc,
     };
 
@@ -135,7 +136,7 @@ mod test {
 
     fn test_skip_vote_pool_for_type<VC: VoteCertificate>() {
         let mut vote_pool = VotePool::<VC>::new(1);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
         let my_pubkey = Pubkey::new_unique();
 
         assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
@@ -161,7 +162,7 @@ mod test {
 
     fn test_notarization_pool_for_type<VC: VoteCertificate>() {
         let mut vote_pool = VotePool::<VC>::new(1);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
@@ -224,7 +225,7 @@ mod test {
     fn test_notarization_fallback_pool_for_type<VC: VoteCertificate>() {
         solana_logger::setup();
         let mut vote_pool = VotePool::<VC>::new(3);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test());
+        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();

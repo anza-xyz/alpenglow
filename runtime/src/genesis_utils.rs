@@ -167,19 +167,18 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         let node_pubkey = validator_voting_keypairs.borrow().node_keypair.pubkey();
         let vote_pubkey = validator_voting_keypairs.borrow().vote_keypair.pubkey();
         let stake_pubkey = validator_voting_keypairs.borrow().stake_keypair.pubkey();
+        let bls_pubkey = validator_voting_keypairs.borrow().bls_keypair.public.into();
 
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if alpenglow_so_path.is_some() {
-            //TODO(wen): change to derive from vote private key when bls crate is published.
-            let bls_keypair = BLSKeypair::new();
             AlpenglowVoteState::create_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
                 0,
                 *stake,
-                bls_keypair.public.into(),
+                bls_pubkey,
             )
         } else {
             vote_state::create_account(&vote_pubkey, &node_pubkey, 0, *stake)
