@@ -112,6 +112,10 @@ impl<VC: VoteCertificate> VotePool<VC> {
             output.extend(vote_entries.transactions.iter().cloned());
         }
     }
+
+    pub fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
+        self.prev_votes.contains_key(validator_key)
+    }
 }
 
 #[cfg(test)]
