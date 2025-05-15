@@ -7,7 +7,7 @@ use {
         vote_to_certificate_ids, Stake,
     },
     crate::alpenglow_consensus::{
-        CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        conflicting_types, CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
         MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
@@ -44,8 +44,9 @@ pub type PoolId = (Slot, VoteType);
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
-    //    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
-    //    ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
+    #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
+    ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
+
     #[error("Epoch stakes missing for epoch: {0}")]
     EpochStakesNotFound(Epoch),
 
@@ -71,8 +72,6 @@ pub struct CertificatePool<VC: VoteCertificate> {
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateId, VC>,
-    // Lookup table for checking conflicting vote types.
-    // conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
@@ -99,18 +98,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             certificate_sender,
             ..Self::default()
         };
-
-        /*    // Initialize the conflicting_vote_types map
-        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
-            pool.conflicting_vote_types
-                .entry(*vote_type_1)
-                .or_insert_with(Vec::new)
-                .push(*vote_type_2);
-            pool.conflicting_vote_types
-                .entry(*vote_type_2)
-                .or_insert_with(Vec::new)
-                .push(*vote_type_1);
-        }*/
 
         // Update the epoch_stakes_map and root
         pool.update_epoch_stakes_map(bank);
@@ -248,24 +235,21 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             })
     }
 
-    //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
-    /*    fn has_conflicting_vote(
-            &self,
-            slot: Slot,
-            vote_type: VoteType,
-            validator_vote_key: &Pubkey,
-        ) -> Option<VoteType> {
-            let conflicting_types = self.conflicting_vote_types.get(&vote_type)?;
-            for conflicting_type in conflicting_types {
-                if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
-                    if pool.has_prev_vote(validator_vote_key) {
-                        return Some(*conflicting_type);
-                    }
+    fn has_conflicting_vote(
+        &self,
+        slot: Slot,
+        vote_type: VoteType,
+        validator_vote_key: &Pubkey,
+    ) -> Option<VoteType> {
+        for conflicting_type in conflicting_types(vote_type) {
+            if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
+                if pool.has_prev_vote(validator_vote_key) {
+                    return Some(*conflicting_type);
                 }
             }
-            None
         }
-    */
+        None
+    }
 
     /// Adds the new vote the the certificate pool. If a new certificate is created
     /// as a result of this, send it via the `self.certificate_sender`
@@ -306,18 +290,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             }
             _ => (None, None),
         };
-        //TODO(wen): without cert retransmit this kills our local cluster test, enable later.
-        /*        if let Some(conflicting_type) =
-                    self.has_conflicting_vote(slot, vote_type, validator_vote_key)
-                {
-                    return Err(AddVoteError::ConflictingVoteType(
-                        vote_type,
-                        conflicting_type,
-                        slot,
-                        *validator_vote_key,
-                    ));
-                }
-        */
+        if let Some(conflicting_type) =
+            self.has_conflicting_vote(slot, vote_type, validator_vote_key)
+        {
+            return Err(AddVoteError::ConflictingVoteType(
+                vote_type,
+                conflicting_type,
+                slot,
+                *validator_vote_key,
+            ));
+        }
         if !self.update_vote_pool(
             slot,
             vote_type,
@@ -1654,7 +1636,6 @@ mod tests {
         assert!(pool.safe_to_skip(slot, &vote_history));
     }
 
-    /*
     fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
         match vote_type {
             VoteType::Notarize => {
@@ -1669,32 +1650,63 @@ mod tests {
         }
     }
 
+    fn test_reject_conflicting_vote<VC: VoteCertificate>(
+        pool: &mut CertificatePool<VC>,
+        keypairs: &ValidatorVoteKeypairs,
+        vote_type_1: VoteType,
+        vote_type_2: VoteType,
+        slot: Slot,
+    ) {
+        let vote_1 = create_new_vote(vote_type_1, slot);
+        let vote_2 = create_new_vote(vote_type_2, slot);
+        let pubkey = keypairs.vote_keypair.pubkey();
+        let bls_keypair = &keypairs.bls_keypair;
+        assert!(pool
+            .add_vote(
+                &vote_1,
+                dummy_transaction::<VC>(bls_keypair.clone()),
+                &pubkey
+            )
+            .is_ok());
+        assert!(pool
+            .add_vote(
+                &vote_2,
+                dummy_transaction::<VC>(bls_keypair.clone()),
+                &pubkey
+            )
+            .is_err());
+    }
 
-        fn test_reject_conflicting_vote(
-            pool: &mut CertificatePool,
-            pubkey: &Pubkey,
-            vote_type_1: VoteType,
-            vote_type_2: VoteType,
-            slot: Slot,
-        ) {
-            let vote_1 = create_new_vote(vote_type_1, slot);
-            let vote_2 = create_new_vote(vote_type_2, slot);
-            assert!(pool.add_vote(&vote_1, dummy_transaction(), pubkey).is_ok());
-            assert!(pool.add_vote(&vote_2, dummy_transaction(), pubkey).is_err());
-        }
-
-        #[test]
-        fn test_reject_conflicting_votes() {
-            let (validator_keypairs, mut pool) = create_keypairs_and_pool();
-            let mut slot = 2;
-            for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
-                let pubkey = validator_keypairs[0].vote_keypair.pubkey();
-                test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_1, *vote_type_2, slot);
-                test_reject_conflicting_vote(&mut pool, &pubkey, *vote_type_2, *vote_type_1, slot + 1);
-                slot += 2;
+    fn test_reject_conflicting_votes_with_type<VC: VoteCertificate>() {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
+        let mut slot = 2;
+        for vote_type_1 in [
+            VoteType::Finalize,
+            VoteType::Notarize,
+            VoteType::NotarizeFallback,
+            VoteType::Skip,
+            VoteType::SkipFallback,
+        ] {
+            let conflicting_vote_types = conflicting_types(vote_type_1);
+            let keypairs = &validator_keypairs[0];
+            for vote_type_2 in conflicting_vote_types {
+                test_reject_conflicting_vote::<VC>(
+                    &mut pool,
+                    keypairs,
+                    vote_type_1,
+                    *vote_type_2,
+                    slot,
+                );
             }
+            slot += 4;
         }
-    */
+    }
+
+    #[test]
+    fn test_reject_conflicting_votes() {
+        test_reject_conflicting_votes_with_type::<LegacyVoteCertificate>();
+        test_reject_conflicting_votes_with_type::<BlsCertificate>();
+    }
 
     #[test]
     fn test_handle_new_root() {
