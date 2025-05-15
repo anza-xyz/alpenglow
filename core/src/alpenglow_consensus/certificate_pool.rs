@@ -1652,18 +1652,28 @@ mod tests {
 
     fn test_reject_conflicting_vote<VC: VoteCertificate>(
         pool: &mut CertificatePool<VC>,
-        pubkey: &Pubkey,
+        keypairs: &ValidatorVoteKeypairs,
         vote_type_1: VoteType,
         vote_type_2: VoteType,
         slot: Slot,
     ) {
         let vote_1 = create_new_vote(vote_type_1, slot);
         let vote_2 = create_new_vote(vote_type_2, slot);
+        let pubkey = keypairs.vote_keypair.pubkey();
+        let bls_keypair = &keypairs.bls_keypair;
         assert!(pool
-            .add_vote(&vote_1, dummy_transaction::<VC>(), pubkey)
+            .add_vote(
+                &vote_1,
+                dummy_transaction::<VC>(bls_keypair.clone()),
+                &pubkey
+            )
             .is_ok());
         assert!(pool
-            .add_vote(&vote_2, dummy_transaction::<VC>(), pubkey)
+            .add_vote(
+                &vote_2,
+                dummy_transaction::<VC>(bls_keypair.clone()),
+                &pubkey
+            )
             .is_err());
     }
 
@@ -1678,11 +1688,11 @@ mod tests {
             VoteType::SkipFallback,
         ] {
             let conflicting_vote_types = conflicting_types(vote_type_1);
-            let pubkey = validator_keypairs[0].vote_keypair.pubkey();
+            let keypairs = &validator_keypairs[0];
             for vote_type_2 in conflicting_vote_types {
                 test_reject_conflicting_vote::<VC>(
                     &mut pool,
-                    &pubkey,
+                    keypairs,
                     vote_type_1,
                     *vote_type_2,
                     slot,
