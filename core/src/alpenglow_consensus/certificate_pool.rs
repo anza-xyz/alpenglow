@@ -585,6 +585,7 @@ mod tests {
             },
             *,
         },
+        itertools::Itertools,
         solana_bls::keypair::Keypair as BLSKeypair,
         solana_runtime::{
             bank::{Bank, NewBankOptions},
@@ -1575,7 +1576,7 @@ mod tests {
             assert!(pool
                 .add_vote(
                     &Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash),
-                    dummy_transaction::<VC>(),
+                    dummy_transaction::<VC>(keypairs.bls_keypair.clone()),
                     &keypairs.vote_keypair.pubkey(),
                 )
                 .is_ok());
