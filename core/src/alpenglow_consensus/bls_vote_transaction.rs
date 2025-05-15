@@ -5,9 +5,8 @@ use {
 };
 
 impl AlpenglowVoteTransaction for BlsVoteTransaction {
-    fn new_for_test() -> Self {
+    fn new_for_test(bls_keypair: Keypair) -> Self {
         let message = VersionedMessage::default();
-        let bls_keypair = Keypair::new();
         let pubkey: Pubkey = bls_keypair.public.into();
         let signature = bls_keypair.sign(&message.serialize()).into();
         Self {
