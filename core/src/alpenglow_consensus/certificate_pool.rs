@@ -7,7 +7,7 @@ use {
         vote_to_certificate_ids, Stake,
     },
     crate::alpenglow_consensus::{
-        CertificateId, VoteType, CONFLICTING_VOTETYPES, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        conflicting_types, CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
         MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
@@ -72,8 +72,6 @@ pub struct CertificatePool<VC: VoteCertificate> {
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateId, VC>,
-    // Lookup table for checking conflicting vote types.
-    conflicting_vote_types: HashMap<VoteType, Vec<VoteType>>,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
@@ -100,18 +98,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             certificate_sender,
             ..Self::default()
         };
-
-        // Initialize the conflicting_vote_types map
-        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
-            pool.conflicting_vote_types
-                .entry(*vote_type_1)
-                .or_default()
-                .push(*vote_type_2);
-            pool.conflicting_vote_types
-                .entry(*vote_type_2)
-                .or_default()
-                .push(*vote_type_1);
-        }
 
         // Update the epoch_stakes_map and root
         pool.update_epoch_stakes_map(bank);
@@ -252,8 +238,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         vote_type: VoteType,
         validator_vote_key: &Pubkey,
     ) -> Option<VoteType> {
-        let conflicting_types = self.conflicting_vote_types.get(&vote_type)?;
-        for conflicting_type in conflicting_types {
+        for conflicting_type in conflicting_types(vote_type) {
             if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
                 if pool.has_prev_vote(validator_vote_key) {
                     return Some(*conflicting_type);
@@ -1669,23 +1654,25 @@ mod tests {
     fn test_reject_conflicting_votes_with_type<VC: VoteCertificate>() {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let mut slot = 2;
-        for (vote_type_1, vote_type_2) in CONFLICTING_VOTETYPES.iter() {
+        for vote_type_1 in [
+            VoteType::Finalize,
+            VoteType::Notarize,
+            VoteType::NotarizeFallback,
+            VoteType::Skip,
+            VoteType::SkipFallback,
+        ] {
+            let conflicting_vote_types = conflicting_types(vote_type_1);
             let pubkey = validator_keypairs[0].vote_keypair.pubkey();
-            test_reject_conflicting_vote::<VC>(
-                &mut pool,
-                &pubkey,
-                *vote_type_1,
-                *vote_type_2,
-                slot,
-            );
-            test_reject_conflicting_vote::<VC>(
-                &mut pool,
-                &pubkey,
-                *vote_type_2,
-                *vote_type_1,
-                slot + 1,
-            );
-            slot += 2;
+            for vote_type_2 in conflicting_vote_types {
+                test_reject_conflicting_vote::<VC>(
+                    &mut pool,
+                    &pubkey,
+                    vote_type_1,
+                    *vote_type_2,
+                    slot,
+                );
+            }
+            slot += 4;
         }
     }
 
