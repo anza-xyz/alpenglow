@@ -385,14 +385,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         })
     }
 
-    /// Checks if any block in slot `slot` is notarized, if so return the size of the certificate
-    pub fn block_notarized(&self, slot: Slot) -> Option<usize> {
+    /// Check if the specific block `(block_id, bank_hash)` in slot `s` is notarized
+    pub fn is_notarized(&self, slot: Slot, block_id: Hash, bank_hash: Hash) -> bool {
         self.completed_certificates
-            .iter()
-            .find_map(|(cert_id, cert)| {
-                matches!(cert_id, CertificateId::Notarize(s,_,_) if *s == slot)
-                    .then_some(cert.vote_count())
-            })
+            .contains_key(&CertificateId::Notarize(slot, block_id, bank_hash))
     }
 
     /// Checks if the any block in slot `slot` has received a `NotarizeFallback` certificate, if so return
@@ -415,18 +411,26 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     }
 
     /// Checks if we have voted to skip `slot` or notarize some block `b' = (block_id', bank_hash')` in `slot`
-    /// Additionally check that for some differernt block `b = (block_id, bank_hash)` in `slot` either:
+    /// Additionally check that for some different block `b = (block_id, bank_hash)` in `slot` either:
     /// (i) At least 40% of stake has voted to notarize `b`
     /// (ii) At least 20% of stake voted to notarize `b` and at least 60% of stake voted to either notarize `b` or skip `slot`
+    /// and we have not already cast a notarize fallback for this `b`
     /// If all the above hold, return `Some(block_id, bank_hash)` for the `b`
-    pub fn safe_to_notar(&self, slot: Slot, vote_history: &VoteHistory) -> Option<(Hash, Hash)> {
-        let epoch_stakes = self
+    pub fn safe_to_notar(&self, slot: Slot, vote_history: &VoteHistory) -> Vec<(Hash, Hash)> {
+        if vote_history.its_over(slot) {
+            return vec![];
+        }
+
+        let Some(epoch_stakes) = self
             .epoch_stakes_map
-            .get(&self.epoch_schedule.get_epoch(slot))?;
+            .get(&self.epoch_schedule.get_epoch(slot))
+        else {
+            return vec![];
+        };
         let total_stake = epoch_stakes.total_stake();
 
         if !vote_history.voted(slot) {
-            return None;
+            return vec![];
         }
         let b_prime = vote_history.voted_notar(slot);
 
@@ -436,7 +440,10 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             .map_or(0, |pool| pool.total_stake_by_key(None, None)) as f64
             / total_stake as f64;
 
-        let notarize_pool = self.vote_pools.get(&(slot, VoteType::Notarize))?;
+        let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
+            return vec![];
+        };
+        let mut safe_to_notar = vec![];
         for (
             VoteKey {
                 bank_hash,
@@ -447,26 +454,28 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         {
             let b_block_id = block_id.unwrap();
             let b_bank_hash = bank_hash.unwrap();
+            if vote_history.voted_notar_fallback(slot, b_block_id, b_bank_hash) {
+                continue;
+            }
             if let Some((prev_block_id, prev_bank_hash)) = b_prime {
                 if prev_block_id == b_block_id && prev_bank_hash == b_bank_hash {
                     continue;
                 }
             }
-            // Check if the block fits condition (i) 40% of stake holders voted notarize
-            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
-            if notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY {
-                return Some((b_block_id, b_bank_hash));
-            }
 
-            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-            if notarized_ratio < SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP {
-                continue;
-            }
-            if notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP {
-                return Some((b_block_id, b_bank_hash));
+            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
+            let qualifies =
+                // Check if the block fits condition (i) 40% of stake holders voted notarize
+                notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
+                // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+                || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
+                    && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP);
+
+            if qualifies {
+                safe_to_notar.push((b_block_id, b_bank_hash));
             }
         }
-        None
+        safe_to_notar
     }
 
     /// Checks if we have already voted to notarize some block in `slot` and additionally that
@@ -474,6 +483,14 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
     /// - votedStake(s) is the cumulative stake of all nodes who voted notarize or skip on s
     /// - topNotarStake(s) the highest of cumulative notarize stake per block in s
     pub fn safe_to_skip(&self, slot: Slot, vote_history: &VoteHistory) -> bool {
+        if vote_history.its_over(slot) {
+            return false;
+        }
+
+        if vote_history.voted_skip_fallback(slot) {
+            return false;
+        }
+
         let epoch = self.epoch_schedule.get_epoch(slot);
         let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
             return false;
@@ -507,7 +524,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
         if needs_notarization_certificate
-            && self.block_notarized(parent_slot).is_none()
+            && self.slot_notarized_fallback(parent_slot).is_none()
             && !self.is_finalized(parent_slot)
         {
             error!("Missing notarization certificate {parent_slot}");
@@ -565,6 +582,7 @@ mod tests {
             },
             *,
         },
+        itertools::Itertools,
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
@@ -1470,7 +1488,7 @@ mod tests {
         let bank_hash = Hash::new_unique();
 
         // With no votes, this should fail.
-        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
+        assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Add a skip from myself.
         assert!(pool
@@ -1493,7 +1511,7 @@ mod tests {
         }
         assert_eq!(
             pool.safe_to_notar(slot, &vote_history),
-            Some((block_id, bank_hash))
+            vec![(block_id, bank_hash)]
         );
 
         // Create bank 3
@@ -1511,7 +1529,7 @@ mod tests {
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
+        assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
         let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique());
@@ -1519,7 +1537,7 @@ mod tests {
             .add_vote(&vote, dummy_transaction::<VC>(), &my_pubkey,)
             .is_ok());
         vote_history.add_vote(vote);
-        assert!(pool.safe_to_notar(slot, &vote_history).is_none());
+        assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Now add 40% skip, should succeed
         for keypairs in validator_keypairs.iter().skip(3).take(4) {
@@ -1533,7 +1551,42 @@ mod tests {
         }
         assert_eq!(
             pool.safe_to_notar(slot, &vote_history),
-            Some((block_id, bank_hash))
+            vec![(block_id, bank_hash)]
+        );
+
+        // Add 20% notarization for another block, we should notify on both
+        let duplicate_block_id = Hash::new_unique();
+        let duplicate_bank_hash = Hash::new_unique();
+        for keypairs in validator_keypairs.iter().skip(7).take(2) {
+            assert!(pool
+                .add_vote(
+                    &Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash),
+                    dummy_transaction::<VC>(),
+                    &keypairs.vote_keypair.pubkey(),
+                )
+                .is_ok());
+        }
+
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history)
+                .into_iter()
+                .sorted()
+                .collect::<Vec<_>>(),
+            vec![
+                (block_id, bank_hash),
+                (duplicate_block_id, duplicate_bank_hash),
+            ]
+            .into_iter()
+            .sorted()
+            .collect::<Vec<_>>()
+        );
+
+        // Vote notar fallback, safe to notar should now only notify for the other block
+        let vote = Vote::new_notarization_fallback_vote(3, block_id, bank_hash);
+        vote_history.add_vote(vote);
+        assert_eq!(
+            pool.safe_to_notar(slot, &vote_history),
+            vec![(duplicate_block_id, duplicate_bank_hash)]
         );
     }
 
