@@ -5,7 +5,7 @@ use {
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         result::{Error, Result},
-        sigverify,
+        sigverifier::ed25519_sigverifier::ed25519_verify_cpu,
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
     alpenglow_vote::vote::Vote as AlpenglowVote,
@@ -284,7 +284,7 @@ impl ClusterInfoVoteListener {
         let mut packet_batches = packet::to_packet_batches(&votes, 1);
 
         // Votes should already be filtered by this point.
-        sigverify::ed25519_verify_cpu(
+        ed25519_verify_cpu(
             &mut packet_batches,
             /*reject_non_vote=*/ false,
             votes.len(),
