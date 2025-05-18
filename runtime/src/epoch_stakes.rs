@@ -58,7 +58,7 @@ impl BLSPubkeyToRankMap {
         self.rank_map.len()
     }
 
-    pub fn get(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
+    pub fn get_rank(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
         self.rank_map.get(bls_pubkey)
     }
 
@@ -669,7 +669,7 @@ pub(crate) mod tests {
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
         for (pubkey, (_, vote_account)) in epoch_vote_accounts {
             let index = bls_pubkey_to_rank_map
-                .get(vote_account.bls_pubkey().unwrap())
+                .get_rank(vote_account.bls_pubkey().unwrap())
                 .unwrap();
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
