@@ -60,7 +60,7 @@ fn certificate_pool_add_vote_benchmark(
     );
     let bank = Bank::new_for_tests(&genesis.genesis_config);
     b.iter(|| {
-        let mut pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(&bank);
+        let mut pool = CertificatePool::<LegacyVoteCertificate>::new_from_root_bank(&bank, None);
         add_vote_bench(&validator_keypairs, vote_fn, check_fn, &mut pool);
     });
 }
@@ -69,8 +69,8 @@ fn certificate_pool_add_vote_benchmark(
 fn certificate_pool_add_vote_notarization_benchmark(b: &mut Bencher) {
     certificate_pool_add_vote_benchmark(
         b,
-        |slot| Vote::new_notarization_vote(slot, Hash::new_unique(), Hash::new_unique()),
-        |pool, slot| pool.get_notarization_cert_size(slot).is_some(),
+        |slot| Vote::new_notarization_vote(slot, Hash::default(), Hash::default()),
+        |pool, slot| pool.is_notarized(slot, Hash::default(), Hash::default()),
     );
 }
 
@@ -84,6 +84,6 @@ fn certificate_pool_add_vote_skip_benchmark(b: &mut Bencher) {
 #[bench]
 fn certificate_pool_add_vote_finalization_benchmark(b: &mut Bencher) {
     certificate_pool_add_vote_benchmark(b, Vote::new_finalization_vote, |pool, slot| {
-        pool.get_finalization_cert_size(slot).is_some()
+        pool.is_finalized(slot)
     });
 }
