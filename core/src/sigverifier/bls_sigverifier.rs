@@ -15,6 +15,7 @@ pub struct BLSSigVerifier {
 
 impl SigVerifier for BLSSigVerifier {
     type SendType = ();
+    // TODO(wen): just a placeholder without any verification.
     fn verify_batches(&self, batches: Vec<PacketBatch>, _valid_packets: usize) -> Vec<PacketBatch> {
         batches
     }
