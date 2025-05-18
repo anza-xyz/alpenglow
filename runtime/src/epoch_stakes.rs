@@ -9,35 +9,44 @@ use {
 
 pub type NodeIdToVoteAccounts = HashMap<Pubkey, NodeVoteAccounts>;
 pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
+pub type SortedPubkeys = Vec<(Pubkey, BLSPubkey)>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 pub struct BLSPubkeyToRankMap {
     rank_map: HashMap<BLSPubkey, u16>,
+    //TODO(wen): We can make SortedPubkeys a Vec<BLSPubkey> after we remove ed25519
+    // pubkey from certificate pool.
+    sorted_pubkeys: Vec<(Pubkey, BLSPubkey)>,
 }
 
 impl BLSPubkeyToRankMap {
     pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
-        let mut pubkey_stake_pair_vec: Vec<(BLSPubkey, u64)> = epoch_vote_accounts_hash_map
+        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkey, u64)> = epoch_vote_accounts_hash_map
             .iter()
-            .filter_map(|(_, (stake, account))| {
+            .filter_map(|(pubkey, (stake, account))| {
                 if *stake > 0 {
-                    account.bls_pubkey().map(|bls_pubkey| (*bls_pubkey, *stake))
+                    account
+                        .bls_pubkey()
+                        .map(|bls_pubkey| (*pubkey, *bls_pubkey, *stake))
                 } else {
                     None
                 }
             })
             .collect();
-        pubkey_stake_pair_vec.sort_by(|(a_pubkey, a_stake), (b_pubkey, b_stake)| {
+        pubkey_stake_pair_vec.sort_by(|(_, a_pubkey, a_stake), (_, b_pubkey, b_stake)| {
             b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
         });
+        let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
-        for (rank, (bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+        for (rank, (pubkey, bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+            sorted_pubkeys.push((pubkey, bls_pubkey));
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
             rank_map: bls_pubkey_to_rank_map,
+            sorted_pubkeys,
         }
     }
 
@@ -49,8 +58,12 @@ impl BLSPubkeyToRankMap {
         self.rank_map.len()
     }
 
-    pub fn get(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
+    pub fn get_rank(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
         self.rank_map.get(bls_pubkey)
+    }
+
+    pub fn get_pubkey(&self, index: usize) -> Option<&(Pubkey, BLSPubkey)> {
+        self.sorted_pubkeys.get(index)
     }
 }
 
@@ -654,9 +667,15 @@ pub(crate) mod tests {
         let epoch_stakes = EpochStakes::new_for_tests(epoch_vote_accounts.clone(), 0);
         let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
-        for (_, vote_account) in epoch_vote_accounts.values() {
-            let index = bls_pubkey_to_rank_map.get(vote_account.bls_pubkey().unwrap());
-            assert!(index >= Some(&0) && index < Some(&(num_vote_accounts as u16)));
+        for (pubkey, (_, vote_account)) in epoch_vote_accounts {
+            let index = bls_pubkey_to_rank_map
+                .get_rank(vote_account.bls_pubkey().unwrap())
+                .unwrap();
+            assert!(index >= &0 && index < &(num_vote_accounts as u16));
+            assert_eq!(
+                bls_pubkey_to_rank_map.get_pubkey(*index as usize),
+                Some(&(pubkey, *vote_account.bls_pubkey().unwrap()))
+            );
         }
 
         // Convert it to versioned and back, we should get the same rank map
