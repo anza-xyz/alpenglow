@@ -141,7 +141,7 @@ impl BlsCertificate {
 
             // set bit-vector for the validator
             let validator_index = bls_pubkey_to_rank_map
-                .get(&transaction.pubkey)
+                .get_rank(&transaction.pubkey)
                 .ok_or(CertificateError::ValidatorDoesNotExist)?;
             bit_vector
                 .set_bit(*validator_index as usize, true)
@@ -194,7 +194,7 @@ impl BlsCertificate {
 
         // set bit-vector for the validator
         let validator_index = bls_pubkey_to_rank_map
-            .get(&transaction.pubkey)
+            .get_rank(&transaction.pubkey)
             .ok_or(CertificateError::ValidatorDoesNotExist)?;
         self.bit_vector
             .set_bit(*validator_index as usize, true)
