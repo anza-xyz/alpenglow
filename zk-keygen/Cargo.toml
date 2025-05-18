@@ -19,6 +19,7 @@ edition = { workspace = true }
 bs58 = { workspace = true }
 clap = { version = "3.1.5", features = ["cargo", "derive"] }
 dirs-next = { workspace = true }
+solana-bls = { workspace = true }
 solana-clap-v3-utils = { workspace = true }
 solana-remote-wallet = { workspace = true, features = ["default"] }
 solana-seed-derivable = { workspace = true }
