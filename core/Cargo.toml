@@ -175,6 +175,9 @@ name = "gen_keys"
 [[bench]]
 name = "sigverify_stage"
 
+[[bench]]
+name = "alpenglow"
+
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 
