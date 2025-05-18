@@ -1225,7 +1225,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4114279215a005bc675e386011e594e1d9b800918cea18fcadadcce864a2046b"
 dependencies = [
  "borsh-derive 0.10.3",
- "hashbrown 0.13.2",
+ "hashbrown 0.12.3",
 ]
 
 [[package]]
@@ -6792,7 +6792,7 @@ dependencies = [
 [[package]]
 name = "solana-bls"
 version = "0.1.1"
-source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#ce5dd055f2c6e3adacae2e21827f79ee0d3804b5"
 dependencies = [
  "base64 0.22.1",
  "blst",
@@ -6803,6 +6803,7 @@ dependencies = [
  "group",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "serde_with",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
@@ -11293,6 +11294,7 @@ dependencies = [
  "bs58",
  "clap 3.2.23",
  "dirs-next",
+ "solana-bls",
  "solana-clap-v3-utils",
  "solana-pubkey",
  "solana-remote-wallet",
