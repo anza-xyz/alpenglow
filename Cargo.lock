@@ -472,10 +472,11 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=070c5b1#070c5b1d365dba5f2b0e092d3fd5bf0ed110c2f1"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=58cd654#58cd654a6d174d39e6eb909da7969027d89ad205"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
+ "bitvec",
  "bytemuck",
  "either",
  "num-derive",
@@ -1133,6 +1134,7 @@ checksum = "1bc2832c24239b0141d5674bb9174f9d68a8b5b3f2753311927c172ca46f7e9c"
 dependencies = [
  "funty",
  "radium",
+ "serde",
  "tap",
  "wyz",
 ]

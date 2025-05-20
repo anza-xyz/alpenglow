@@ -6,7 +6,7 @@
 //! if perf-libs are available
 
 use {
-    crate::sigverify,
+    crate::sigverifier::ed25519_sigverifier::ed25519_verify_disabled,
     core::time::Duration,
     crossbeam_channel::{Receiver, RecvTimeoutError, SendError},
     itertools::Itertools,
@@ -221,7 +221,7 @@ impl SigVerifier for DisabledSigVerifier {
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
     ) -> Vec<PacketBatch> {
-        sigverify::ed25519_verify_disabled(&mut batches);
+        ed25519_verify_disabled(&mut batches);
         batches
     }
 
@@ -433,7 +433,9 @@ impl SigVerifyStage {
 mod tests {
     use {
         super::*,
-        crate::{banking_trace::BankingTracer, sigverify::TransactionSigVerifier},
+        crate::{
+            banking_trace::BankingTracer, sigverifier::ed25519_sigverifier::TransactionSigVerifier,
+        },
         crossbeam_channel::unbounded,
         solana_perf::{
             packet::{to_packet_batches, Packet},
