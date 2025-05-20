@@ -18,7 +18,7 @@ use {
         },
         fetch_stage::FetchStage,
         forwarding_stage::ForwardingStage,
-        sigverify::TransactionSigVerifier,
+        sigverifier::ed25519_sigverifier::TransactionSigVerifier,
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
         tpu_entry_notifier::TpuEntryNotifier,
