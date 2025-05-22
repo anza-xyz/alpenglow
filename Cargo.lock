@@ -7428,6 +7428,7 @@ dependencies = [
  "assert_matches",
  "base64 0.22.1",
  "bincode",
+ "bitvec",
  "bs58",
  "bytes",
  "chrono",

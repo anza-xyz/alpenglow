@@ -1,5 +1,8 @@
 use {
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{
+        certificate::{Certificate, CertificateType},
+        vote::Vote,
+    },
     solana_sdk::{clock::Slot, hash::Hash},
     std::time::Duration,
 };
@@ -56,6 +59,43 @@ impl CertificateId {
     /// NotarizeFallback certificate as well
     pub(crate) fn is_critical(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+    }
+}
+
+impl From<CertificateId> for Certificate {
+    fn from(certificate_id: CertificateId) -> Certificate {
+        match certificate_id {
+            CertificateId::Finalize(slot) => Certificate {
+                certificate_type: CertificateType::Finalize,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+            CertificateId::FinalizeFast(slot, block_id, replayed_bank_hash) => Certificate {
+                slot,
+                certificate_type: CertificateType::FinalizeFast,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Notarize(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::Notarize,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::NotarizeFallback(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::NotarizeFallback,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Skip(slot) => Certificate {
+                certificate_type: CertificateType::Skip,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+        }
     }
 }
 

@@ -23,6 +23,7 @@ arrayvec = { workspace = true }
 assert_matches = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
+bitvec = { workspace = true }
 bs58 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["default", "serde"] }

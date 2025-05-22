@@ -201,6 +201,7 @@ backoff = "0.4.0"
 base64 = "0.22.1"
 bincode = "1.3.3"
 bitflags = { version = "2.9.0" }
+bitvec = { version = "1.0.1", features = ["serde"] }
 blake3 = "1.6.1"
 blst = "0.3.14"
 blstrs = "0.7.1"

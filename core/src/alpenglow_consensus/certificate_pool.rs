@@ -94,9 +94,15 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         certificate_sender: Option<Sender<(CertificateId, VC)>>,
     ) -> Self {
         let mut pool = Self {
+            vote_pools: BTreeMap::new(),
+            completed_certificates: BTreeMap::new(),
+            highest_notarized_fallback: None,
+            highest_finalized_slot: None,
+            epoch_schedule: EpochSchedule::default(),
+            epoch_stakes_map: Arc::new(HashMap::new()),
             root: bank.slot(),
+            root_epoch: Epoch::default(),
             certificate_sender,
-            ..Self::default()
         };
 
         // Update the epoch_stakes_map and root
@@ -165,11 +171,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         total_stake: Stake,
     ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
-            return Err(AddVoteError::EpochStakesNotFound(epoch));
-        };
-        let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         vote_to_certificate_ids(vote)
             .iter()
             .try_fold(None, |highest, &cert_id| {
@@ -200,8 +201,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
                 // TODO: remove unwrap and properly handle unwrap
-                let vote_certificate =
-                    VC::new(accumulated_stake, transactions, bls_pubkey_to_rank_map).unwrap();
+                let vote_certificate = VC::new(cert_id, transactions).unwrap();
                 self.completed_certificates
                     .insert(cert_id, vote_certificate.clone());
                 if let Some(sender) = &self.certificate_sender {
