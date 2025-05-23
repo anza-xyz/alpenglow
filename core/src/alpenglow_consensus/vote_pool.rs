@@ -123,11 +123,11 @@ mod test {
     use {
         super::{
             super::{
-                transaction::AlpenglowVoteTransaction,
-                vote_certificate::{BlsCertificate, LegacyVoteCertificate},
+                transaction::AlpenglowVoteTransaction, vote_certificate::LegacyVoteCertificate,
             },
             *,
         },
+        alpenglow_vote::bls_message::CertificateMessage,
         solana_bls::keypair::Keypair as BLSKeypair,
         std::sync::Arc,
     };
@@ -135,7 +135,7 @@ mod test {
     #[test]
     fn test_skip_vote_pool() {
         test_skip_vote_pool_for_type::<LegacyVoteCertificate>();
-        test_skip_vote_pool_for_type::<BlsCertificate>();
+        test_skip_vote_pool_for_type::<CertificateMessage>();
     }
 
     fn test_skip_vote_pool_for_type<VC: VoteCertificate>() {
@@ -161,7 +161,7 @@ mod test {
     #[test]
     fn test_notarization_pool() {
         test_notarization_pool_for_type::<LegacyVoteCertificate>();
-        test_notarization_pool_for_type::<BlsCertificate>();
+        test_notarization_pool_for_type::<CertificateMessage>();
     }
 
     fn test_notarization_pool_for_type<VC: VoteCertificate>() {
@@ -223,7 +223,7 @@ mod test {
     #[test]
     fn test_notarization_fallback_pool() {
         test_notarization_fallback_pool_for_type::<LegacyVoteCertificate>();
-        test_notarization_fallback_pool_for_type::<BlsCertificate>();
+        test_notarization_fallback_pool_for_type::<CertificateMessage>();
     }
 
     fn test_notarization_fallback_pool_for_type<VC: VoteCertificate>() {
