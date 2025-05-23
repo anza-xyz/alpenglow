@@ -122,6 +122,9 @@ fn aggregate_vote_signatures(
         //
         // TODO: This only accounts for one type of vote. Update this after
         // we have a base3 encoding implementation.
+        if bitmap.len() < transaction.rank as usize {
+            return Err(CertificateError::IndexOutOfBound);
+        }
         bitmap.set(transaction.rank as usize, true);
     }
 
