@@ -94,9 +94,15 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         certificate_sender: Option<Sender<(CertificateId, VC)>>,
     ) -> Self {
         let mut pool = Self {
+            vote_pools: BTreeMap::new(),
+            completed_certificates: BTreeMap::new(),
+            highest_notarized_fallback: None,
+            highest_finalized_slot: None,
+            epoch_schedule: EpochSchedule::default(),
+            epoch_stakes_map: Arc::new(HashMap::new()),
             root: bank.slot(),
+            root_epoch: Epoch::default(),
             certificate_sender,
-            ..Self::default()
         };
 
         // Update the epoch_stakes_map and root
@@ -165,11 +171,6 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         total_stake: Stake,
     ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
-            return Err(AddVoteError::EpochStakesNotFound(epoch));
-        };
-        let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         vote_to_certificate_ids(vote)
             .iter()
             .try_fold(None, |highest, &cert_id| {
@@ -200,8 +201,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     vote_pool.copy_out_transactions(bank_hash, block_id, &mut transactions);
                 }
                 // TODO: remove unwrap and properly handle unwrap
-                let vote_certificate =
-                    VC::new(accumulated_stake, transactions, bls_pubkey_to_rank_map).unwrap();
+                let vote_certificate = VC::new(cert_id, transactions).unwrap();
                 self.completed_certificates
                     .insert(cert_id, vote_certificate.clone());
                 if let Some(sender) = &self.certificate_sender {
@@ -562,11 +562,11 @@ mod tests {
     use {
         super::{
             super::{
-                transaction::AlpenglowVoteTransaction,
-                vote_certificate::{BlsCertificate, LegacyVoteCertificate},
+                transaction::AlpenglowVoteTransaction, vote_certificate::LegacyVoteCertificate,
             },
             *,
         },
+        alpenglow_vote::bls_message::CertificateMessage,
         itertools::Itertools,
         solana_bls::keypair::Keypair as BLSKeypair,
         solana_runtime::{
@@ -665,8 +665,9 @@ mod tests {
         test_make_decision_leader_does_not_start_if_notarization_missing_with_type::<
             LegacyVoteCertificate,
         >();
-        test_make_decision_leader_does_not_start_if_notarization_missing_with_type::<BlsCertificate>(
-        );
+        test_make_decision_leader_does_not_start_if_notarization_missing_with_type::<
+            CertificateMessage,
+        >();
     }
 
     fn test_make_decision_leader_does_not_start_if_notarization_missing_with_type<
@@ -689,7 +690,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_1() {
         test_make_decision_first_alpenglow_slot_edge_case_1_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_1_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_1_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_1_with_type<VC: VoteCertificate>() {
@@ -706,7 +707,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_2() {
         test_make_decision_first_alpenglow_slot_edge_case_2_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_2_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_2_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_2_with_type<VC: VoteCertificate>() {
@@ -737,7 +738,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_3() {
         test_make_decision_first_alpenglow_slot_edge_case_3_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_3_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_3_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_3_with_type<VC: VoteCertificate>() {
@@ -757,7 +758,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_4() {
         test_make_decision_first_alpenglow_slot_edge_case_4_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_4_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_4_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_4_with_type<VC: VoteCertificate>() {
@@ -787,7 +788,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_5() {
         test_make_decision_first_alpenglow_slot_edge_case_5_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_5_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_5_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_5_with_type<VC: VoteCertificate>() {
@@ -808,7 +809,7 @@ mod tests {
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_6() {
         test_make_decision_first_alpenglow_slot_edge_case_6_with_type::<LegacyVoteCertificate>();
-        test_make_decision_first_alpenglow_slot_edge_case_6_with_type::<BlsCertificate>();
+        test_make_decision_first_alpenglow_slot_edge_case_6_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_first_alpenglow_slot_edge_case_6_with_type<VC: VoteCertificate>() {
@@ -831,7 +832,7 @@ mod tests {
             LegacyVoteCertificate,
         >();
         test_make_decision_leader_does_not_start_if_skip_certificate_missing_with_type::<
-            BlsCertificate,
+            CertificateMessage,
         >();
     }
 
@@ -871,7 +872,7 @@ mod tests {
     #[test]
     fn test_make_decision_leader_starts_when_no_skip_required() {
         test_make_decision_leader_starts_when_no_skip_required_with_type::<LegacyVoteCertificate>();
-        test_make_decision_leader_starts_when_no_skip_required_with_type::<BlsCertificate>();
+        test_make_decision_leader_starts_when_no_skip_required_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_leader_starts_when_no_skip_required_with_type<VC: VoteCertificate>() {
@@ -897,7 +898,8 @@ mod tests {
         test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type::<
             LegacyVoteCertificate,
         >();
-        test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type::<BlsCertificate>();
+        test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type::<CertificateMessage>(
+        );
     }
 
     fn test_make_decision_leader_starts_if_notarized_and_skips_valid_with_type<
@@ -928,7 +930,7 @@ mod tests {
     fn test_make_decision_leader_starts_if_skip_range_superset() {
         test_make_decision_leader_starts_if_skip_range_superset_with_type::<LegacyVoteCertificate>(
         );
-        test_make_decision_leader_starts_if_skip_range_superset_with_type::<BlsCertificate>();
+        test_make_decision_leader_starts_if_skip_range_superset_with_type::<CertificateMessage>();
     }
 
     fn test_make_decision_leader_starts_if_skip_range_superset_with_type<VC: VoteCertificate>() {
@@ -962,7 +964,7 @@ mod tests {
     #[test]
     fn test_add_vote_new_finalize_certificate() {
         test_add_vote_new_finalize_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_new_finalize_certificate_with_type::<BlsCertificate>();
+        test_add_vote_new_finalize_certificate_with_type::<CertificateMessage>();
     }
 
     fn test_add_vote_new_finalize_certificate_with_type<VC: VoteCertificate>() {
@@ -1008,7 +1010,7 @@ mod tests {
     #[test]
     fn test_add_vote_new_notarize_certificate() {
         test_add_vote_new_notarize_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_new_notarize_certificate_with_type::<BlsCertificate>();
+        test_add_vote_new_notarize_certificate_with_type::<CertificateMessage>();
     }
 
     fn test_add_vote_new_notarize_certificate_with_type<VC: VoteCertificate>() {
@@ -1055,7 +1057,7 @@ mod tests {
     #[test]
     fn test_add_vote_new_notarize_fallback_certificate() {
         test_add_vote_new_notarize_fallback_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_new_notarize_fallback_certificate_with_type::<BlsCertificate>();
+        test_add_vote_new_notarize_fallback_certificate_with_type::<CertificateMessage>();
     }
 
     fn test_add_vote_new_notarize_fallback_certificate_with_type<VC: VoteCertificate>() {
@@ -1104,7 +1106,7 @@ mod tests {
     #[test]
     fn test_add_vote_new_skip_certificate() {
         test_add_vote_new_skip_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_new_skip_certificate_with_type::<BlsCertificate>();
+        test_add_vote_new_skip_certificate_with_type::<CertificateMessage>();
     }
     fn test_add_vote_new_skip_certificate_with_type<VC: VoteCertificate>() {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
@@ -1149,7 +1151,7 @@ mod tests {
     #[test]
     fn test_add_vote_new_skip_fallback_certificate() {
         test_add_vote_new_skip_fallback_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_new_skip_fallback_certificate_with_type::<BlsCertificate>();
+        test_add_vote_new_skip_fallback_certificate_with_type::<CertificateMessage>();
     }
 
     fn test_add_vote_new_skip_fallback_certificate_with_type<VC: VoteCertificate>() {
@@ -1207,7 +1209,7 @@ mod tests {
     #[test]
     fn test_add_vote_zero_stake() {
         test_add_vote_zero_stake_with_type::<LegacyVoteCertificate>();
-        test_add_vote_zero_stake_with_type::<BlsCertificate>();
+        test_add_vote_zero_stake_with_type::<CertificateMessage>();
     }
 
     fn test_add_vote_zero_stake_with_type<VC: VoteCertificate>() {
@@ -1236,7 +1238,7 @@ mod tests {
     #[test]
     fn test_consecutive_slots() {
         test_consecutive_slots_with_type::<LegacyVoteCertificate>();
-        test_consecutive_slots_with_type::<BlsCertificate>();
+        test_consecutive_slots_with_type::<CertificateMessage>();
     }
 
     fn test_consecutive_slots_with_type<VC: VoteCertificate>() {
@@ -1263,7 +1265,7 @@ mod tests {
     #[test]
     fn test_multi_skip_cert() {
         test_multi_skip_cert_with_type::<LegacyVoteCertificate>();
-        test_multi_skip_cert_with_type::<BlsCertificate>();
+        test_multi_skip_cert_with_type::<CertificateMessage>();
     }
 
     fn test_multi_skip_cert_with_type<VC: VoteCertificate>() {
@@ -1294,7 +1296,7 @@ mod tests {
     #[test]
     fn test_add_multiple_votes() {
         test_add_multiple_votes_with_type::<LegacyVoteCertificate>();
-        test_add_multiple_votes_with_type::<BlsCertificate>();
+        test_add_multiple_votes_with_type::<CertificateMessage>();
     }
 
     fn test_add_multiple_votes_with_type<VC: VoteCertificate>() {
@@ -1319,7 +1321,7 @@ mod tests {
     #[test]
     fn test_add_multiple_disjoint_votes() {
         test_add_multiple_disjoint_votes_with_type::<LegacyVoteCertificate>();
-        test_add_multiple_disjoint_votes_with_type::<BlsCertificate>();
+        test_add_multiple_disjoint_votes_with_type::<CertificateMessage>();
     }
 
     fn test_add_multiple_disjoint_votes_with_type<VC: VoteCertificate>() {
@@ -1372,7 +1374,7 @@ mod tests {
     #[test]
     fn test_update_existing_singleton_vote() {
         test_update_existing_singleton_vote_with_type::<LegacyVoteCertificate>();
-        test_update_existing_singleton_vote_with_type::<BlsCertificate>();
+        test_update_existing_singleton_vote_with_type::<CertificateMessage>();
     }
 
     fn test_update_existing_singleton_vote_with_type<VC: VoteCertificate>() {
@@ -1398,7 +1400,7 @@ mod tests {
     #[test]
     fn test_update_existing_vote() {
         test_update_existing_vote_with_type::<LegacyVoteCertificate>();
-        test_update_existing_vote_with_type::<BlsCertificate>();
+        test_update_existing_vote_with_type::<CertificateMessage>();
     }
 
     fn test_update_existing_vote_with_type<VC: VoteCertificate>() {
@@ -1426,7 +1428,7 @@ mod tests {
     #[test]
     fn test_threshold_not_reached() {
         test_threshold_not_reached_with_type::<LegacyVoteCertificate>();
-        test_threshold_not_reached_with_type::<BlsCertificate>();
+        test_threshold_not_reached_with_type::<CertificateMessage>();
     }
 
     fn test_threshold_not_reached_with_type<VC: VoteCertificate>() {
@@ -1446,7 +1448,7 @@ mod tests {
     #[test]
     fn test_update_and_skip_range_certify() {
         test_update_and_skip_range_certify_with_type::<LegacyVoteCertificate>();
-        test_update_and_skip_range_certify_with_type::<BlsCertificate>();
+        test_update_and_skip_range_certify_with_type::<CertificateMessage>();
     }
 
     fn test_update_and_skip_range_certify_with_type<VC: VoteCertificate>() {
@@ -1470,7 +1472,7 @@ mod tests {
     #[test]
     fn test_safe_to_notar() {
         test_safe_to_notar_with_type::<LegacyVoteCertificate>();
-        test_safe_to_notar_with_type::<BlsCertificate>();
+        test_safe_to_notar_with_type::<CertificateMessage>();
     }
 
     fn test_safe_to_notar_with_type<VC: VoteCertificate>() {
@@ -1590,7 +1592,7 @@ mod tests {
     #[test]
     fn test_safe_to_skip() {
         test_safe_to_skip_with_type::<LegacyVoteCertificate>();
-        test_safe_to_skip_with_type::<BlsCertificate>();
+        test_safe_to_skip_with_type::<CertificateMessage>();
     }
 
     fn test_safe_to_skip_with_type<VC: VoteCertificate>() {
@@ -1705,7 +1707,7 @@ mod tests {
     #[test]
     fn test_reject_conflicting_votes() {
         test_reject_conflicting_votes_with_type::<LegacyVoteCertificate>();
-        test_reject_conflicting_votes_with_type::<BlsCertificate>();
+        test_reject_conflicting_votes_with_type::<CertificateMessage>();
     }
 
     #[test]
