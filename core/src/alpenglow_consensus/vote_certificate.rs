@@ -41,6 +41,7 @@ pub enum CertificateError {
 pub trait VoteCertificate: Clone {
     type VoteTransaction: AlpenglowVoteTransaction;
 
+    // TODO: consider adding the maximum number of validators as parameter
     fn new(
         certificate_id: CertificateId,
         transactions: Vec<Arc<Self::VoteTransaction>>,
