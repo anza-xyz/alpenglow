@@ -1,7 +1,10 @@
 use {
     super::transaction::AlpenglowVoteTransaction,
     crate::alpenglow_consensus::CertificateId,
-    alpenglow_vote::bls_message::{CertificateMessage, VoteMessage},
+    alpenglow_vote::{
+        bls_message::{CertificateMessage, VoteMessage},
+        certificate::{Certificate, CertificateType},
+    },
     bitvec::prelude::*,
     solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
@@ -152,4 +155,41 @@ pub fn aggregate_pubkey(
     }
 
     Ok(aggregate_pubkey.into())
+}
+
+impl From<CertificateId> for Certificate {
+    fn from(certificate_id: CertificateId) -> Certificate {
+        match certificate_id {
+            CertificateId::Finalize(slot) => Certificate {
+                certificate_type: CertificateType::Finalize,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+            CertificateId::FinalizeFast(slot, block_id, replayed_bank_hash) => Certificate {
+                slot,
+                certificate_type: CertificateType::FinalizeFast,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Notarize(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::Notarize,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::NotarizeFallback(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::NotarizeFallback,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Skip(slot) => Certificate {
+                certificate_type: CertificateType::Skip,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+        }
+    }
 }
