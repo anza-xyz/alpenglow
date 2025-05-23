@@ -132,6 +132,7 @@ fn aggregate_vote_signatures(
         bitmap.set(transaction.rank as usize, true);
     }
 
+    // TODO: truncate trailing zeros in bitmap
     Ok((aggregate_signature.into(), bitmap))
 }
 
