@@ -1,10 +1,7 @@
 use {
-    alpenglow_vote::{
-        bls_message::VoteMessage,
-        vote::{NotarizationVote, Vote},
-    },
+    alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
     solana_bls::keypair::Keypair as BLSKeypair,
-    solana_sdk::transaction::VersionedTransaction,
+    solana_sdk::{hash::Hash, transaction::VersionedTransaction},
 };
 
 pub trait AlpenglowVoteTransaction: Clone + std::fmt::Debug {
@@ -20,7 +17,7 @@ impl AlpenglowVoteTransaction for VersionedTransaction {
 impl AlpenglowVoteTransaction for VoteMessage {
     fn new_for_test(bls_keypair: BLSKeypair) -> Self {
         // use notarization vote since this is just for tests
-        let vote = Vote::Notarize(NotarizationVote::default());
+        let vote = Vote::new_notarization_vote(5, Hash::default(), Hash::default());
 
         // unwrap since this is just for tests
         let signature = bls_keypair.sign(&bincode::serialize(&vote).unwrap()).into();
