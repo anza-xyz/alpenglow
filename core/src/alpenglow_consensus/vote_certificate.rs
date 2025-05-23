@@ -1,14 +1,28 @@
 use {
-    super::{
-        bit_vector::BitVector, bls_vote_transaction::BlsVoteTransaction,
-        transaction::AlpenglowVoteTransaction, Stake,
+    super::transaction::AlpenglowVoteTransaction,
+    crate::alpenglow_consensus::CertificateId,
+    alpenglow_vote::{
+        bls_message::{CertificateMessage, VoteMessage},
+        certificate::{Certificate, CertificateType},
     },
+    bitvec::prelude::*,
     solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_sdk::transaction::VersionedTransaction,
     std::sync::Arc,
     thiserror::Error,
 };
+
+/// Maximum number of validators in a certificate
+///
+/// There are around 1500 validators currently. For a clean power-of-two
+/// implementation, we should chosoe either 2048 or 4096. Choose a more
+/// conservative number 4096 for now.
+const MAXIMUM_VALIDATORS: usize = 4096;
+
+/// The number of bytes in a bitmap to represent up to 4096 validators
+/// (`MAXIMUM_VALIDATORS` / 8)
+const VALIDATOR_BITMAP_U8_SIZE: usize = 512;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CertificateError {
@@ -20,18 +34,19 @@ pub enum CertificateError {
     InvalidSignature,
     #[error("Validator does not exist")]
     ValidatorDoesNotExist,
+    #[error("Invalid vote type")]
+    InvalidVoteType,
 }
 
-pub trait VoteCertificate: Default + Clone {
+pub trait VoteCertificate: Clone {
     type VoteTransaction: AlpenglowVoteTransaction;
 
+    // TODO: consider adding the maximum number of validators as parameter
     fn new(
-        stake: Stake,
+        certificate_id: CertificateId,
         transactions: Vec<Arc<Self::VoteTransaction>>,
-        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError>;
     fn vote_count(&self) -> usize;
-    fn stake(&self) -> Stake;
 }
 
 // NOTE: This will go away after BLS implementation is finished.
@@ -39,8 +54,6 @@ pub trait VoteCertificate: Default + Clone {
 pub struct LegacyVoteCertificate {
     // We don't need to send the actual vote transactions out for now.
     transactions: Vec<Arc<VersionedTransaction>>,
-    // Total stake of all the slots in the certificate
-    stake: Stake,
 }
 
 impl LegacyVoteCertificate {
@@ -58,174 +71,127 @@ impl VoteCertificate for LegacyVoteCertificate {
     type VoteTransaction = VersionedTransaction;
 
     fn new(
-        stake: Stake,
+        _certificate_id: CertificateId,
         transactions: Vec<Arc<VersionedTransaction>>,
-        _bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
     ) -> Result<Self, CertificateError> {
-        Ok(Self {
-            stake,
-            transactions,
-        })
+        Ok(Self { transactions })
     }
 
     fn vote_count(&self) -> usize {
         self.transactions.len()
     }
-
-    fn stake(&self) -> Stake {
-        self.stake
-    }
 }
 
-impl VoteCertificate for BlsCertificate {
-    type VoteTransaction = BlsVoteTransaction;
+impl VoteCertificate for CertificateMessage {
+    type VoteTransaction = VoteMessage;
 
     fn new(
-        stake: Stake,
-        transactions: Vec<Arc<BlsVoteTransaction>>,
-        validator_bls_pubkey_map: &BLSPubkeyToRankMap,
+        certificate_id: CertificateId,
+        transactions: Vec<Arc<VoteMessage>>,
     ) -> Result<Self, CertificateError> {
-        BlsCertificate::new(stake, transactions, validator_bls_pubkey_map)
-    }
-
-    fn vote_count(&self) -> usize {
-        self.vote_count.into()
-    }
-
-    fn stake(&self) -> Stake {
-        self.stake
-    }
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct BlsCertificate {
-    /// BLS aggregate pubkey
-    pub aggregate_pubkey: BlsPubkey,
-    /// BLS aggregate signature
-    pub aggregate_signature: Signature,
-    /// Bit-vector indicating which votes are invluded in the aggregate signature
-    pub bit_vector: BitVector,
-    /// Total stake in the certificate
-    pub stake: Stake,
-    /// Number of votes accumulated
-    pub vote_count: u16, // u16 covers up to 65k votes
-}
-
-impl BlsCertificate {
-    pub fn new(
-        stake: Stake,
-        transactions: Vec<Arc<BlsVoteTransaction>>,
-        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
-    ) -> Result<Self, CertificateError> {
-        let mut aggregate_pubkey = PubkeyProjective::default();
-        let mut aggregate_signature = SignatureProjective::default();
-        let mut bit_vector = BitVector::default();
-        let vote_count = transactions.len() as u16;
-
-        // TODO: signature aggregation can be done out-of-order;
-        // consider aggregating signatures separately in parallel
-        for transaction in transactions {
-            // aggregate the pubkey
-            let bls_pubkey: PubkeyProjective = transaction
-                .pubkey
-                .try_into()
-                .map_err(|_| CertificateError::InvalidPubkey)?;
-            aggregate_pubkey.aggregate_with([&bls_pubkey]);
-
-            // aggregate the signature
-            let signature: SignatureProjective = transaction
-                .signature
-                .try_into()
-                .map_err(|_| CertificateError::InvalidSignature)?;
-            aggregate_signature.aggregate_with([&signature]);
-
-            // set bit-vector for the validator
-            let validator_index = bls_pubkey_to_rank_map
-                .get_rank(&transaction.pubkey)
-                .ok_or(CertificateError::ValidatorDoesNotExist)?;
-            bit_vector
-                .set_bit(*validator_index as usize, true)
-                .map_err(|_| CertificateError::IndexOutOfBound)?;
-        }
-
-        Ok(Self {
-            aggregate_pubkey: aggregate_pubkey.into(),
-            aggregate_signature: aggregate_signature.into(),
-            bit_vector,
-            stake,
-            vote_count,
+        let (aggregate_signature, bitmap) = aggregate_vote_signatures(transactions)?;
+        Ok(CertificateMessage {
+            certificate: certificate_id.into(),
+            signature: aggregate_signature,
+            bitmap,
         })
     }
 
-    pub fn add(
-        &mut self,
-        stake: Stake,
-        bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
-        transaction: &BlsVoteTransaction,
-    ) -> Result<(), CertificateError> {
-        let aggregate_pubkey: PubkeyProjective = self
-            .aggregate_pubkey
-            .try_into()
-            .map_err(|_| CertificateError::InvalidPubkey)?;
-        let new_pubkey: PubkeyProjective = transaction
-            .pubkey
-            .try_into()
-            .map_err(|_| CertificateError::InvalidPubkey)?;
+    fn vote_count(&self) -> usize {
+        self.bitmap.count_ones()
+    }
+}
 
-        let aggregate_signature: SignatureProjective = self
-            .aggregate_signature
-            .try_into()
-            .map_err(|_| CertificateError::InvalidSignature)?;
-        let new_signature: SignatureProjective = transaction
+fn aggregate_vote_signatures(
+    transactions: Vec<Arc<VoteMessage>>,
+) -> Result<(Signature, BitVec<u8, Lsb0>), CertificateError> {
+    if transactions.len() > MAXIMUM_VALIDATORS {
+        return Err(CertificateError::IndexOutOfBound);
+    }
+
+    let mut aggregate_signature = SignatureProjective::default();
+    let mut bitmap = BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE);
+
+    // TODO: signature aggregation can be done out-of-order;
+    // consider aggregating signatures separately in parallel
+    for transaction in transactions {
+        // aggregate the signature
+        let signature: SignatureProjective = transaction
             .signature
             .try_into()
             .map_err(|_| CertificateError::InvalidSignature)?;
-
-        // the function aggregate fails only on empty pubkeys or signatures,
-        // so it is safe to unwrap here
-        // TODO: update this after simplfying aggregation interface in `solana_bls`
-        let new_aggregate_pubkey =
-            PubkeyProjective::aggregate([&aggregate_pubkey, &new_pubkey]).unwrap();
-        self.aggregate_pubkey = new_aggregate_pubkey.into();
-
-        let new_aggregate_signature =
-            SignatureProjective::aggregate([&aggregate_signature, &new_signature]).unwrap();
-        self.aggregate_signature = new_aggregate_signature.into();
+        aggregate_signature.aggregate_with([&signature]);
 
         // set bit-vector for the validator
-        let validator_index = bls_pubkey_to_rank_map
-            .get_rank(&transaction.pubkey)
-            .ok_or(CertificateError::ValidatorDoesNotExist)?;
-        self.bit_vector
-            .set_bit(*validator_index as usize, true)
-            .map_err(|_| CertificateError::IndexOutOfBound)?;
-
-        self.stake += stake;
-        self.vote_count += 1;
-        Ok(())
+        //
+        // TODO: This only accounts for one type of vote. Update this after
+        // we have a base3 encoding implementation.
+        if bitmap.len() < transaction.rank as usize {
+            return Err(CertificateError::IndexOutOfBound);
+        }
+        bitmap.set(transaction.rank as usize, true);
     }
 
-    /// Given a bit vector and a list of validator BLS pubkeys, generate an
-    /// aggregate BLS pubkey.
-    ///
-    /// TODO: Defining this to be a static function for now, but it more
-    /// naturally belongs to where we keep the sorted list of BLS pubkeys
-    pub fn aggregate_pubkey(
-        bit_vector: &BitVector,
-        validator_bls_pubkeys: &[&BlsPubkey],
-    ) -> Result<BlsPubkey, CertificateError> {
-        let mut aggregate_pubkey = PubkeyProjective::default();
-        for (i, pubkey) in validator_bls_pubkeys.iter().enumerate() {
-            if bit_vector
-                .get_bit(i)
-                .map_err(|_| CertificateError::IndexOutOfBound)?
-            {
-                let pubkey_projective: PubkeyProjective = (*pubkey)
-                    .try_into()
-                    .map_err(|_| CertificateError::InvalidPubkey)?;
-                aggregate_pubkey.aggregate_with([&pubkey_projective]);
-            }
+    // TODO: truncate trailing zeros in bitmap
+    Ok((aggregate_signature.into(), bitmap))
+}
+
+/// Given a bit vector and a list of validator BLS pubkeys, generate an
+/// aggregate BLS pubkey.
+pub fn aggregate_pubkey(
+    bitmap: &BitVec<u8, Lsb0>,
+    bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
+) -> Result<BlsPubkey, CertificateError> {
+    let mut aggregate_pubkey = PubkeyProjective::default();
+    for (i, included) in bitmap.iter().enumerate() {
+        if *included {
+            let bls_pubkey: PubkeyProjective = bls_pubkey_to_rank_map
+                .get_pubkey(i)
+                .ok_or(CertificateError::IndexOutOfBound)?
+                .1
+                .try_into()
+                .map_err(|_| CertificateError::InvalidPubkey)?;
+
+            aggregate_pubkey.aggregate_with([&bls_pubkey]);
         }
-        Ok(aggregate_pubkey.into())
+    }
+
+    Ok(aggregate_pubkey.into())
+}
+
+impl From<CertificateId> for Certificate {
+    fn from(certificate_id: CertificateId) -> Certificate {
+        match certificate_id {
+            CertificateId::Finalize(slot) => Certificate {
+                certificate_type: CertificateType::Finalize,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+            CertificateId::FinalizeFast(slot, block_id, replayed_bank_hash) => Certificate {
+                slot,
+                certificate_type: CertificateType::FinalizeFast,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Notarize(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::Notarize,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::NotarizeFallback(slot, block_id, replayed_bank_hash) => Certificate {
+                certificate_type: CertificateType::NotarizeFallback,
+                slot,
+                block_id: Some(block_id),
+                replayed_bank_hash: Some(replayed_bank_hash),
+            },
+            CertificateId::Skip(slot) => Certificate {
+                certificate_type: CertificateType::Skip,
+                slot,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+        }
     }
 }
