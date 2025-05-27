@@ -16,10 +16,7 @@ use {
     crossbeam_channel::Sender,
     solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank,
-        epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
-    },
+    solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
     solana_sdk::{
         clock::{Epoch, Slot},
         epoch_schedule::EpochSchedule,
@@ -585,30 +582,25 @@ pub(crate) fn load_from_blockstore(
         .slot_certificates_iterator(root_bank.slot())
         .unwrap()
     {
-        for ((block_id, bank_hash), cert) in slot_cert.notarize_fallback_certificates.into_iter() {
-            // TODO: this will be migrated to BLS
-            let cert_id = CertificateId::NotarizeFallback(slot, block_id, bank_hash);
+        let certs = slot_cert
+            .notarize_fallback_certificates
+            .into_iter()
+            .map(|((block_id, bank_hash), cert)| {
+                let cert_id = CertificateId::NotarizeFallback(slot, block_id, bank_hash);
+                (cert_id, cert)
+            })
+            .chain(slot_cert.skip_certificate.map(|cert| {
+                let cert_id = CertificateId::Skip(slot);
+                (cert_id, cert)
+            }));
+
+        for (cert_id, cert) in certs {
             let cert = cert.into_iter().map(Arc::from).collect();
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(
-                cert_id,
-                LegacyVoteCertificate::new(0, cert, &BLSPubkeyToRankMap::default()).unwrap(),
-            );
+            let legacy_cert = LegacyVoteCertificate::new(cert_id, cert)
+                .expect("Certificate construction must not fail");
+            cert_pool.insert_certificate(cert_id, legacy_cert);
         }
-
-        let Some(cert) = slot_cert.skip_certificate else {
-            continue;
-        };
-        // TODO: this will be migrated to BLS
-        let cert_id = CertificateId::Skip(slot);
-        let cert = cert.into_iter().map(Arc::from).collect();
-        trace!(
-            "{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool"
-        );
-        cert_pool.insert_certificate(
-            cert_id,
-            LegacyVoteCertificate::new(0, cert, &BLSPubkeyToRankMap::default()).unwrap(),
-        );
     }
     cert_pool
 }
