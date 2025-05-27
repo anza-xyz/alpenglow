@@ -192,14 +192,14 @@ impl VotingLoop {
 
         let mut current_leader = None;
         let mut current_slot = {
-            let bank_forks_slot = root_bank_cache.root_bank().slot() + 1;
-            let vote_history_slot = vote_history.root() + 1;
-            let slot = bank_forks_slot.max(vote_history_slot);
+            let bank_forks_slot = root_bank_cache.root_bank().slot();
+            let vote_history_slot = vote_history.root();
             if bank_forks_slot != vote_history_slot {
                 panic!(
                     "{my_pubkey}: Mismatch bank forks root {bank_forks_slot} vs vote history root {vote_history_slot}"
                 );
             }
+            let slot = bank_forks_slot + 1;
             info!(
                 "{my_pubkey}: Starting voting loop from {slot}: root {}",
                 root_bank_cache.root_bank().slot()
