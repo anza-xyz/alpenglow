@@ -212,10 +212,7 @@ impl VotingLoop {
             &root_bank_cache.root_bank(),
             blockstore.as_ref(),
             Some(certificate_sender),
-        ).inspect_err(|err| {
-            // TODO: should we just panic
-            error!("{my_pubkey}: Unable to load certificate pool from blockstore: {err:?}. Initializing as empty");
-        }).unwrap_or_default();
+        );
 
         let mut voting_context = VotingContext {
             vote_history,

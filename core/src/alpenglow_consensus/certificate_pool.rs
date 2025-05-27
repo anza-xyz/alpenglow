@@ -14,7 +14,7 @@ use {
     },
     alpenglow_vote::vote::Vote,
     crossbeam_channel::Sender,
-    solana_ledger::blockstore::{Blockstore, BlockstoreError},
+    solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
     solana_runtime::{
         bank::Bank,
@@ -579,9 +579,12 @@ pub(crate) fn load_from_blockstore(
     root_bank: &Bank,
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(CertificateId, LegacyVoteCertificate)>>,
-) -> Result<CertificatePool<LegacyVoteCertificate>, BlockstoreError> {
+) -> CertificatePool<LegacyVoteCertificate> {
     let mut cert_pool = CertificatePool::new_from_root_bank(root_bank, certificate_sender);
-    for (slot, slot_cert) in blockstore.slot_certificates_iterator(root_bank.slot())? {
+    for (slot, slot_cert) in blockstore
+        .slot_certificates_iterator(root_bank.slot())
+        .unwrap()
+    {
         for ((block_id, bank_hash), cert) in slot_cert.notarize_fallback_certificates.into_iter() {
             // TODO: this will be migrated to BLS
             let cert_id = CertificateId::NotarizeFallback(slot, block_id, bank_hash);
@@ -607,7 +610,7 @@ pub(crate) fn load_from_blockstore(
             LegacyVoteCertificate::new(0, cert, &BLSPubkeyToRankMap::default()).unwrap(),
         );
     }
-    Ok(cert_pool)
+    cert_pool
 }
 
 #[cfg(test)]
