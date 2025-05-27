@@ -2493,7 +2493,7 @@ impl Node {
         let port_range = (1024, 65535);
 
         let udp_config = SocketConfig::default();
-        let quic_config = SocketConfig::default().reuseport(true);
+        let quic_config = SocketConfig::default().reuseport(false);
         let ((_tpu_port, tpu), (_tpu_quic_port, tpu_quic)) =
             bind_two_in_range_with_offset_and_config(
                 localhost_ip_addr,
@@ -2503,7 +2503,17 @@ impl Node {
                 quic_config,
             )
             .unwrap();
+
+        println!("tpu :: {:?} {:?}", tpu, tpu.local_addr().unwrap());
+        println!(
+            "tpu_quic :: {:?} {:?}",
+            tpu_quic,
+            tpu_quic.local_addr().unwrap()
+        );
+
         let tpu_quic = bind_more_with_config(tpu_quic, num_quic_endpoints, quic_config).unwrap();
+        println!("tpu_quic2 :: {:?}", tpu_quic);
+
         let (gossip_port, (gossip, ip_echo)) =
             bind_common_in_range_with_config(localhost_ip_addr, port_range, udp_config).unwrap();
         let gossip_addr = SocketAddr::new(localhost_ip_addr, gossip_port);
@@ -2543,14 +2553,27 @@ impl Node {
             timestamp(), // wallclock
             0u16,        // shred_version
         );
+
+        println!(
+            "[CHECK] TPU QUIC: {:?}",
+            info.tpu(solana_client::connection_cache::Protocol::QUIC)
+        );
+
         macro_rules! set_socket {
             ($method:ident, $addr:expr, $name:literal) => {
+                println!("Setting {} to {:?}", $addr, $name);
                 info.$method($addr).expect(&format!(
                     "Operator must spin up node with valid {} address",
                     $name
                 ))
             };
             ($method:ident, $protocol:ident, $addr:expr, $name:literal) => {{
+                println!(
+                    "[Protocol] Setting {:?} {} to {:?}",
+                    contact_info::Protocol::$protocol,
+                    $addr,
+                    $name
+                );
                 info.$method(contact_info::Protocol::$protocol, $addr)
                     .expect(&format!(
                         "Operator must spin up node with valid {} address",
@@ -2562,6 +2585,12 @@ impl Node {
         set_socket!(set_tvu, UDP, tvu.local_addr().unwrap(), "TVU");
         set_socket!(set_tvu, QUIC, tvu_quic.local_addr().unwrap(), "TVU QUIC");
         set_socket!(set_tpu, tpu.local_addr().unwrap(), "TPU");
+
+        println!(
+            "[CHECK 1] TPU QUIC: {:?}",
+            info.tpu(solana_client::connection_cache::Protocol::QUIC)
+        );
+
         set_socket!(
             set_tpu_forwards,
             tpu_forwards.local_addr().unwrap(),
@@ -2579,6 +2608,12 @@ impl Node {
             tpu_vote_quic[0].local_addr().unwrap(),
             "TPU-vote QUIC"
         );
+
+        println!(
+            "[CHECK 2] TPU QUIC: {:?}",
+            info.tpu(solana_client::connection_cache::Protocol::QUIC)
+        );
+
         set_socket!(set_rpc, rpc_addr, "RPC");
         set_socket!(set_rpc_pubsub, rpc_pubsub_addr, "RPC-pubsub");
         set_socket!(
@@ -2593,6 +2628,12 @@ impl Node {
             serve_repair_quic.local_addr().unwrap(),
             "serve-repair QUIC"
         );
+
+        println!(
+            "TPU QUIC: {:?}",
+            info.tpu(solana_client::connection_cache::Protocol::QUIC)
+        );
+
         Node {
             info,
             sockets: Sockets {

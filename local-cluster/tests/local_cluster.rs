@@ -1,5 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
+    alpenglow_vote::vote::Vote as AlpenglowVote,
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -80,6 +81,7 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
+    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -91,9 +93,10 @@ use {
         fs,
         io::Read,
         iter,
+        net::UdpSocket,
         path::Path,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -2922,8 +2925,7 @@ fn test_oc_bad_signatures() {
             let num_votes_simulated = num_votes_simulated.clone();
             move |vote_slot, leader_vote_tx, parsed_vote, _cluster_info| {
                 info!("received vote for {}", vote_slot);
-                let parsed_vote = parsed_vote.as_tower_transaction_ref().unwrap();
-                let vote_hash = parsed_vote.hash();
+                let vote_hash = parsed_vote.as_tower_transaction_ref().unwrap().hash();
                 info!(
                     "Simulating vote from our node on slot {}, hash {}",
                     vote_slot, vote_hash
@@ -6094,4 +6096,672 @@ fn test_invalid_forks_persisted_on_restart() {
         );
         sleep(Duration::from_millis(100));
     }
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_simple() {
+    // Create node stakes
+    // solana_logger::setup_with_default(RUST_LOG_FILTER);
+    let total_stake = 3 * DEFAULT_NODE_STAKE;
+    let third_stake = DEFAULT_NODE_STAKE;
+    let tenth_stake = total_stake / 10;
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+
+    let node_a_stake = third_stake + 2;
+    let node_b_stake = third_stake - 1;
+    let node_c_stake = third_stake - 1;
+
+    // let node_a_stake = 8 * tenth_stake;
+    // let node_b_stake = tenth_stake;
+    // let node_c_stake = tenth_stake;
+
+    let node_stakes = vec![node_a_stake, node_b_stake, node_c_stake];
+    let num_nodes = node_stakes.len();
+
+    assert_eq!(total_stake, node_a_stake + node_b_stake + node_c_stake);
+
+    // Create leader schedule
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&vec![1000, 0, 0]);
+
+    println!("validator_keys :: {:?}", validator_keys);
+    println!("slot_leaders :: {:?}", leader_schedule.get_slot_leaders());
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+
+    println!(
+        "vote_listener bound to {}",
+        vote_listener.local_addr().unwrap()
+    );
+
+    // Create validator configs
+    println!("Creating validator configs");
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener.local_addr().unwrap()]);
+
+    let validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
+
+    // Collect node pubkeys
+    let node_pubkeys = validator_keys
+        .iter()
+        .map(|key| key.pubkey())
+        .collect::<Vec<_>>();
+
+    println!("node_pubkeys: {:#?}", node_pubkeys);
+
+    assert_eq!(num_nodes, validator_keys.len());
+
+    // Cluster config
+    println!("Creating cluster config");
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes,
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    println!("Creating local cluster");
+    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    let vote_pubkeys = validator_keys
+        .iter()
+        .filter_map(|keypair| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| validator.info.voting_keypair.pubkey())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vote_pubkeys.len(), num_nodes);
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    let num_votes_seen = Arc::new(AtomicUsize::new(0));
+    let byzantine_voter = std::thread::spawn({
+        let num_votes_seen = num_votes_seen.clone();
+        let shutdown = shutdown.clone();
+
+        let mut buf = [0_u8; 65_535];
+
+        move || loop {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            num_votes_seen.fetch_add(1, Ordering::AcqRel);
+
+            let node_name = match vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap()
+            {
+                0 => "A",
+                1 => "B",
+                2 => "C",
+                _ => "Unknown",
+            };
+
+            println!(
+                "{} vote # :: node = {} :: vote_tx :: {:?}",
+                num_votes_seen.load(Ordering::Acquire),
+                node_name,
+                parsed_vote.as_alpenglow_transaction_ref().unwrap()
+            );
+        }
+    });
+
+    sleep(Duration::from_secs(400));
+    shutdown.store(true, Ordering::Release);
+
+    println!("Joining!");
+    byzantine_voter.join().unwrap();
+    println!("Done!");
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_certificate_repair_usecase() {
+    // Create node stakes
+    // solana_logger::setup_with_default(RUST_LOG_FILTER);
+    let total_stake = 3 * DEFAULT_NODE_STAKE;
+    let tenth_stake = total_stake / 10;
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+
+    let node_a_stake = 9 * tenth_stake;
+    let node_b_stake = 1;
+    let node_c_stake = total_stake - node_a_stake - node_b_stake;
+
+    let node_stakes = vec![node_a_stake, node_b_stake, node_c_stake];
+    let num_nodes = node_stakes.len();
+
+    println!("node_stakes :: {:?}", node_stakes);
+
+    assert_eq!(total_stake, node_a_stake + node_b_stake + node_c_stake);
+
+    // Create leader schedule
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&vec![1, 0, 0]);
+
+    println!("validator_keys :: {:?}", validator_keys);
+    println!("slot_leaders :: {:?}", leader_schedule.get_slot_leaders());
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+
+    println!(
+        "vote_listener bound to {}",
+        vote_listener.local_addr().unwrap()
+    );
+
+    // Create validator configs
+    println!("Creating validator configs");
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener.local_addr().unwrap()]);
+
+    // Collect node pubkeys
+    let node_pubkeys = validator_keys
+        .iter()
+        .map(|key| key.pubkey())
+        .collect::<Vec<_>>();
+
+    assert_eq!(num_nodes, validator_keys.len());
+
+    // Cluster config
+    println!("Creating cluster config");
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes,
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    println!("Creating local cluster");
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    let vote_pubkeys = validator_keys
+        .iter()
+        .filter_map(|keypair| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| validator.info.voting_keypair.pubkey())
+        })
+        .collect::<Vec<_>>();
+
+    println!("vote_pubkeys: {:#?}\n", vote_pubkeys);
+
+    assert_eq!(vote_pubkeys.len(), num_nodes);
+
+    // println!("Spending and verifying");
+    // cluster_tests::spend_and_verify_all_nodes(
+    //     &cluster.entry_point_info,
+    //     &cluster.funding_keypair,
+    //     num_nodes,
+    //     HashSet::new(),
+    //     SocketAddrSpace::Unspecified,
+    //     &cluster.connection_cache,
+    // );
+
+    let disp = cluster
+        .validators
+        .iter()
+        .map(|(pubkey, v)| (pubkey, &v.info.contact_info))
+        .collect::<Vec<_>>();
+
+    println!("validator_info ::\n{:#?}", disp);
+
+    let tpu_socket_addrs = node_pubkeys
+        .iter()
+        .map(|pubkey| {
+            let addr = cluster.get_contact_info(&pubkey).unwrap();
+            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
+            // However, doing this when invoking exit_node results in skips everywhere.
+            // addr.tpu_vote(Protocol::UDP)
+            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+
+            // NOTE: doing this results in liveness - but, C ends up purely generating skips and
+            // weirdly, B and C end up sharing the same port number?
+            addr.tpu(cluster.connection_cache.protocol())
+                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+        })
+        .collect::<Vec<_>>();
+
+    println!(
+        "{:?} :: tpu_socket_addrs: {:?}",
+        cluster.connection_cache.protocol(),
+        tpu_socket_addrs
+    );
+
+    println!("exiting node B");
+
+    cluster.exit_node(&node_pubkeys[1]);
+
+    let vote_observer = std::thread::spawn({
+        let mut buf = [0_u8; 65_535];
+
+        move || loop {
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            let node_name = match vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap()
+            {
+                0 => "A",
+                1 => "B",
+                2 => "C",
+                _ => "Unknown",
+            };
+
+            let node_name = match vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap()
+            {
+                0 => "A",
+                1 => "B",
+                2 => "C",
+                _ => "Unknown",
+            };
+
+            println!(
+                "vote # :: node = {} :: vote_tx :: {:?}",
+                node_name,
+                parsed_vote.as_alpenglow_transaction_ref().unwrap()
+            );
+
+            // Once we've seen a vote at or beyond slot 15, we're done.
+            if cur_vote.slot() >= 15 {
+                break;
+            }
+        }
+    });
+
+    sleep(Duration::from_secs(300));
+
+    vote_observer.join().unwrap();
+
+    println!("Done!");
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_liveness_when_notarize_after_skip() {
+    // Create node stakes
+    // solana_logger::setup_with_default(RUST_LOG_FILTER);
+    let total_stake = 3 * DEFAULT_NODE_STAKE;
+    let third_stake = DEFAULT_NODE_STAKE;
+    let tenth_stake = total_stake / 10;
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+
+    // let node_a_stake = third_stake + 2;
+    // let node_b_stake = third_stake - 1;
+    // let node_c_stake = third_stake - 1;
+
+    let node_a_stake = 9 * tenth_stake;
+    let node_b_stake = tenth_stake / 2;
+    let node_c_stake = tenth_stake / 2;
+
+    let node_stakes = vec![node_a_stake, node_b_stake, node_c_stake];
+    let num_nodes = node_stakes.len();
+
+    assert_eq!(total_stake, node_a_stake + node_b_stake + node_c_stake);
+
+    // Control components
+    println!("Setting up control components");
+    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let stage = Arc::new(AtomicU8::new(0));
+    let node_b_is_offline = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Create leader schedule
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&vec![1, 0, 0]);
+
+    println!("validator_keys :: {:?}", validator_keys);
+    println!("slot_leaders :: {:?}", leader_schedule.get_slot_leaders());
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+
+    println!(
+        "vote_listener bound to {}",
+        vote_listener.local_addr().unwrap()
+    );
+
+    // Create validator configs
+    println!("Creating validator configs");
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener.local_addr().unwrap()]);
+
+    let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
+    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+
+    // Collect node pubkeys
+    let node_pubkeys = validator_keys
+        .iter()
+        .map(|key| key.pubkey())
+        .collect::<Vec<_>>();
+
+    println!("node_pubkeys: {:#?}", node_pubkeys);
+
+    assert_eq!(num_nodes, validator_keys.len());
+
+    // Cluster config
+    println!("Creating cluster config");
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes,
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    println!("Creating local cluster");
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    let vote_pubkeys = validator_keys
+        .iter()
+        .filter_map(|keypair| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| validator.info.voting_keypair.pubkey())
+        })
+        .collect::<Vec<_>>();
+
+    println!("vote_pubkeys: {:#?}\n", vote_pubkeys);
+
+    assert_eq!(vote_pubkeys.len(), num_nodes);
+
+    // println!("Spending and verifying");
+    // cluster_tests::spend_and_verify_all_nodes(
+    //     &cluster.entry_point_info,
+    //     &cluster.funding_keypair,
+    //     num_nodes,
+    //     HashSet::new(),
+    //     SocketAddrSpace::Unspecified,
+    //     &cluster.connection_cache,
+    // );
+
+    println!("Nice! Starting turbine_disabled handle");
+    let node_c_turbine_disabled_handle = {
+        let stage = stage.clone();
+        let shutdown = shutdown.clone();
+
+        std::thread::spawn(move || loop {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if stage.load(Ordering::Relaxed) == 0 {
+                continue;
+            }
+
+            node_c_turbine_disabled.store(true, Ordering::Relaxed);
+            sleep(Duration::from_millis(100));
+            node_c_turbine_disabled.store(false, Ordering::Relaxed);
+            sleep(Duration::from_millis(100));
+        })
+    };
+
+    let disp = cluster
+        .validators
+        .iter()
+        .map(|(pubkey, v)| (pubkey, &v.info.contact_info))
+        .collect::<Vec<_>>();
+
+    println!("validator_info ::\n{:#?}", disp);
+
+    let tpu_socket_addrs = node_pubkeys
+        .iter()
+        .map(|pubkey| {
+            let addr = cluster.get_contact_info(&pubkey).unwrap();
+            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
+            // However, doing this when invoking exit_node results in skips everywhere.
+            // addr.tpu_vote(Protocol::UDP)
+            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+
+            // NOTE: doing this results in liveness - but, C ends up purely generating skips and
+            // weirdly, B and C end up sharing the same port number?
+            addr.tpu(cluster.connection_cache.protocol())
+                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+        })
+        .collect::<Vec<_>>();
+
+    println!(
+        "{:?} :: tpu_socket_addrs: {:?}",
+        cluster.connection_cache.protocol(),
+        tpu_socket_addrs
+    );
+
+    println!("exiting node B");
+
+    // let node_b_info = cluster.validators.get(&node_pubkeys[1]).unwrap();
+    let node_b_info = cluster.exit_node(&node_pubkeys[1]);
+    let node_b_keypair = node_b_info.info.keypair.clone();
+    let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+
+    let num_votes_seen = Arc::new(AtomicUsize::new(0));
+    let num_votes_simulated = Arc::new(AtomicUsize::new(0));
+
+    let byzantine_voter = std::thread::spawn({
+        let node_a_vote_pubkey = vote_pubkeys[0];
+        let num_votes_seen = num_votes_seen.clone();
+        // let node_b_keypair = Arc::new(node_b_keypair.insecure_clone());
+        // let node_b_vote_keypair = Arc::new(node_b_vote_keypair.insecure_clone());
+        let num_votes_simulated = num_votes_simulated.clone();
+        let stage = stage.clone();
+        let node_b_is_offline = node_b_is_offline.clone();
+        let connection_cache = cluster.connection_cache.clone();
+
+        let mut buf = [0_u8; 65_535];
+
+        move || loop {
+            if node_b_is_offline.load(Ordering::Relaxed) {
+                println!("!!!!! node B is now offline !!!!!");
+                break;
+            }
+
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            num_votes_seen.fetch_add(1, Ordering::AcqRel);
+
+            let node_name = match vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap()
+            {
+                0 => "A",
+                1 => "B",
+                2 => "C",
+                _ => "Unknown",
+            };
+
+            println!(
+                "stage {} :: vote # :: node = {} :: vote_tx :: {:?}",
+                stage.load(Ordering::Relaxed),
+                node_name,
+                parsed_vote.as_alpenglow_transaction_ref().unwrap()
+            );
+            continue;
+
+            // We only copy votes from node A
+            if vote_pubkey != node_a_vote_pubkey {
+                continue;
+            }
+
+            // Construct the copied vote transaction
+            let node_b_keypair = node_b_keypair.insecure_clone();
+            let node_b_vote_keypair = node_b_vote_keypair.insecure_clone();
+
+            let copied_vote_ixn = parsed_vote
+                .as_alpenglow_transaction_ref()
+                .unwrap()
+                .to_vote_instruction(node_b_vote_keypair.pubkey(), node_b_keypair.pubkey());
+
+            let copied_vote_txn = Transaction::new_signed_with_payer(
+                &[copied_vote_ixn],
+                Some(&node_b_keypair.pubkey()),
+                &[node_b_keypair],
+                vote_txn.message.recent_blockhash,
+            );
+
+            // Which nodes should we send votes to?
+            let recipient_ixs = match stage.load(Ordering::Acquire) {
+                0 => vec![0, 2],
+                1 => vec![0],
+                _ => {
+                    // We'll want to trigger C to send a skip. To do so, we need to see A send a
+                    // notarization vote. We only retain votes from A, so we don't need to
+                    // perform another check to verify that this vote belongs to A.
+                    if matches!(
+                        parsed_vote.as_alpenglow_transaction_ref().unwrap(),
+                        AlpenglowVote::Notarize(_)
+                    ) {
+                        println!("  !!!!! node B is going offline !!!!!");
+                        node_b_is_offline.store(true, Ordering::Release);
+                    }
+
+                    vec![0]
+                }
+            };
+
+            let recipient_tpu_addrs = recipient_ixs
+                .iter()
+                .map(|ix| tpu_socket_addrs[*ix])
+                .collect::<Vec<_>>();
+
+            // Get the TPU addresses of the recipient nodes
+            // println!("recipient_tpu_addrs :: {:?}", recipient_tpu_addrs);
+
+            for tpu_vote_socket in recipient_tpu_addrs {
+                let buf = bincode::serialize(&copied_vote_txn)
+                    .expect("Couldn't serialize vote transaction");
+
+                let client = connection_cache.get_connection(&tpu_vote_socket);
+
+                // client.send_data_async(buf).unwrap_or_else(|_| {
+                //     panic!("Failed to send vote to {}", tpu_vote_socket);
+                // });
+            }
+
+            // println!(
+            //     "stage {} :: vote # :: node = B :: vote_tx :: {:?}",
+            //     stage.load(Ordering::Relaxed),
+            //     parsed_vote.as_alpenglow_transaction_ref().unwrap()
+            // );
+
+            num_votes_simulated.fetch_add(1, Ordering::Release);
+        }
+    });
+
+    sleep(Duration::from_secs(300));
+
+    byzantine_voter.join().unwrap();
+
+    // Stage 0: wait for things to stablize
+    // println!("[STAGE 0]");
+    // assert_eq!(0, stage.load(Ordering::Acquire));
+    // sleep(Duration::from_secs(10));
+
+    // // Stage 1: node B only send votes to node A
+    // println!("[STAGE 1]");
+    // stage.fetch_add(1, Ordering::AcqRel);
+    // assert_eq!(1, stage.load(Ordering::Acquire));
+    // sleep(Duration::from_secs(10));
+
+    // // Stage 2: oscillate turbine_disabled for node C
+    // println!("[STAGE 2]");
+    // stage.fetch_add(1, Ordering::AcqRel);
+    // assert_eq!(2, stage.load(Ordering::Acquire));
+    // sleep(Duration::from_secs(10));
+
+    // // Stage 3: group B sends a notar to A and stops sending votes in perpetuity
+    // println!("[STAGE 3]");
+    // stage.fetch_add(1, Ordering::AcqRel);
+    // assert_eq!(3, stage.load(Ordering::Acquire));
+    // sleep(Duration::from_secs(30));
+
+    // // Cleanup
+    // println!("Cleaning up");
+    // shutdown.store(true, Ordering::Relaxed);
+    // node_c_turbine_disabled_handle.join().unwrap();
+
+    println!("Done!");
 }
