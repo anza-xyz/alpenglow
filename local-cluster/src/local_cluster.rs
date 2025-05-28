@@ -683,6 +683,23 @@ impl LocalCluster {
         info!("{} done waiting for roots", test_name);
     }
 
+    pub fn check_for_new_processed(
+        &self,
+        num_new_processed: usize,
+        test_name: &str,
+        socket_addr_space: SocketAddrSpace,
+    ) {
+        let alive_node_contact_infos = self.discover_nodes(socket_addr_space, test_name);
+        info!("{} looking for new processed slots on all nodes", test_name);
+        cluster_tests::check_for_new_processed(
+            num_new_processed,
+            &alive_node_contact_infos,
+            &self.connection_cache,
+            test_name,
+        );
+        info!("{} done waiting for processed slots", test_name);
+    }
+
     pub fn check_no_new_roots(
         &self,
         num_slots_to_wait: usize,
