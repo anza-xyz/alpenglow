@@ -1,6 +1,7 @@
 use {
     super::{
         certificate_limits_and_vote_types,
+        parent_ready_tracker::ParentReadyTracker,
         vote_certificate::{CertificateError, LegacyVoteCertificate, VoteCertificate},
         vote_history::VoteHistory,
         vote_pool::{VoteKey, VotePool},
@@ -73,6 +74,8 @@ pub struct CertificatePool<VC: VoteCertificate> {
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateId, VC>,
+    /// Parent ready tracker
+    pub(crate) parent_ready_tracker: ParentReadyTracker,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
@@ -91,9 +94,19 @@ pub struct CertificatePool<VC: VoteCertificate> {
 
 impl<VC: VoteCertificate> CertificatePool<VC> {
     pub fn new_from_root_bank(
+        my_pubkey: Pubkey,
         bank: &Bank,
         certificate_sender: Option<Sender<(CertificateId, VC)>>,
     ) -> Self {
+        // To account for genesis and snapshots we allow default block id until
+        // block id can be serialized  as part of the snapshot
+        let root_block = (
+            bank.slot(),
+            bank.block_id().unwrap_or_default(),
+            bank.hash(),
+        );
+        let parent_ready_tracker = ParentReadyTracker::new(my_pubkey, root_block);
+
         let mut pool = Self {
             vote_pools: BTreeMap::new(),
             completed_certificates: BTreeMap::new(),
@@ -104,6 +117,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             root: bank.slot(),
             root_epoch: Epoch::default(),
             certificate_sender,
+            parent_ready_tracker,
         };
 
         // Update the epoch_stakes_map and root
@@ -221,6 +235,15 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 {
                     self.highest_notarized_fallback =
                         Some((slot, block_id.unwrap(), bank_hash.unwrap()));
+                    self.parent_ready_tracker.add_new_notar_fallback((
+                        slot,
+                        block_id.unwrap(),
+                        bank_hash.unwrap(),
+                    ));
+                }
+
+                if cert_id.is_skip() {
+                    self.parent_ready_tracker.add_new_skip(slot);
                 }
 
                 if cert_id.is_finalization_variant()
@@ -254,6 +277,16 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
 
     pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VC) {
         self.completed_certificates.insert(cert_id, cert);
+
+        match cert_id {
+            CertificateId::NotarizeFallback(slot, block_id, bank_hash) => self
+                .parent_ready_tracker
+                .add_new_notar_fallback((slot, block_id, bank_hash)),
+            CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot),
+            CertificateId::Finalize(_)
+            | CertificateId::FinalizeFast(_, _, _)
+            | CertificateId::Notarize(_, _, _) => (),
+        }
     }
 
     /// Adds the new vote the the certificate pool. If a new certificate is created
@@ -512,8 +545,8 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         (voted_stake - top_notarized_stake) as f64 / total_stake as f64 >= SAFE_TO_SKIP_THRESHOLD
     }
 
-    /// Determines if the leader can start based on notarization and skip certificates.
-    pub fn make_start_leader_decision(
+    #[cfg(test)]
+    fn make_start_leader_decision(
         &self,
         my_leader_slot: Slot,
         parent_slot: Slot,
@@ -577,7 +610,8 @@ pub(crate) fn load_from_blockstore(
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(CertificateId, LegacyVoteCertificate)>>,
 ) -> CertificatePool<LegacyVoteCertificate> {
-    let mut cert_pool = CertificatePool::new_from_root_bank(root_bank, certificate_sender);
+    let mut cert_pool =
+        CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
     for (slot, slot_cert) in blockstore
         .slot_certificates_iterator(root_bank.slot())
         .unwrap()
@@ -657,7 +691,7 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(&root_bank.clone(), None),
+            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank.clone(), None),
         )
     }
 
@@ -1766,7 +1800,7 @@ mod tests {
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
         let mut pool: CertificatePool<LegacyVoteCertificate> =
-            CertificatePool::new_from_root_bank(&root_bank.clone(), None);
+            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank.clone(), None);
         assert_eq!(pool.root(), 0);
 
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));
