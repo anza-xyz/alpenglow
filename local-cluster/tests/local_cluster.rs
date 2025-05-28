@@ -6095,3 +6095,133 @@ fn test_invalid_forks_persisted_on_restart() {
         sleep(Duration::from_millis(100));
     }
 }
+
+#[test]
+#[serial]
+fn test_restart_node_alpenglow() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH * 2;
+    let ticks_per_slot = 16;
+    let validator_config = ValidatorConfig::default_for_test();
+    let mut cluster = LocalCluster::new_alpenglow(
+        &mut ClusterConfig {
+            node_stakes: vec![DEFAULT_NODE_STAKE],
+            validator_configs: vec![safe_clone_config(&validator_config)],
+            ticks_per_slot,
+            slots_per_epoch,
+            stakers_slot_offset: slots_per_epoch,
+            skip_warmup_slots: true,
+            ..ClusterConfig::default()
+        },
+        SocketAddrSpace::Unspecified,
+    );
+    let nodes = cluster.get_node_pubkeys();
+    cluster_tests::sleep_n_epochs(
+        1.0,
+        &cluster.genesis_config.poh_config,
+        clock::DEFAULT_TICKS_PER_SLOT,
+        slots_per_epoch,
+    );
+    info!("Restarting node");
+    cluster.exit_restart_node(&nodes[0], validator_config, SocketAddrSpace::Unspecified);
+    cluster_tests::sleep_n_epochs(
+        0.5,
+        &cluster.genesis_config.poh_config,
+        clock::DEFAULT_TICKS_PER_SLOT,
+        slots_per_epoch,
+    );
+    cluster_tests::send_many_transactions(
+        &cluster.entry_point_info,
+        &cluster.funding_keypair,
+        &cluster.connection_cache,
+        10,
+        1,
+    );
+}
+
+/// We start 2 nodes, where the first node A holds 90% of the stake
+/// The leader schedule is also setup so that the A is always the leader.
+/// As a result, A can progress by itself.
+///
+/// We let A run by itself, and ensure that B can join and rejoin the network
+/// through fast forwarding their slot on receiving A's finalization certificate
+#[test]
+#[serial]
+fn test_alpenglow_imbalanced_stakes_catchup() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    // Create node stakes
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+
+    let total_stake = 2 * DEFAULT_NODE_STAKE;
+    let tenth_stake = total_stake / 10;
+    let node_a_stake = 9 * tenth_stake;
+    let node_b_stake = total_stake - node_a_stake;
+
+    let node_stakes = vec![node_a_stake, node_b_stake];
+    let num_nodes = node_stakes.len();
+
+    // Create leader schedule with A as the leader always
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[1, 0]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+
+    // Collect node pubkeys
+    let node_pubkeys = validator_keys
+        .iter()
+        .map(|key| key.pubkey())
+        .collect::<Vec<_>>();
+
+    // Cluster config
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes,
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    // Ensure all nodes are voting
+    cluster.check_for_new_processed(
+        8,
+        "test_alpenglow_imbalanced_stakes_catchup",
+        SocketAddrSpace::Unspecified,
+    );
+
+    info!("exiting node B");
+    let b_info = cluster.exit_node(&node_pubkeys[1]);
+
+    // Let A make roots by itself
+    cluster.check_for_new_roots(
+        8,
+        "test_alpenglow_imbalanced_stakes_catchup",
+        SocketAddrSpace::Unspecified,
+    );
+
+    info!("restarting node B");
+    cluster.restart_node(&node_pubkeys[1], b_info, SocketAddrSpace::Unspecified);
+
+    // Ensure all nodes are voting
+    cluster.check_for_new_processed(
+        16,
+        "test_alpenglow_imbalanced_stakes_catchup",
+        SocketAddrSpace::Unspecified,
+    );
+}
