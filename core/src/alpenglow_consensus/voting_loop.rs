@@ -5,7 +5,7 @@ use {
         block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
         certificate_pool::{self, AddVoteError},
         vote_history_storage::VoteHistoryStorage,
-        CertificateId,
+        Block, CertificateId,
     },
     crate::{
         alpenglow_consensus::{
@@ -28,7 +28,9 @@ use {
     solana_ledger::{
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
-        leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
+        leader_schedule_utils::{
+            first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
+        },
     },
     solana_measure::measure::Measure,
     solana_rpc::{
@@ -42,6 +44,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+        hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
@@ -255,20 +258,17 @@ impl VotingLoop {
 
             if is_leader {
                 // Let the block creation loop know it is time for it to produce the window
-                // TODO: We max with root here, as the snapshot slot might not have a certificate.
-                // Think about this more and fix if necessary.
-                let parent_slot = cert_pool
-                    .highest_notarized_fallback()
-                    // TODO(ashwin): Check hash when dealing with duplicate blocks
-                    .map_or(0, |(s, _, _)| s)
-                    .max(root_bank_cache.root_bank().slot());
+                let parent_block = cert_pool
+                    .parent_ready_tracker
+                    .block_production_parent(current_slot)
+                    .expect("Must have a block production parent in sequential voting loop");
                 Self::notify_block_creation_loop_of_leader_window(
                     &my_pubkey,
                     &cert_pool,
                     &leader_window_notifier,
-                    current_slot,
+                    first_of_consecutive_leader_slots(current_slot),
                     leader_end_slot,
-                    parent_slot,
+                    parent_block,
                     skip_timer,
                 );
             }
@@ -280,7 +280,6 @@ impl VotingLoop {
                 &leader_pubkey,
             );
 
-            let mut fast_forward = None;
             while current_slot <= leader_end_slot {
                 let leader_slot_index = leader_slot_index(current_slot);
                 let timeout = timeouts[leader_slot_index];
@@ -323,7 +322,6 @@ impl VotingLoop {
                     if Self::try_notar(
                         &my_pubkey,
                         bank.as_ref(),
-                        is_leader,
                         &blockstore,
                         &mut cert_pool,
                         &mut voting_context,
@@ -333,11 +331,9 @@ impl VotingLoop {
                     }
                 }
 
-                // Wait for certificate
+                // Wait for certificates to indicate we can move to the next slot
                 let mut refresh_timer = Instant::now();
-                while !Self::branch_certified(&my_pubkey, current_slot, &cert_pool)
-                    && !Self::skip_certified(&my_pubkey, current_slot, &cert_pool)
-                {
+                while cert_pool.parent_ready_tracker.highest_parent_ready() <= current_slot {
                     if exit.load(Ordering::Relaxed) {
                         return;
                     }
@@ -382,26 +378,6 @@ impl VotingLoop {
                         );
                         refresh_timer = Instant::now();
                     }
-
-                    // Check if we can fast forward
-                    // TODO(ashwin): for duplicate blocks, ensure that we have the correct chain up to this
-                    let Some((slot, _, _)) = cert_pool.highest_fast_finalized() else {
-                        continue;
-                    };
-                    if slot > current_slot {
-                        fast_forward = Some(slot);
-                        break;
-                    }
-                }
-
-                if let Some(slot) = fast_forward {
-                    info!(
-                        "{my_pubkey}: While waiting for certificate on {current_slot} we observed fast finalization certificate for {slot}. \
-                        Fast forwarding to {}",
-                        slot + 1,
-                    );
-                    current_slot = slot + 1;
-                    break;
                 }
 
                 info!(
@@ -421,13 +397,6 @@ impl VotingLoop {
                 current_slot += 1;
             }
 
-            // We intentionally do not set root if we were fast forwarding, we could
-            // end up rooting a slot that has not yet been considered for voting by the above loop
-            // causing the bank to be removed from bank forks.
-            if fast_forward.is_some() {
-                continue;
-            }
-
             // Set new root
             Self::maybe_set_root(
                 leader_end_slot,
@@ -442,39 +411,6 @@ impl VotingLoop {
             // TODO(ashwin): If we were the leader for `current_slot` and the bank has not completed,
             // we can abandon the bank now
         }
-    }
-
-    fn branch_certified(
-        my_pubkey: &Pubkey,
-        slot: Slot,
-        cert_pool: &CertificatePool<LegacyVoteCertificate>,
-    ) -> bool {
-        // TODO(ashwin): For non duplicate blocks, `notarize fallback` is sufficient to imply
-        // that we have seen branch certified in the sequential loop, when implementing duplicate
-        // logic, update to May 2nd paper for simplicity
-        if let Some(size) = cert_pool.slot_notarized_fallback(slot) {
-            info!(
-                "{my_pubkey}: Branch Certified: Slot {} from {} validators",
-                slot, size
-            );
-            return true;
-        };
-
-        false
-    }
-
-    fn skip_certified(
-        my_pubkey: &Pubkey,
-        slot: Slot,
-        cert_pool: &CertificatePool<LegacyVoteCertificate>,
-    ) -> bool {
-        // TODO(ashwin): can include cert size for debugging
-        if cert_pool.skip_certified(slot) {
-            info!("{my_pubkey}: Skip Certified: Slot {}", slot,);
-            return true;
-        }
-
-        false
     }
 
     /// Checks if any slots between `vote_history`'s current root
@@ -536,6 +472,51 @@ impl VotingLoop {
         }
 
         Some(new_root)
+    }
+
+    /// Gets the block id of a bank. If this is a leader bank,
+    /// shredding might not be complete when initially set, so update
+    /// the bank for children checks later
+    fn get_set_block_id(my_pubkey: &Pubkey, bank: &Bank, blockstore: &Blockstore) -> Option<Hash> {
+        let is_leader = bank.collector_id() == my_pubkey;
+
+        if bank.slot() == 0 {
+            // Genesis does not have a block id
+            return Some(Hash::default());
+        }
+        if bank.block_id().is_some() {
+            return bank.block_id();
+        }
+
+        if !is_leader {
+            warn!(
+                "{my_pubkey}: Unable to retrieve block id or duplicate block checks have failed
+                for non leader slot {} {}",
+                bank.slot(),
+                bank.hash()
+            );
+            return None;
+        }
+
+        // We are leader attempt to retrieve from blockstore
+        // TODO:(ashwin) We are leader ignore duplicate block checks and just get from last shred?
+        let block_id = blockstore
+            .check_last_fec_set_and_get_block_id(
+                bank.slot(),
+                bank.hash(),
+                is_leader,
+                &FeatureSet::all_enabled(),
+            )
+            .unwrap_or(None);
+
+        if block_id.is_some() {
+            // Prior to asynchronous execution, the leader's blocks could be frozen before shredded
+            // As such we choose to set the block id here, so that future parent block id lookups
+            // succeed. Since the scope of parent block id lookups is the voting loop, doing it here
+            // suffices, but if the scope expands we could consider moving this to replay.
+            bank.set_block_id(block_id);
+        }
+        block_id
     }
 
     /// Attempts to create and send a skip vote for all unvoted slots in `[start, end]`
@@ -608,7 +589,6 @@ impl VotingLoop {
     fn try_notar(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        is_leader: bool,
         blockstore: &Blockstore,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
@@ -618,33 +598,33 @@ impl VotingLoop {
         let leader_slot_index = leader_slot_index(slot);
 
         let parent_slot = bank.parent_slot();
+        let parent_bank_hash = bank.parent_hash();
+        let parent_block_id = Self::get_set_block_id(
+            my_pubkey,
+            bank.parent().expect("Cannot vote on genesis").as_ref(),
+            blockstore,
+        )
+        // To account for child of genesis and snapshots we allow default block id
+        .unwrap_or_default();
 
         // Check if the certificates are valid for us to vote notarize.
-        // TODO: fix WFSM hack
         // - If this is the first leader slot (leader index = 0 or slot = 1) check
-        //      - The parent is branch certified
+        //   that we are parent ready:
+        //      - The parent is notarized fallback
         //      - OR the parent is genesis / slot 1 (WFSM hack)
         //      - All slots between the parent and this slot are skip certified
         // - If this is not the first leader slot check
         //      - The slot is consecutive to the parent slot
         //      - We voted notarize on the parent block
         if leader_slot_index == 0 || slot == 1 {
-            // TODO(ashwin): track by hash,
-            if cert_pool.slot_notarized_fallback(parent_slot).is_none() && parent_slot > 1 {
-                // Need to ingest more votes
-                return false;
-            }
-
-            if !(parent_slot + 1..slot).all(|s| cert_pool.skip_certified(s)) {
+            if !cert_pool
+                .parent_ready_tracker
+                .parent_ready(slot, (parent_slot, parent_block_id, parent_bank_hash))
+            {
                 // Need to ingest more votes
                 return false;
             }
         } else {
-            let parent_bank_hash = bank.parent_hash();
-            let parent_block_id = bank
-                .parent_block_id()
-                .expect("Synchronous replay cannot have a missing parent block id");
-
             if parent_slot + 1 != slot {
                 // Non consecutive
                 return false;
@@ -658,14 +638,7 @@ impl VotingLoop {
         }
 
         // Broadcast notarize vote
-        let voted = Self::vote_notarize(
-            my_pubkey,
-            bank,
-            is_leader,
-            blockstore,
-            cert_pool,
-            voting_context,
-        );
+        let voted = Self::vote_notarize(my_pubkey, bank, blockstore, cert_pool, voting_context);
 
         // Try to finalize
         Self::try_final(my_pubkey, slot, bank, cert_pool, voting_context);
@@ -680,7 +653,6 @@ impl VotingLoop {
     fn vote_notarize(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        is_leader: bool,
         blockstore: &Blockstore,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
@@ -688,41 +660,9 @@ impl VotingLoop {
         debug_assert!(bank.is_frozen());
         let slot = bank.slot();
         let hash = bank.hash();
-        let Some(block_id) = blockstore
-            .check_last_fec_set_and_get_block_id(
-                slot,
-                hash,
-                is_leader,
-                // TODO:(ashwin) ignore duplicate block checks (?)
-                &FeatureSet::all_enabled(),
-            ).unwrap_or_else(|e| {
-                if !is_leader {
-                    warn!("Unable to retrieve block_id, failed last fec set checks for slot {slot} hash {hash}: {e:?}")
-                }
-                None
-            }
-        ) else {
-            if is_leader {
-                // For leader slots, shredding is asynchronous so block_id might not yet
-                // be available. In this case we want to retry our vote later
-                return false;
-            }
-            // At this point we could mark the bank as dead similar to TowerBFT, however
-            // for alpenglow this is not necessary
-            warn!(
-                "Unable to retrieve block id or duplicate block checks have failed
-                for non leader slot {slot} {hash}, not voting notarize"
-            );
-            return true;
+        let Some(block_id) = Self::get_set_block_id(my_pubkey, bank, blockstore) else {
+            return false;
         };
-
-        if is_leader && bank.block_id().is_none() {
-            // Prior to asynchronous execution, the leader's blocks could be frozen before shredded
-            // As such we choose to set the block id here, so that future parent block id lookups
-            // succeed. Since the scope of parent block id lookups is the voting loop, doing it here
-            // suffices, but if the scope expands we could consider moving this to replay.
-            bank.set_block_id(Some(block_id));
-        }
 
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
@@ -737,8 +677,8 @@ impl VotingLoop {
     }
 
     /// Consider voting notarize fallback for this slot
-    /// if b' = safeToNotar(slot)
-    /// then try to skip the window, vote notarize fallback and skip the window
+    /// for each b' = safeToNotar(slot)
+    /// try to skip the window, and vote notarize fallback b'
     fn try_notar_fallback(
         my_pubkey: &Pubkey,
         slot: Slot,
@@ -775,7 +715,7 @@ impl VotingLoop {
 
     /// Consider voting skip fallback for this slot
     /// if safeToSkip(slot)
-    /// then try to skip the window, vote notarize fallback and skip the window
+    /// then try to skip the window, and vote skip fallback
     fn try_skip_fallback(
         my_pubkey: &Pubkey,
         slot: Slot,
@@ -808,7 +748,7 @@ impl VotingLoop {
     }
 
     /// Refresh the highest recent finalization certificate
-    /// For each slot past this, refresh our votes
+    /// For each slot past this up to our current slot `slot`, refresh our votes
     fn refresh_votes_and_cert(
         my_pubkey: &Pubkey,
         slot: Slot,
@@ -816,13 +756,13 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) {
-        // TODO: handle slow finalization after cert pool refactor
-        let highest_finalization_slot = if let Some(block) = cert_pool.highest_fast_finalized() {
-            // TODO: rebroadcast cert for block once we have BLS
-            block.0
-        } else {
-            0
-        };
+        let highest_finalization_slot = cert_pool
+            .highest_finalized_slot()
+            .max(root_bank_cache.root_bank().slot());
+        // TODO: rebroadcast finalization cert for block once we have BLS
+        // This includes the notarized fallback cert if it was a slow finalization
+
+        // Refresh votes for all slots up to our current slot
         for s in highest_finalization_slot..=slot {
             for vote in voting_context.vote_history.votes_cast(s) {
                 info!("{my_pubkey}: Refreshing vote {vote:?}");
@@ -1038,7 +978,7 @@ impl VotingLoop {
         leader_window_notifier: &LeaderWindowNotifier,
         start_slot: Slot,
         end_slot: Slot,
-        parent_slot: Slot,
+        parent_block @ (parent_slot, _, _): Block,
         skip_timer: Instant,
     ) -> bool {
         // Check if we missed our window
@@ -1057,14 +997,6 @@ impl VotingLoop {
             return false;
         }
 
-        // Sanity check for certificates
-        if !cert_pool.make_start_leader_decision(start_slot, parent_slot, 0) {
-            panic!(
-                "{my_pubkey}: Missing leader block certificates something has gone wrong with the voting loop \
-                while producing {start_slot} parent {parent_slot}"
-            );
-        }
-
         // Notify the block creation loop.
         let mut l_window_info = leader_window_notifier.window_info.lock().unwrap();
         if let Some(window_info) = l_window_info.as_ref() {
@@ -1079,7 +1011,7 @@ impl VotingLoop {
         *l_window_info = Some(LeaderWindowInfo {
             start_slot,
             end_slot,
-            parent_slot,
+            parent_block,
             skip_timer,
         });
         leader_window_notifier.window_notification.notify_one();
