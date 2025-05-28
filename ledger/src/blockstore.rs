@@ -4054,6 +4054,20 @@ impl Blockstore {
         self.slot_certificates_cf.get(slot)
     }
 
+    /// Returns all certificates from `slot` onwards
+    pub fn slot_certificates_iterator(
+        &self,
+        slot: Slot,
+    ) -> Result<impl Iterator<Item = (Slot, SlotCertificates)> + '_> {
+        let iter = self
+            .slot_certificates_cf
+            .iter(IteratorMode::From(slot, IteratorDirection::Forward))?;
+        Ok(iter.map(|(slot, bytes)| {
+            let certs: SlotCertificates = deserialize(&bytes).unwrap();
+            (slot, certs)
+        }))
+    }
+
     /// Returns information about the `num` latest optimistically confirmed slot
     pub fn get_latest_optimistic_slots(
         &self,
