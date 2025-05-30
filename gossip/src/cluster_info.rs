@@ -2864,7 +2864,8 @@ impl Node {
         )
         .unwrap();
 
-        let (alpenglow_port, alpenglow) = Self::bind_with_config(bind_ip_addr, port_range, socket_config);
+        let (alpenglow_port, alpenglow) =
+            Self::bind_with_config(bind_ip_addr, port_range, socket_config);
 
         let (_, retransmit_sockets) =
             multi_bind_in_range_with_config(bind_ip_addr, port_range, socket_config_reuseport, 8)
