@@ -70,7 +70,6 @@ pub const AG_DEBUG_LOG_FILTER: &str = "error,solana_core::replay_stage=info,\
         solana_core::alpenglow_consensus::block_creation_loop=trace,\
         solana_core::alpenglow_consensus::certificate_pool=trace,\
         solana_core::validator=info";
-
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {
@@ -200,7 +199,26 @@ pub fn ms_for_n_slots(num_blocks: u64, ticks_per_slot: u64) -> u64 {
     (ticks_per_slot * DEFAULT_MS_PER_SLOT * num_blocks).div_ceil(DEFAULT_TICKS_PER_SLOT)
 }
 
-pub fn run_kill_partition_switch_threshold<C>(
+/// Implements a test scenario that creates a network partition by killing validator nodes.
+///
+/// # Arguments
+/// * `stakes_to_kill` - Validators to remove from the network, where each tuple contains:
+///   * First element (usize): The stake weight/size of the validator
+///   * Second element (usize): The number of slots assigned to the validator
+/// * `alive_stakes` - Validators to keep alive, where each tuple contains:
+///   * First element (usize): The stake weight/size of the validator
+///   * Second element (usize): The number of slots assigned to the validator
+/// * `ticks_per_slot` - Optional override for the default ticks per slot
+/// * `partition_context` - Test-specific context object that will be passed to callbacks
+/// * `on_partition_start` - Callback executed when the partition begins
+/// * `on_before_partition_resolved` - Callback executed right before the partition is resolved
+/// * `on_partition_resolved` - Callback executed after the partition is resolved
+///
+/// This function simulates a network partition by killing specified validator nodes,
+/// waiting for a period, resolving the partition, and then verifying the network
+/// can recover and reach consensus. The IS_ALPENGLOW parameter determines whether
+/// to use Alpenglow-specific cluster initialization.
+fn run_kill_partition_switch_threshold_impl<C, const IS_ALPENGLOW: bool>(
     stakes_to_kill: &[(usize, usize)],
     alive_stakes: &[(usize, usize)],
     ticks_per_slot: Option<u64>,
@@ -258,7 +276,7 @@ pub fn run_kill_partition_switch_threshold<C>(
             partition_context,
         );
     };
-    run_cluster_partition(
+    run_cluster_partition::<C>(
         &stake_partitions,
         Some((leader_schedule, validator_keys)),
         partition_context,
@@ -267,19 +285,56 @@ pub fn run_kill_partition_switch_threshold<C>(
         on_partition_resolved,
         ticks_per_slot,
         vec![],
-        false,
+        IS_ALPENGLOW,
+    )
+}
+
+pub fn run_kill_partition_switch_threshold_alpenglow<C>(
+    stakes_to_kill: &[(usize, usize)],
+    alive_stakes: &[(usize, usize)],
+    ticks_per_slot: Option<u64>,
+    partition_context: C,
+    on_partition_start: impl Fn(&mut LocalCluster, &[Pubkey], Vec<ClusterValidatorInfo>, &mut C),
+    on_before_partition_resolved: impl Fn(&mut LocalCluster, &mut C),
+    on_partition_resolved: impl Fn(&mut LocalCluster, &mut C),
+) {
+    run_kill_partition_switch_threshold_impl::<C, true>(
+        stakes_to_kill,
+        alive_stakes,
+        ticks_per_slot,
+        partition_context,
+        on_partition_start,
+        on_before_partition_resolved,
+        on_partition_resolved,
+    )
+}
+
+pub fn run_kill_partition_switch_threshold<C>(
+    stakes_to_kill: &[(usize, usize)],
+    alive_stakes: &[(usize, usize)],
+    ticks_per_slot: Option<u64>,
+    partition_context: C,
+    on_partition_start: impl Fn(&mut LocalCluster, &[Pubkey], Vec<ClusterValidatorInfo>, &mut C),
+    on_before_partition_resolved: impl Fn(&mut LocalCluster, &mut C),
+    on_partition_resolved: impl Fn(&mut LocalCluster, &mut C),
+) {
+    run_kill_partition_switch_threshold_impl::<C, false>(
+        stakes_to_kill,
+        alive_stakes,
+        ticks_per_slot,
+        partition_context,
+        on_partition_start,
+        on_before_partition_resolved,
+        on_partition_resolved,
     )
 }
 
 pub fn create_custom_leader_schedule(
     validator_key_to_slots: impl Iterator<Item = (Pubkey, usize)>,
 ) -> LeaderSchedule {
-    let mut leader_schedule = vec![];
-    for (k, num_slots) in validator_key_to_slots {
-        for _ in 0..num_slots {
-            leader_schedule.push(k)
-        }
-    }
+    let leader_schedule: Vec<_> = validator_key_to_slots
+        .flat_map(|(pubkey, num_slots)| std::iter::repeat(pubkey).take(num_slots))
+        .collect();
 
     info!("leader_schedule: {}", leader_schedule.len());
     Box::new(IdentityKeyedLeaderSchedule::new_from_schedule(
@@ -302,14 +357,35 @@ pub fn create_custom_leader_schedule_with_random_keys(
     (leader_schedule, validator_keys)
 }
 
-/// This function runs a network, initiates a partition based on a
-/// configuration, resolve the partition, then checks that the network
-/// continues to achieve consensus
+/// Simulates a network partition test scenario by creating a cluster, triggering a partition,
+/// allowing the partition to heal, and then verifying the network's ability to recover and
+/// achieve consensus after the partition is resolved.
+///
+/// This function:
+/// 1. Creates a local cluster with nodes configured according to the provided stakes
+/// 2. Induces a network partition by disabling communication between validators
+/// 3. Runs the partition for a predetermined duration
+/// 4. Resolves the partition by re-enabling communication
+/// 5. Verifies the network can recover and continue to make progress
+///
 /// # Arguments
-/// * `partitions` - A slice of partition configurations, where each partition
-///   configuration is a usize representing a node's stake
-/// * `leader_schedule` - An option that specifies whether the cluster should
-///   run with a fixed, predetermined leader schedule
+/// * `partitions` - A slice of partition configurations, where each usize represents a validator's
+///   stake weight. This determines the relative voting power of each node in the network.
+/// * `leader_schedule` - An option that specifies whether the cluster should run with a fixed,
+///   predetermined leader schedule. If provided, the partition will last for one complete
+///   iteration of the leader schedule.
+/// * `context` - A user-defined context object that is passed to the callback functions.
+/// * `on_partition_start` - Callback function that runs when the partition begins. Can be used
+///   to perform custom actions or checks at the start of the partition.
+/// * `on_before_partition_resolved` - Callback function that runs just before the partition
+///   is resolved. Can be used to verify partition state or prepare for resolution.
+/// * `on_partition_resolved` - Callback function that runs after the partition is resolved and
+///   the network has had time to recover. Can be used to verify recovery.
+/// * `ticks_per_slot` - Optional override for the default ticks per slot. Controls the
+///   rate at which slots advance in the cluster.
+/// * `additional_accounts` - Additional accounts to be added to the genesis configuration.
+/// * `is_alpenglow` - Boolean flag indicating whether to initialize the `LocalCluster` in Alpenglow
+///    mode.
 #[allow(clippy::cognitive_complexity)]
 pub fn run_cluster_partition<C>(
     partitions: &[usize],
