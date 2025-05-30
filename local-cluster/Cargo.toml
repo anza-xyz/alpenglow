@@ -20,8 +20,8 @@ rayon = { workspace = true }
 solana-accounts-db = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
 solana-client = { workspace = true }
-solana-connection-cache = { workspace = true }
 solana-config-program = { workspace = true }
+solana-connection-cache = { workspace = true }
 solana-core = { workspace = true }
 solana-entry = { workspace = true }
 solana-gossip = { workspace = true }
