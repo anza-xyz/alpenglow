@@ -83,9 +83,7 @@ pub fn make_identical_validator_configs(
     config: &ValidatorConfig,
     num: usize,
 ) -> Vec<ValidatorConfig> {
-    let mut configs = vec![];
-    for _ in 0..num {
-        configs.push(safe_clone_config(config));
-    }
-    configs
+    std::iter::repeat_with(|| safe_clone_config(config))
+        .take(num)
+        .collect()
 }
