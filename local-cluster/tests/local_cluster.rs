@@ -92,7 +92,6 @@ use {
         fs,
         io::Read,
         iter,
-        net::UdpSocket,
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -6265,15 +6264,14 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let node_a_turbine_disabled = Arc::new(AtomicBool::new(false));
 
     // Create leader schedule
-    let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&vec![0, 4]);
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
     };
 
     // Create our UDP socket to listen to votes
-    let vote_listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let vote_listener = solana_net_utils::bind_to_localhost().unwrap();
 
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
@@ -6332,7 +6330,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
-            let vote_txn = bincode::deserialize::<Transaction>(&mut buf[0..n_bytes]).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
 
             let (vote_pubkey, parsed_vote, ..) =
                 vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
@@ -6356,7 +6354,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
             // Gather all votes issued by node A on slot 32
             if txn.slot() == 32 && node_name == "A" {
-                node_a_filtered_votes.lock().unwrap().push(txn.clone());
+                node_a_filtered_votes.lock().unwrap().push(*txn);
             };
 
             let num_votes = { node_a_filtered_votes.lock().unwrap().len() };
