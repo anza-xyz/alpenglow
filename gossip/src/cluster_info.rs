@@ -569,7 +569,7 @@ impl ClusterInfo {
                     }
                     let ip_addr = node.gossip().as_ref().map(SocketAddr::ip);
                     Some(format!(
-                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {}\n",
+                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5} | {:5} | {:5} | {}\n",
                         node.gossip()
                             .filter(|addr| self.socket_addr_space.check(addr))
                             .as_ref()
@@ -592,6 +592,7 @@ impl ClusterInfo {
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::UDP)),
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::QUIC)),
                         self.addr_to_string(&ip_addr, &node.serve_repair(contact_info::Protocol::UDP)),
+                        self.addr_to_string(&ip_addr, &node.alpenglow()),
                         node.shred_version(),
                     ))
                 }
@@ -2455,6 +2456,7 @@ pub struct Sockets {
     pub tpu_quic: Vec<UdpSocket>,
     pub tpu_forwards_quic: Vec<UdpSocket>,
     pub tpu_vote_quic: Vec<UdpSocket>,
+    pub alpenglow: UdpSocket,
 }
 
 pub struct NodeConfig {
@@ -2524,6 +2526,7 @@ impl Node {
         let tpu_vote_quic = bind_to_localhost().unwrap();
         let tpu_vote_quic =
             bind_more_with_config(tpu_vote_quic, num_quic_endpoints, quic_config).unwrap();
+        let alpenglow = bind_to_localhost().unwrap();
 
         let repair = bind_to_localhost().unwrap();
         let repair_quic = bind_to_localhost().unwrap();
@@ -2579,6 +2582,7 @@ impl Node {
             tpu_vote_quic[0].local_addr().unwrap(),
             "TPU-vote QUIC"
         );
+        set_socket!(set_alpenglow, alpenglow.local_addr().unwrap(), "Alpenglow");
         set_socket!(set_rpc, rpc_addr, "RPC");
         set_socket!(set_rpc_pubsub, rpc_pubsub_addr, "RPC-pubsub");
         set_socket!(
@@ -2614,6 +2618,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }
@@ -2698,6 +2703,8 @@ impl Node {
             socket_config_reuseport,
         )
         .unwrap();
+        let (alpenglow_port, alpenglow) =
+            Self::bind_with_config(bind_ip_addr, port_range, socket_config);
 
         let (_, retransmit_socket) =
             Self::bind_with_config(bind_ip_addr, port_range, socket_config);
@@ -2744,6 +2751,7 @@ impl Node {
         set_socket!(set_tpu_forwards, tpu_forwards_port, "TPU-forwards");
         set_socket!(set_tpu_vote, UDP, tpu_vote_port, "TPU-vote");
         set_socket!(set_tpu_vote, QUIC, tpu_vote_quic_port, "TPU-vote QUIC");
+        set_socket!(set_alpenglow, alpenglow_port, "Alpenglow");
         set_socket!(set_rpc, rpc_port, "RPC");
         set_socket!(set_rpc_pubsub, rpc_pubsub_port, "RPC-pubsub");
         set_socket!(set_serve_repair, UDP, serve_repair_port, "serve-repair");
@@ -2777,6 +2785,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }
@@ -2855,6 +2864,8 @@ impl Node {
         )
         .unwrap();
 
+        let (_, alpenglow) = Self::bind_with_config(bind_ip_addr, port_range, socket_config);
+
         let (_, retransmit_sockets) =
             multi_bind_in_range_with_config(bind_ip_addr, port_range, socket_config_reuseport, 8)
                 .expect("retransmit multi_bind");
@@ -2898,6 +2909,7 @@ impl Node {
             .unwrap();
         info.set_serve_repair(QUIC, (addr, serve_repair_quic_port))
             .unwrap();
+        info.set_alpenglow(alpenglow.local_addr().unwrap()).unwrap();
 
         trace!("new ContactInfo: {:?}", info);
 
@@ -2922,6 +2934,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }

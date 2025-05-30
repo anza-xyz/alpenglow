@@ -1645,6 +1645,7 @@ impl Validator {
                 transactions_quic: node.sockets.tpu_quic,
                 transactions_forwards_quic: node.sockets.tpu_forwards_quic,
                 vote_quic: node.sockets.tpu_vote_quic,
+                alpenglow: node.sockets.alpenglow,
             },
             &rpc_subscriptions,
             transaction_status_sender,
