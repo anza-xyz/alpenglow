@@ -2864,7 +2864,7 @@ impl Node {
         )
         .unwrap();
 
-        let (_, alpenglow) = Self::bind_with_config(bind_ip_addr, port_range, socket_config);
+        let (alpenglow_port, alpenglow) = Self::bind_with_config(bind_ip_addr, port_range, socket_config);
 
         let (_, retransmit_sockets) =
             multi_bind_in_range_with_config(bind_ip_addr, port_range, socket_config_reuseport, 8)
@@ -2909,7 +2909,7 @@ impl Node {
             .unwrap();
         info.set_serve_repair(QUIC, (addr, serve_repair_quic_port))
             .unwrap();
-        info.set_alpenglow(alpenglow.local_addr().unwrap()).unwrap();
+        info.set_alpenglow((addr, alpenglow_port)).unwrap();
 
         trace!("new ContactInfo: {:?}", info);
 
