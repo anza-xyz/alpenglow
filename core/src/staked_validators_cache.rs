@@ -318,6 +318,9 @@ mod tests {
                                     (Ipv4Addr::LOCALHOST, 8005 + node_ix as u16),
                                 )
                                 .is_ok());
+                            assert!(contact_info
+                                .set_alpenglow((Ipv4Addr::LOCALHOST, 8080 + node_ix as u16))
+                                .is_ok());
 
                             contact_info
                         });
