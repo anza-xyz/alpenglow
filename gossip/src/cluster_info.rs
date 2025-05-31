@@ -569,7 +569,7 @@ impl ClusterInfo {
                     }
                     let ip_addr = node.gossip().as_ref().map(SocketAddr::ip);
                     Some(format!(
-                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5} | {:5} | {:5} | {}\n",
+                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {}\n",
                         node.gossip()
                             .filter(|addr| self.socket_addr_space.check(addr))
                             .as_ref()
@@ -601,9 +601,9 @@ impl ClusterInfo {
 
         format!(
             "IP Address        |Age(ms)| Node identifier                              \
-             | Version |Gossip|TPUvote| TPU  |TPUfwd| TVU  |TVU Q |ServeR|ShredVer\n\
+             | Version |Gossip|TPUvote| TPU  |TPUfwd| TVU  |TVU Q |ServeR|Alpeng|ShredVer\n\
              ------------------+-------+----------------------------------------------\
-             +---------+------+-------+------+------+------+------+------+--------\n\
+             +---------+------+-------+------+------+------+------+------+------+--------\n\
              {}\
              Nodes: {}{}{}",
             nodes.join(""),
@@ -4414,7 +4414,7 @@ mod tests {
 
         let trace = cluster_info44.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 431);
+        assert_eq!(trace.len(), 452);
 
         let trace = cluster_info44.rpc_info_trace();
         info!("rpc:\n{}", trace);
@@ -4422,7 +4422,7 @@ mod tests {
 
         let trace = cluster_info43.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 431);
+        assert_eq!(trace.len(), 452);
 
         let trace = cluster_info43.rpc_info_trace();
         info!("rpc:\n{}", trace);
