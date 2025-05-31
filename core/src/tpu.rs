@@ -44,7 +44,9 @@ use {
         bank_forks::BankForks,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
-        vote_sender_types::{AlpenglowVoteSender, ReplayVoteReceiver, ReplayVoteSender},
+        vote_sender_types::{
+            AlpenglowBLSMessageSender, AlpenglowVoteSender, ReplayVoteReceiver, ReplayVoteSender,
+        },
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, quic::NotifyKeyUpdate, signature::Keypair},
     solana_streamer::{
@@ -118,6 +120,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         alpenglow_vote_sender: AlpenglowVoteSender,
+        alpenglow_bls_message_sender: AlpenglowBLSMessageSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         keypair: &Keypair,
@@ -150,9 +153,7 @@ impl Tpu {
         let (packet_sender, packet_receiver) = unbounded();
         let (vote_packet_sender, vote_packet_receiver) = unbounded();
         let (forwarded_packet_sender, forwarded_packet_receiver) = unbounded();
-        //TODO(wen): we should actually send the messages to voting loop.
         let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
-        let (alpenglow_bls_message_sender, _) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let fetch_stage = FetchStage::new_with_sender(
             transactions_sockets,
             tpu_forwards_sockets,

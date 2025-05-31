@@ -13,8 +13,11 @@ use {
 };
 
 struct StakedValidatorsCacheEntry {
-    /// Sockets associated with the staked validators
+    /// TPU Vote Sockets associated with the staked validators
     validator_sockets: Vec<SocketAddr>,
+
+    /// Alpenglow Sockets associated with the staked validators
+    alpenglow_sockets: Vec<SocketAddr>,
 
     /// The time at which this entry was created
     creation_time: Instant,
@@ -85,6 +88,7 @@ impl StakedValidatorsCache {
         struct Node {
             stake: u64,
             tpu_socket: SocketAddr,
+            alpenglow_socket: Option<SocketAddr>,
         }
 
         let mut nodes: Vec<_> = epoch_staked_nodes
@@ -93,9 +97,16 @@ impl StakedValidatorsCache {
             .filter_map(|(pubkey, stake)| {
                 cluster_info
                     .lookup_contact_info(pubkey, |node| node.tpu_vote(self.protocol))?
-                    .map(|socket_addr| Node {
-                        stake: *stake,
-                        tpu_socket: socket_addr,
+                    .map(|tpu_socket| {
+                        let alpenglow_socket = cluster_info
+                            .lookup_contact_info(pubkey, |node| node.alpenglow())
+                            .flatten();
+                        //TODO(wen): In the future we might not require tpu_socket.
+                        Node {
+                            stake: *stake,
+                            tpu_socket,
+                            alpenglow_socket,
+                        }
                     })
             })
             .collect();
@@ -103,12 +114,22 @@ impl StakedValidatorsCache {
         nodes.dedup_by_key(|node| node.tpu_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        let validator_sockets = nodes.into_iter().map(|node| node.tpu_socket).collect();
+        let (validator_sockets, alpenglow_sockets) = nodes.into_iter().fold(
+            (Vec::new(), Vec::new()),
+            |(mut validator_sockets, mut alpenglow_sockets), node| {
+                validator_sockets.push(node.tpu_socket);
+                if let Some(alpenglow_socket) = node.alpenglow_socket {
+                    alpenglow_sockets.push(alpenglow_socket);
+                }
+                (validator_sockets, alpenglow_sockets)
+            },
+        );
 
         self.cache.push(
             epoch,
             StakedValidatorsCacheEntry {
                 validator_sockets,
+                alpenglow_sockets,
                 creation_time: update_time,
             },
         );
@@ -120,7 +141,7 @@ impl StakedValidatorsCache {
         cluster_info: &ClusterInfo,
         access_time: Instant,
     ) -> (&[SocketAddr], bool) {
-        self.get_staked_validators_by_epoch(self.cur_epoch(slot), cluster_info, access_time)
+        self.get_staked_validators_by_epoch(self.cur_epoch(slot), cluster_info, access_time, true)
     }
 
     pub fn get_staked_validators_by_epoch(
@@ -128,6 +149,7 @@ impl StakedValidatorsCache {
         epoch: Epoch,
         cluster_info: &ClusterInfo,
         access_time: Instant,
+        is_alpenglow: bool,
     ) -> (&[SocketAddr], bool) {
         // For a given epoch, if we either:
         //
@@ -150,7 +172,13 @@ impl StakedValidatorsCache {
             // self.cache[epoch].
             self.cache
                 .get(&epoch)
-                .map(|v| &*v.validator_sockets)
+                .map(|v| {
+                    if is_alpenglow {
+                        &*v.alpenglow_sockets
+                    } else {
+                        &*v.validator_sockets
+                    }
+                })
                 .unwrap(),
             refresh_cache,
         )

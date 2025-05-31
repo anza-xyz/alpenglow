@@ -10,7 +10,7 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
-            vote_certificate::{LegacyVoteCertificate, VoteCertificate},
+            vote_certificate::VoteCertificate,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -21,8 +21,12 @@ use {
         replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
         voting_service::VoteOp,
     },
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage},
+        vote::Vote,
+    },
     crossbeam_channel::Sender,
+    solana_bls::Signature as BLSSignature,
     solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -38,14 +42,14 @@ use {
     solana_runtime::{
         accounts_background_service::AbsRequestSender, bank::Bank, bank_forks::BankForks,
         installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
-        vote_sender_types::AlpenglowVoteReceiver as VoteReceiver,
+        vote_sender_types::AlpenglowBLSMessageReceiver as VoteReceiver,
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::{Transaction, VersionedTransaction},
+        transaction::Transaction,
     },
     std::{
         sync::{
@@ -82,7 +86,7 @@ pub struct VotingLoopConfig {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
-    pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
+    pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 
     // Receivers
     pub vote_receiver: VoteReceiver,
@@ -121,9 +125,18 @@ pub(crate) enum GenerateVoteTxResult {
     // hot spare validator, not eligble for refresh
     // until set identity is invoked
     HotSpare,
+    // No epoch stakes found, not eligible for refresh
+    NoEpochStakes,
+    // No BLS pubkey found, not eligible for refresh
+    NoBLSPubkey,
+    // No rank found, not eligible for refresh
+    NoRank,
     // failed generation, eligible for refresh
     Failed,
+    // Generated a vote transaction
     Tx(Transaction),
+    // generated a BLS vote message
+    VoteMessage(VoteMessage),
 }
 
 impl GenerateVoteTxResult {
@@ -447,7 +460,7 @@ impl VotingLoop {
     fn branch_certified(
         my_pubkey: &Pubkey,
         slot: Slot,
-        cert_pool: &CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &CertificatePool<CertificateMessage>,
     ) -> bool {
         // TODO(ashwin): For non duplicate blocks, `notarize fallback` is sufficient to imply
         // that we have seen branch certified in the sequential loop, when implementing duplicate
@@ -466,7 +479,7 @@ impl VotingLoop {
     fn skip_certified(
         my_pubkey: &Pubkey,
         slot: Slot,
-        cert_pool: &CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &CertificatePool<CertificateMessage>,
     ) -> bool {
         // TODO(ashwin): can include cert size for debugging
         if cert_pool.skip_certified(slot) {
@@ -484,7 +497,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -544,7 +557,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -571,7 +584,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
         if voting_context.vote_history.its_over(slot) {
@@ -610,7 +623,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -682,7 +695,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -744,7 +757,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
         let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
@@ -781,7 +794,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
         if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
@@ -813,7 +826,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) {
         // TODO: handle slow finalization after cert pool refactor
@@ -852,23 +865,22 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         context: &mut VotingContext,
     ) {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
-        let vote_tx_result = Self::generate_vote_tx(&vote, bank, context);
+        let vote_tx_result = Self::generate_bls_message(&vote, bank, context);
         generate_time.stop();
         // TODO(ashwin): add metrics struct here and throughout the whole file
         // replay_timing.generate_vote_us += generate_time.as_us();
-        let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result else {
+        let GenerateVoteTxResult::VoteMessage(vote_message) = vote_tx_result else {
             return;
         };
 
         if let Err(e) = Self::add_vote_and_maybe_update_commitment(
             &context.identity_keypair.pubkey(),
             &vote,
-            &context.vote_account_pubkey,
-            vote_tx.clone().into(),
+            &vote_message,
             cert_pool,
             &context.commitment_sender,
         ) {
@@ -894,14 +906,14 @@ impl VotingLoop {
         context
             .voting_sender
             .send(VoteOp::PushAlpenglowVote {
-                tx: vote_tx,
+                vote_message,
                 slot: bank.slot(),
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
     }
 
-    fn generate_vote_tx(
+    fn generate_bls_message(
         vote: &Vote,
         bank: &Bank,
         context: &mut VotingContext,
@@ -968,17 +980,11 @@ impl VotingLoop {
             Some(authorized_voter_keypair) => authorized_voter_keypair,
         };
 
-        let vote_ix =
-            vote.to_vote_instruction(vote_account_pubkey, authorized_voter_keypair.pubkey());
-        let vote_tx = Transaction::new_signed_with_payer(
-            &[vote_ix],
-            Some(&context.identity_keypair.pubkey()),
-            &[&context.identity_keypair, authorized_voter_keypair],
-            bank.last_blockhash(),
-        );
-
+        //TODO(wen): We should make BLSSignature work, for now let's just sign the vote as signature.
+        let vote_signature =
+            authorized_voter_keypair.sign_message(&bincode::serialize(&vote).unwrap());
         if !context.has_new_vote_been_rooted {
-            context.voted_signatures.push(vote_tx.signatures[0]);
+            context.voted_signatures.push(vote_signature);
             if context.voted_signatures.len() > MAX_VOTE_SIGNATURES {
                 context.voted_signatures.remove(0);
             }
@@ -986,7 +992,36 @@ impl VotingLoop {
             context.voted_signatures.clear();
         }
 
-        GenerateVoteTxResult::Tx(vote_tx)
+        //TODO(wen): my rank should be cached, no need to retrieve it every time.
+        let vote_epoch = bank.epoch_schedule().get_epoch(vote.slot());
+        let Some(epoch_stakes) = bank.epoch_stakes(vote_epoch) else {
+            warn!(
+                "Vote account {vote_account_pubkey} does not have epoch stakes for epoch {vote_epoch}.  Unable to vote",
+            );
+            return GenerateVoteTxResult::NoEpochStakes;
+        };
+
+        let Some(my_bls_pubkey) = vote_account.bls_pubkey() else {
+            warn!("Vote account {vote_account_pubkey} has no BLS pubkey.  Unable to vote");
+            return GenerateVoteTxResult::NoBLSPubkey;
+        };
+
+        let Some(my_rank) = epoch_stakes
+            .bls_pubkey_to_rank_map()
+            .get_rank(my_bls_pubkey)
+        else {
+            warn!(
+                "Vote account {vote_account_pubkey} has no rank for BLS pubkey {my_bls_pubkey}.  Unable to vote"
+            );
+            return GenerateVoteTxResult::NoRank;
+        };
+
+        //TODO(wen): Generate a real signature using real BLS keypair later.
+        GenerateVoteTxResult::VoteMessage(VoteMessage {
+            vote: *vote,
+            signature: BLSSignature::default(),
+            rank: *my_rank,
+        })
     }
 
     /// Ingest votes from all to all, tpu, and gossip into the certificate pool
@@ -995,28 +1030,38 @@ impl VotingLoop {
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool<CertificateMessage>,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let add_to_cert_pool =
-            |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
-                match Self::add_vote_and_maybe_update_commitment(
-                    my_pubkey,
-                    &vote,
-                    &vote_account_pubkey,
-                    tx,
-                    cert_pool,
-                    commitment_sender,
-                ) {
-                    err @ Err(AddVoteError::CertificateSenderError) => err,
-                    Err(e) => {
-                        // TODO(ashwin): increment metrics on non duplicate failures
-                        trace!("{my_pubkey}: unable to push vote into the pool {}", e);
-                        Ok(())
+        let add_to_cert_pool = |bls_message: BLSMessage| {
+            match bls_message {
+                BLSMessage::Vote(vote_message) => {
+                    match Self::add_vote_and_maybe_update_commitment(
+                        my_pubkey,
+                        &vote_message.vote,
+                        &vote_message,
+                        cert_pool,
+                        commitment_sender,
+                    ) {
+                        err @ Err(AddVoteError::CertificateSenderError) => err,
+                        Err(e) => {
+                            // TODO(ashwin): increment metrics on non duplicate failures
+                            trace!("{my_pubkey}: unable to push vote into the pool {}", e);
+                            Ok(())
+                        }
+                        Ok(()) => Ok(()),
                     }
-                    Ok(()) => Ok(()),
                 }
-            };
+                BLSMessage::Certificate(certificate_message) => {
+                    //TODO(wen): handle certificate message
+                    trace!(
+                        "{my_pubkey}: Received non-vote BLS message: {:?}",
+                        certificate_message
+                    );
+                    Ok(())
+                }
+            }
+        };
 
         let Ok(first) = vote_receiver.recv_timeout(Duration::from_secs(1)) else {
             // Either timeout or sender disconnected, return so we can check exit
@@ -1090,12 +1135,13 @@ impl VotingLoop {
     fn add_vote_and_maybe_update_commitment<VC: VoteCertificate>(
         my_pubkey: &Pubkey,
         vote: &Vote,
-        vote_account_pubkey: &Pubkey,
-        tx: VC::VoteTransaction,
+        vote_message: &VC::VoteTransaction,
         cert_pool: &mut CertificatePool<VC>,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let Some(new_finalized_slot) = cert_pool.add_vote(vote, tx, vote_account_pubkey)? else {
+        let Some(new_finalized_slot) =
+            cert_pool.add_vote(vote, vote_message.clone(), &Pubkey::default())?
+        else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");

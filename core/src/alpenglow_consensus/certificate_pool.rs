@@ -1,7 +1,7 @@
 use {
     super::{
         certificate_limits_and_vote_types,
-        vote_certificate::{CertificateError, LegacyVoteCertificate, VoteCertificate},
+        vote_certificate::{CertificateError, VoteCertificate},
         vote_history::VoteHistory,
         vote_pool::{VoteKey, VotePool},
         vote_to_certificate_ids, Stake,
@@ -12,7 +12,7 @@ use {
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{bls_message::CertificateMessage, vote::Vote},
     crossbeam_channel::Sender,
     solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
@@ -575,8 +575,8 @@ pub(crate) fn load_from_blockstore(
     my_pubkey: &Pubkey,
     root_bank: &Bank,
     blockstore: &Blockstore,
-    certificate_sender: Option<Sender<(CertificateId, LegacyVoteCertificate)>>,
-) -> CertificatePool<LegacyVoteCertificate> {
+    certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+) -> CertificatePool<CertificateMessage> {
     let mut cert_pool = CertificatePool::new_from_root_bank(root_bank, certificate_sender);
     for (slot, slot_cert) in blockstore
         .slot_certificates_iterator(root_bank.slot())
@@ -595,11 +595,8 @@ pub(crate) fn load_from_blockstore(
             }));
 
         for (cert_id, cert) in certs {
-            let cert = cert.into_iter().map(Arc::from).collect();
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            let legacy_cert = LegacyVoteCertificate::new(cert_id, cert)
-                .expect("Certificate construction must not fail");
-            cert_pool.insert_certificate(cert_id, legacy_cert);
+            cert_pool.insert_certificate(cert_id, cert);
         }
     }
     cert_pool
