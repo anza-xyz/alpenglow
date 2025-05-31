@@ -62,6 +62,9 @@ use {
     tokio::sync::mpsc::Sender as AsyncSender,
 };
 
+// The maximum number of alpenglow packets that can be processed in a single batch
+pub const MAX_ALPENGLOW_PACKET_NUM: usize = 10000;
+
 pub struct TpuSockets {
     pub transactions: Vec<UdpSocket>,
     pub transaction_forwards: Vec<UdpSocket>,
@@ -148,8 +151,8 @@ impl Tpu {
         let (vote_packet_sender, vote_packet_receiver) = unbounded();
         let (forwarded_packet_sender, forwarded_packet_receiver) = unbounded();
         //TODO(wen): we should actually send the messages to voting loop.
-        let (bls_packet_sender, bls_packet_receiver) = unbounded();
-        let (alpenglow_bls_message_sender, _) = unbounded();
+        let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
+        let (alpenglow_bls_message_sender, _) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let fetch_stage = FetchStage::new_with_sender(
             transactions_sockets,
             tpu_forwards_sockets,

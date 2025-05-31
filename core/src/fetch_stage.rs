@@ -250,7 +250,7 @@ impl FetchStage {
             coalesce,
             true,
             None,
-            false, // unstaked connections
+            true, // only staked connections can send BLS messages
         )];
 
         let sender = sender.clone();
@@ -281,6 +281,7 @@ impl FetchStage {
                 tpu_stats.report();
                 tpu_vote_stats.report();
                 tpu_forward_stats.report();
+                bls_message_stats.report();
 
                 if exit.load(Ordering::Relaxed) {
                     return;
