@@ -80,6 +80,7 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
+    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -6224,4 +6225,165 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         "test_alpenglow_imbalanced_stakes_catchup",
         SocketAddrSpace::Unspecified,
     );
+}
+/// This test validates the Alpenglow consensus protocol's ability to maintain liveness when a node
+/// needs to issue a NotarizeFallback vote. The test sets up a two-node cluster with a specific
+/// stake distribution to create a scenario where:
+///
+/// - Node A has 60% of stake minus a small amount (epsilon)
+/// - Node B has 40% of stake plus a small amount (epsilon)
+///
+/// The test simulates the following sequence:
+/// 1. Node B (as leader) proposes a block for slot 32
+/// 2. Node A is unable to receive the block (simulated via turbine disconnection)
+/// 3. Node A sends Skip votes to both nodes for slot 32
+/// 4. Node B sends Notarize votes to both nodes for slot 32
+/// 5. Node A receives both votes and its certificate pool determines:
+///    - Skip has (60% - epsilon) votes
+///    - Notarize has (40% + epsilon) votes
+///    - Protocol determines it's "SafeToNotar" and issues a NotarizeFallback vote
+/// 6. Node B doesn't issue NotarizeFallback because it already submitted a Notarize
+/// 7. Node B receives Node A's NotarizeFallback vote
+/// 8. Network progresses and maintains liveness after this fallback scenario
+#[test]
+#[serial]
+fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
+    // Configure total stake and stake distribution
+    let total_stake = 2 * DEFAULT_NODE_STAKE;
+    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+
+    let node_a_stake = total_stake * 6 / 10 - 1;
+    let node_b_stake = total_stake * 4 / 10 + 1;
+
+    let node_stakes = vec![node_a_stake, node_b_stake];
+    let num_nodes = node_stakes.len();
+
+    assert_eq!(total_stake, node_a_stake + node_b_stake);
+
+    // Control components
+    let node_a_turbine_disabled = Arc::new(AtomicBool::new(false));
+
+    // Create leader schedule
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener = solana_net_utils::bind_to_localhost().unwrap();
+
+    // Create validator configs
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener.local_addr().unwrap()]);
+
+    let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
+    validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
+
+    assert_eq!(num_nodes, validator_keys.len());
+
+    // Cluster config
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes,
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    assert_eq!(cluster.validators.len(), num_nodes);
+
+    let vote_pubkeys = validator_keys
+        .iter()
+        .filter_map(|keypair| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| validator.info.voting_keypair.pubkey())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vote_pubkeys.len(), num_nodes);
+
+    // Track Node A's votes and when the test can conclude
+    let node_a_filtered_votes = Arc::new(Mutex::new(vec![]));
+    let mut post_experiment_roots = 0;
+
+    // Start vote listener thread to monitor and control the experiment
+    let vote_listener = std::thread::spawn({
+        let mut buf = [0_u8; 65_535];
+        let node_a_filtered_votes = node_a_filtered_votes.clone();
+
+        move || loop {
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            let node_name = match vote_pubkeys
+                .iter()
+                .position(|pk| pk == &vote_pubkey)
+                .unwrap()
+            {
+                0 => "A",
+                1 => "B",
+                _ => "Unknown",
+            };
+
+            let txn = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+
+            // Once we've received a vote from node B at slot 31, we can start the experiment.
+            if txn.slot() == 31 && node_name == "B" {
+                node_a_turbine_disabled.store(true, Ordering::Relaxed);
+            }
+
+            // Gather all votes issued by node A on slot 32
+            if txn.slot() == 32 && node_name == "A" {
+                node_a_filtered_votes.lock().unwrap().push(*txn);
+            };
+
+            let num_votes = { node_a_filtered_votes.lock().unwrap().len() };
+
+            // We should see a skip followed by a notar fallback. Once we do, the experiment is
+            // complete.
+            if num_votes == 2 {
+                node_a_turbine_disabled.store(false, Ordering::Relaxed);
+
+                // Once we've observed >= 10 roots upon the experiment completing, we're all set.
+                if txn.is_finalize() {
+                    post_experiment_roots += 1;
+                }
+
+                if post_experiment_roots >= 10 {
+                    break;
+                }
+            }
+        }
+    });
+
+    vote_listener.join().unwrap();
+
+    // Verify that Node A issued the expected sequence of votes
+    {
+        let node_a_filtered_votes = node_a_filtered_votes.lock().unwrap();
+
+        assert_eq!(2, node_a_filtered_votes.len());
+        assert!(node_a_filtered_votes[0].is_skip());
+        assert!(node_a_filtered_votes[1].is_notarize_fallback());
+    }
 }
