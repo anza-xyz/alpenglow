@@ -1,8 +1,11 @@
 //! The `fetch_stage` batches input from a UDP socket and sends it to a channel.
 
 use {
-    crate::result::{Error, Result},
-    crossbeam_channel::{unbounded, RecvTimeoutError},
+    crate::{
+        result::{Error, Result},
+        tpu::MAX_ALPENGLOW_PACKET_NUM,
+    },
+    crossbeam_channel::{bounded, unbounded, RecvTimeoutError},
     solana_metrics::{inc_new_counter_debug, inc_new_counter_info},
     solana_perf::{packet::PacketBatchRecycler, recycler::Recycler},
     solana_poh::poh_recorder::PohRecorder,
@@ -46,7 +49,7 @@ impl FetchStage {
     ) {
         let (sender, receiver) = unbounded();
         let (vote_sender, vote_receiver) = unbounded();
-        let (alpenglow_sender, alpenglow_receiver) = unbounded();
+        let (alpenglow_sender, alpenglow_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let (forward_sender, forward_receiver) = unbounded();
         (
             Self::new_with_sender(
