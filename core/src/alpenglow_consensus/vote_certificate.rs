@@ -56,17 +56,6 @@ pub struct LegacyVoteCertificate {
     transactions: Vec<Arc<VersionedTransaction>>,
 }
 
-impl LegacyVoteCertificate {
-    /// Clone the transactions for insertion in blockstore
-    pub(crate) fn transactions(self) -> Vec<VersionedTransaction> {
-        // There's a better way to do this without the copy here, but this is going away for BLS anyway
-        self.transactions
-            .into_iter()
-            .map(Arc::unwrap_or_clone)
-            .collect()
-    }
-}
-
 impl VoteCertificate for LegacyVoteCertificate {
     type VoteTransaction = VersionedTransaction;
 
