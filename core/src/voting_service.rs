@@ -5,7 +5,7 @@ use {
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
     },
-    alpenglow_vote::bls_message::VoteMessage,
+    alpenglow_vote::bls_message::{BLSMessage, VoteMessage},
     bincode::serialize,
     crossbeam_channel::Receiver,
     solana_client::connection_cache::ConnectionCache,
@@ -89,7 +89,7 @@ fn send_bls_message(
     let alpenglow = alpenglow
         .or_else(|| cluster_info.my_contact_info().alpenglow())
         .ok_or(SendVoteError::InvalidTpuAddress)?;
-    let buf = serialize(vote_message)?;
+    let buf = serialize(&BLSMessage::Vote(*vote_message))?;
     let client = connection_cache.get_connection(&alpenglow);
 
     client.send_data_async(buf).map_err(|err| {
