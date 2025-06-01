@@ -28,9 +28,8 @@ impl SigVerifier for BLSSigVerifier {
         if let Some(sender) = &self.sender {
             packet_batches.iter().for_each(|batch| {
                 batch.iter().for_each(|packet| {
-                    if let Ok(message) = packet.deserialize_slice::<BLSMessage, _>(..) {
-                        sender.send(message).unwrap();
-                    }
+                    let message: BLSMessage = packet.deserialize_slice(..).unwrap();
+                    sender.send(message).unwrap();
                 });
             });
         }
