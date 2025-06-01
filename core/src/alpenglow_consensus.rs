@@ -6,7 +6,6 @@ use {
 
 pub mod block_creation_loop;
 pub mod certificate_pool;
-pub mod transaction;
 pub mod utils;
 pub mod vote_certificate;
 pub mod vote_history;

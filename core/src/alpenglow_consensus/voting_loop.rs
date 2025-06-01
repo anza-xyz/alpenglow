@@ -10,7 +10,6 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
-            vote_certificate::VoteCertificate,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -457,11 +456,7 @@ impl VotingLoop {
         }
     }
 
-    fn branch_certified(
-        my_pubkey: &Pubkey,
-        slot: Slot,
-        cert_pool: &CertificatePool<CertificateMessage>,
-    ) -> bool {
+    fn branch_certified(my_pubkey: &Pubkey, slot: Slot, cert_pool: &CertificatePool) -> bool {
         // TODO(ashwin): For non duplicate blocks, `notarize fallback` is sufficient to imply
         // that we have seen branch certified in the sequential loop, when implementing duplicate
         // logic, update to May 2nd paper for simplicity
@@ -476,11 +471,7 @@ impl VotingLoop {
         false
     }
 
-    fn skip_certified(
-        my_pubkey: &Pubkey,
-        slot: Slot,
-        cert_pool: &CertificatePool<CertificateMessage>,
-    ) -> bool {
+    fn skip_certified(my_pubkey: &Pubkey, slot: Slot, cert_pool: &CertificatePool) -> bool {
         // TODO(ashwin): can include cert size for debugging
         if cert_pool.skip_certified(slot) {
             info!("{my_pubkey}: Skip Certified: Slot {}", slot,);
@@ -497,7 +488,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -557,7 +548,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -584,7 +575,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if voting_context.vote_history.its_over(slot) {
@@ -623,7 +614,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -695,7 +686,7 @@ impl VotingLoop {
         bank: &Bank,
         is_leader: bool,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -757,7 +748,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
@@ -794,7 +785,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
@@ -826,7 +817,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         // TODO: handle slow finalization after cert pool refactor
@@ -865,7 +856,7 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         context: &mut VotingContext,
     ) {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
@@ -1030,7 +1021,7 @@ impl VotingLoop {
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
@@ -1077,9 +1068,9 @@ impl VotingLoop {
     ///
     /// Fails to notify and returns false if the leader window has already
     /// been skipped, or if the parent is greater than or equal to the first leader slot
-    fn notify_block_creation_loop_of_leader_window<VC: VoteCertificate>(
+    fn notify_block_creation_loop_of_leader_window(
         my_pubkey: &Pubkey,
-        cert_pool: &CertificatePool<VC>,
+        cert_pool: &CertificatePool,
         leader_window_notifier: &LeaderWindowNotifier,
         start_slot: Slot,
         end_slot: Slot,
@@ -1132,16 +1123,14 @@ impl VotingLoop {
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
-    fn add_vote_and_maybe_update_commitment<VC: VoteCertificate>(
+    fn add_vote_and_maybe_update_commitment(
         my_pubkey: &Pubkey,
         vote: &Vote,
-        vote_message: &VC::VoteTransaction,
-        cert_pool: &mut CertificatePool<VC>,
+        vote_message: &VoteMessage,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let Some(new_finalized_slot) =
-            cert_pool.add_vote(vote, vote_message.clone(), &Pubkey::default())?
-        else {
+        let Some(new_finalized_slot) = cert_pool.add_vote(vote, *vote_message)? else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
