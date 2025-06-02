@@ -1781,6 +1781,10 @@ impl Validator {
             "local retransmit address: {}",
             node.sockets.retransmit_sockets[0].local_addr().unwrap()
         );
+        info!(
+            "local alpenglow address: {}",
+            node.sockets.alpenglow.local_addr().unwrap()
+        );
     }
 
     pub fn join(self) {
