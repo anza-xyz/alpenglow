@@ -89,7 +89,7 @@ use {
     solana_vote::{vote_parser, vote_transaction},
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
     std::{
-        collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet},
         fs,
         io::Read,
         iter,
