@@ -1,5 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
+    alpenglow_vote::vote::Vote,
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -88,7 +89,7 @@ use {
     solana_vote::{vote_parser, vote_transaction},
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
     std::{
-        collections::{BTreeSet, HashMap, HashSet},
+        collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
         fs,
         io::Read,
         iter,
@@ -6226,6 +6227,27 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         SocketAddrSpace::Unspecified,
     );
 }
+
+fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
+    let discriminant = if vote.is_notarization() {
+        0
+    } else if vote.is_finalize() {
+        1
+    } else if vote.is_skip() {
+        2
+    } else if vote.is_notarize_fallback() {
+        3
+    } else if vote.is_skip_fallback() {
+        4
+    } else {
+        panic!("Invalid vote type: {:?}", vote)
+    };
+
+    let slot = vote.slot();
+
+    (slot, discriminant)
+}
+
 /// This test validates the Alpenglow consensus protocol's ability to maintain liveness when a node
 /// needs to issue a NotarizeFallback vote. The test sets up a two-node cluster with a specific
 /// stake distribution to create a scenario where:
@@ -6320,8 +6342,9 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     assert_eq!(vote_pubkeys.len(), num_nodes);
 
     // Track Node A's votes and when the test can conclude
-    let node_a_filtered_votes = Arc::new(Mutex::new(vec![]));
-    let mut post_experiment_roots = 0;
+    let node_a_filtered_votes = Arc::new(Mutex::new(HashSet::new()));
+    let mut post_experiment_votes = HashMap::new();
+    let mut post_experiment_roots = HashSet::new();
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
@@ -6345,16 +6368,19 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                 _ => "Unknown",
             };
 
-            let txn = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+            let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
             // Once we've received a vote from node B at slot 31, we can start the experiment.
-            if txn.slot() == 31 && node_name == "B" {
+            if vote.slot() == 31 && node_name == "B" {
                 node_a_turbine_disabled.store(true, Ordering::Relaxed);
             }
 
             // Gather all votes issued by node A on slot 32
-            if txn.slot() == 32 && node_name == "A" {
-                node_a_filtered_votes.lock().unwrap().push(*txn);
+            if vote.slot() == 32 && node_name == "A" {
+                node_a_filtered_votes
+                    .lock()
+                    .unwrap()
+                    .insert(_vote_to_tuple(vote));
             };
 
             let num_votes = { node_a_filtered_votes.lock().unwrap().len() };
@@ -6365,12 +6391,23 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                 node_a_turbine_disabled.store(false, Ordering::Relaxed);
 
                 // Once we've observed >= 10 roots upon the experiment completing, we're all set.
-                if txn.is_finalize() {
-                    post_experiment_roots += 1;
-                }
+                if vote.is_finalize() {
+                    match post_experiment_votes.entry(vote.slot()) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(vec![node_name]);
+                        }
+                        Entry::Occupied(mut entry) => {
+                            entry.get_mut().push(node_name);
 
-                if post_experiment_roots >= 10 {
-                    break;
+                            if entry.get().len() == 2 {
+                                post_experiment_roots.insert(vote.slot());
+
+                                if post_experiment_roots.len() >= 10 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -6383,7 +6420,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
         let node_a_filtered_votes = node_a_filtered_votes.lock().unwrap();
 
         assert_eq!(2, node_a_filtered_votes.len());
-        assert!(node_a_filtered_votes[0].is_skip());
-        assert!(node_a_filtered_votes[1].is_notarize_fallback());
+        assert!(node_a_filtered_votes.contains(&(32, 2))); // skip on slot 32
+        assert!(node_a_filtered_votes.contains(&(32, 3))); // notar fallback on slot 32
     }
 }
