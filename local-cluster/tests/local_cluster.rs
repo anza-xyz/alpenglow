@@ -6392,20 +6392,15 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
                 // Once we've observed >= 10 roots upon the experiment completing, we're all set.
                 if vote.is_finalize() {
-                    match post_experiment_votes.entry(vote.slot()) {
-                        Entry::Vacant(entry) => {
-                            entry.insert(vec![node_name]);
-                        }
-                        Entry::Occupied(mut entry) => {
-                            entry.get_mut().push(node_name);
+                    let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
 
-                            if entry.get().len() == 2 {
-                                post_experiment_roots.insert(vote.slot());
+                    value.push(node_name);
 
-                                if post_experiment_roots.len() >= 10 {
-                                    break;
-                                }
-                            }
+                    if value.len() == 2 {
+                        post_experiment_roots.insert(vote.slot());
+
+                        if post_experiment_roots.len() >= 10 {
+                            break;
                         }
                     }
                 }
