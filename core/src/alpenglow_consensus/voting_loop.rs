@@ -870,7 +870,6 @@ impl VotingLoop {
 
         if let Err(e) = Self::add_vote_and_maybe_update_commitment(
             &context.identity_keypair.pubkey(),
-            &vote,
             &vote_message,
             cert_pool,
             &context.commitment_sender,
@@ -1029,7 +1028,6 @@ impl VotingLoop {
                 BLSMessage::Vote(vote_message) => {
                     match Self::add_vote_and_maybe_update_commitment(
                         my_pubkey,
-                        &vote_message.vote,
                         &vote_message,
                         cert_pool,
                         commitment_sender,
@@ -1125,12 +1123,11 @@ impl VotingLoop {
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
     fn add_vote_and_maybe_update_commitment(
         my_pubkey: &Pubkey,
-        vote: &Vote,
         vote_message: &VoteMessage,
         cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let Some(new_finalized_slot) = cert_pool.add_vote(vote, *vote_message)? else {
+        let Some(new_finalized_slot) = cert_pool.add_vote(*vote_message)? else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");

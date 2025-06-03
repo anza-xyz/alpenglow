@@ -288,11 +288,8 @@ impl CertificatePool {
     ///
     /// If this resulted in a new highest Finalize or FastFinalize certificate,
     /// return the slot
-    pub fn add_vote(
-        &mut self,
-        vote: &Vote,
-        transaction: VoteMessage,
-    ) -> Result<Option<Slot>, AddVoteError> {
+    pub fn add_vote(&mut self, transaction: VoteMessage) -> Result<Option<Slot>, AddVoteError> {
+        let vote = &transaction.vote;
         let slot = vote.slot();
         let (validator_vote_key, validator_stake, total_stake) =
             self.get_key_and_stakes(slot, transaction.rank)?;
@@ -640,10 +637,10 @@ mod tests {
         std::sync::{Arc, RwLock},
     };
 
-    fn dummy_transaction(rank: usize) -> VoteMessage {
+    fn dummy_transaction(vote: &Vote, rank: usize) -> VoteMessage {
         VoteMessage {
             signature: BLSSignature::default(),
-            vote: Vote::new_notarization_vote(0, Hash::new_unique(), Hash::new_unique()),
+            vote: *vote,
             rank: rank as u16,
         }
     }
@@ -692,7 +689,7 @@ mod tests {
 
     fn add_certificate(pool: &mut CertificatePool, vote: Vote) {
         for rank in 0..7 {
-            assert!(pool.add_vote(&vote, dummy_transaction(rank)).is_ok());
+            assert!(pool.add_vote(dummy_transaction(&vote, rank)).is_ok());
         }
         match vote {
             Vote::Notarize(vote) => assert_eq!(pool.highest_notarized_slot(), vote.slot()),
@@ -706,7 +703,7 @@ mod tests {
     fn add_skip_vote_range(pool: &mut CertificatePool, start: Slot, end: Slot, rank: usize) {
         for slot in start..=end {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(slot), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(slot), rank))
                 .is_ok());
         }
     }
@@ -927,22 +924,22 @@ mod tests {
         solana_logger::setup();
         let mut pool = create_pool();
         assert!(pool
-            .add_vote(&Vote::new_finalization_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_finalization_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_finalized_slot(), 0);
         // Same key voting again shouldn't make a certificate
         assert!(pool
-            .add_vote(&Vote::new_finalization_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_finalization_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_finalized_slot(), 0);
         for rank in 0..4 {
             assert!(pool
-                .add_vote(&Vote::new_finalization_vote(5), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_finalization_vote(5), rank))
                 .is_ok());
         }
         assert_eq!(pool.highest_finalized_slot(), 0);
         assert!(pool
-            .add_vote(&Vote::new_finalization_vote(5), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_finalization_vote(5), 6))
             .is_ok());
         assert_eq!(pool.highest_finalized_slot(), 5);
     }
@@ -951,35 +948,35 @@ mod tests {
     fn test_add_vote_new_notarize_certificate() {
         let mut pool = create_pool();
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                dummy_transaction(5),
-            )
+                5
+            ))
             .is_ok());
         assert_eq!(pool.highest_notarized_slot(), 0);
         // Same key voting again shouldn't make a certificate
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                dummy_transaction(5),
-            )
+                5
+            ),)
             .is_ok());
         assert_eq!(pool.highest_notarized_slot(), 0);
 
         for rank in 0..4 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
         assert_eq!(pool.highest_notarized_slot(), 0);
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                dummy_transaction(6),
-            )
+                6
+            ),)
             .is_ok());
         assert_eq!(pool.highest_notarized_slot(), 5);
     }
@@ -989,36 +986,36 @@ mod tests {
         let mut pool = create_pool();
         // 10% voted for notarize_fallback 5
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_fallback_vote(5, Hash::default(), Hash::default()),
-                dummy_transaction(4),
-            )
+                4
+            ),)
             .is_ok());
         assert_eq!(pool.highest_notarized_slot(), 0);
         // 20% voted for notarize 5, 20% voted for notarize_fallback 5
         for rank in 0..2 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
         for rank in 2..4 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
         assert_eq!(pool.highest_notarized_slot(), 0);
         // Another 10% voted for notarize_fallback 5, we are over the threshold
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                dummy_transaction(5),
-            )
+                5
+            ),)
             .is_ok());
         assert_eq!(pool.highest_notarized_slot(), 5);
     }
@@ -1027,22 +1024,22 @@ mod tests {
     fn test_add_vote_new_skip_certificate() {
         let mut pool = create_pool();
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         // Same key voting again shouldn't make a certificate
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         for rank in 0..4 {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(5), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(5), rank))
                 .is_ok());
         }
         assert_eq!(pool.highest_skip_slot(), 0);
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(5), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(5), 6))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 5);
     }
@@ -1052,29 +1049,29 @@ mod tests {
         let mut pool = create_pool();
         // 10% voted for skip_fallback 5
         assert!(pool
-            .add_vote(&Vote::new_skip_fallback_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_skip_fallback_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         // Same key voting again shouldn't make a certificate
         assert!(pool
-            .add_vote(&Vote::new_skip_fallback_vote(5), dummy_transaction(5))
+            .add_vote(dummy_transaction(&Vote::new_skip_fallback_vote(5), 5))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 0);
         // 20% voted for skip 5, 20% voted for skip_fallback 5
         for rank in 0..2 {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(5), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(5), rank))
                 .is_ok());
         }
         for rank in 2..4 {
             assert!(pool
-                .add_vote(&Vote::new_skip_fallback_vote(5), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_fallback_vote(5), rank))
                 .is_ok());
         }
         assert_eq!(pool.highest_skip_slot(), 0);
         // Another 10% voted for skip_fallback 5, we are over the threshold
         assert!(pool
-            .add_vote(&Vote::new_skip_fallback_vote(5), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_skip_fallback_vote(5), 6))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 5);
     }
@@ -1084,7 +1081,7 @@ mod tests {
         let mut pool = create_pool();
 
         assert_eq!(
-            pool.add_vote(&Vote::new_skip_vote(5), dummy_transaction(100)),
+            pool.add_vote(dummy_transaction(&Vote::new_skip_vote(5), 100)),
             Err(AddVoteError::InvalidRank(100))
         );
     }
@@ -1110,7 +1107,7 @@ mod tests {
             let slot = i as u64 + 16;
             // These should not extend the skip range
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(slot), dummy_transaction(i))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(slot), i))
                 .is_ok());
         }
 
@@ -1172,14 +1169,14 @@ mod tests {
         }
         // 10% vote for (2, 2)
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(2), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(2), 6))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 2);
 
         assert_single_certificate_range(&pool, 2, 2);
         // 10% vote for (4, 4)
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(4), dummy_transaction(7))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(4), 7))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
 
@@ -1187,7 +1184,7 @@ mod tests {
         assert_single_certificate_range(&pool, 4, 4);
         // 10% vote for (3, 3)
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(3), dummy_transaction(8))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(3), 8))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
         assert_single_certificate_range(&pool, 2, 4);
@@ -1208,7 +1205,7 @@ mod tests {
         }
         // Range expansion on a singleton vote should be ok
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(1), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(1), 6))
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 1);
         add_skip_vote_range(&mut pool, 1, 6, 6);
@@ -1230,7 +1227,7 @@ mod tests {
 
         // AlreadyExists, silently fail
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(20), dummy_transaction(6))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(20), 6))
             .is_ok());
     }
 
@@ -1283,16 +1280,16 @@ mod tests {
 
         // Add a skip from myself.
         assert!(pool
-            .add_vote(&Vote::new_skip_vote(2), dummy_transaction(0))
+            .add_vote(dummy_transaction(&Vote::new_skip_vote(2), 0))
             .is_ok());
         vote_history.add_vote(Vote::new_skip_vote(2));
         // 40% notarized, should succeed
         for rank in 1..5 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(2, block_id, bank_hash),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
         assert_eq!(
@@ -1308,24 +1305,24 @@ mod tests {
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(3, block_id, bank_hash),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
         assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
         let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique());
-        assert!(pool.add_vote(&vote, dummy_transaction(0)).is_ok());
+        assert!(pool.add_vote(dummy_transaction(&vote, 0)).is_ok());
         vote_history.add_vote(vote);
         assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Now add 40% skip, should succeed
         for rank in 3..7 {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(3), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(3), rank))
                 .is_ok());
         }
         assert_eq!(
@@ -1338,10 +1335,10 @@ mod tests {
         let duplicate_bank_hash = Hash::new_unique();
         for rank in 7..9 {
             assert!(pool
-                .add_vote(
+                .add_vote(dummy_transaction(
                     &Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash),
-                    dummy_transaction(rank),
-                )
+                    rank
+                ),)
                 .is_ok());
         }
 
@@ -1380,23 +1377,23 @@ mod tests {
         let block_id = Hash::new_unique();
         let block_hash = Hash::new_unique();
         let vote = Vote::new_notarization_vote(2, block_id, block_hash);
-        assert!(pool.add_vote(&vote, dummy_transaction(0)).is_ok());
+        assert!(pool.add_vote(dummy_transaction(&vote, 0)).is_ok());
         vote_history.add_vote(vote);
         // Should still fail because there are no other votes.
         assert!(!pool.safe_to_skip(slot, &vote_history));
         // Add 50% skip, should succeed
         for rank in 1..6 {
             assert!(pool
-                .add_vote(&Vote::new_skip_vote(2), dummy_transaction(rank))
+                .add_vote(dummy_transaction(&Vote::new_skip_vote(2), rank))
                 .is_ok());
         }
         assert!(pool.safe_to_skip(slot, &vote_history));
         // Add 10% more notarize, still safe to skip any more because total voted increased.
         assert!(pool
-            .add_vote(
+            .add_vote(dummy_transaction(
                 &Vote::new_notarization_vote(2, block_id, block_hash),
-                dummy_transaction(6),
-            )
+                6
+            ),)
             .is_ok());
         assert!(pool.safe_to_skip(slot, &vote_history));
     }
@@ -1424,8 +1421,8 @@ mod tests {
     ) {
         let vote_1 = create_new_vote(vote_type_1, slot);
         let vote_2 = create_new_vote(vote_type_2, slot);
-        assert!(pool.add_vote(&vote_1, dummy_transaction(rank)).is_ok());
-        assert!(pool.add_vote(&vote_2, dummy_transaction(rank)).is_err());
+        assert!(pool.add_vote(dummy_transaction(&vote_1, rank)).is_ok());
+        assert!(pool.add_vote(dummy_transaction(&vote_2, rank)).is_err());
     }
 
     #[test]
