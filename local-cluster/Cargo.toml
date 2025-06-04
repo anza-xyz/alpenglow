@@ -11,6 +11,7 @@ edition = { workspace = true }
 
 [dependencies]
 alpenglow-vote = { workspace = true }
+bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -20,6 +21,7 @@ solana-accounts-db = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
 solana-client = { workspace = true }
 solana-config-program = { workspace = true }
+solana-connection-cache = { workspace = true }
 solana-core = { workspace = true }
 solana-entry = { workspace = true }
 solana-gossip = { workspace = true }
@@ -37,6 +39,7 @@ solana-stake-program = { workspace = true }
 solana-streamer = { workspace = true }
 solana-thin-client = { workspace = true }
 solana-tpu-client = { workspace = true }
+solana-transaction = { workspace = true, features = ["bincode"] }
 solana-turbine = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
