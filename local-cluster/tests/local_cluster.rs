@@ -95,7 +95,7 @@ use {
         iter,
         path::Path,
         sync::{
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -6344,7 +6344,6 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
     // Track Node A's votes and when the test can conclude
     let node_a_filtered_votes = Arc::new(Mutex::new(HashMap::new()));
-    let node_a_two_vote_slot = Arc::new(AtomicU64::new(0));
     let mut post_experiment_votes = HashMap::new();
     let mut post_experiment_roots = HashSet::new();
 
@@ -6352,7 +6351,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
         let node_a_filtered_votes = node_a_filtered_votes.clone();
-        let node_a_two_vote_slot = node_a_two_vote_slot.clone();
+        let mut check_for_roots = false;
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6379,16 +6378,16 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                     .or_insert(HashSet::new());
                 cur_filtered_votes.insert(vote_tuple.1);
 
-                if node_a_two_vote_slot.load(Ordering::Acquire) == 0
-                    && cur_filtered_votes.len() == 2
-                {
-                    node_a_two_vote_slot.store(vote.slot(), Ordering::Release);
+                if !check_for_roots && cur_filtered_votes.len() == 2 {
+                    check_for_roots = true;
+                    assert!(cur_filtered_votes.contains(&2)); // skip on slot 32
+                    assert!(cur_filtered_votes.contains(&3)); // notar fallback on slot 32
                 }
             }
 
             // We should see a skip followed by a notar fallback. Once we do, the experiment is
             // complete.
-            if node_a_two_vote_slot.load(Ordering::Acquire) > 0 {
+            if check_for_roots {
                 node_a_turbine_disabled.store(false, Ordering::Relaxed);
 
                 if vote.is_finalize() {
@@ -6409,15 +6408,4 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     });
 
     vote_listener.join().unwrap();
-
-    // Verify that Node A issued the expected sequence of votes
-    {
-        let node_a_filtered_votes = node_a_filtered_votes.lock().unwrap();
-
-        let slot = node_a_two_vote_slot.load(Ordering::Relaxed);
-
-        assert_eq!(2, node_a_filtered_votes[&slot].len());
-        assert!(node_a_filtered_votes[&slot].contains(&2)); // skip on slot 32
-        assert!(node_a_filtered_votes[&slot].contains(&3)); // notar fallback on slot 32
-    }
 }
