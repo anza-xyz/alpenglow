@@ -95,7 +95,7 @@ use {
         iter,
         path::Path,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -6331,18 +6331,20 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
     let vote_pubkeys = validator_keys
         .iter()
-        .filter_map(|keypair| {
+        .enumerate()
+        .filter_map(|(index, keypair)| {
             cluster
                 .validators
                 .get(&keypair.pubkey())
-                .map(|validator| validator.info.voting_keypair.pubkey())
+                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
         })
-        .collect::<Vec<_>>();
+        .collect::<HashMap<_, _>>();
 
     assert_eq!(vote_pubkeys.len(), num_nodes);
 
     // Track Node A's votes and when the test can conclude
-    let node_a_filtered_votes = Arc::new(Mutex::new(HashSet::new()));
+    let node_a_filtered_votes = Arc::new(Mutex::new(HashMap::new()));
+    let node_a_two_vote_slot = Arc::new(AtomicU64::new(0));
     let mut post_experiment_votes = HashMap::new();
     let mut post_experiment_roots = HashSet::new();
 
@@ -6350,6 +6352,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
         let node_a_filtered_votes = node_a_filtered_votes.clone();
+        let node_a_two_vote_slot = node_a_two_vote_slot.clone();
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6358,39 +6361,36 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
             let (vote_pubkey, parsed_vote, ..) =
                 vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
 
-            let node_name = match vote_pubkeys
-                .iter()
-                .position(|pk| pk == &vote_pubkey)
-                .unwrap()
-            {
-                0 => "A",
-                1 => "B",
-                _ => "Unknown",
-            };
-
+            let node_name = vote_pubkeys[&vote_pubkey];
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
             // Once we've received a vote from node B at slot 31, we can start the experiment.
-            if vote.slot() == 31 && node_name == "B" {
+            if vote.slot() == 31 && node_name == 1 {
                 node_a_turbine_disabled.store(true, Ordering::Relaxed);
             }
 
-            // Gather all votes issued by node A on slot 32
-            if vote.slot() == 32 && node_name == "A" {
-                node_a_filtered_votes
-                    .lock()
-                    .unwrap()
-                    .insert(_vote_to_tuple(vote));
-            };
+            // Gather all votes issued by node A on slot >= 32
+            if vote.slot() >= 32 && node_name == 0 {
+                let vote_tuple = _vote_to_tuple(vote);
 
-            let num_votes = { node_a_filtered_votes.lock().unwrap().len() };
+                let mut cur_filtered_votes = node_a_filtered_votes.lock().unwrap();
+                let cur_filtered_votes = cur_filtered_votes
+                    .entry(vote_tuple.0)
+                    .or_insert(HashSet::new());
+                cur_filtered_votes.insert(vote_tuple.1);
+
+                if node_a_two_vote_slot.load(Ordering::Acquire) == 0
+                    && cur_filtered_votes.len() == 2
+                {
+                    node_a_two_vote_slot.store(vote.slot(), Ordering::Release);
+                }
+            }
 
             // We should see a skip followed by a notar fallback. Once we do, the experiment is
             // complete.
-            if num_votes == 2 {
+            if node_a_two_vote_slot.load(Ordering::Acquire) > 0 {
                 node_a_turbine_disabled.store(false, Ordering::Relaxed);
 
-                // Once we've observed >= 10 roots upon the experiment completing, we're all set.
                 if vote.is_finalize() {
                     let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
 
@@ -6414,8 +6414,10 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     {
         let node_a_filtered_votes = node_a_filtered_votes.lock().unwrap();
 
-        assert_eq!(2, node_a_filtered_votes.len());
-        assert!(node_a_filtered_votes.contains(&(32, 2))); // skip on slot 32
-        assert!(node_a_filtered_votes.contains(&(32, 3))); // notar fallback on slot 32
+        let slot = node_a_two_vote_slot.load(Ordering::Relaxed);
+
+        assert_eq!(2, node_a_filtered_votes[&slot].len());
+        assert!(node_a_filtered_votes[&slot].contains(&2)); // skip on slot 32
+        assert!(node_a_filtered_votes[&slot].contains(&3)); // notar fallback on slot 32
     }
 }
