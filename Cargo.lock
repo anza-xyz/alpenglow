@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=21f0fa1#21f0fa1442dbe0be6e7bc25204799277ba8c1e79"
+source = "git+ssh://git@github.com/solana-program/alpenglow-vote.git?rev=e4f33e5#e4f33e57647f8ca15789d347e763d28478823b5d"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -8583,6 +8583,7 @@ version = "2.3.0"
 dependencies = [
  "alpenglow-vote",
  "assert_matches",
+ "bincode",
  "crossbeam-channel",
  "fs_extra",
  "gag",
@@ -8595,6 +8596,7 @@ dependencies = [
  "solana-build-alpenglow-vote",
  "solana-client",
  "solana-config-program",
+ "solana-connection-cache",
  "solana-core",
  "solana-download-utils",
  "solana-entry",
@@ -8614,6 +8616,7 @@ dependencies = [
  "solana-streamer",
  "solana-thin-client",
  "solana-tpu-client",
+ "solana-transaction",
  "solana-turbine",
  "solana-vote",
  "solana-vote-program",
