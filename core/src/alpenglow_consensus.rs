@@ -42,14 +42,6 @@ impl CertificateId {
         matches!(self, Self::FinalizeFast(_, _, _))
     }
 
-    pub(crate) fn is_finalization_variant(&self) -> bool {
-        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
-    }
-
-    pub(crate) fn is_notarize_fallback(&self) -> bool {
-        matches!(self, Self::NotarizeFallback(_, _, _))
-    }
-
     pub(crate) fn to_block(self) -> Option<Block> {
         match self {
             CertificateId::Finalize(_) | CertificateId::Skip(_) => None,

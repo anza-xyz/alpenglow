@@ -868,9 +868,9 @@ impl VotingLoop {
             return;
         };
 
-        if let Err(e) = Self::add_vote_and_maybe_update_commitment(
+        if let Err(e) = Self::add_message_and_maybe_update_commitment(
             &context.identity_keypair.pubkey(),
-            &vote_message,
+            &BLSMessage::Vote(vote_message),
             cert_pool,
             &context.commitment_sender,
         ) {
@@ -1024,31 +1024,19 @@ impl VotingLoop {
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
-            match bls_message {
-                BLSMessage::Vote(vote_message) => {
-                    match Self::add_vote_and_maybe_update_commitment(
-                        my_pubkey,
-                        &vote_message,
-                        cert_pool,
-                        commitment_sender,
-                    ) {
-                        err @ Err(AddVoteError::CertificateSenderError) => err,
-                        Err(e) => {
-                            // TODO(ashwin): increment metrics on non duplicate failures
-                            trace!("{my_pubkey}: unable to push vote into the pool {}", e);
-                            Ok(())
-                        }
-                        Ok(()) => Ok(()),
-                    }
-                }
-                BLSMessage::Certificate(certificate_message) => {
-                    //TODO(wen): handle certificate message
-                    trace!(
-                        "{my_pubkey}: Received non-vote BLS message: {:?}",
-                        certificate_message
-                    );
+            match Self::add_message_and_maybe_update_commitment(
+                my_pubkey,
+                &bls_message,
+                cert_pool,
+                commitment_sender,
+            ) {
+                err @ Err(AddVoteError::CertificateSenderError) => err,
+                Err(e) => {
+                    // TODO(ashwin): increment metrics on non duplicate failures
+                    trace!("{my_pubkey}: unable to push vote into the pool {}", e);
                     Ok(())
                 }
+                Ok(()) => Ok(()),
             }
         };
 
@@ -1121,13 +1109,19 @@ impl VotingLoop {
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
-    fn add_vote_and_maybe_update_commitment(
+    fn add_message_and_maybe_update_commitment(
         my_pubkey: &Pubkey,
-        vote_message: &VoteMessage,
+        bls_message: &BLSMessage,
         cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let Some(new_finalized_slot) = cert_pool.add_vote(*vote_message)? else {
+        let new_finalized_slot = match bls_message {
+            BLSMessage::Vote(vote_message) => cert_pool.add_vote(*vote_message)?,
+            BLSMessage::Certificate(certificate_message) => {
+                cert_pool.add_certificate(certificate_message)?
+            }
+        };
+        let Some(new_finalized_slot) = new_finalized_slot else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");

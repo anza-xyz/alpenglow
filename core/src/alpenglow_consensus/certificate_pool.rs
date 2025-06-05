@@ -14,6 +14,7 @@ use {
     },
     alpenglow_vote::{
         bls_message::{CertificateMessage, VoteMessage},
+        certificate::CertificateType,
         vote::Vote,
     },
     crossbeam_channel::Sender,
@@ -48,6 +49,9 @@ pub type PoolId = (Slot, VoteType);
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AddVoteError {
+    #[error("Certificate already exists: {0:?}")]
+    CertificateAlreadyExists(CertificateId),
+
     #[error("Conflicting vote type: {0:?} vs existing {1:?} for slot: {2} pubkey: {3}")]
     ConflictingVoteType(VoteType, VoteType, Slot, Pubkey),
 
@@ -56,6 +60,12 @@ pub enum AddVoteError {
 
     #[error("Invalid rank: {0}")]
     InvalidRank(u16),
+
+    #[error("Missing bank hash in certificate: {0:?}")]
+    MissingBankHash(Slot),
+
+    #[error("Missing block id in certificate: {0:?}")]
+    MissingBlockId(Slot),
 
     #[error("Zero stake")]
     ZeroStake,
@@ -78,7 +88,7 @@ pub struct CertificatePool {
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePool>,
     /// Completed certificates
-    completed_certificates: BTreeMap<CertificateId, VoteCertificate>,
+    completed_certificates: BTreeMap<CertificateId, CertificateMessage>,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
@@ -215,28 +225,7 @@ impl CertificatePool {
                         }
                     }
                 }
-                self.completed_certificates
-                    .insert(cert_id, vote_certificate);
-
-                if cert_id.is_notarize_fallback()
-                    && self
-                        .highest_notarized_fallback
-                        .map_or(true, |(s, _, _)| s < slot)
-                {
-                    self.highest_notarized_fallback =
-                        Some((slot, block_id.unwrap(), bank_hash.unwrap()));
-                }
-
-                if cert_id.is_finalization_variant()
-                    && self.highest_finalized_slot.map_or(true, |s| s < slot)
-                {
-                    self.highest_finalized_slot = Some(slot);
-                    if self.highest_finalized_slot > highest {
-                        return Ok(Some(slot));
-                    }
-                }
-
-                Ok(highest)
+                Ok(self.insert_certificate(cert_id, vote_certificate.certificate()))
             })
     }
 
@@ -256,8 +245,32 @@ impl CertificatePool {
         None
     }
 
-    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: CertificateMessage) {
-        self.completed_certificates.insert(cert_id, cert.into());
+    pub(crate) fn insert_certificate(
+        &mut self,
+        cert_id: CertificateId,
+        cert: CertificateMessage,
+    ) -> Option<Slot> {
+        self.completed_certificates.insert(cert_id, cert);
+        match cert_id {
+            CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
+                if self
+                    .highest_notarized_fallback
+                    .map_or(true, |(s, _, _)| s < slot)
+                {
+                    self.highest_notarized_fallback = Some((slot, block_id, bank_hash));
+                }
+                None
+            }
+            CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
+                if self.highest_finalized_slot.map_or(true, |s| s < slot) {
+                    self.highest_finalized_slot = Some(slot);
+                    Some(slot)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     fn get_key_and_stakes(
@@ -281,6 +294,45 @@ impl CertificatePool {
             return Err(AddVoteError::ZeroStake);
         }
         Ok((*vote_key, stake, epoch_stakes.total_stake()))
+    }
+
+    pub fn add_certificate(
+        &mut self,
+        certificate_message: &CertificateMessage,
+    ) -> Result<Option<Slot>, AddVoteError> {
+        let certificate = &certificate_message.certificate;
+        let (block_id, bank_hash) = match certificate.certificate_type {
+            CertificateType::FinalizeFast
+            | CertificateType::Notarize
+            | CertificateType::NotarizeFallback => {
+                let block_id = certificate
+                    .block_id
+                    .ok_or(AddVoteError::MissingBlockId(certificate.slot))?;
+                let bank_hash = certificate
+                    .replayed_bank_hash
+                    .ok_or(AddVoteError::MissingBankHash(certificate.slot))?;
+                (block_id, bank_hash)
+            }
+            // no hash for Finalize or Skip
+            CertificateType::Finalize | CertificateType::Skip => (Hash::default(), Hash::default()),
+        };
+        let cert_id = match certificate.certificate_type {
+            CertificateType::Finalize => CertificateId::Finalize(certificate.slot),
+            CertificateType::FinalizeFast => {
+                CertificateId::FinalizeFast(certificate.slot, block_id, bank_hash)
+            }
+            CertificateType::Notarize => {
+                CertificateId::Notarize(certificate.slot, block_id, bank_hash)
+            }
+            CertificateType::NotarizeFallback => {
+                CertificateId::NotarizeFallback(certificate.slot, block_id, bank_hash)
+            }
+            CertificateType::Skip => CertificateId::Skip(certificate.slot),
+        };
+        if self.completed_certificates.contains_key(&cert_id) {
+            return Err(AddVoteError::CertificateAlreadyExists(cert_id));
+        }
+        Ok(self.insert_certificate(cert_id, certificate_message.clone()))
     }
 
     /// Adds the new vote the the certificate pool. If a new certificate is created
@@ -416,7 +468,7 @@ impl CertificatePool {
             .iter()
             .find_map(|(cert_id, cert)| {
                 matches!(cert_id, CertificateId::NotarizeFallback(s,_,_) if *s == slot)
-                    .then_some(cert.vote_count())
+                    .then_some(cert.bitmap.count_ones())
             })
     }
 
@@ -613,7 +665,7 @@ pub(crate) fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(cert_id, cert);
+            let _ = cert_pool.insert_certificate(cert_id, cert);
         }
     }
     cert_pool
