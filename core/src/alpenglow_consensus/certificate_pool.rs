@@ -6,11 +6,14 @@ use {
         vote_pool::{VoteKey, VotePool},
         vote_to_certificate_ids, Stake,
     },
-    crate::alpenglow_consensus::{
-        conflicting_types, CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
-        SAFE_TO_SKIP_THRESHOLD,
+    crate::{
+        alpenglow_consensus::{
+            conflicting_types, CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE,
+            SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
+            SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
+        },
+        voting_service::VoteOp,
     },
     alpenglow_vote::{
         bls_message::{CertificateMessage, VoteMessage},
@@ -83,7 +86,6 @@ pub enum AddVoteError {
     CertificateSenderError,
 }
 
-#[derive(Default)]
 pub struct CertificatePool {
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePool>,
@@ -103,12 +105,15 @@ pub struct CertificatePool {
     root_epoch: Epoch,
     /// The certificate sender, if set, newly created certificates will be sent here
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    /// The voting sender, used to send certificates all-to-all
+    voting_sender: Option<Sender<VoteOp>>,
 }
 
 impl CertificatePool {
     pub fn new_from_root_bank(
         bank: &Bank,
         certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+        voting_sender: Option<Sender<VoteOp>>,
     ) -> Self {
         let mut pool = Self {
             vote_pools: BTreeMap::new(),
@@ -120,6 +125,7 @@ impl CertificatePool {
             root: bank.slot(),
             root_epoch: Epoch::default(),
             certificate_sender,
+            voting_sender,
         };
 
         // Update the epoch_stakes_map and root
@@ -250,7 +256,17 @@ impl CertificatePool {
         cert_id: CertificateId,
         cert: CertificateMessage,
     ) -> Option<Slot> {
-        self.completed_certificates.insert(cert_id, cert);
+        self.completed_certificates.insert(cert_id, cert.clone());
+        trace!("Inserting certificate {cert_id:?}");
+        // TODO(wen): handle send error.
+        if let Some(voting_sender) = &self.voting_sender {
+            if let Err(e) = voting_sender.send(VoteOp::PushAlpenglowCertificate {
+                certificate_message: cert,
+                slot: cert_id.slot(),
+            }) {
+                error!("Unable to send certificate {cert_id:?}: {e:?}");
+            }
+        }
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
                 if self
@@ -645,8 +661,10 @@ pub(crate) fn load_from_blockstore(
     root_bank: &Bank,
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    voting_sender: Sender<VoteOp>,
 ) -> CertificatePool {
-    let mut cert_pool = CertificatePool::new_from_root_bank(root_bank, certificate_sender);
+    let mut cert_pool =
+        CertificatePool::new_from_root_bank(root_bank, certificate_sender, Some(voting_sender));
     for (slot, slot_cert) in blockstore
         .slot_certificates_iterator(root_bank.slot())
         .unwrap()
@@ -725,7 +743,7 @@ mod tests {
         (
             validator_keypairs,
             bank_forks,
-            CertificatePool::new_from_root_bank(&root_bank.clone(), None),
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None, None),
         )
     }
 
@@ -1504,7 +1522,7 @@ mod tests {
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
         let mut pool: CertificatePool =
-            CertificatePool::new_from_root_bank(&root_bank.clone(), None);
+            CertificatePool::new_from_root_bank(&root_bank.clone(), None, None);
         assert_eq!(pool.root(), 0);
 
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));

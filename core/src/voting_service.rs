@@ -5,7 +5,7 @@ use {
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
     },
-    alpenglow_vote::bls_message::{BLSMessage, VoteMessage},
+    alpenglow_vote::bls_message::{BLSMessage, CertificateMessage, VoteMessage},
     bincode::serialize,
     crossbeam_channel::Receiver,
     solana_client::connection_cache::ConnectionCache,
@@ -41,6 +41,10 @@ pub enum VoteOp {
         vote_message: VoteMessage,
         slot: Slot,
         saved_vote_history: SavedVoteHistoryVersions,
+    },
+    PushAlpenglowCertificate {
+        certificate_message: CertificateMessage,
+        slot: Slot,
     },
     RefreshVote {
         tx: Transaction,
@@ -82,14 +86,14 @@ fn send_vote_transaction(
 
 fn send_bls_message(
     cluster_info: &ClusterInfo,
-    vote_message: &VoteMessage,
+    bls_message: &BLSMessage,
     alpenglow: Option<SocketAddr>,
     connection_cache: &Arc<ConnectionCache>,
 ) -> Result<(), SendVoteError> {
     let alpenglow = alpenglow
         .or_else(|| cluster_info.my_contact_info().alpenglow())
         .ok_or(SendVoteError::InvalidTpuAddress)?;
-    let buf = serialize(&BLSMessage::Vote(*vote_message))?;
+    let buf = serialize(bls_message)?;
     let client = connection_cache.get_connection(&alpenglow);
 
     client.send_data_async(buf).map_err(|err| {
@@ -178,10 +182,10 @@ impl VotingService {
         }
     }
 
-    fn broadcast_alpenglow_vote(
+    fn broadcast_alpenglow_message(
         slot: Slot,
         cluster_info: &ClusterInfo,
-        vote_message: &VoteMessage,
+        bls_message: &BLSMessage,
         connection_cache: Arc<ConnectionCache>,
         additional_listeners: Option<&Vec<SocketAddr>>,
         staked_validators_cache: &mut StakedValidatorsCache,
@@ -190,7 +194,7 @@ impl VotingService {
             .get_staked_validators_by_slot(slot, cluster_info, Instant::now());
 
         if staked_validator_tpu_sockets.is_empty() {
-            let _ = send_bls_message(cluster_info, vote_message, None, &connection_cache);
+            let _ = send_bls_message(cluster_info, bls_message, None, &connection_cache);
         } else {
             let sockets = additional_listeners
                 .map(|v| v.as_slice())
@@ -198,10 +202,16 @@ impl VotingService {
                 .iter()
                 .chain(staked_validator_tpu_sockets.iter());
 
+            trace!(
+                "{:?} Broadcasting alpenglow message: {:?} sockets {:?}",
+                cluster_info.id(),
+                bls_message,
+                sockets
+            );
             for alpenglow_socket in sockets {
                 let _ = send_bls_message(
                     cluster_info,
-                    vote_message,
+                    bls_message,
                     Some(*alpenglow_socket),
                     &connection_cache,
                 );
@@ -250,10 +260,23 @@ impl VotingService {
                 measure.stop();
                 trace!("{measure}");
 
-                Self::broadcast_alpenglow_vote(
+                Self::broadcast_alpenglow_message(
                     slot,
                     cluster_info,
-                    &vote_message,
+                    &BLSMessage::Vote(vote_message),
+                    connection_cache,
+                    additional_listeners,
+                    staked_validators_cache,
+                );
+            }
+            VoteOp::PushAlpenglowCertificate {
+                certificate_message,
+                slot,
+            } => {
+                Self::broadcast_alpenglow_message(
+                    slot,
+                    cluster_info,
+                    &BLSMessage::Certificate(certificate_message),
                     connection_cache,
                     additional_listeners,
                     staked_validators_cache,

@@ -224,6 +224,7 @@ impl VotingLoop {
             &root_bank_cache.root_bank(),
             blockstore.as_ref(),
             Some(certificate_sender),
+            voting_sender.clone(),
         );
 
         let mut voting_context = VotingContext {
@@ -1024,6 +1025,7 @@ impl VotingLoop {
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
+            trace!("{my_pubkey}: ingesting BLS Message: {bls_message:?}");
             match Self::add_message_and_maybe_update_commitment(
                 my_pubkey,
                 &bls_message,
