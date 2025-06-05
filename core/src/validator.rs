@@ -1645,6 +1645,7 @@ impl Validator {
                 transactions_quic: node.sockets.tpu_quic,
                 transactions_forwards_quic: node.sockets.tpu_forwards_quic,
                 vote_quic: node.sockets.tpu_vote_quic,
+                alpenglow: node.sockets.alpenglow,
             },
             &rpc_subscriptions,
             transaction_status_sender,
@@ -1779,6 +1780,10 @@ impl Validator {
         info!(
             "local retransmit address: {}",
             node.sockets.retransmit_sockets[0].local_addr().unwrap()
+        );
+        info!(
+            "local alpenglow address: {}",
+            node.sockets.alpenglow.local_addr().unwrap()
         );
     }
 
