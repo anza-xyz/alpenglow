@@ -708,7 +708,7 @@ mod tests {
     };
 
     fn dummy_transaction(
-        keypairs: &Vec<ValidatorVoteKeypairs>,
+        keypairs: &[ValidatorVoteKeypairs],
         vote: &Vote,
         rank: usize,
     ) -> VoteMessage {
@@ -770,11 +770,7 @@ mod tests {
         (keypairs, pool)
     }
 
-    fn add_certificate(
-        keypairs: &Vec<ValidatorVoteKeypairs>,
-        pool: &mut CertificatePool,
-        vote: Vote,
-    ) {
+    fn add_certificate(keypairs: &[ValidatorVoteKeypairs], pool: &mut CertificatePool, vote: Vote) {
         for rank in 0..7 {
             assert!(pool
                 .add_vote(dummy_transaction(keypairs, &vote, rank))
@@ -790,7 +786,7 @@ mod tests {
     }
 
     fn add_skip_vote_range(
-        keypairs: &Vec<ValidatorVoteKeypairs>,
+        keypairs: &[ValidatorVoteKeypairs],
         pool: &mut CertificatePool,
         start: Slot,
         end: Slot,
@@ -1574,7 +1570,7 @@ mod tests {
     }
 
     fn test_reject_conflicting_vote(
-        keypairs: &Vec<ValidatorVoteKeypairs>,
+        keypairs: &[ValidatorVoteKeypairs],
         pool: &mut CertificatePool,
         rank: usize,
         vote_type_1: VoteType,
