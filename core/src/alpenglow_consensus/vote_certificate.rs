@@ -75,8 +75,8 @@ impl VoteCertificate {
                 .set(vote_message.rank as usize, true);
             // aggregate the signature
             // TODO(wen): put this into bls crate
-            //            let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
-            //            self.signature.aggregate_with([&uncompressed]);
+            let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
+            self.signature.aggregate_with([&uncompressed]);
         }
         self.certificate.signature = Signature::from(self.signature.clone());
         Ok(())

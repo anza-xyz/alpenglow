@@ -25,7 +25,7 @@ use {
         vote::Vote,
     },
     crossbeam_channel::Sender,
-    solana_bls::Signature as BLSSignature,
+    solana_bls::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
     solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -51,6 +51,7 @@ use {
         transaction::Transaction,
     },
     std::{
+        collections::HashMap,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
@@ -97,6 +98,7 @@ struct VotingContext {
     vote_account_pubkey: Pubkey,
     identity_keypair: Arc<Keypair>,
     authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
+    derived_bls_keypairs: HashMap<Pubkey, BLSKeypair>,
     has_new_vote_been_rooted: bool,
     voting_sender: Sender<VoteOp>,
     commitment_sender: Sender<CommitmentAggregationData>,
@@ -227,11 +229,23 @@ impl VotingLoop {
             voting_sender.clone(),
         );
 
+        let derived_bls_keypairs = authorized_voter_keypairs
+            .read()
+            .unwrap()
+            .iter()
+            .map(|keypair| {
+                let bls_keypair = BLSKeypair::derive_from_signer(keypair, b"alpenglow")
+                    .expect("Failed to derive BLS keypair");
+                (keypair.pubkey(), bls_keypair)
+            })
+            .collect();
+
         let mut voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
             identity_keypair,
             authorized_voter_keypairs,
+            derived_bls_keypairs,
             has_new_vote_been_rooted,
             voting_sender,
             commitment_sender,
@@ -971,11 +985,28 @@ impl VotingLoop {
             Some(authorized_voter_keypair) => authorized_voter_keypair,
         };
 
-        //TODO(wen): We should make BLSSignature work, for now let's just sign the vote as signature.
-        let vote_signature =
-            authorized_voter_keypair.sign_message(&bincode::serialize(&vote).unwrap());
+        let derived_bls_keypair = match context.derived_bls_keypairs.get(&authorized_voter_pubkey) {
+            None => {
+                // derive the BLS keypair from the authorized voter keypair
+                let new_keypair =
+                    BLSKeypair::derive_from_signer(authorized_voter_keypair, b"alpenglow")
+                        .expect("Failed to derive BLS keypair");
+                context
+                    .derived_bls_keypairs
+                    .insert(authorized_voter_pubkey, new_keypair);
+                context
+                    .derived_bls_keypairs
+                    .get(&authorized_voter_pubkey)
+                    .unwrap()
+            }
+            Some(derived_bls_keypair) => derived_bls_keypair,
+        };
+
+        let vote_serialized = bincode::serialize(&vote).unwrap();
+        let signature = authorized_voter_keypair.sign_message(&vote_serialized);
+
         if !context.has_new_vote_been_rooted {
-            context.voted_signatures.push(vote_signature);
+            context.voted_signatures.push(signature);
             if context.voted_signatures.len() > MAX_VOTE_SIGNATURES {
                 context.voted_signatures.remove(0);
             }
@@ -1007,10 +1038,11 @@ impl VotingLoop {
             return GenerateVoteTxResult::NoRank;
         };
 
-        //TODO(wen): Generate a real signature using real BLS keypair later.
+        let signature: BLSSignature = derived_bls_keypair.sign(&vote_serialized).into();
+
         GenerateVoteTxResult::VoteMessage(VoteMessage {
             vote: *vote,
-            signature: BLSSignature::default(),
+            signature,
             rank: *my_rank,
         })
     }
