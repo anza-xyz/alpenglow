@@ -79,6 +79,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
     .unwrap();
     assert!(cluster_nodes.len() >= nodes);
     let ignore_nodes = Arc::new(ignore_nodes);
+    warn!("spend_and_verify_all_nodes 1");
     cluster_nodes.par_iter().for_each(|ingress_node| {
         if ignore_nodes.contains(ingress_node.pubkey()) {
             return;
@@ -100,6 +101,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
         let mut transaction =
             system_transaction::transfer(funding_keypair, &random_keypair.pubkey(), 1, blockhash);
         let confs = VOTE_THRESHOLD_DEPTH + 1;
+        warn!("spend_and_verify_all_nodes 2 {:?}", ingress_node.pubkey());
         LocalCluster::send_transaction_with_retries(
             &client,
             &[funding_keypair],
@@ -108,6 +110,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
             confs,
         )
         .unwrap();
+        warn!("spend_and_verify_all_nodes 3 {:?}", ingress_node.pubkey());
         for validator in &cluster_nodes {
             if ignore_nodes.contains(validator.pubkey()) {
                 continue;
@@ -118,6 +121,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
                 .poll_for_signature_confirmation(&transaction.signatures[0], confs)
                 .unwrap();
         }
+        warn!("spend_and_verify_all_nodes 4 {:?}", ingress_node.pubkey());
     });
 }
 
