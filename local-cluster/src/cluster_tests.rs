@@ -440,6 +440,11 @@ fn check_for_new_commitment_slots(
     let loop_start = Instant::now();
     let loop_timeout = Duration::from_secs(180);
     let mut num_slots_map = HashMap::new();
+    trace!(
+        "check_for_new_commitment_slots: num_new_slots: {}, commitment: {:?}",
+        num_new_slots,
+        commitment
+    );
     while !done {
         assert!(loop_start.elapsed() < loop_timeout);
 
@@ -449,6 +454,11 @@ fn check_for_new_commitment_slots(
                 .rpc_client()
                 .get_slot_with_commitment(commitment)
                 .unwrap_or(0);
+            trace!(
+                "check_for_new_commitment_slots: node: {}, root_slot: {}",
+                ingress_node.pubkey(),
+                root_slot,
+            );
             slots[i].insert(root_slot);
             num_slots_map.insert(*ingress_node.pubkey(), slots[i].len());
             let num_slots = slots.iter().map(|r| r.len()).min().unwrap();
