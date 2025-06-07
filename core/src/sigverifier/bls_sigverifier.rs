@@ -28,8 +28,16 @@ impl SigVerifier for BLSSigVerifier {
         if let Some(sender) = &self.sender {
             packet_batches.iter().for_each(|batch| {
                 batch.iter().for_each(|packet| {
-                    if let Ok(message) = packet.deserialize_slice::<BLSMessage, _>(..) {
-                        sender.send(message).unwrap();
+                    //TODO(wen): add errror counting.
+                    match packet.deserialize_slice::<BLSMessage, _>(..) {
+                        Ok(message) => {
+                            if let Err(e) = sender.send(message) {
+                                trace!("Failed to send BLS message: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            trace!("Failed to deserialize BLS message: {}", e);
+                        }
                     }
                 });
             });
