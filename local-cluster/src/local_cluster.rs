@@ -740,7 +740,12 @@ impl LocalCluster {
         attempts: usize,
         pending_confirmations: usize,
     ) -> std::result::Result<Signature, TransportError> {
+        warn!(
+            "spend_and_verify {} attempts to confirm transaction",
+            attempts
+        );
         for attempt in 0..attempts {
+            warn!("attempt {attempt} to confirm transaction");
             let now = Instant::now();
             let mut num_confirmed = 0;
             let mut wait_time = MAX_PROCESSING_AGE;
@@ -768,6 +773,7 @@ impl LocalCluster {
             }
             info!("{attempt} tries failed transfer");
             let blockhash = client.rpc_client().get_latest_blockhash()?;
+            warn!("resending transaction with blockhash {}", blockhash);
             transaction.sign(keypairs, blockhash);
         }
         Err(std::io::Error::new(
