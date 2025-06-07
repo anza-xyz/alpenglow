@@ -131,6 +131,9 @@ impl VoteHistory {
 
     /// All votes in a slot, for use in refresh
     pub fn votes_cast(&self, slot: Slot) -> Vec<Vote> {
+        if slot < self.root {
+            error!("Slot {} is less than root {}", slot, self.root);
+        }
         assert!(slot >= self.root);
         self.votes_cast.get(&slot).cloned().unwrap_or_default()
     }

@@ -448,8 +448,7 @@ impl CertificatePool {
             .unwrap_or(0)
     }
 
-    #[cfg(test)]
-    fn highest_finalized_slot(&self) -> Slot {
+    pub fn highest_finalized_slot(&self) -> Slot {
         self.completed_certificates
             .iter()
             .filter_map(|(cert_id, _)| match cert_id {

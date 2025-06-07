@@ -835,13 +835,9 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
-        // TODO: handle slow finalization after cert pool refactor
-        let highest_finalization_slot = if let Some(block) = cert_pool.highest_fast_finalized() {
-            // TODO: rebroadcast cert for block once we have BLS
-            block.0
-        } else {
-            0
-        };
+        let highest_finalization_slot = cert_pool
+            .highest_finalized_slot()
+            .max(root_bank_cache.root_bank().slot());
         for s in highest_finalization_slot..=slot {
             for vote in voting_context.vote_history.votes_cast(s) {
                 info!("{my_pubkey}: Refreshing vote {vote:?}");
