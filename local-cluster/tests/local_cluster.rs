@@ -182,6 +182,7 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
         }
     }
 
+    warn!("Checking for new roots with {} nodes", num_nodes);
     // Check for new roots
     cluster.check_for_new_roots(
         16,

@@ -123,6 +123,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
         }
         warn!("spend_and_verify_all_nodes 4 {:?}", ingress_node.pubkey());
     });
+    warn!("spend_and_verify_all_nodes done");
 }
 
 pub fn verify_balances<S: ::std::hash::BuildHasher>(
