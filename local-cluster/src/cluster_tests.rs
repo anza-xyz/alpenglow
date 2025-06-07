@@ -108,7 +108,8 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
         warn!(
             "spend_and_verify_all_nodes 3 {:?} {:?}",
             ingress_node.pubkey(),
-            LocalCluster::send_transaction_with_retries(
+            LocalCluster::send_transaction_with_retries1(
+                ingress_node.pubkey(),
                 &client,
                 &[funding_keypair],
                 &mut transaction,

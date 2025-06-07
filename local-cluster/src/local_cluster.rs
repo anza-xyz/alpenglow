@@ -783,6 +783,70 @@ impl LocalCluster {
         .into())
     }
 
+    /// Attempt to send and confirm tx "attempts" times
+    /// Wait for signature confirmation before returning
+    /// Return the transaction signature
+    pub fn send_transaction_with_retries1<T: Signers + ?Sized>(
+        pubkey: &Pubkey,
+        client: &QuicTpuClient,
+        keypairs: &T,
+        transaction: &mut Transaction,
+        attempts: usize,
+        pending_confirmations: usize,
+    ) -> std::result::Result<Signature, TransportError> {
+        warn!(
+            "spend_and_verify {pubkey:?} {} attempts to confirm transaction",
+            attempts
+        );
+        for attempt in 0..attempts {
+            warn!("spend_and_verify {pubkey:?} attempt {attempt} to confirm transaction");
+            let now = Instant::now();
+            let mut num_confirmed = 0;
+            let mut wait_time = MAX_PROCESSING_AGE;
+
+            while now.elapsed().as_secs() < wait_time as u64 {
+                warn!(
+                    "spend_and_verify {pubkey:?} attempt {attempt} {}",
+                    now.elapsed().as_secs()
+                );
+                if num_confirmed == 0 {
+                    client.send_transaction_to_upcoming_leaders(transaction)?;
+                }
+                warn!("spend_and_verify {pubkey:?} attempt {attempt} transaction sent");
+
+                if let Ok(confirmed_blocks) = client.rpc_client().poll_for_signature_confirmation(
+                    &transaction.signatures[0],
+                    pending_confirmations,
+                ) {
+                    num_confirmed = confirmed_blocks;
+                    warn!("spend_and_verify {pubkey:?} attempt {attempt} confirmed_blocks: {confirmed_blocks}");
+                    if confirmed_blocks >= pending_confirmations {
+                        return Ok(transaction.signatures[0]);
+                    }
+                    // Since network has seen the transaction, wait longer to receive
+                    // all pending confirmations. Resending the transaction could result into
+                    // extra transaction fees
+                    wait_time = wait_time.max(
+                        MAX_PROCESSING_AGE * pending_confirmations.saturating_sub(num_confirmed),
+                    );
+                } else {
+                    warn!(
+                        "spend_and_verify {pubkey:?} attempt {attempt} transaction not confirmed"
+                    );
+                }
+            }
+            info!("{attempt} tries failed transfer");
+            let blockhash = client.rpc_client().get_latest_blockhash()?;
+            warn!("resending transaction with blockhash {}", blockhash);
+            transaction.sign(keypairs, blockhash);
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "failed to confirm transaction".to_string(),
+        )
+        .into())
+    }
+
     fn transfer_with_client(
         client: &QuicTpuClient,
         source_keypair: &Keypair,
