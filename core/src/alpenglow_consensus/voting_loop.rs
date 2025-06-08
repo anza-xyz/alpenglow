@@ -412,9 +412,7 @@ impl VotingLoop {
 
                     // Check if we can fast forward
                     // TODO(ashwin): for duplicate blocks, ensure that we have the correct chain up to this
-                    let Some((slot, _, _)) = cert_pool.highest_fast_finalized() else {
-                        continue;
-                    };
+                    let slot = cert_pool.highest_finalized_slot();
                     if slot > current_slot {
                         fast_forward = Some(slot);
                         break;
