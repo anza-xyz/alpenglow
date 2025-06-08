@@ -1030,7 +1030,7 @@ mod tests {
         let socket = repeat_with(|| new_rand_socket(&mut rng))
             .filter(|socket| matches!(sanitize_socket(socket), Ok(())))
             .find(|socket| socket.port().checked_add(11).is_some())
-            .expect("Failed to find a valid socket with port + 11 in test_new_with_socketaddr");
+            .unwrap();
         let node = ContactInfo::new_with_socketaddr(&Keypair::new().pubkey(), &socket);
         cross_verify_with_legacy(&node);
     }

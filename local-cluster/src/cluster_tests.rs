@@ -79,10 +79,6 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
     .unwrap();
     assert!(cluster_nodes.len() >= nodes);
     let ignore_nodes = Arc::new(ignore_nodes);
-    warn!(
-        "spend_and_verify_all_nodes cluster_nodes: {:?}",
-        cluster_nodes.len()
-    );
     cluster_nodes.par_iter().for_each(|ingress_node| {
         if ignore_nodes.contains(ingress_node.pubkey()) {
             return;
@@ -104,19 +100,14 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
         let mut transaction =
             system_transaction::transfer(funding_keypair, &random_keypair.pubkey(), 1, blockhash);
         let confs = VOTE_THRESHOLD_DEPTH + 1;
-        warn!("spend_and_verify_all_nodes 2 {:?}", ingress_node.pubkey());
-        warn!(
-            "spend_and_verify_all_nodes 3 {:?} {:?}",
-            ingress_node.pubkey(),
-            LocalCluster::send_transaction_with_retries1(
-                ingress_node.pubkey(),
-                &client,
-                &[funding_keypair],
-                &mut transaction,
-                10,
-                confs,
-            )
-        );
+        LocalCluster::send_transaction_with_retries(
+            &client,
+            &[funding_keypair],
+            &mut transaction,
+            10,
+            confs,
+        )
+        .unwrap();
         for validator in &cluster_nodes {
             if ignore_nodes.contains(validator.pubkey()) {
                 continue;
@@ -127,9 +118,7 @@ pub fn spend_and_verify_all_nodes<S: ::std::hash::BuildHasher + Sync + Send>(
                 .poll_for_signature_confirmation(&transaction.signatures[0], confs)
                 .unwrap();
         }
-        warn!("spend_and_verify_all_nodes 4 {:?}", ingress_node.pubkey());
     });
-    warn!("spend_and_verify_all_nodes done");
 }
 
 pub fn verify_balances<S: ::std::hash::BuildHasher>(
@@ -451,11 +440,6 @@ fn check_for_new_commitment_slots(
     let loop_start = Instant::now();
     let loop_timeout = Duration::from_secs(180);
     let mut num_slots_map = HashMap::new();
-    trace!(
-        "check_for_new_commitment_slots: num_new_slots: {}, commitment: {:?}",
-        num_new_slots,
-        commitment
-    );
     while !done {
         assert!(loop_start.elapsed() < loop_timeout);
 
@@ -465,11 +449,6 @@ fn check_for_new_commitment_slots(
                 .rpc_client()
                 .get_slot_with_commitment(commitment)
                 .unwrap_or(0);
-            trace!(
-                "check_for_new_commitment_slots: node: {}, root_slot: {}",
-                ingress_node.pubkey(),
-                root_slot,
-            );
             slots[i].insert(root_slot);
             num_slots_map.insert(*ingress_node.pubkey(), slots[i].len());
             let num_slots = slots.iter().map(|r| r.len()).min().unwrap();
