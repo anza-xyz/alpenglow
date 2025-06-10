@@ -39,6 +39,9 @@ pub struct StakedValidatorsCache {
 
     /// Protocol
     protocol: Protocol,
+
+    /// Whether to include the running validator's socket address in cache entries
+    include_self: bool,
 }
 
 impl StakedValidatorsCache {
@@ -47,12 +50,14 @@ impl StakedValidatorsCache {
         protocol: Protocol,
         ttl: Duration,
         max_cache_size: usize,
+        include_self: bool,
     ) -> Self {
         Self {
             cache: LruCache::new(max_cache_size),
             ttl,
             bank_forks,
             protocol,
+            include_self,
         }
     }
 
@@ -89,7 +94,12 @@ impl StakedValidatorsCache {
 
         let mut nodes: Vec<_> = epoch_staked_nodes
             .iter()
-            .filter(|(_, stake)| **stake > 0)
+            .filter(|(pubkey, stake)| {
+                let positive_stake = **stake > 0;
+                let not_self = pubkey != &&cluster_info.id();
+
+                positive_stake && (self.include_self || not_self)
+            })
             .filter_map(|(pubkey, stake)| {
                 cluster_info
                     .lookup_contact_info(pubkey, |node| node.tpu_vote(self.protocol))?
@@ -255,10 +265,9 @@ mod tests {
     }
 
     impl StakedValidatorsCacheHarness {
-        pub fn new(genesis_config: &GenesisConfig) -> Self {
+        pub fn new(genesis_config: &GenesisConfig, keypair: Keypair) -> Self {
             let bank = Bank::new_for_tests(genesis_config);
 
-            let keypair = Keypair::new();
             let cluster_info = ClusterInfo::new(
                 Node::new_localhost_with_pubkey(&keypair.pubkey()).info,
                 Arc::new(keypair),
@@ -378,12 +387,14 @@ mod tests {
 
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
 
-        let (bank_forks, cluster_info) = StakedValidatorsCacheHarness::new(&genesis_config)
-            .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
-            .bank_forks();
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
+                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .bank_forks();
 
         // Create our staked validators cache
-        let mut svc = StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5);
+        let mut svc =
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
 
         let now = Instant::now();
 
@@ -446,13 +457,14 @@ mod tests {
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(123);
 
         let base_slot = 325_000_000_000;
-        let (bank_forks, cluster_info) = StakedValidatorsCacheHarness::new(&genesis_config)
-            .with_vote_accounts(base_slot, keypair_map, vahm, Protocol::UDP)
-            .bank_forks();
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
+                .with_vote_accounts(base_slot, keypair_map, vahm, Protocol::UDP)
+                .bank_forks();
 
         // Create our staked validators cache
         let mut svc =
-            StakedValidatorsCache::new(bank_forks, Protocol::UDP, Duration::from_secs(5), 5);
+            StakedValidatorsCache::new(bank_forks, Protocol::UDP, Duration::from_secs(5), 5, true);
 
         assert_eq!(0, svc.len());
         assert!(svc.is_empty());
@@ -514,12 +526,14 @@ mod tests {
 
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
 
-        let (bank_forks, cluster_info) = StakedValidatorsCacheHarness::new(&genesis_config)
-            .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
-            .bank_forks();
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
+                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .bank_forks();
 
         // Create our staked validators cache
-        let mut svc = StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5);
+        let mut svc =
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
 
         let now = Instant::now();
 
@@ -531,5 +545,60 @@ mod tests {
 
         let (_, refreshed) = svc.get_staked_validators_by_slot(2 * slot_num, &cluster_info, now);
         assert!(refreshed);
+    }
+
+    #[test_case(1_usize, Protocol::UDP)]
+    #[test_case(1_usize, Protocol::QUIC)]
+    #[test_case(10_usize, Protocol::UDP)]
+    #[test_case(10_usize, Protocol::QUIC)]
+    fn test_exclude_self_from_cache(num_nodes: usize, protocol: Protocol) {
+        let slot_num = 325_000_000_u64;
+        let num_vote_accounts = 10_usize;
+        let genesis_lamports = 123_u64;
+
+        // Create our harness
+        let (keypair_map, vahm) = build_epoch_stakes(num_nodes, 0, num_vote_accounts);
+
+        // Fetch some keypair from the keypair map
+        let keypair = keypair_map.values().next().unwrap().insecure_clone();
+
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
+
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
+                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .bank_forks();
+
+        let my_tpu_vote_socket_addr = cluster_info
+            .lookup_contact_info(&keypair.pubkey(), |node| node.tpu_vote(protocol).unwrap())
+            .unwrap();
+
+        // Create our staked validators cache - set include_self to true
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            protocol,
+            Duration::from_secs(5),
+            5,
+            true,
+        );
+
+        let (sockets, _) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
+        assert_eq!(sockets.len(), num_nodes);
+        assert!(sockets.contains(&my_tpu_vote_socket_addr));
+
+        // Create our staked validators cache - set include_self to false
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            protocol,
+            Duration::from_secs(5),
+            5,
+            false,
+        );
+
+        let (sockets, _) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
+        assert_eq!(sockets.len(), num_nodes - 1);
+        assert!(!sockets.contains(&my_tpu_vote_socket_addr));
     }
 }
