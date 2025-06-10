@@ -77,7 +77,7 @@ use {
         commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{AlpenglowBLSMessageReceiver, AlpenglowVoteSender, ReplayVoteSender},
+        vote_sender_types::{AlpenglowVoteSender, BLSVerifiedMessageReceiver, ReplayVoteSender},
     },
     solana_sdk::{
         clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
@@ -308,7 +308,7 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
-    pub alpenglow_bls_message_receiver: AlpenglowBLSMessageReceiver,
+    pub bls_verified_message_receiver: BLSVerifiedMessageReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -612,7 +612,7 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            alpenglow_bls_message_receiver,
+            bls_verified_message_receiver,
         } = receivers;
 
         trace!("replay stage");
@@ -675,7 +675,7 @@ impl ReplayStage {
                 commitment_sender: lockouts_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
-                vote_receiver: alpenglow_bls_message_receiver,
+                vote_receiver: bls_verified_message_receiver,
                 leader_window_notifier,
                 certificate_sender,
             };

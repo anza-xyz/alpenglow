@@ -166,7 +166,7 @@ const WAIT_FOR_SUPERMAJORITY_THRESHOLD_PERCENT: u64 = 80;
 const WAIT_FOR_WEN_RESTART_SUPERMAJORITY_THRESHOLD_PERCENT: u64 =
     WAIT_FOR_SUPERMAJORITY_THRESHOLD_PERCENT;
 // Maximum number of alpenglow BLS messages to buffer before processing.
-const MAX_ALPENGLOW_BLS_MESSAGE_NUM: usize = 100_000;
+const MAX_BLS_VERIFIED_MESSAGE_NUM: usize = 100_000;
 
 #[derive(
     Clone, EnumCount, EnumIter, EnumString, EnumVariantNames, Default, IntoStaticStr, Display,
@@ -957,8 +957,8 @@ impl Validator {
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
         let (alpenglow_vote_sender, _) = unbounded();
-        let (alpenglow_bls_message_sender, alpenglow_bls_message_receiver) =
-            bounded(MAX_ALPENGLOW_BLS_MESSAGE_NUM);
+        let (bls_verified_message_sender, bls_verified_message_receiver) =
+            bounded(MAX_BLS_VERIFIED_MESSAGE_NUM);
 
         // block min prioritization fee cache should be readable by RPC, and writable by validator
         // (by both replay stage and banking stage)
@@ -1579,7 +1579,7 @@ impl Validator {
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
             alpenglow_vote_sender.clone(),
-            alpenglow_bls_message_receiver,
+            bls_verified_message_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 shred_version: node.info.shred_version(),
@@ -1668,7 +1668,7 @@ impl Validator {
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
             alpenglow_vote_sender,
-            alpenglow_bls_message_sender,
+            bls_verified_message_sender,
             &connection_cache,
             turbine_quic_endpoint_sender,
             &identity_keypair,

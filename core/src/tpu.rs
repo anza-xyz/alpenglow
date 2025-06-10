@@ -45,7 +45,7 @@ use {
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
         vote_sender_types::{
-            AlpenglowBLSMessageSender, AlpenglowVoteSender, ReplayVoteReceiver, ReplayVoteSender,
+            AlpenglowVoteSender, BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender,
         },
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, quic::NotifyKeyUpdate, signature::Keypair},
@@ -120,7 +120,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         alpenglow_vote_sender: AlpenglowVoteSender,
-        bls_verified_message_sender: AlpenglowBLSMessageSender,
+        bls_verified_message_sender: BLSVerifiedMessageSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         keypair: &Keypair,

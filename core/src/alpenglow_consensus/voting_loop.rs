@@ -41,7 +41,7 @@ use {
     solana_runtime::{
         accounts_background_service::AbsRequestSender, bank::Bank, bank_forks::BankForks,
         installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
-        vote_sender_types::AlpenglowBLSMessageReceiver as VoteReceiver,
+        vote_sender_types::BLSVerifiedMessageReceiver as VoteReceiver,
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},

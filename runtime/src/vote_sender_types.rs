@@ -11,5 +11,5 @@ pub type ReplayVoteReceiver = Receiver<ParsedVote>;
 pub type AlpenglowVoteSender = Sender<(AlpenglowVote, Pubkey, VersionedTransaction)>;
 pub type AlpenglowVoteReceiver = Receiver<(AlpenglowVote, Pubkey, VersionedTransaction)>;
 
-pub type AlpenglowBLSMessageSender = Sender<BLSMessage>;
-pub type AlpenglowBLSMessageReceiver = Receiver<BLSMessage>;
+pub type BLSVerifiedMessageSender = Sender<BLSMessage>;
+pub type BLSVerifiedMessageReceiver = Receiver<BLSMessage>;
