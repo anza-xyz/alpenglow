@@ -601,7 +601,7 @@ mod tests {
                 .bank_forks();
 
         let my_tpu_vote_socket_addr = cluster_info
-            .lookup_contact_info(&keypair.pubkey(), |node| node.tpu_vote(protocol).unwrap())
+            .lookup_contact_info(&keypair.pubkey(), |node| node.alpenglow().unwrap())
             .unwrap();
 
         // Create our staked validators cache - set include_self to true
