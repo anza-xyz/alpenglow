@@ -39,6 +39,9 @@ pub struct StakedValidatorsCache {
 
     /// Protocol
     protocol: Protocol,
+
+    /// Whether to include the running validator's socket address in cache entries
+    include_self: bool,
 }
 
 impl StakedValidatorsCache {
@@ -47,12 +50,14 @@ impl StakedValidatorsCache {
         protocol: Protocol,
         ttl: Duration,
         max_cache_size: usize,
+        include_self: bool,
     ) -> Self {
         Self {
             cache: LruCache::new(max_cache_size),
             ttl,
             bank_forks,
             protocol,
+            include_self,
         }
     }
 
@@ -89,7 +94,12 @@ impl StakedValidatorsCache {
 
         let mut nodes: Vec<_> = epoch_staked_nodes
             .iter()
-            .filter(|(_, stake)| **stake > 0)
+            .filter(|(pubkey, stake)| {
+                let positive_stake = **stake > 0;
+                let not_self = pubkey != &&cluster_info.id();
+
+                positive_stake && (self.include_self || not_self)
+            })
             .filter_map(|(pubkey, stake)| {
                 cluster_info
                     .lookup_contact_info(pubkey, |node| node.tpu_vote(self.protocol))?
