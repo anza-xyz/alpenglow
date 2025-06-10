@@ -3393,6 +3393,7 @@ mod tests {
         check_socket(&node.sockets.gossip, ip, range);
         check_socket(&node.sockets.repair, ip, range);
         check_socket(&node.sockets.tvu_quic, ip, range);
+        check_socket(&node.sockets.alpenglow, ip, range);
 
         check_sockets(&node.sockets.tvu, ip, range);
         check_sockets(&node.sockets.tpu, ip, range);
@@ -4374,6 +4375,10 @@ mod tests {
     #[test]
     fn test_contact_trace() {
         solana_logger::setup();
+        // If you change the format of cluster_info_trace or rpc_info_trace, please make sure
+        // you read the actual output so the headers lign up with the output.
+        const CLUSTER_INFO_TRACE_LENGTH: usize = 452;
+        const RPC_INFO_TRACE_LENGTH: usize = 335;
         let keypair43 = Arc::new(
             Keypair::from_bytes(&[
                 198, 203, 8, 178, 196, 71, 119, 152, 31, 96, 221, 142, 115, 224, 45, 34, 173, 138,
@@ -4414,18 +4419,18 @@ mod tests {
 
         let trace = cluster_info44.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 452);
+        assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info44.rpc_info_trace();
         info!("rpc:\n{}", trace);
-        assert_eq!(trace.len(), 335);
+        assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 452);
+        assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.rpc_info_trace();
         info!("rpc:\n{}", trace);
-        assert_eq!(trace.len(), 335);
+        assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
     }
 }

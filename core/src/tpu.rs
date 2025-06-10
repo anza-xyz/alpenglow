@@ -120,7 +120,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         alpenglow_vote_sender: AlpenglowVoteSender,
-        alpenglow_bls_message_sender: AlpenglowBLSMessageSender,
+        bls_verified_message_sender: AlpenglowBLSMessageSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         keypair: &Keypair,
@@ -261,7 +261,7 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let verifier = BLSSigVerifier::new(Some(alpenglow_bls_message_sender));
+            let verifier = BLSSigVerifier::new(Some(bls_verified_message_sender));
             SigVerifyStage::new(
                 bls_packet_receiver,
                 verifier,
