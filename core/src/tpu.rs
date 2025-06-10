@@ -153,7 +153,7 @@ impl Tpu {
         let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         //TODO(wen): we should actually send the messages to voting loop.
         //TODO(wen): actually add error reporing to BLS sigverifier.
-        let (alpenglow_bls_message_sender, _) = bounded(MAX_ALPENGLOW_PACKET_NUM);
+        let (bls_verified_message_sender, _) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let fetch_stage = FetchStage::new_with_sender(
             transactions_sockets,
             tpu_forwards_sockets,
@@ -261,7 +261,7 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let verifier = BLSSigVerifier::new(Some(alpenglow_bls_message_sender));
+            let verifier = BLSSigVerifier::new(Some(bls_verified_message_sender));
             SigVerifyStage::new(
                 bls_packet_receiver,
                 verifier,
