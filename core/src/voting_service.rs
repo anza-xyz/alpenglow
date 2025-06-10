@@ -102,6 +102,7 @@ impl VotingService {
                     connection_cache.protocol(),
                     Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
                     STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
+                    false,
                 );
 
                 for vote_op in vote_receiver.iter() {
