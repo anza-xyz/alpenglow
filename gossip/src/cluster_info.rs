@@ -569,7 +569,7 @@ impl ClusterInfo {
                     }
                     let ip_addr = node.gossip().as_ref().map(SocketAddr::ip);
                     Some(format!(
-                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {}\n",
+                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {}\n",
                         node.gossip()
                             .filter(|addr| self.socket_addr_space.check(addr))
                             .as_ref()
@@ -592,6 +592,7 @@ impl ClusterInfo {
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::UDP)),
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::QUIC)),
                         self.addr_to_string(&ip_addr, &node.serve_repair(contact_info::Protocol::UDP)),
+                        self.addr_to_string(&ip_addr, &node.alpenglow()),
                         node.shred_version(),
                     ))
                 }
@@ -600,9 +601,9 @@ impl ClusterInfo {
 
         format!(
             "IP Address        |Age(ms)| Node identifier                              \
-             | Version |Gossip|TPUvote| TPU  |TPUfwd| TVU  |TVU Q |ServeR|ShredVer\n\
+             | Version |Gossip|TPUvote| TPU  |TPUfwd| TVU  |TVU Q |ServeR|Alpeng|ShredVer\n\
              ------------------+-------+----------------------------------------------\
-             +---------+------+-------+------+------+------+------+------+--------\n\
+             +---------+------+-------+------+------+------+------+------+------+--------\n\
              {}\
              Nodes: {}{}{}",
             nodes.join(""),
@@ -2455,6 +2456,7 @@ pub struct Sockets {
     pub tpu_quic: Vec<UdpSocket>,
     pub tpu_forwards_quic: Vec<UdpSocket>,
     pub tpu_vote_quic: Vec<UdpSocket>,
+    pub alpenglow: UdpSocket,
 }
 
 pub struct NodeConfig {
@@ -2524,6 +2526,7 @@ impl Node {
         let tpu_vote_quic = bind_to_localhost().unwrap();
         let tpu_vote_quic =
             bind_more_with_config(tpu_vote_quic, num_quic_endpoints, quic_config).unwrap();
+        let alpenglow = bind_to_localhost().unwrap();
 
         let repair = bind_to_localhost().unwrap();
         let repair_quic = bind_to_localhost().unwrap();
@@ -2579,6 +2582,7 @@ impl Node {
             tpu_vote_quic[0].local_addr().unwrap(),
             "TPU-vote QUIC"
         );
+        set_socket!(set_alpenglow, alpenglow.local_addr().unwrap(), "Alpenglow");
         set_socket!(set_rpc, rpc_addr, "RPC");
         set_socket!(set_rpc_pubsub, rpc_pubsub_addr, "RPC-pubsub");
         set_socket!(
@@ -2614,6 +2618,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }
@@ -2698,6 +2703,8 @@ impl Node {
             socket_config_reuseport,
         )
         .unwrap();
+        let (alpenglow_port, alpenglow) =
+            Self::bind_with_config(bind_ip_addr, port_range, socket_config);
 
         let (_, retransmit_socket) =
             Self::bind_with_config(bind_ip_addr, port_range, socket_config);
@@ -2744,6 +2751,7 @@ impl Node {
         set_socket!(set_tpu_forwards, tpu_forwards_port, "TPU-forwards");
         set_socket!(set_tpu_vote, UDP, tpu_vote_port, "TPU-vote");
         set_socket!(set_tpu_vote, QUIC, tpu_vote_quic_port, "TPU-vote QUIC");
+        set_socket!(set_alpenglow, alpenglow_port, "Alpenglow");
         set_socket!(set_rpc, rpc_port, "RPC");
         set_socket!(set_rpc_pubsub, rpc_pubsub_port, "RPC-pubsub");
         set_socket!(set_serve_repair, UDP, serve_repair_port, "serve-repair");
@@ -2777,6 +2785,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }
@@ -2855,6 +2864,9 @@ impl Node {
         )
         .unwrap();
 
+        let (alpenglow_port, alpenglow) =
+            Self::bind_with_config(bind_ip_addr, port_range, socket_config);
+
         let (_, retransmit_sockets) =
             multi_bind_in_range_with_config(bind_ip_addr, port_range, socket_config_reuseport, 8)
                 .expect("retransmit multi_bind");
@@ -2898,6 +2910,7 @@ impl Node {
             .unwrap();
         info.set_serve_repair(QUIC, (addr, serve_repair_quic_port))
             .unwrap();
+        info.set_alpenglow((addr, alpenglow_port)).unwrap();
 
         trace!("new ContactInfo: {:?}", info);
 
@@ -2922,6 +2935,7 @@ impl Node {
                 tpu_quic,
                 tpu_forwards_quic,
                 tpu_vote_quic,
+                alpenglow,
             },
         }
     }
@@ -3379,6 +3393,7 @@ mod tests {
         check_socket(&node.sockets.gossip, ip, range);
         check_socket(&node.sockets.repair, ip, range);
         check_socket(&node.sockets.tvu_quic, ip, range);
+        check_socket(&node.sockets.alpenglow, ip, range);
 
         check_sockets(&node.sockets.tvu, ip, range);
         check_sockets(&node.sockets.tpu, ip, range);
@@ -4360,6 +4375,10 @@ mod tests {
     #[test]
     fn test_contact_trace() {
         solana_logger::setup();
+        // If you change the format of cluster_info_trace or rpc_info_trace, please make sure
+        // you read the actual output so the headers lign up with the output.
+        const CLUSTER_INFO_TRACE_LENGTH: usize = 452;
+        const RPC_INFO_TRACE_LENGTH: usize = 335;
         let keypair43 = Arc::new(
             Keypair::from_bytes(&[
                 198, 203, 8, 178, 196, 71, 119, 152, 31, 96, 221, 142, 115, 224, 45, 34, 173, 138,
@@ -4400,18 +4419,18 @@ mod tests {
 
         let trace = cluster_info44.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 431);
+        assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info44.rpc_info_trace();
         info!("rpc:\n{}", trace);
-        assert_eq!(trace.len(), 335);
+        assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.contact_info_trace();
         info!("cluster:\n{}", trace);
-        assert_eq!(trace.len(), 431);
+        assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.rpc_info_trace();
         info!("rpc:\n{}", trace);
-        assert_eq!(trace.len(), 335);
+        assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
     }
 }

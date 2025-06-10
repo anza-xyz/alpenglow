@@ -18,7 +18,9 @@ use {
         },
         fetch_stage::FetchStage,
         forwarding_stage::ForwardingStage,
-        sigverifier::ed25519_sigverifier::TransactionSigVerifier,
+        sigverifier::{
+            bls_sigverifier::BLSSigVerifier, ed25519_sigverifier::TransactionSigVerifier,
+        },
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
         tpu_entry_notifier::TpuEntryNotifier,
@@ -60,6 +62,9 @@ use {
     tokio::sync::mpsc::Sender as AsyncSender,
 };
 
+// The maximum number of alpenglow packets that can be processed in a single batch
+pub const MAX_ALPENGLOW_PACKET_NUM: usize = 10000;
+
 pub struct TpuSockets {
     pub transactions: Vec<UdpSocket>,
     pub transaction_forwards: Vec<UdpSocket>,
@@ -68,12 +73,14 @@ pub struct TpuSockets {
     pub transactions_quic: Vec<UdpSocket>,
     pub transactions_forwards_quic: Vec<UdpSocket>,
     pub vote_quic: Vec<UdpSocket>,
+    pub alpenglow: UdpSocket,
 }
 
 pub struct Tpu {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
+    alpenglow_sigverify_stage: SigVerifyStage,
     banking_stage: BankingStage,
     forwarding_stage: JoinHandle<()>,
     cluster_info_vote_listener: ClusterInfoVoteListener,
@@ -137,18 +144,25 @@ impl Tpu {
             transactions_quic: transactions_quic_sockets,
             transactions_forwards_quic: transactions_forwards_quic_sockets,
             vote_quic: tpu_vote_quic_sockets,
+            alpenglow: alpenglow_socket,
         } = sockets;
 
         let (packet_sender, packet_receiver) = unbounded();
         let (vote_packet_sender, vote_packet_receiver) = unbounded();
         let (forwarded_packet_sender, forwarded_packet_receiver) = unbounded();
+        let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
+        //TODO(wen): we should actually send the messages to voting loop.
+        //TODO(wen): actually add error reporing to BLS sigverifier.
+        let (bls_verified_message_sender, _) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let fetch_stage = FetchStage::new_with_sender(
             transactions_sockets,
             tpu_forwards_sockets,
             tpu_vote_sockets,
+            alpenglow_socket,
             exit.clone(),
             &packet_sender,
             &vote_packet_sender,
+            &bls_packet_sender,
             &forwarded_packet_sender,
             forwarded_packet_receiver,
             poh_recorder,
@@ -246,6 +260,16 @@ impl Tpu {
             )
         };
 
+        let alpenglow_sigverify_stage = {
+            let verifier = BLSSigVerifier::new(Some(bls_verified_message_sender));
+            SigVerifyStage::new(
+                bls_packet_receiver,
+                verifier,
+                "solSigVerAlpenglow",
+                "tpu-alpenglow-verifier",
+            )
+        };
+
         let cluster_info_vote_listener = ClusterInfoVoteListener::new(
             exit.clone(),
             cluster_info.clone(),
@@ -317,6 +341,7 @@ impl Tpu {
                 fetch_stage,
                 sigverify_stage,
                 vote_sigverify_stage,
+                alpenglow_sigverify_stage,
                 banking_stage,
                 forwarding_stage,
                 cluster_info_vote_listener,
@@ -337,6 +362,7 @@ impl Tpu {
             self.fetch_stage.join(),
             self.sigverify_stage.join(),
             self.vote_sigverify_stage.join(),
+            self.alpenglow_sigverify_stage.join(),
             self.cluster_info_vote_listener.join(),
             self.banking_stage.join(),
             self.forwarding_stage.join(),
