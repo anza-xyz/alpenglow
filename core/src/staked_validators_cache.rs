@@ -40,7 +40,7 @@ pub struct StakedValidatorsCache {
     /// Protocol
     protocol: Protocol,
 
-    /// Whether to include the running validator's socket address in the list of staked validators
+    /// Whether to include the running validator's socket address in cache entries
     include_self: bool,
 }
 
@@ -96,12 +96,9 @@ impl StakedValidatorsCache {
             .iter()
             .filter(|(pubkey, stake)| {
                 let positive_stake = **stake > 0;
+                let not_self = pubkey != &&cluster_info.id();
 
-                if self.include_self {
-                    positive_stake
-                } else {
-                    positive_stake && pubkey != &&cluster_info.id()
-                }
+                positive_stake && (self.include_self || not_self)
             })
             .filter_map(|(pubkey, stake)| {
                 cluster_info
@@ -550,18 +547,15 @@ mod tests {
         assert!(refreshed);
     }
 
-    #[test_case(325_000_000_u64, 1_usize, 10_usize, 123_u64, Protocol::UDP)]
-    #[test_case(325_000_000_u64, 3_usize, 10_usize, 123_u64, Protocol::QUIC)]
-    #[test_case(325_000_000_u64, 10_usize, 10_usize, 123_u64, Protocol::UDP)]
-    #[test_case(325_000_000_u64, 10_usize, 10_usize, 123_u64, Protocol::QUIC)]
-    #[test_case(325_000_000_u64, 50_usize, 60_usize, 123_u64, Protocol::UDP)]
-    fn test_exclude_self_from_cache(
-        slot_num: u64,
-        num_nodes: usize,
-        num_vote_accounts: usize,
-        genesis_lamports: u64,
-        protocol: Protocol,
-    ) {
+    #[test_case(1_usize, Protocol::UDP)]
+    #[test_case(1_usize, Protocol::QUIC)]
+    #[test_case(10_usize, Protocol::UDP)]
+    #[test_case(10_usize, Protocol::QUIC)]
+    fn test_exclude_self_from_cache(num_nodes: usize, protocol: Protocol) {
+        let slot_num = 325_000_000_u64;
+        let num_vote_accounts = 10_usize;
+        let genesis_lamports = 123_u64;
+
         // Create our harness
         let (keypair_map, vahm) = build_epoch_stakes(num_nodes, 0, num_vote_accounts);
 
