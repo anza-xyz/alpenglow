@@ -226,19 +226,20 @@ impl VotingService {
             .unwrap_or(&[])
             .iter()
             .chain(staked_validator_alpenglow_sockets.iter());
-        match serialize(bls_message) {
-            Ok(buf) => {
-                for alpenglow_socket in sockets {
-                    if let Err(e) = send_message(buf.clone(), alpenglow_socket, &connection_cache) {
-                        warn!(
-                            "Failed to send alpenglow message to {}: {:?}",
-                            alpenglow_socket, e
-                        );
-                    }
-                }
-            }
+        let buf = match serialize(bls_message) {
+            Ok(buf) => buf,
             Err(err) => {
                 error!("Failed to serialize alpenglow message: {:?}", err);
+                return;
+            }
+        };
+
+        for alpenglow_socket in sockets {
+            if let Err(e) = send_message(buf.clone(), alpenglow_socket, &connection_cache) {
+                warn!(
+                    "Failed to send alpenglow message to {}: {:?}",
+                    alpenglow_socket, e
+                );
             }
         }
     }
