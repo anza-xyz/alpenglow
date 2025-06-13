@@ -405,87 +405,23 @@ mod tests {
         (node_keypair_map, vahm)
     }
 
-    #[test_case(
-        325_000_000_u64,
-        1_usize,
-        0_usize,
-        10_usize,
-        123_u64,
-        Protocol::UDP,
-        false
-    )]
-    #[test_case(
-        325_000_000_u64,
-        1_usize,
-        0_usize,
-        10_usize,
-        123_u64,
-        Protocol::UDP,
-        true
-    )]
-    #[test_case(
-        325_000_000_u64,
-        3_usize,
-        0_usize,
-        10_usize,
-        123_u64,
-        Protocol::QUIC,
-        false
-    )]
-    #[test_case(
-        325_000_000_u64,
-        10_usize,
-        2_usize,
-        10_usize,
-        123_u64,
-        Protocol::UDP,
-        false
-    )]
-    #[test_case(
-        325_000_000_u64,
-        10_usize,
-        2_usize,
-        10_usize,
-        123_u64,
-        Protocol::UDP,
-        true
-    )]
-    #[test_case(
-        325_000_000_u64,
-        10_usize,
-        10_usize,
-        10_usize,
-        123_u64,
-        Protocol::QUIC,
-        false
-    )]
-    #[test_case(
-        325_000_000_u64,
-        50_usize,
-        7_usize,
-        60_usize,
-        123_u64,
-        Protocol::UDP,
-        false
-    )]
-    #[test_case(
-        325_000_000_u64,
-        50_usize,
-        7_usize,
-        60_usize,
-        123_u64,
-        Protocol::UDP,
-        true
-    )]
+    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, false)]
+    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, true)]
+    #[test_case(3_usize, 0_usize, 10_usize, Protocol::QUIC, false)]
+    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, false)]
+    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, true)]
+    #[test_case(10_usize, 10_usize, 10_usize, Protocol::QUIC, false)]
+    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, false)]
+    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, true)]
     fn test_detect_only_staked_nodes_and_refresh_after_ttl(
-        slot_num: u64,
         num_nodes: usize,
         num_zero_stake_nodes: usize,
         num_vote_accounts: usize,
-        genesis_lamports: u64,
         protocol: Protocol,
         use_alpenglow_socket: bool,
     ) {
+        let slot_num = 325_000_000_u64;
+        let genesis_lamports = 123_u64;
         // Create our harness
         let (keypair_map, vahm) =
             build_epoch_stakes(num_nodes, num_zero_stake_nodes, num_vote_accounts);
