@@ -460,19 +460,16 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         assert!(recv_mmsg(&socket, &mut packet_batch[..]).is_ok());
-        if let Some(packet) = packet_batch.iter().next() {
-            match packet.deserialize_slice::<BLSMessage, _>(..) {
-                Ok(received_bls_message) => {
-                    assert_eq!(received_bls_message, bls_message);
-                }
-                Err(err) => panic!(
+        let packet = packet_batch.iter().next().expect("No packets received");
+        let received_bls_message = packet
+            .deserialize_slice::<BLSMessage, _>(..)
+            .unwrap_or_else(|err| {
+                panic!(
                     "Failed to deserialize BLSMessage: {:?} {:?}",
                     size_of::<BLSMessage>(),
                     err
-                ),
-            }
-        } else {
-            panic!("No packets received");
-        }
+                )
+            });
+        assert_eq!(received_bls_message, bls_message);
     }
 }
