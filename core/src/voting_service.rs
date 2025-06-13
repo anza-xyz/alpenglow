@@ -433,7 +433,7 @@ mod tests {
         // Create listener thread on a random port we allocated and return SocketAddr to create VotingService
 
         // Bind to a random UDP port
-        let socket = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind UDP socket");
+        let socket = solana_net_utils::bind_to_localhost();
         let listener_addr = socket.local_addr().unwrap();
 
         // Create VotingService with the listener address
