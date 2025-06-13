@@ -709,8 +709,14 @@ mod tests {
                 .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
                 .bank_forks();
 
-        let my_tpu_vote_socket_addr = cluster_info
-            .lookup_contact_info(&keypair.pubkey(), |node| node.tpu_vote(protocol).unwrap())
+        let my_socket_addr = cluster_info
+            .lookup_contact_info(&keypair.pubkey(), |node| {
+                if use_alpenglow_socket {
+                    node.alpenglow().unwrap()
+                } else {
+                    node.tpu_vote(protocol).unwrap()
+                }
+            })
             .unwrap();
 
         // Create our staked validators cache - set include_self to true
@@ -729,7 +735,7 @@ mod tests {
             use_alpenglow_socket,
         );
         assert_eq!(sockets.len(), num_nodes);
-        assert!(sockets.contains(&my_tpu_vote_socket_addr));
+        assert!(sockets.contains(&my_socket_addr));
 
         // Create our staked validators cache - set include_self to false
         let mut svc = StakedValidatorsCache::new(
@@ -747,6 +753,6 @@ mod tests {
             use_alpenglow_socket,
         );
         assert_eq!(sockets.len(), num_nodes - 1);
-        assert!(!sockets.contains(&my_tpu_vote_socket_addr));
+        assert!(!sockets.contains(&my_socket_addr));
     }
 }
