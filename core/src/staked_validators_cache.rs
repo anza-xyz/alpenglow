@@ -680,12 +680,11 @@ mod tests {
         assert!(refreshed);
     }
 
-    #[test_case(1_usize, Protocol::UDP, false)]
-    #[test_case(1_usize, Protocol::UDP, true)]
-    #[test_case(1_usize, Protocol::QUIC, false)]
-    #[test_case(10_usize, Protocol::UDP, false)]
-    #[test_case(10_usize, Protocol::UDP, true)]
-    #[test_case(10_usize, Protocol::QUIC, false)]
+#[test_matrix(
+    [1_usize, 10_usize],
+    [Protocol::UDP, Protocol::QUIC],
+    [false, true]
+)]
     fn test_exclude_self_from_cache(
         num_nodes: usize,
         protocol: Protocol,
