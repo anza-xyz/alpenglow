@@ -124,16 +124,15 @@ impl StakedValidatorsCache {
         nodes.dedup_by_key(|node| node.tpu_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        let (validator_sockets, alpenglow_sockets) = nodes.into_iter().fold(
-            (Vec::new(), Vec::new()),
-            |(mut validator_sockets, mut alpenglow_sockets), node| {
-                validator_sockets.push(node.tpu_socket);
-                if let Some(alpenglow_socket) = node.alpenglow_socket {
-                    alpenglow_sockets.push(alpenglow_socket);
-                }
-                (validator_sockets, alpenglow_sockets)
-            },
-        );
+        let mut validator_sockets = Vec::new();
+        let mut alpenglow_sockets = Vec::new();
+
+        for node in nodes {
+            validator_sockets.push(node.tpu_socket);
+            if let Some(alpenglow_socket) = node.alpenglow_socket {
+                alpenglow_sockets.push(alpenglow_socket);
+            }
+        }
 
         self.cache.push(
             epoch,
