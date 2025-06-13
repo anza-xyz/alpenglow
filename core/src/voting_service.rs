@@ -370,7 +370,7 @@ mod tests {
             socket::SocketAddrSpace,
         },
         std::{
-            net::{SocketAddr, UdpSocket},
+            net::SocketAddr,
             sync::{atomic::AtomicBool, Arc, RwLock},
         },
     };
@@ -434,7 +434,7 @@ mod tests {
         // Create listener thread on a random port we allocated and return SocketAddr to create VotingService
 
         // Bind to a random UDP port
-        let socket = solana_net_utils::bind_to_localhost();
+        let socket = solana_net_utils::bind_to_localhost().unwrap();
         let listener_addr = socket.local_addr().unwrap();
 
         // Create VotingService with the listener address

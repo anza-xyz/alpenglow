@@ -240,7 +240,7 @@ mod tests {
             sync::{Arc, RwLock},
             time::{Duration, Instant},
         },
-        test_case::test_case,
+        test_case::{test_case, test_matrix},
     };
 
     fn new_rand_vote_account<R: rand::Rng>(
@@ -616,7 +616,7 @@ mod tests {
         assert!(refreshed);
     }
 
-#[test_matrix(
+    #[test_matrix(
     [1_usize, 10_usize],
     [Protocol::UDP, Protocol::QUIC],
     [false, true]
