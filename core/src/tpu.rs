@@ -261,7 +261,7 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let verifier = BLSSigVerifier::new(Some(bls_verified_message_sender));
+            let verifier = BLSSigVerifier::new(bls_verified_message_sender);
             SigVerifyStage::new(
                 bls_packet_receiver,
                 verifier,
