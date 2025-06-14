@@ -82,7 +82,7 @@ impl DataPoint {
     }
 
     pub fn add_field_u64(&mut self, name: &'static str, value: u64) -> &mut Self {
-        self.fields.push((name, value.to_string() + "i"));
+        self.fields.push((name, value.to_string() + "u"));
         self
     }
 
