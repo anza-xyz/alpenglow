@@ -13,8 +13,11 @@ use {
 };
 
 struct StakedValidatorsCacheEntry {
-    /// Sockets associated with the staked validators
+    /// TPU Vote Sockets associated with the staked validators
     validator_sockets: Vec<SocketAddr>,
+
+    /// Alpenglow Sockets associated with the staked validators
+    alpenglow_sockets: Vec<SocketAddr>,
 
     /// The time at which this entry was created
     creation_time: Instant,
@@ -90,6 +93,7 @@ impl StakedValidatorsCache {
         struct Node {
             stake: u64,
             tpu_socket: SocketAddr,
+            alpenglow_socket: Option<SocketAddr>,
         }
 
         let mut nodes: Vec<_> = epoch_staked_nodes
@@ -101,24 +105,40 @@ impl StakedValidatorsCache {
                 positive_stake && (self.include_self || not_self)
             })
             .filter_map(|(pubkey, stake)| {
-                cluster_info
-                    .lookup_contact_info(pubkey, |node| node.tpu_vote(self.protocol))?
-                    .map(|socket_addr| Node {
+                cluster_info.lookup_contact_info(pubkey, |node| {
+                    let tpu_socket = node.tpu_vote(self.protocol);
+                    let alpenglow_socket = node.alpenglow();
+                    // To not change current behavior, we only consider nodes that have a
+                    // TPU socket, and ignore nodes that only have an Alpenglow socket.
+                    // TODO(wen): tpu_socket is no longer needed after Alpenglow migration.
+                    tpu_socket.map(|tpu_socket| Node {
                         stake: *stake,
-                        tpu_socket: socket_addr,
+                        tpu_socket,
+                        alpenglow_socket,
                     })
+                })?
             })
             .collect();
 
+        // TODO(wen): After Alpenglow vote is no longer transaction, we dedup by alpenglow socket.
         nodes.dedup_by_key(|node| node.tpu_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        let validator_sockets = nodes.into_iter().map(|node| node.tpu_socket).collect();
+        let mut validator_sockets = Vec::new();
+        let mut alpenglow_sockets = Vec::new();
+
+        for node in nodes {
+            validator_sockets.push(node.tpu_socket);
+            if let Some(alpenglow_socket) = node.alpenglow_socket {
+                alpenglow_sockets.push(alpenglow_socket);
+            }
+        }
 
         self.cache.push(
             epoch,
             StakedValidatorsCacheEntry {
                 validator_sockets,
+                alpenglow_sockets,
                 creation_time: update_time,
             },
         );
@@ -129,8 +149,14 @@ impl StakedValidatorsCache {
         slot: Slot,
         cluster_info: &ClusterInfo,
         access_time: Instant,
+        use_alpenglow_socket: bool,
     ) -> (&[SocketAddr], bool) {
-        self.get_staked_validators_by_epoch(self.cur_epoch(slot), cluster_info, access_time)
+        self.get_staked_validators_by_epoch(
+            self.cur_epoch(slot),
+            cluster_info,
+            access_time,
+            use_alpenglow_socket,
+        )
     }
 
     pub fn get_staked_validators_by_epoch(
@@ -138,6 +164,7 @@ impl StakedValidatorsCache {
         epoch: Epoch,
         cluster_info: &ClusterInfo,
         access_time: Instant,
+        use_alpenglow_socket: bool,
     ) -> (&[SocketAddr], bool) {
         // For a given epoch, if we either:
         //
@@ -160,7 +187,13 @@ impl StakedValidatorsCache {
             // self.cache[epoch].
             self.cache
                 .get(&epoch)
-                .map(|v| &*v.validator_sockets)
+                .map(|v| {
+                    if use_alpenglow_socket {
+                        &*v.alpenglow_sockets
+                    } else {
+                        &*v.validator_sockets
+                    }
+                })
                 .unwrap(),
             refresh_cache,
         )
@@ -207,7 +240,7 @@ mod tests {
             sync::{Arc, RwLock},
             time::{Duration, Instant},
         },
-        test_case::test_case,
+        test_case::{test_case, test_matrix},
     };
 
     fn new_rand_vote_account<R: rand::Rng>(
@@ -300,6 +333,10 @@ mod tests {
                                 )
                                 .is_ok());
 
+                            assert!(contact_info
+                                .set_alpenglow((Ipv4Addr::LOCALHOST, 8080 + node_ix as u16))
+                                .is_ok());
+
                             contact_info
                         });
 
@@ -368,19 +405,23 @@ mod tests {
         (node_keypair_map, vahm)
     }
 
-    #[test_case(325_000_000_u64, 1_usize, 0_usize, 10_usize, 123_u64, Protocol::UDP)]
-    #[test_case(325_000_000_u64, 3_usize, 0_usize, 10_usize, 123_u64, Protocol::QUIC)]
-    #[test_case(325_000_000_u64, 10_usize, 2_usize, 10_usize, 123_u64, Protocol::UDP)]
-    #[test_case(325_000_000_u64, 10_usize, 10_usize, 10_usize, 123_u64, Protocol::QUIC)]
-    #[test_case(325_000_000_u64, 50_usize, 7_usize, 60_usize, 123_u64, Protocol::UDP)]
+    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, false)]
+    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, true)]
+    #[test_case(3_usize, 0_usize, 10_usize, Protocol::QUIC, false)]
+    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, false)]
+    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, true)]
+    #[test_case(10_usize, 10_usize, 10_usize, Protocol::QUIC, false)]
+    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, false)]
+    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, true)]
     fn test_detect_only_staked_nodes_and_refresh_after_ttl(
-        slot_num: u64,
         num_nodes: usize,
         num_zero_stake_nodes: usize,
         num_vote_accounts: usize,
-        genesis_lamports: u64,
         protocol: Protocol,
+        use_alpenglow_socket: bool,
     ) {
+        let slot_num = 325_000_000_u64;
+        let genesis_lamports = 123_u64;
         // Create our harness
         let (keypair_map, vahm) =
             build_epoch_stakes(num_nodes, num_zero_stake_nodes, num_vote_accounts);
@@ -398,7 +439,8 @@ mod tests {
 
         let now = Instant::now();
 
-        let (sockets, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+        let (sockets, refreshed) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
 
         assert!(refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
@@ -409,6 +451,7 @@ mod tests {
             slot_num,
             &cluster_info,
             now + Duration::from_secs_f64(4.999),
+            use_alpenglow_socket,
         );
 
         assert!(!refreshed);
@@ -420,6 +463,7 @@ mod tests {
             slot_num,
             &cluster_info,
             now + Duration::from_secs(5),
+            use_alpenglow_socket,
         );
 
         assert!(!refreshed);
@@ -431,6 +475,7 @@ mod tests {
             slot_num,
             &cluster_info,
             now + Duration::from_secs_f64(5.001),
+            use_alpenglow_socket,
         );
 
         assert!(refreshed);
@@ -442,6 +487,7 @@ mod tests {
             slot_num,
             &cluster_info,
             now + Duration::from_secs(100),
+            use_alpenglow_socket,
         );
 
         assert!(refreshed);
@@ -449,8 +495,9 @@ mod tests {
         assert_eq!(1, svc.len());
     }
 
-    #[test]
-    fn test_cache_eviction() {
+    #[test_case(true)]
+    #[test_case(false)]
+    fn test_cache_eviction(use_alpenglow_socket: bool) {
         // Create our harness
         let (keypair_map, vahm) = build_epoch_stakes(50, 7, 60);
 
@@ -474,19 +521,32 @@ mod tests {
         // Populate the first five entries; accessing the cache once again shouldn't trigger any
         // refreshes.
         for entry_ix in 1..=5 {
-            let (_, refreshed) =
-                svc.get_staked_validators_by_slot(entry_ix * base_slot, &cluster_info, now);
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix * base_slot,
+                &cluster_info,
+                now,
+                use_alpenglow_socket,
+            );
             assert!(refreshed);
             assert_eq!(entry_ix as usize, svc.len());
 
-            let (_, refreshed) =
-                svc.get_staked_validators_by_slot(entry_ix * base_slot, &cluster_info, now);
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix * base_slot,
+                &cluster_info,
+                now,
+                use_alpenglow_socket,
+            );
             assert!(!refreshed);
             assert_eq!(entry_ix as usize, svc.len());
         }
 
         // Entry 6 - this shouldn't increase the cache length.
-        let (_, refreshed) = svc.get_staked_validators_by_slot(6 * base_slot, &cluster_info, now);
+        let (_, refreshed) = svc.get_staked_validators_by_slot(
+            6 * base_slot,
+            &cluster_info,
+            now,
+            use_alpenglow_socket,
+        );
         assert!(refreshed);
         assert_eq!(5, svc.len());
 
@@ -505,14 +565,16 @@ mod tests {
                 entry_ix * base_slot,
                 &cluster_info,
                 now + Duration::from_secs(10),
+                use_alpenglow_socket,
             );
             assert!(refreshed);
             assert_eq!(5, svc.len());
         }
     }
 
-    #[test]
-    fn test_only_update_once_per_epoch() {
+    #[test_case(true)]
+    #[test_case(false)]
+    fn test_only_update_once_per_epoch(use_alpenglow_socket: bool) {
         let slot_num = 325_000_000_u64;
         let num_nodes = 10_usize;
         let num_zero_stake_nodes = 2_usize;
@@ -537,21 +599,33 @@ mod tests {
 
         let now = Instant::now();
 
-        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+        let (_, refreshed) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
         assert!(refreshed);
 
-        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
+        let (_, refreshed) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
         assert!(!refreshed);
 
-        let (_, refreshed) = svc.get_staked_validators_by_slot(2 * slot_num, &cluster_info, now);
+        let (_, refreshed) = svc.get_staked_validators_by_slot(
+            2 * slot_num,
+            &cluster_info,
+            now,
+            use_alpenglow_socket,
+        );
         assert!(refreshed);
     }
 
-    #[test_case(1_usize, Protocol::UDP)]
-    #[test_case(1_usize, Protocol::QUIC)]
-    #[test_case(10_usize, Protocol::UDP)]
-    #[test_case(10_usize, Protocol::QUIC)]
-    fn test_exclude_self_from_cache(num_nodes: usize, protocol: Protocol) {
+    #[test_matrix(
+    [1_usize, 10_usize],
+    [Protocol::UDP, Protocol::QUIC],
+    [false, true]
+)]
+    fn test_exclude_self_from_cache(
+        num_nodes: usize,
+        protocol: Protocol,
+        use_alpenglow_socket: bool,
+    ) {
         let slot_num = 325_000_000_u64;
         let num_vote_accounts = 10_usize;
         let genesis_lamports = 123_u64;
@@ -569,8 +643,14 @@ mod tests {
                 .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
                 .bank_forks();
 
-        let my_tpu_vote_socket_addr = cluster_info
-            .lookup_contact_info(&keypair.pubkey(), |node| node.tpu_vote(protocol).unwrap())
+        let my_socket_addr = cluster_info
+            .lookup_contact_info(&keypair.pubkey(), |node| {
+                if use_alpenglow_socket {
+                    node.alpenglow().unwrap()
+                } else {
+                    node.tpu_vote(protocol).unwrap()
+                }
+            })
             .unwrap();
 
         // Create our staked validators cache - set include_self to true
@@ -582,10 +662,14 @@ mod tests {
             true,
         );
 
-        let (sockets, _) =
-            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
+        let (sockets, _) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            Instant::now(),
+            use_alpenglow_socket,
+        );
         assert_eq!(sockets.len(), num_nodes);
-        assert!(sockets.contains(&my_tpu_vote_socket_addr));
+        assert!(sockets.contains(&my_socket_addr));
 
         // Create our staked validators cache - set include_self to false
         let mut svc = StakedValidatorsCache::new(
@@ -596,9 +680,13 @@ mod tests {
             false,
         );
 
-        let (sockets, _) =
-            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
+        let (sockets, _) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            Instant::now(),
+            use_alpenglow_socket,
+        );
         assert_eq!(sockets.len(), num_nodes - 1);
-        assert!(!sockets.contains(&my_tpu_vote_socket_addr));
+        assert!(!sockets.contains(&my_socket_addr));
     }
 }
