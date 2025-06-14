@@ -88,10 +88,10 @@ impl BLSSigVerifier {
         }
         datapoint_info!(
             "bls_sig_verifier_stats",
-            ("sent", self.stats.bls_messages_sent, i64),
-            ("sent_failed", self.stats.sent_failed, i64),
-            ("malformed", self.stats.bls_messages_malformed, i64),
-            ("received", self.stats.packets_received, i64)
+            ("sent", self.stats.bls_messages_sent, u64),
+            ("sent_failed", self.stats.sent_failed, u64),
+            ("malformed", self.stats.bls_messages_malformed, u64),
+            ("received", self.stats.packets_received, u64)
         );
         self.last_stats_logged = now;
     }
