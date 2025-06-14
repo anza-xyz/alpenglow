@@ -6,11 +6,7 @@ use {
     alpenglow_vote::bls_message::BLSMessage,
     crossbeam_channel::{Sender, TrySendError},
     solana_streamer::packet::PacketBatch,
-    std::{
-        mem,
-        sync::{Arc, Mutex},
-        time::{Duration, Instant},
-    },
+    std::time::{Duration, Instant},
 };
 
 const STATS_INTERVAL_SECONDS: u64 = 10; // Log stats every 10 second
@@ -27,7 +23,7 @@ pub(crate) struct BLSSigVerifierStats {
 
 pub struct BLSSigVerifier {
     sender: Sender<BLSMessage>,
-    stats: Arc<Mutex<BLSSigVerifierStats>>,
+    stats: BLSSigVerifierStats,
     last_stats_logged: Instant,
 }
 
@@ -72,12 +68,12 @@ impl SigVerifier for BLSSigVerifier {
             });
         });
         if packet_received > 0 {
-            let mut stats = self.stats.lock().unwrap();
-            stats.packets_received += packet_received;
-            stats.bls_messages_sent += bls_messages_sent;
-            stats.bls_messages_malformed += bls_messages_malformed;
-            stats.sent_failed += sent_failed;
+            self.stats.packets_received += packet_received;
+            self.stats.bls_messages_sent += bls_messages_sent;
+            self.stats.bls_messages_malformed += bls_messages_malformed;
+            self.stats.sent_failed += sent_failed;
         }
+        // We don't need lock on stats because stats are read and write in a single thread.
         self.report_stats();
         Ok(())
     }
@@ -90,17 +86,12 @@ impl BLSSigVerifier {
         if time_since_last_log < Duration::from_secs(STATS_INTERVAL_SECONDS) {
             return;
         }
-        let mut cur_stats = BLSSigVerifierStats::default();
-        {
-            let mut stats = self.stats.lock().unwrap();
-            mem::swap(&mut *stats, &mut cur_stats);
-        }
         datapoint_info!(
             "bls_sig_verifier_stats",
-            ("sent", cur_stats.bls_messages_sent, i64),
-            ("sent_failed", cur_stats.sent_failed, i64),
-            ("malformed", cur_stats.bls_messages_malformed, i64),
-            ("received", cur_stats.packets_received, i64)
+            ("sent", self.stats.bls_messages_sent, i64),
+            ("sent_failed", self.stats.sent_failed, i64),
+            ("malformed", self.stats.bls_messages_malformed, i64),
+            ("received", self.stats.packets_received, i64)
         );
         self.last_stats_logged = now;
     }
@@ -108,16 +99,15 @@ impl BLSSigVerifier {
     pub fn new(sender: Sender<BLSMessage>) -> Self {
         Self {
             sender,
-            stats: Arc::new(Mutex::new(BLSSigVerifierStats::default())),
+            stats: BLSSigVerifierStats::default(),
             last_stats_logged: Instant::now(),
         }
     }
 
     #[cfg(feature = "dev-context-only-utils")]
     #[allow(dead_code)]
-    pub(crate) fn stats(&self) -> BLSSigVerifierStats {
-        let stats = self.stats.lock().unwrap();
-        stats.clone()
+    pub(crate) fn stats(&self) -> &BLSSigVerifierStats {
+        &self.stats
     }
 }
 
