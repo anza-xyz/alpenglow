@@ -113,7 +113,7 @@ macro_rules! create_datapoint {
     (@field $point:ident $name:expr, $value:expr, i64) => {
         $point.add_field_i64($name, $value as i64);
     };
-    (@field $point:ident $name:expr, $value:expr, i64) => {
+    (@field $point:ident $name:expr, $value:expr, u64) => {
         $point.add_field_u64($name, $value as u64);
     };
     (@field $point:ident $name:expr, $value:expr, f64) => {
