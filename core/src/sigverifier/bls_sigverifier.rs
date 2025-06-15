@@ -9,23 +9,44 @@ use {
     std::time::{Duration, Instant},
 };
 
-const STATS_INTERVAL_SECONDS: u64 = 10; // Log stats every 10 second
+const STATS_INTERVAL_SECONDS: u64 = 1; // Log stats every second
 
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
-#[derive(Debug, Default, Clone)]
+#[derive(Debug)]
 pub(crate) struct BLSSigVerifierStats {
-    pub bls_messages_sent: u64,
-    pub bls_messages_malformed: u64,
+    pub sent: u64,
     pub sent_failed: u64,
-    pub packets_received: u64,
+    pub received: u64,
+    pub received_malformed: u64,
     pub channel_disconnected: bool,
+    pub last_stats_logged: Instant,
+}
+
+impl BLSSigVerifierStats {
+    pub fn new() -> Self {
+        Self {
+            sent: 0,
+            sent_failed: 0,
+            received: 0,
+            received_malformed: 0,
+            channel_disconnected: false,
+            last_stats_logged: Instant::now(),
+        }
+    }
+
+    pub fn accumulate(&mut self, other: BLSSigVerifierStats) {
+        self.sent += other.sent;
+        self.sent_failed += other.sent_failed;
+        self.received += other.received;
+        self.received_malformed += other.received_malformed;
+        self.channel_disconnected |= other.channel_disconnected;
+    }
 }
 
 pub struct BLSSigVerifier {
     sender: Sender<BLSMessage>,
     stats: BLSSigVerifierStats,
-    last_stats_logged: Instant,
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -40,85 +61,73 @@ impl SigVerifier for BLSSigVerifier {
         packet_batches: Vec<PacketBatch>,
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         // TODO(wen): just a placeholder without any batching.
-        let mut packet_received = 0;
-        let mut bls_messages_sent = 0;
-        let mut bls_messages_malformed = 0;
-        let mut sent_failed = 0;
-        let mut channel_disconnected = false;
+        let mut stats = BLSSigVerifierStats::new();
         packet_batches.iter().for_each(|batch| {
             batch.iter().for_each(|packet| {
-                packet_received += 1;
+                stats.received += 1;
                 match packet.deserialize_slice::<BLSMessage, _>(..) {
                     Ok(message) => match self.sender.try_send(message) {
                         Ok(()) => {
-                            bls_messages_sent += 1;
+                            stats.sent += 1;
                         }
                         Err(TrySendError::Full(_)) => {
                             warn!("BLS message channel is full, dropping message");
-                            sent_failed += 1;
+                            stats.sent_failed += 1;
                         }
                         Err(TrySendError::Disconnected(_)) => {
                             error!("BLS message channel is disconnected");
-                            channel_disconnected = true;
+                            stats.channel_disconnected = true;
                         }
                     },
                     Err(e) => {
                         trace!("Failed to deserialize BLS message: {}", e);
-                        bls_messages_malformed += 1;
+                        stats.received_malformed += 1;
                     }
                 }
             });
         });
-        if packet_received > 0 {
-            self.stats.packets_received += packet_received;
-            self.stats.bls_messages_sent += bls_messages_sent;
-            self.stats.bls_messages_malformed += bls_messages_malformed;
-            self.stats.sent_failed += sent_failed;
-            self.stats.channel_disconnected = channel_disconnected;
+        if stats.received > 0 {
+            self.stats.accumulate(stats);
         }
-        // We don't need lock on stats because stats are read and write in a single thread.
-        self.report_stats();
+        // We don't need lock on stats for now because stats are read and written in a single thread.
+        self.maybe_report_stats();
         Ok(())
     }
 }
 
 impl BLSSigVerifier {
-    fn report_stats(&mut self) {
+    fn maybe_report_stats(&mut self) {
         let now = Instant::now();
-        let time_since_last_log = now.duration_since(self.last_stats_logged);
+        let time_since_last_log = now.duration_since(self.stats.last_stats_logged);
         if time_since_last_log < Duration::from_secs(STATS_INTERVAL_SECONDS) {
             return;
         }
         datapoint_info!(
             "bls_sig_verifier_stats",
-            ("sent", self.stats.bls_messages_sent, u64),
+            ("sent", self.stats.sent, u64),
             ("sent_failed", self.stats.sent_failed, u64),
-            ("malformed", self.stats.bls_messages_malformed, u64),
-            ("received", self.stats.packets_received, u64),
+            ("received", self.stats.received, u64),
+            ("received_malformed", self.stats.received_malformed, u64),
             ("disconnected", self.stats.channel_disconnected, bool),
         );
-        self.stats = BLSSigVerifierStats::default();
-        self.last_stats_logged = now;
+        self.stats = BLSSigVerifierStats::new();
     }
 
     pub fn new(sender: Sender<BLSMessage>) -> Self {
         Self {
             sender,
-            stats: BLSSigVerifierStats::default(),
-            last_stats_logged: Instant::now(),
+            stats: BLSSigVerifierStats::new(),
         }
     }
 
-    #[cfg(feature = "dev-context-only-utils")]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn stats(&self) -> &BLSSigVerifierStats {
         &self.stats
     }
 
-    #[cfg(feature = "dev-context-only-utils")]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn set_last_stats_logged(&mut self, last_stats_logged: Instant) {
-        self.last_stats_logged = last_stats_logged;
+        self.stats.last_stats_logged = last_stats_logged;
     }
 }
 
@@ -194,10 +203,10 @@ mod tests {
         ];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 2);
-        assert_eq!(stats.packets_received, 2);
+        assert_eq!(stats.sent, 2);
+        assert_eq!(stats.received, 2);
         assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.bls_messages_malformed, 0);
+        assert_eq!(stats.received_malformed, 0);
 
         let messages = vec![BLSMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()),
@@ -206,14 +215,16 @@ mod tests {
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 3);
-        assert_eq!(stats.packets_received, 3);
+        assert_eq!(stats.sent, 3);
+        assert_eq!(stats.received, 3);
         assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.bls_messages_malformed, 0);
+        assert_eq!(stats.received_malformed, 0);
         assert!(!stats.channel_disconnected);
 
         // Pretend 10 seconds have passed, make sure stats are reset
-        verifier.set_last_stats_logged(Instant::now() - Duration::from_secs(11));
+        verifier.set_last_stats_logged(
+            Instant::now() - Duration::from_secs(STATS_INTERVAL_SECONDS + 1),
+        );
         let messages = vec![BLSMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(7),
             signature: Signature::default(),
@@ -222,10 +233,10 @@ mod tests {
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
         // Since we just logged all stats (including the packet just sent), stats should be reset
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 0);
-        assert_eq!(stats.packets_received, 0);
+        assert_eq!(stats.sent, 0);
+        assert_eq!(stats.received, 0);
         assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.bls_messages_malformed, 0);
+        assert_eq!(stats.received_malformed, 0);
         assert!(!stats.channel_disconnected);
     }
 
@@ -238,10 +249,10 @@ mod tests {
         let packet_batches = vec![PacketBatch::new(packets)];
         assert!(verifier.send_packets(packet_batches).is_ok());
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 0);
-        assert_eq!(stats.packets_received, 1);
+        assert_eq!(stats.sent, 0);
+        assert_eq!(stats.received, 1);
         assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.bls_messages_malformed, 1);
+        assert_eq!(stats.received_malformed, 1);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -266,10 +277,10 @@ mod tests {
 
         // Since we sent two packets and receiver can only hold one, we should see drop.
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 1);
-        assert_eq!(stats.packets_received, 3);
+        assert_eq!(stats.sent, 1);
+        assert_eq!(stats.received, 3);
         assert_eq!(stats.sent_failed, 1);
-        assert_eq!(stats.bls_messages_malformed, 1);
+        assert_eq!(stats.received_malformed, 1);
         assert!(!stats.channel_disconnected);
     }
 
@@ -287,10 +298,10 @@ mod tests {
         })];
         test_bls_message_transmission(&mut verifier, None, &messages);
         let stats = verifier.stats();
-        assert_eq!(stats.bls_messages_sent, 0);
-        assert_eq!(stats.packets_received, 1);
+        assert_eq!(stats.sent, 0);
+        assert_eq!(stats.received, 1);
         assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.bls_messages_malformed, 0);
+        assert_eq!(stats.received_malformed, 0);
         assert!(stats.channel_disconnected);
     }
 }
