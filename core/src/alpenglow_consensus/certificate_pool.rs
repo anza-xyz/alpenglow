@@ -16,7 +16,7 @@ use {
         voting_service::VoteOp,
     },
     alpenglow_vote::{
-        bls_message::{CertificateMessage, VoteMessage},
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage},
         certificate::CertificateType,
         vote::Vote,
     },
@@ -260,9 +260,10 @@ impl CertificatePool {
         trace!("Inserting certificate {cert_id:?}");
         // TODO(wen): handle send error.
         if let Some(voting_sender) = &self.voting_sender {
-            if let Err(e) = voting_sender.send(VoteOp::PushAlpenglowCertificate {
-                certificate_message: cert,
+            if let Err(e) = voting_sender.send(VoteOp::PushAlpenglowBLSMessage {
+                bls_message: BLSMessage::Certificate(cert),
                 slot: cert_id.slot(),
+                saved_vote_history: None,
             }) {
                 error!("Unable to send certificate {cert_id:?}: {e:?}");
             }

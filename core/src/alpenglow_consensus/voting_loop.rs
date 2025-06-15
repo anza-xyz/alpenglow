@@ -904,10 +904,10 @@ impl VotingLoop {
         // Send the vote over the wire
         context
             .voting_sender
-            .send(VoteOp::PushAlpenglowVote {
-                vote_message,
+            .send(VoteOp::PushAlpenglowBLSMessage {
+                bls_message: BLSMessage::Vote(vote_message),
                 slot: bank.slot(),
-                saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+                saved_vote_history: Some(SavedVoteHistoryVersions::from(saved_vote_history)),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
     }
