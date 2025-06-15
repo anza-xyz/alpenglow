@@ -44,6 +44,7 @@ impl SigVerifier for BLSSigVerifier {
         let mut bls_messages_sent = 0;
         let mut bls_messages_malformed = 0;
         let mut sent_failed = 0;
+        let mut channel_disconnected = false;
         packet_batches.iter().for_each(|batch| {
             batch.iter().for_each(|packet| {
                 packet_received += 1;
@@ -58,7 +59,7 @@ impl SigVerifier for BLSSigVerifier {
                         }
                         Err(TrySendError::Disconnected(_)) => {
                             error!("BLS message channel is disconnected");
-                            self.stats.channel_disconnected = true;
+                            channel_disconnected = true;
                         }
                     },
                     Err(e) => {
@@ -73,6 +74,7 @@ impl SigVerifier for BLSSigVerifier {
             self.stats.bls_messages_sent += bls_messages_sent;
             self.stats.bls_messages_malformed += bls_messages_malformed;
             self.stats.sent_failed += sent_failed;
+            self.stats.channel_disconnected = channel_disconnected;
         }
         // We don't need lock on stats because stats are read and write in a single thread.
         self.report_stats();
