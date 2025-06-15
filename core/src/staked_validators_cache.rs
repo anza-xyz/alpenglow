@@ -14,7 +14,6 @@ use {
 
 struct StakedValidatorsCacheEntry {
     /// TPU Vote Sockets associated with the staked validators
-    /// TPU Vote Sockets associated with the staked validators
     validator_sockets: Vec<SocketAddr>,
 
     /// Alpenglow Sockets associated with the staked validators
@@ -349,6 +348,7 @@ mod tests {
                                     (Ipv4Addr::LOCALHOST, 8005 + node_ix as u16),
                                 )
                                 .is_ok());
+
                             assert!(contact_info
                                 .set_alpenglow((Ipv4Addr::LOCALHOST, 8080 + node_ix as u16))
                                 .is_ok());
