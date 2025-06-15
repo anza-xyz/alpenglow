@@ -6,7 +6,6 @@ use {
 
 pub mod block_creation_loop;
 pub mod certificate_pool;
-pub mod transaction;
 pub mod utils;
 pub mod vote_certificate;
 pub mod vote_history;
@@ -41,14 +40,6 @@ impl CertificateId {
 
     pub(crate) fn is_fast_finalization(&self) -> bool {
         matches!(self, Self::FinalizeFast(_, _, _))
-    }
-
-    pub(crate) fn is_finalization_variant(&self) -> bool {
-        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
-    }
-
-    pub(crate) fn is_notarize_fallback(&self) -> bool {
-        matches!(self, Self::NotarizeFallback(_, _, _))
     }
 
     pub(crate) fn to_block(self) -> Option<Block> {

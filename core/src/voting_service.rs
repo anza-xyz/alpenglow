@@ -37,16 +37,10 @@ pub enum VoteOp {
         tower_slots: Vec<Slot>,
         saved_tower: SavedTowerVersions,
     },
-    //TODO(wen): remove PushAlpenglowVote when BLS all to all is submmitted.
-    PushAlpenglowVote {
-        tx: Transaction,
-        slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
-    },
     PushAlpenglowBLSMessage {
         bls_message: BLSMessage,
         slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
+        saved_vote_history: Option<SavedVoteHistoryVersions>,
     },
     RefreshVote {
         tx: Transaction,
@@ -177,39 +171,6 @@ impl VotingService {
         }
     }
 
-    // TODO(wen): broadcast_alpenglow_vote should be removed when all Alpenglow
-    // votes are sent through BLS messages.
-    fn broadcast_alpenglow_vote(
-        slot: Slot,
-        cluster_info: &ClusterInfo,
-        tx: &Transaction,
-        connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
-        staked_validators_cache: &mut StakedValidatorsCache,
-    ) {
-        let (staked_validator_tpu_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot_with_tpu_vote_ports(slot, cluster_info, Instant::now());
-
-        if staked_validator_tpu_sockets.is_empty() {
-            let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
-        } else {
-            let sockets = additional_listeners
-                .map(|v| v.as_slice())
-                .unwrap_or(&[])
-                .iter()
-                .chain(staked_validator_tpu_sockets.iter());
-
-            for tpu_vote_socket in sockets {
-                let _ = send_vote_transaction(
-                    cluster_info,
-                    tx,
-                    Some(*tpu_vote_socket),
-                    &connection_cache,
-                );
-            }
-        }
-    }
-
     fn broadcast_alpenglow_message(
         slot: Slot,
         cluster_info: &ClusterInfo,
@@ -275,40 +236,17 @@ impl VotingService {
 
                 cluster_info.push_vote(&tower_slots, tx);
             }
-            VoteOp::PushAlpenglowVote {
-                tx,
-                slot,
-                saved_vote_history,
-            } => {
-                let mut measure = Measure::start("alpenglow vote history save");
-                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
-                    std::process::exit(1);
-                }
-                measure.stop();
-                trace!("{measure}");
-
-                Self::broadcast_alpenglow_vote(
-                    slot,
-                    cluster_info,
-                    &tx,
-                    connection_cache,
-                    additional_listeners,
-                    staked_validators_cache,
-                );
-
-                // TODO: Test that no important votes are overwritten
-                cluster_info.push_alpenglow_vote(tx);
-            }
             VoteOp::PushAlpenglowBLSMessage {
                 bls_message,
                 slot,
                 saved_vote_history,
             } => {
                 let mut measure = Measure::start("alpenglow vote history save");
-                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
-                    std::process::exit(1);
+                if let Some(saved_vote_history) = &saved_vote_history {
+                    if let Err(err) = vote_history_storage.store(saved_vote_history) {
+                        error!("Unable to save vote history to storage: {:?}", err);
+                        std::process::exit(1);
+                    }
                 }
                 measure.stop();
                 trace!("{measure}");
@@ -454,7 +392,7 @@ mod tests {
             .send(VoteOp::PushAlpenglowBLSMessage {
                 bls_message: bls_message.clone(),
                 slot: 5,
-                saved_vote_history,
+                saved_vote_history: Some(saved_vote_history),
             })
             .is_ok());
 

@@ -5534,6 +5534,9 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_with",
+ "solana-signature",
+ "solana-signer",
+ "subtle",
  "thiserror 2.0.12",
 ]
 
@@ -6647,6 +6650,7 @@ dependencies = [
 name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bitflags 2.9.0",
