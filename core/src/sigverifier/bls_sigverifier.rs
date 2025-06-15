@@ -95,6 +95,7 @@ impl BLSSigVerifier {
             ("received", self.stats.packets_received, u64),
             ("disconnected", self.stats.channel_disconnected, bool),
         );
+        self.stats = BLSSigVerifierStats::default();
         self.last_stats_logged = now;
     }
 
