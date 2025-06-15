@@ -19,6 +19,7 @@ pub(crate) struct BLSSigVerifierStats {
     pub bls_messages_malformed: u64,
     pub sent_failed: u64,
     pub packets_received: u64,
+    pub channel_disconnected: bool,
 }
 
 pub struct BLSSigVerifier {
@@ -56,8 +57,8 @@ impl SigVerifier for BLSSigVerifier {
                             sent_failed += 1;
                         }
                         Err(TrySendError::Disconnected(_)) => {
-                            // There is no hope to recover, restart the validator.
-                            panic!("BLS message channel is disconnected");
+                            error!("BLS message channel is disconnected");
+                            self.stats.channel_disconnected = true;
                         }
                     },
                     Err(e) => {
@@ -91,8 +92,10 @@ impl BLSSigVerifier {
             ("sent", self.stats.bls_messages_sent, u64),
             ("sent_failed", self.stats.sent_failed, u64),
             ("malformed", self.stats.bls_messages_malformed, u64),
-            ("received", self.stats.packets_received, u64)
+            ("received", self.stats.packets_received, u64),
+            ("disconnected", self.stats.channel_disconnected, bool),
         );
+        self.stats = BLSSigVerifierStats::default();
         self.last_stats_logged = now;
     }
 
@@ -108,6 +111,12 @@ impl BLSSigVerifier {
     #[allow(dead_code)]
     pub(crate) fn stats(&self) -> &BLSSigVerifierStats {
         &self.stats
+    }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    #[allow(dead_code)]
+    pub(crate) fn set_last_stats_logged(&mut self, last_stats_logged: Instant) {
+        self.last_stats_logged = last_stats_logged;
     }
 }
 
@@ -199,6 +208,23 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.bls_messages_malformed, 0);
+        assert!(!stats.channel_disconnected);
+
+        // Pretend 10 seconds have passed, make sure stats are reset
+        verifier.set_last_stats_logged(Instant::now() - Duration::from_secs(11));
+        let messages = vec![BLSMessage::Vote(VoteMessage {
+            vote: Vote::new_finalization_vote(7),
+            signature: Signature::default(),
+            rank: 2,
+        })];
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
+        // Since we just logged all stats (including the packet just sent), stats should be reset
+        let stats = verifier.stats();
+        assert_eq!(stats.bls_messages_sent, 0);
+        assert_eq!(stats.packets_received, 0);
+        assert_eq!(stats.sent_failed, 0);
+        assert_eq!(stats.bls_messages_malformed, 0);
+        assert!(!stats.channel_disconnected);
     }
 
     #[test]
@@ -242,10 +268,10 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 1);
         assert_eq!(stats.bls_messages_malformed, 1);
+        assert!(!stats.channel_disconnected);
     }
 
     #[test]
-    #[should_panic(expected = "BLS message channel is disconnected")]
     fn test_blssigverifier_send_packets_receiver_closed() {
         solana_logger::setup();
         let (sender, receiver) = crossbeam_channel::bounded(1);
@@ -258,5 +284,11 @@ mod tests {
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages);
+        let stats = verifier.stats();
+        assert_eq!(stats.bls_messages_sent, 0);
+        assert_eq!(stats.packets_received, 1);
+        assert_eq!(stats.sent_failed, 0);
+        assert_eq!(stats.bls_messages_malformed, 0);
+        assert!(stats.channel_disconnected);
     }
 }
