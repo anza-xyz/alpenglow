@@ -202,6 +202,7 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.bls_messages_malformed, 0);
+        assert_eq!(stats.channel_disconnected, false);
     }
 
     #[test]
@@ -245,10 +246,10 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 1);
         assert_eq!(stats.bls_messages_malformed, 1);
+        assert_eq!(stats.channel_disconnected, false);
     }
 
     #[test]
-    #[should_panic(expected = "BLS message channel is disconnected")]
     fn test_blssigverifier_send_packets_receiver_closed() {
         solana_logger::setup();
         let (sender, receiver) = crossbeam_channel::bounded(1);
@@ -261,5 +262,11 @@ mod tests {
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages);
+        let stats = verifier.stats();
+        assert_eq!(stats.bls_messages_sent, 0);
+        assert_eq!(stats.packets_received, 1);
+        assert_eq!(stats.sent_failed, 0);
+        assert_eq!(stats.bls_messages_malformed, 0);
+        assert!(stats.channel_disconnected);
     }
 }
