@@ -7623,6 +7623,7 @@ dependencies = [
  "solana-net-utils",
  "solana-perf",
  "solana-poh",
+ "solana-poh-config",
  "solana-program-runtime",
  "solana-pubkey",
  "solana-quic-client",
