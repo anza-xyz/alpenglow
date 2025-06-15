@@ -19,6 +19,7 @@ pub(crate) struct BLSSigVerifierStats {
     pub bls_messages_malformed: u64,
     pub sent_failed: u64,
     pub packets_received: u64,
+    pub channel_disconnected: bool,
 }
 
 pub struct BLSSigVerifier {
@@ -56,8 +57,8 @@ impl SigVerifier for BLSSigVerifier {
                             sent_failed += 1;
                         }
                         Err(TrySendError::Disconnected(_)) => {
-                            // There is no hope to recover, restart the validator.
-                            panic!("BLS message channel is disconnected");
+                            error!("BLS message channel is disconnected");
+                            self.stats.channel_disconnected = true;
                         }
                     },
                     Err(e) => {
@@ -91,7 +92,8 @@ impl BLSSigVerifier {
             ("sent", self.stats.bls_messages_sent, u64),
             ("sent_failed", self.stats.sent_failed, u64),
             ("malformed", self.stats.bls_messages_malformed, u64),
-            ("received", self.stats.packets_received, u64)
+            ("received", self.stats.packets_received, u64),
+            ("disconnected", self.stats.channel_disconnected, bool),
         );
         self.last_stats_logged = now;
     }
