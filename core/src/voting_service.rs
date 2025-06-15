@@ -188,7 +188,7 @@ impl VotingService {
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         let (staked_validator_tpu_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot(slot, cluster_info, Instant::now(), false);
+            .get_staked_validators_by_slot_with_tpu_vote_ports(slot, cluster_info, Instant::now());
 
         if staked_validator_tpu_sockets.is_empty() {
             let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
@@ -219,7 +219,7 @@ impl VotingService {
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot(slot, cluster_info, Instant::now(), true);
+            .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
 
         let sockets = additional_listeners
             .map(|v| v.as_slice())
@@ -234,6 +234,9 @@ impl VotingService {
             }
         };
 
+        // We use send_message in a loop right now because we worry that sending packets too fast
+        // will cause a packet spike and overwhelm the network. If we later find out that this is
+        // not an issue, we can optimize this by using multi_targret_send or similar methods.
         for alpenglow_socket in sockets {
             if let Err(e) = send_message(buf.clone(), alpenglow_socket, &connection_cache) {
                 warn!(

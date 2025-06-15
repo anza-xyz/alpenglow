@@ -47,6 +47,11 @@ pub struct StakedValidatorsCache {
     include_self: bool,
 }
 
+enum PortsToUse {
+    TpuVote,
+    Alpenglow,
+}
+
 impl StakedValidatorsCache {
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
@@ -93,6 +98,7 @@ impl StakedValidatorsCache {
         struct Node {
             stake: u64,
             tpu_socket: SocketAddr,
+            // TODO(wen): this should not be an Option after BLS all-to-all is submitted.
             alpenglow_socket: Option<SocketAddr>,
         }
 
@@ -144,27 +150,40 @@ impl StakedValidatorsCache {
         );
     }
 
-    pub fn get_staked_validators_by_slot(
+    pub fn get_staked_validators_by_slot_with_tpu_vote_ports(
         &mut self,
         slot: Slot,
         cluster_info: &ClusterInfo,
         access_time: Instant,
-        use_alpenglow_socket: bool,
     ) -> (&[SocketAddr], bool) {
         self.get_staked_validators_by_epoch(
             self.cur_epoch(slot),
             cluster_info,
             access_time,
-            use_alpenglow_socket,
+            PortsToUse::TpuVote,
         )
     }
 
-    pub fn get_staked_validators_by_epoch(
+    pub fn get_staked_validators_by_slot_with_alpenglow_ports(
+        &mut self,
+        slot: Slot,
+        cluster_info: &ClusterInfo,
+        access_time: Instant,
+    ) -> (&[SocketAddr], bool) {
+        self.get_staked_validators_by_epoch(
+            self.cur_epoch(slot),
+            cluster_info,
+            access_time,
+            PortsToUse::Alpenglow,
+        )
+    }
+
+    fn get_staked_validators_by_epoch(
         &mut self,
         epoch: Epoch,
         cluster_info: &ClusterInfo,
         access_time: Instant,
-        use_alpenglow_socket: bool,
+        ports_to_use: PortsToUse,
     ) -> (&[SocketAddr], bool) {
         // For a given epoch, if we either:
         //
@@ -187,12 +206,9 @@ impl StakedValidatorsCache {
             // self.cache[epoch].
             self.cache
                 .get(&epoch)
-                .map(|v| {
-                    if use_alpenglow_socket {
-                        &*v.alpenglow_sockets
-                    } else {
-                        &*v.validator_sockets
-                    }
+                .map(|v| match ports_to_use {
+                    PortsToUse::TpuVote => &*v.validator_sockets,
+                    PortsToUse::Alpenglow => &*v.alpenglow_sockets,
                 })
                 .unwrap(),
             refresh_cache,
@@ -439,56 +455,87 @@ mod tests {
 
         let now = Instant::now();
 
-        let (sockets, refreshed) =
-            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
+        let (sockets, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
+        };
 
         assert!(refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right before the 5-second deadline
-        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            now + Duration::from_secs_f64(4.999),
-            use_alpenglow_socket,
-        );
+        let (sockets, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs_f64(4.999),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs_f64(4.999),
+            )
+        };
 
         assert!(!refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right at the 5-second deadline - we still shouldn't refresh.
-        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            now + Duration::from_secs(5),
-            use_alpenglow_socket,
-        );
+        let (sockets, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs(5),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs(5),
+            )
+        };
 
         assert!(!refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right after the 5-second deadline - now we should refresh.
-        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            now + Duration::from_secs_f64(5.001),
-            use_alpenglow_socket,
-        );
+        let (sockets, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs_f64(5.001),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs_f64(5.001),
+            )
+        };
 
         assert!(refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache well after the 5-second deadline - we should refresh.
-        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            now + Duration::from_secs(100),
-            use_alpenglow_socket,
-        );
+        let (sockets, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs(100),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                now + Duration::from_secs(100),
+            )
+        };
 
         assert!(refreshed);
         assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
@@ -521,32 +568,49 @@ mod tests {
         // Populate the first five entries; accessing the cache once again shouldn't trigger any
         // refreshes.
         for entry_ix in 1..=5 {
-            let (_, refreshed) = svc.get_staked_validators_by_slot(
-                entry_ix * base_slot,
-                &cluster_info,
-                now,
-                use_alpenglow_socket,
-            );
+            let (_, refreshed) = if use_alpenglow_socket {
+                svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now,
+                )
+            } else {
+                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now,
+                )
+            };
             assert!(refreshed);
             assert_eq!(entry_ix as usize, svc.len());
 
-            let (_, refreshed) = svc.get_staked_validators_by_slot(
-                entry_ix * base_slot,
-                &cluster_info,
-                now,
-                use_alpenglow_socket,
-            );
+            let (_, refreshed) = if use_alpenglow_socket {
+                svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now,
+                )
+            } else {
+                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now,
+                )
+            };
             assert!(!refreshed);
             assert_eq!(entry_ix as usize, svc.len());
         }
 
         // Entry 6 - this shouldn't increase the cache length.
-        let (_, refreshed) = svc.get_staked_validators_by_slot(
-            6 * base_slot,
-            &cluster_info,
-            now,
-            use_alpenglow_socket,
-        );
+        let (_, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                6 * base_slot,
+                &cluster_info,
+                now,
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(6 * base_slot, &cluster_info, now)
+        };
         assert!(refreshed);
         assert_eq!(5, svc.len());
 
@@ -561,12 +625,19 @@ mod tests {
         // Accessing the cache after TTL should recalculate everything; the size remains 5, since
         // we only ever lazily evict cache entries.
         for entry_ix in 1..=5 {
-            let (_, refreshed) = svc.get_staked_validators_by_slot(
-                entry_ix * base_slot,
-                &cluster_info,
-                now + Duration::from_secs(10),
-                use_alpenglow_socket,
-            );
+            let (_, refreshed) = if use_alpenglow_socket {
+                svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now + Duration::from_secs(10),
+                )
+            } else {
+                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                    entry_ix * base_slot,
+                    &cluster_info,
+                    now + Duration::from_secs(10),
+                )
+            };
             assert!(refreshed);
             assert_eq!(5, svc.len());
         }
@@ -599,20 +670,25 @@ mod tests {
 
         let now = Instant::now();
 
-        let (_, refreshed) =
-            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
+        let (_, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
+        };
         assert!(refreshed);
 
-        let (_, refreshed) =
-            svc.get_staked_validators_by_slot(slot_num, &cluster_info, now, use_alpenglow_socket);
+        let (_, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
+        };
         assert!(!refreshed);
 
-        let (_, refreshed) = svc.get_staked_validators_by_slot(
-            2 * slot_num,
-            &cluster_info,
-            now,
-            use_alpenglow_socket,
-        );
+        let (_, refreshed) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(2 * slot_num, &cluster_info, now)
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(2 * slot_num, &cluster_info, now)
+        };
         assert!(refreshed);
     }
 
@@ -662,12 +738,19 @@ mod tests {
             true,
         );
 
-        let (sockets, _) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            Instant::now(),
-            use_alpenglow_socket,
-        );
+        let (sockets, _) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                Instant::now(),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                Instant::now(),
+            )
+        };
         assert_eq!(sockets.len(), num_nodes);
         assert!(sockets.contains(&my_socket_addr));
 
@@ -680,12 +763,20 @@ mod tests {
             false,
         );
 
-        let (sockets, _) = svc.get_staked_validators_by_slot(
-            slot_num,
-            &cluster_info,
-            Instant::now(),
-            use_alpenglow_socket,
-        );
+        let (sockets, _) = if use_alpenglow_socket {
+            svc.get_staked_validators_by_slot_with_alpenglow_ports(
+                slot_num,
+                &cluster_info,
+                Instant::now(),
+            )
+        } else {
+            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
+                slot_num,
+                &cluster_info,
+                Instant::now(),
+            )
+        };
+        // We should have num_nodes - 1 sockets, since we exclude our own socket address.
         assert_eq!(sockets.len(), num_nodes - 1);
         assert!(!sockets.contains(&my_socket_addr));
     }
