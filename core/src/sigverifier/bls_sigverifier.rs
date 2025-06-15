@@ -112,6 +112,12 @@ impl BLSSigVerifier {
     pub(crate) fn stats(&self) -> &BLSSigVerifierStats {
         &self.stats
     }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    #[allow(dead_code)]
+    pub(crate) fn set_last_stats_logged(&mut self, last_stats_logged: Instant) {
+        self.last_stats_logged = last_stats_logged;
+    }
 }
 
 // Add tests for the BLS signature verifier
@@ -202,7 +208,23 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.bls_messages_malformed, 0);
-        assert_eq!(stats.channel_disconnected, false);
+        assert!(!stats.channel_disconnected);
+
+        // Pretend 10 seconds have passed, make sure stats are reset
+        verifier.set_last_stats_logged(Instant::now() - Duration::from_secs(11));
+        let messages = vec![BLSMessage::Vote(VoteMessage {
+            vote: Vote::new_finalization_vote(7),
+            signature: Signature::default(),
+            rank: 2,
+        })];
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
+        // Since we just logged all stats (including the packet just sent), stats should be reset
+        let stats = verifier.stats();
+        assert_eq!(stats.bls_messages_sent, 0);
+        assert_eq!(stats.packets_received, 0);
+        assert_eq!(stats.sent_failed, 0);
+        assert_eq!(stats.bls_messages_malformed, 0);
+        assert!(!stats.channel_disconnected);
     }
 
     #[test]
@@ -246,7 +268,7 @@ mod tests {
         assert_eq!(stats.packets_received, 3);
         assert_eq!(stats.sent_failed, 1);
         assert_eq!(stats.bls_messages_malformed, 1);
-        assert_eq!(stats.channel_disconnected, false);
+        assert!(!stats.channel_disconnected);
     }
 
     #[test]
