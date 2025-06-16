@@ -1029,7 +1029,7 @@ mod tests {
     #[test_case(Vote::new_skip_vote(8))]
     #[test_case(Vote::new_skip_fallback_vote(9))]
     fn test_add_vote_and_create_new_certificate_with_types(vote: Vote) {
-        test_add_vote_and_create_new_certificate_with_type::<LegacyVoteCertificate>(vote.clone());
+        test_add_vote_and_create_new_certificate_with_type::<LegacyVoteCertificate>(vote);
         test_add_vote_and_create_new_certificate_with_type::<CertificateMessage>(vote);
     }
 
