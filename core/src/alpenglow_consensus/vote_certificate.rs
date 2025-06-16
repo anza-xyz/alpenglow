@@ -45,10 +45,11 @@ pub trait VoteCertificate: Clone {
 
     fn vote_count(&self) -> usize;
 
-    fn aggregate<'a, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
         T: Iterator<Item = &'a Self::VoteTransaction>,
-        Self: 'a;
+        Self: 'b,
+        'b: 'a;
 }
 
 // NOTE: This will go away after BLS implementation is finished.
@@ -82,10 +83,11 @@ impl VoteCertificate for LegacyVoteCertificate {
         self.transactions.len()
     }
 
-    fn aggregate<'a, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
         T: Iterator<Item = &'a Self::VoteTransaction>,
-        Self: 'a,
+        Self: 'b,
+        'b: 'a,
     {
         for message in messages {
             self.transactions.push(Arc::new(message.clone()));
@@ -109,10 +111,11 @@ impl VoteCertificate for CertificateMessage {
         self.bitmap.count_ones()
     }
 
-    fn aggregate<'a, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
         T: Iterator<Item = &'a Self::VoteTransaction>,
-        Self: 'a,
+        Self: 'b,
+        'b: 'a,
     {
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
