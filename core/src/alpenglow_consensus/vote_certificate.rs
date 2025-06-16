@@ -133,7 +133,7 @@ impl VoteCertificate for CertificateMessage {
                 return Err(CertificateError::IndexOutOfBound);
             }
             if self.bitmap.get(vote_message.rank as usize).as_deref() == Some(&true) {
-                return Ok(());
+                panic!("Conflicting vote check should make this unreachable {vote_message:?}");
             }
             self.bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature

@@ -597,10 +597,9 @@ pub(crate) fn load_from_blockstore(
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
             let mut legacy_cert = LegacyVoteCertificate::new(cert_id);
             if let Err(e) = legacy_cert.aggregate(cert.iter()) {
-                error!(
+                panic!(
                     "{my_pubkey}: Error aggregating certificate {cert_id:?} from blockstore: {e:?}"
                 );
-                continue;
             }
             cert_pool.insert_certificate(cert_id, legacy_cert);
         }
