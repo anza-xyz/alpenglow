@@ -19,7 +19,6 @@ pub(crate) struct BLSSigVerifierStats {
     pub sent_failed: u64,
     pub received: u64,
     pub received_malformed: u64,
-    pub channel_disconnected: bool,
     pub last_stats_logged: Instant,
 }
 
@@ -30,7 +29,6 @@ impl BLSSigVerifierStats {
             sent_failed: 0,
             received: 0,
             received_malformed: 0,
-            channel_disconnected: false,
             last_stats_logged: Instant::now(),
         }
     }
@@ -40,7 +38,6 @@ impl BLSSigVerifierStats {
         self.sent_failed += other.sent_failed;
         self.received += other.received;
         self.received_malformed += other.received_malformed;
-        self.channel_disconnected |= other.channel_disconnected;
     }
 }
 
@@ -50,7 +47,7 @@ pub struct BLSSigVerifier {
 }
 
 impl SigVerifier for BLSSigVerifier {
-    type SendType = ();
+    type SendType = BLSMessage;
     // TODO(wen): just a placeholder without any verification.
     fn verify_batches(&self, batches: Vec<PacketBatch>, _valid_packets: usize) -> Vec<PacketBatch> {
         batches
@@ -62,30 +59,29 @@ impl SigVerifier for BLSSigVerifier {
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         // TODO(wen): just a placeholder without any batching.
         let mut stats = BLSSigVerifierStats::new();
-        packet_batches.iter().for_each(|batch| {
-            batch.iter().for_each(|packet| {
-                stats.received += 1;
-                match packet.deserialize_slice::<BLSMessage, _>(..) {
-                    Ok(message) => match self.sender.try_send(message) {
-                        Ok(()) => {
-                            stats.sent += 1;
-                        }
-                        Err(TrySendError::Full(_)) => {
-                            warn!("BLS message channel is full, dropping message");
-                            stats.sent_failed += 1;
-                        }
-                        Err(TrySendError::Disconnected(_)) => {
-                            error!("BLS message channel is disconnected");
-                            stats.channel_disconnected = true;
-                        }
-                    },
-                    Err(e) => {
-                        trace!("Failed to deserialize BLS message: {}", e);
-                        stats.received_malformed += 1;
-                    }
+
+        for packet in packet_batches.iter().flatten() {
+            stats.received += 1;
+
+            let message = match packet.deserialize_slice::<BLSMessage, _>(..) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    trace!("Failed to deserialize BLS message: {}", e);
+                    stats.received_malformed += 1;
+                    continue;
                 }
-            });
-        });
+            };
+
+            match self.sender.try_send(message) {
+                Ok(()) => stats.sent += 1,
+                Err(TrySendError::Full(_)) => {
+                    stats.sent_failed += 1;
+                }
+                Err(e @ TrySendError::Disconnected(_)) => {
+                    return Err(e.into());
+                }
+            }
+        }
         if stats.received > 0 {
             self.stats.accumulate(stats);
         }
@@ -108,7 +104,6 @@ impl BLSSigVerifier {
             ("sent_failed", self.stats.sent_failed, u64),
             ("received", self.stats.received, u64),
             ("received_malformed", self.stats.received_malformed, u64),
-            ("disconnected", self.stats.channel_disconnected, bool),
         );
         self.stats = BLSSigVerifierStats::new();
     }
@@ -153,6 +148,7 @@ mod tests {
         verifier: &mut BLSSigVerifier,
         receiver: Option<&Receiver<BLSMessage>>,
         messages: &[BLSMessage],
+        expect_is_ok: bool,
     ) {
         let packets = messages
             .iter()
@@ -165,14 +161,18 @@ mod tests {
             })
             .collect::<Vec<Packet>>();
         let packet_batches = vec![PacketBatch::new(packets)];
-        assert!(verifier.send_packets(packet_batches).is_ok());
-        if let Some(receiver) = receiver {
-            for msg in messages {
-                match receiver.recv_timeout(Duration::from_secs(1)) {
-                    Ok(received_msg) => assert_eq!(received_msg, *msg),
-                    Err(e) => panic!("Failed to receive BLS message: {}", e),
+        if expect_is_ok {
+            assert!(verifier.send_packets(packet_batches).is_ok());
+            if let Some(receiver) = receiver {
+                for msg in messages {
+                    match receiver.recv_timeout(Duration::from_secs(1)) {
+                        Ok(received_msg) => assert_eq!(received_msg, *msg),
+                        Err(e) => warn!("Failed to receive BLS message: {}", e),
+                    }
                 }
             }
+        } else {
+            assert!(verifier.send_packets(packet_batches).is_err());
         }
     }
 
@@ -201,11 +201,10 @@ mod tests {
                 bitmap,
             }),
         ];
-        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         let stats = verifier.stats();
         assert_eq!(stats.sent, 2);
         assert_eq!(stats.received, 2);
-        assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.received_malformed, 0);
 
         let messages = vec![BLSMessage::Vote(VoteMessage {
@@ -213,13 +212,11 @@ mod tests {
             signature: Signature::default(),
             rank: 1,
         })];
-        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         let stats = verifier.stats();
         assert_eq!(stats.sent, 3);
         assert_eq!(stats.received, 3);
-        assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.received_malformed, 0);
-        assert!(!stats.channel_disconnected);
 
         // Pretend 10 seconds have passed, make sure stats are reset
         verifier.set_last_stats_logged(
@@ -230,19 +227,17 @@ mod tests {
             signature: Signature::default(),
             rank: 2,
         })];
-        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages);
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         // Since we just logged all stats (including the packet just sent), stats should be reset
         let stats = verifier.stats();
         assert_eq!(stats.sent, 0);
         assert_eq!(stats.received, 0);
-        assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.received_malformed, 0);
-        assert!(!stats.channel_disconnected);
     }
 
     #[test]
     fn test_blssigverifier_send_packets_malformed() {
-        let (sender, receiver) = crossbeam_channel::bounded(1);
+        let (sender, receiver) = crossbeam_channel::unbounded();
         let mut verifier = BLSSigVerifier::new(sender);
 
         let packets = vec![Packet::default()];
@@ -251,12 +246,17 @@ mod tests {
         let stats = verifier.stats();
         assert_eq!(stats.sent, 0);
         assert_eq!(stats.received, 1);
-        assert_eq!(stats.sent_failed, 0);
         assert_eq!(stats.received_malformed, 1);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
+    }
 
+    #[test]
+    fn test_blssigverifier_send_packets_channel_full() {
+        solana_logger::setup();
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        let mut verifier = BLSSigVerifier::new(sender);
         let messages = vec![
             BLSMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
@@ -273,20 +273,17 @@ mod tests {
                 rank: 2,
             }),
         ];
-        test_bls_message_transmission(&mut verifier, None, &messages);
+        test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
 
-        // Since we sent two packets and receiver can only hold one, we should see drop.
+        // We failed to send the second message because the channel is full.
         let stats = verifier.stats();
         assert_eq!(stats.sent, 1);
-        assert_eq!(stats.received, 3);
-        assert_eq!(stats.sent_failed, 1);
-        assert_eq!(stats.received_malformed, 1);
-        assert!(!stats.channel_disconnected);
+        assert_eq!(stats.received, 2);
+        assert_eq!(stats.received_malformed, 0);
     }
 
     #[test]
     fn test_blssigverifier_send_packets_receiver_closed() {
-        solana_logger::setup();
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let mut verifier = BLSSigVerifier::new(sender);
         // Close the receiver, should get panic on next send
@@ -296,12 +293,6 @@ mod tests {
             signature: Signature::default(),
             rank: 0,
         })];
-        test_bls_message_transmission(&mut verifier, None, &messages);
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.received, 1);
-        assert_eq!(stats.sent_failed, 0);
-        assert_eq!(stats.received_malformed, 0);
-        assert!(stats.channel_disconnected);
+        test_bls_message_transmission(&mut verifier, None, &messages, false);
     }
 }

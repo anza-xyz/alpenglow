@@ -8,7 +8,7 @@
 use {
     crate::sigverifier::ed25519_sigverifier::ed25519_verify_disabled,
     core::time::Duration,
-    crossbeam_channel::{Receiver, RecvTimeoutError, SendError},
+    crossbeam_channel::{Receiver, RecvTimeoutError, SendError, TrySendError},
     itertools::Itertools,
     solana_measure::measure::Measure,
     solana_perf::{
@@ -43,6 +43,9 @@ const MAX_DISCARDED_PACKET_RATE: f64 = 0.10;
 pub enum SigVerifyServiceError<SendType> {
     #[error("send packets batch error")]
     Send(#[from] SendError<SendType>),
+
+    #[error("try_send packet errror")]
+    TrySend(#[from] TrySendError<SendType>),
 
     #[error("streamer error")]
     Streamer(#[from] StreamerError),
@@ -408,7 +411,7 @@ impl SigVerifyStage {
                             SigVerifyServiceError::Streamer(StreamerError::RecvTimeout(
                                 RecvTimeoutError::Timeout,
                             )) => (),
-                            SigVerifyServiceError::Send(_) => {
+                            SigVerifyServiceError::Send(_) | SigVerifyServiceError::TrySend(_) => {
                                 break;
                             }
                             _ => error!("{:?}", e),
