@@ -629,6 +629,7 @@ mod tests {
         },
         solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signer::Signer},
         std::sync::{Arc, RwLock},
+        test_case::test_case,
     };
 
     fn dummy_transaction<VC: VoteCertificate>(
@@ -1022,69 +1023,62 @@ mod tests {
         assert!(pool.make_start_leader_decision(my_leader_slot, parent_slot, first_alpenglow_slot,));
     }
 
-    #[test]
-    fn test_add_vote_and_create_new_certificate_with_types() {
-        test_add_vote_and_create_new_certificate_with_type::<LegacyVoteCertificate>();
-        test_add_vote_and_create_new_certificate_with_type::<CertificateMessage>();
+    #[test_case(Vote::new_finalization_vote(5))]
+    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()))]
+    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()))]
+    #[test_case(Vote::new_skip_vote(8))]
+    #[test_case(Vote::new_skip_fallback_vote(9))]
+    fn test_add_vote_and_create_new_certificate_with_types(vote: Vote) {
+        test_add_vote_and_create_new_certificate_with_type::<LegacyVoteCertificate>(vote.clone());
+        test_add_vote_and_create_new_certificate_with_type::<CertificateMessage>(vote);
     }
 
-    fn test_add_vote_and_create_new_certificate_with_type<VC: VoteCertificate>() {
+    fn test_add_vote_and_create_new_certificate_with_type<VC: VoteCertificate>(vote: Vote) {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
         let pubkey = validator_keypairs[5].vote_keypair.pubkey();
-        // Please use increasing slot numbers for each vote to make the tests pass.
-        for vote in vec![
-            Vote::new_finalization_vote(5),
-            Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()),
-            Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()),
-            Vote::new_skip_vote(8),
-            Vote::new_skip_fallback_vote(9),
-        ] {
-            let highest_slot_fn = match &vote {
-                Vote::Finalize(_) => |pool: &CertificatePool<VC>| pool.highest_finalized_slot(),
-                Vote::Notarize(_) => |pool: &CertificatePool<VC>| pool.highest_notarized_slot(),
-                Vote::NotarizeFallback(_) => {
-                    |pool: &CertificatePool<VC>| pool.highest_notarized_slot()
-                }
-                Vote::Skip(_) => |pool: &CertificatePool<VC>| pool.highest_skip_slot(),
-                Vote::SkipFallback(_) => |pool: &CertificatePool<VC>| pool.highest_skip_slot(),
-            };
+        let highest_slot_fn = match &vote {
+            Vote::Finalize(_) => |pool: &CertificatePool<VC>| pool.highest_finalized_slot(),
+            Vote::Notarize(_) => |pool: &CertificatePool<VC>| pool.highest_notarized_slot(),
+            Vote::NotarizeFallback(_) => |pool: &CertificatePool<VC>| pool.highest_notarized_slot(),
+            Vote::Skip(_) => |pool: &CertificatePool<VC>| pool.highest_skip_slot(),
+            Vote::SkipFallback(_) => |pool: &CertificatePool<VC>| pool.highest_skip_slot(),
+        };
+        assert!(pool
+            .add_vote(
+                &vote,
+                dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
+                &pubkey,
+            )
+            .is_ok());
+        let slot = vote.slot();
+        assert!(highest_slot_fn(&pool) < slot);
+        // Same key voting again shouldn't make a certificate
+        assert!(pool
+            .add_vote(
+                &vote,
+                dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
+                &pubkey,
+            )
+            .is_ok());
+        assert!(highest_slot_fn(&pool) < slot);
+        for rank in 0..4 {
             assert!(pool
                 .add_vote(
                     &vote,
-                    dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
-                    &pubkey,
+                    dummy_transaction::<VC>(&validator_keypairs, &vote, rank),
+                    &validator_keypairs[rank].vote_keypair.pubkey(),
                 )
                 .is_ok());
-            let slot = vote.slot();
-            assert!(highest_slot_fn(&pool) < slot);
-            // Same key voting again shouldn't make a certificate
-            assert!(pool
-                .add_vote(
-                    &vote,
-                    dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
-                    &pubkey,
-                )
-                .is_ok());
-            assert!(highest_slot_fn(&pool) < slot);
-            for rank in 0..4 {
-                assert!(pool
-                    .add_vote(
-                        &vote,
-                        dummy_transaction::<VC>(&validator_keypairs, &vote, rank),
-                        &validator_keypairs[rank].vote_keypair.pubkey(),
-                    )
-                    .is_ok());
-            }
-            assert!(highest_slot_fn(&pool) < slot);
-            assert!(pool
-                .add_vote(
-                    &vote,
-                    dummy_transaction::<VC>(&validator_keypairs, &vote, 6),
-                    &validator_keypairs[6].vote_keypair.pubkey(),
-                )
-                .is_ok());
-            assert_eq!(highest_slot_fn(&pool), slot);
         }
+        assert!(highest_slot_fn(&pool) < slot);
+        assert!(pool
+            .add_vote(
+                &vote,
+                dummy_transaction::<VC>(&validator_keypairs, &vote, 6),
+                &validator_keypairs[6].vote_keypair.pubkey(),
+            )
+            .is_ok());
+        assert_eq!(highest_slot_fn(&pool), slot);
     }
 
     #[test]
