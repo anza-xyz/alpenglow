@@ -1,31 +1,25 @@
 use {
     alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
-    solana_bls::keypair::Keypair as BLSKeypair,
-    solana_sdk::{hash::Hash, transaction::VersionedTransaction},
+    solana_bls::Signature as BLSSignature,
+    solana_sdk::transaction::VersionedTransaction,
 };
 
 pub trait AlpenglowVoteTransaction: Clone + std::fmt::Debug {
-    fn new_for_test(bls_keypair: BLSKeypair) -> Self;
+    fn new_for_test(signature: BLSSignature, vote: Vote, rank: usize) -> Self;
 }
 
 impl AlpenglowVoteTransaction for VersionedTransaction {
-    fn new_for_test(_bls_keypair: BLSKeypair) -> Self {
+    fn new_for_test(_signature: BLSSignature, _vote: Vote, _rank: usize) -> Self {
         Self::default()
     }
 }
 
 impl AlpenglowVoteTransaction for VoteMessage {
-    fn new_for_test(bls_keypair: BLSKeypair) -> Self {
-        // use notarization vote since this is just for tests
-        let vote = Vote::new_notarization_vote(5, Hash::default(), Hash::default());
-
-        // unwrap since this is just for tests
-        let signature = bls_keypair.sign(&bincode::serialize(&vote).unwrap()).into();
-
+    fn new_for_test(signature: BLSSignature, vote: Vote, rank: usize) -> Self {
         VoteMessage {
             vote,
             signature,
-            rank: 0,
+            rank: rank as u16,
         }
     }
 }
