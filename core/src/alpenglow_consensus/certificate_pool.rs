@@ -677,7 +677,7 @@ mod tests {
         validator_keypairs: &[ValidatorVoteKeypairs],
         vote: Vote,
     ) {
-        for rank in 0..7 {
+        for rank in 0..6 {
             assert!(pool
                 .add_vote(
                     &vote,
