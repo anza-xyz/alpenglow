@@ -221,8 +221,12 @@ impl CertificatePool {
                     let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
                         continue;
                     };
-                    vote_pool.add_to_certificate(block_id, bank_hash, &mut vote_certificate)?;
+                    vote_pool
+                        .add_to_certificate(bank_hash, block_id, &mut vote_certificate)
+                        .map_err(AddVoteError::Certificate)?;
                 }
+                self.completed_certificates
+                    .insert(cert_id, vote_certificate.certificate());
                 if let Some(sender) = &self.certificate_sender {
                     if cert_id.is_critical() {
                         if let Err(e) = sender.try_send((cert_id, vote_certificate.certificate())) {
@@ -705,6 +709,7 @@ mod tests {
         },
         solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signer::Signer},
         std::sync::{Arc, RwLock},
+        test_case::test_case,
     };
 
     fn dummy_transaction(
@@ -833,7 +838,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_2() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // If parent_slot < first_alpenglow_slot, and parent_slot > 0
         // no notarization certificate is required, but a skip
@@ -849,7 +854,7 @@ mod tests {
         ));
 
         add_certificate(
-            &keypairs,
+            &validator_keypairs,
             &mut pool,
             Vote::new_skip_vote(first_alpenglow_slot),
         );
@@ -874,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_4() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // If parent_slot < first_alpenglow_slot, and parent_slot == 0,
         // no notarization certificate is required, but a skip certificate will
@@ -890,7 +895,7 @@ mod tests {
         ));
 
         add_certificate(
-            &keypairs,
+            &validator_keypairs,
             &mut pool,
             Vote::new_skip_vote(first_alpenglow_slot),
         );
@@ -899,11 +904,11 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_5() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
-            add_certificate(&keypairs, &mut pool, Vote::new_skip_vote(slot));
+            add_certificate(&validator_keypairs, &mut pool, Vote::new_skip_vote(slot));
         }
 
         // Parent slot is equal to 0, so no notarization certificate required
@@ -915,11 +920,11 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_6() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
-            add_certificate(&keypairs, &mut pool, Vote::new_skip_vote(slot));
+            add_certificate(&validator_keypairs, &mut pool, Vote::new_skip_vote(slot));
         }
         // Parent slot is less than first_alpenglow_slot, so no notarization certificate required
         let my_leader_slot = 10;
@@ -961,11 +966,11 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_when_no_skip_required() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // Notarize slot 5
         add_certificate(
-            &keypairs,
+            &validator_keypairs,
             &mut pool,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
         );
@@ -980,11 +985,11 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_notarized_and_skips_valid() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // Notarize slot 5
         add_certificate(
-            &keypairs,
+            &validator_keypairs,
             &mut pool,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
         );
@@ -992,7 +997,7 @@ mod tests {
 
         // Valid skip certificate for 6-9 exists
         for slot in 6..=9 {
-            add_certificate(&keypairs, &mut pool, Vote::new_skip_vote(slot));
+            add_certificate(&validator_keypairs, &mut pool, Vote::new_skip_vote(slot));
         }
 
         let my_leader_slot = 10;
@@ -1003,11 +1008,11 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_skip_range_superset() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // Notarize slot 5
         add_certificate(
-            &keypairs,
+            &validator_keypairs,
             &mut pool,
             Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
         );
@@ -1017,7 +1022,11 @@ mod tests {
         // Should start leader block even if the beginning of the range is from
         // before your last notarized slot
         for slot in 4..=9 {
-            add_certificate(&keypairs, &mut pool, Vote::new_skip_fallback_vote(slot));
+            add_certificate(
+                &validator_keypairs,
+                &mut pool,
+                Vote::new_skip_fallback_vote(slot),
+            );
         }
 
         let my_leader_slot = 10;
@@ -1026,212 +1035,67 @@ mod tests {
         assert!(pool.make_start_leader_decision(my_leader_slot, parent_slot, first_alpenglow_slot));
     }
 
-    #[test]
-    fn test_add_vote_new_finalize_certificate() {
-        solana_logger::setup();
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+    #[test_case(Vote::new_finalization_vote(5))]
+    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()))]
+    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()))]
+    #[test_case(Vote::new_skip_vote(8))]
+    #[test_case(Vote::new_skip_fallback_vote(9))]
+    fn test_add_vote_and_create_new_certificate_with_types(vote: Vote) {
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+        let my_validator_ix = 5;
+        let highest_slot_fn = match &vote {
+            Vote::Finalize(_) => |pool: &CertificatePool| pool.highest_finalized_slot(),
+            Vote::Notarize(_) => |pool: &CertificatePool| pool.highest_notarized_slot(),
+            Vote::NotarizeFallback(_) => |pool: &CertificatePool| pool.highest_notarized_slot(),
+            Vote::Skip(_) => |pool: &CertificatePool| pool.highest_skip_slot(),
+            Vote::SkipFallback(_) => |pool: &CertificatePool| pool.highest_skip_slot(),
+        };
         assert!(pool
             .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_finalization_vote(5),
-                5
-            ))
+                &validator_keypairs,
+                &vote,
+                my_validator_ix
+            ),)
             .is_ok());
-        assert_eq!(pool.highest_finalized_slot(), 0);
+        let slot = vote.slot();
+        assert!(highest_slot_fn(&pool) < slot);
         // Same key voting again shouldn't make a certificate
         assert!(pool
             .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_finalization_vote(5),
-                5
-            ))
+                &validator_keypairs,
+                &vote,
+                my_validator_ix
+            ),)
             .is_ok());
-        assert_eq!(pool.highest_finalized_slot(), 0);
+        assert!(highest_slot_fn(&pool) < slot);
         for rank in 0..4 {
             assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_finalization_vote(5),
-                    rank
-                ))
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
-        assert_eq!(pool.highest_finalized_slot(), 0);
+        assert!(highest_slot_fn(&pool) < slot);
+        let new_validator_ix = 6;
         assert!(pool
             .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_finalization_vote(5),
-                6
-            ))
-            .is_ok());
-        assert_eq!(pool.highest_finalized_slot(), 5);
-    }
-
-    #[test]
-    fn test_add_vote_new_notarize_certificate() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                5
-            ))
-            .is_ok());
-        assert_eq!(pool.highest_notarized_slot(), 0);
-        // Same key voting again shouldn't make a certificate
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                5
+                &validator_keypairs,
+                &vote,
+                new_validator_ix
             ),)
             .is_ok());
-        assert_eq!(pool.highest_notarized_slot(), 0);
-
-        for rank in 0..4 {
-            assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    rank
-                ),)
-                .is_ok());
-        }
-        assert_eq!(pool.highest_notarized_slot(), 0);
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                6
-            ),)
-            .is_ok());
-        assert_eq!(pool.highest_notarized_slot(), 5);
-    }
-
-    #[test]
-    fn test_add_vote_new_notarize_fallback_certificate() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
-        // 10% voted for notarize_fallback 5
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_fallback_vote(5, Hash::default(), Hash::default()),
-                4
-            ),)
-            .is_ok());
-        assert_eq!(pool.highest_notarized_slot(), 0);
-        // 20% voted for notarize 5, 20% voted for notarize_fallback 5
-        for rank in 0..2 {
-            assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    rank
-                ),)
-                .is_ok());
-        }
-        for rank in 2..4 {
-            assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                    rank
-                ),)
-                .is_ok());
-        }
-        assert_eq!(pool.highest_notarized_slot(), 0);
-        // Another 10% voted for notarize_fallback 5, we are over the threshold
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
-                5
-            ),)
-            .is_ok());
-        assert_eq!(pool.highest_notarized_slot(), 5);
-    }
-
-    #[test]
-    fn test_add_vote_new_skip_certificate() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
-        assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(5), 5))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 0);
-        // Same key voting again shouldn't make a certificate
-        assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(5), 5))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 0);
-        for rank in 0..4 {
-            assert!(pool
-                .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(5), rank))
-                .is_ok());
-        }
-        assert_eq!(pool.highest_skip_slot(), 0);
-        assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(5), 6))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 5);
-    }
-
-    #[test]
-    fn test_add_vote_new_skip_fallback_certificate() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
-        // 10% voted for skip_fallback 5
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_skip_fallback_vote(5),
-                5
-            ))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 0);
-        // Same key voting again shouldn't make a certificate
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_skip_fallback_vote(5),
-                5
-            ))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 0);
-        // 20% voted for skip 5, 20% voted for skip_fallback 5
-        for rank in 0..2 {
-            assert!(pool
-                .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(5), rank))
-                .is_ok());
-        }
-        for rank in 2..4 {
-            assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_skip_fallback_vote(5),
-                    rank
-                ))
-                .is_ok());
-        }
-        assert_eq!(pool.highest_skip_slot(), 0);
-        // Another 10% voted for skip_fallback 5, we are over the threshold
-        assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_skip_fallback_vote(5),
-                6
-            ))
-            .is_ok());
-        assert_eq!(pool.highest_skip_slot(), 5);
+        assert_eq!(highest_slot_fn(&pool), slot);
     }
 
     #[test]
     fn test_add_vote_zero_stake() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
-        let mut bad_transaction = dummy_transaction(&keypairs, &Vote::new_skip_vote(5), 1);
-        bad_transaction.rank = 100; // Set rank to 100, which is invalid
         assert_eq!(
-            pool.add_vote(bad_transaction),
-            Err(AddVoteError::InvalidRank(100))
+            pool.add_vote(dummy_transaction(
+                &validator_keypairs,
+                &Vote::new_skip_vote(5),
+                100
+            ),),
+            Err(AddVoteError::ZeroStake)
         );
     }
 
@@ -1247,16 +1111,17 @@ mod tests {
 
     #[test]
     fn test_consecutive_slots() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
-        add_certificate(&keypairs, &mut pool, Vote::new_skip_vote(15));
+        add_certificate(&validator_keypairs, &mut pool, Vote::new_skip_vote(15));
         assert_eq!(pool.highest_skip_slot(), 15);
 
         for i in 0..10 {
             let slot = i as u64 + 16;
+            let vote = Vote::new_skip_vote(slot);
             // These should not extend the skip range
             assert!(pool
-                .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(slot), i))
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, i),)
                 .is_ok());
         }
 
@@ -1265,81 +1130,86 @@ mod tests {
 
     #[test]
     fn test_multi_skip_cert() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // We have 10 validators, 40% voted for (5, 15)
         for rank in 0..4 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 15, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 15, rank);
         }
         // 30% voted for (5, 8)
         for rank in 4..7 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 8, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 8, rank);
         }
         // The rest voted for (11, 15)
         for rank in 7..10 {
-            add_skip_vote_range(&keypairs, &mut pool, 11, 15, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 11, 15, rank);
         }
-        // Test slots from 5 to 15, (5, 8) and (11, 15) should be certified, the others aren't
-        for slot in 5..=15 {
-            if slot > 8 && slot < 11 {
-                assert!(!pool.skip_certified(slot));
-            } else {
-                assert!(pool.skip_certified(slot));
-            }
+        // Test slots from 5 to 15, [5, 8] and [11, 15] should be certified, the others aren't
+        for slot in 5..9 {
+            assert!(pool.skip_certified(slot));
+        }
+        for slot in 9..11 {
+            assert!(!pool.skip_certified(slot));
+        }
+        for slot in 11..=15 {
+            assert!(pool.skip_certified(slot));
         }
     }
 
     #[test]
     fn test_add_multiple_votes() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
         // 10 validators, half vote for (5, 15), the other (20, 30)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 15, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 15, rank);
         }
         for rank in 5..10 {
-            add_skip_vote_range(&keypairs, &mut pool, 20, 30, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 20, 30, rank);
         }
         assert_eq!(pool.highest_skip_slot(), 0);
 
         // Now the first half vote for (5, 30)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 30, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 30, rank);
         }
         assert_single_certificate_range(&pool, 20, 30);
     }
 
     #[test]
     fn test_add_multiple_disjoint_votes() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         // 50% of the validators vote for (1, 10)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 1, 10, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 1, 10, rank);
         }
-        // 10% vote for (2, 2)
+        // 10% vote for skip 2
+        let vote = Vote::new_skip_vote(2);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(2), 6))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 6),)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 2);
 
         assert_single_certificate_range(&pool, 2, 2);
-        // 10% vote for (4, 4)
+        // 10% vote for skip 4
+        let vote = Vote::new_skip_vote(4);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(4), 7))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 7),)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
 
         assert_single_certificate_range(&pool, 2, 2);
         assert_single_certificate_range(&pool, 4, 4);
-        // 10% vote for (3, 3)
+        // 10% vote for skip 3
+        let vote = Vote::new_skip_vote(3);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(3), 8))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 8),)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 4);
         assert_single_certificate_range(&pool, 2, 4);
         assert!(pool.skip_certified(3));
         // Let the last 10% vote for (3, 10) now
-        add_skip_vote_range(&keypairs, &mut pool, 3, 10, 8);
+        add_skip_vote_range(&validator_keypairs, &mut pool, 3, 10, 8);
         assert_eq!(pool.highest_skip_slot(), 10);
         assert_single_certificate_range(&pool, 2, 10);
         assert!(pool.skip_certified(7));
@@ -1347,48 +1217,50 @@ mod tests {
 
     #[test]
     fn test_update_existing_singleton_vote() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         // 50% voted on (1, 6)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 1, 6, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 1, 6, rank);
         }
         // Range expansion on a singleton vote should be ok
+        let vote = Vote::new_skip_vote(1);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(1), 6))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 6),)
             .is_ok());
         assert_eq!(pool.highest_skip_slot(), 1);
-        add_skip_vote_range(&keypairs, &mut pool, 1, 6, 6);
+        add_skip_vote_range(&validator_keypairs, &mut pool, 1, 6, 6);
         assert_eq!(pool.highest_skip_slot(), 6);
         assert_single_certificate_range(&pool, 1, 6);
     }
 
     #[test]
     fn test_update_existing_vote() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         // 50% voted for (10, 25)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 10, 25, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 10, 25, rank);
         }
 
-        add_skip_vote_range(&keypairs, &mut pool, 10, 20, 6);
+        add_skip_vote_range(&validator_keypairs, &mut pool, 10, 20, 6);
         assert_eq!(pool.highest_skip_slot(), 20);
         assert_single_certificate_range(&pool, 10, 20);
 
         // AlreadyExists, silently fail
+        let vote = Vote::new_skip_vote(20);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(20), 6))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 6),)
             .is_ok());
     }
 
     #[test]
     fn test_threshold_not_reached() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         // half voted (5, 15) and the other half voted (20, 30)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 15, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 15, rank);
         }
         for rank in 5..10 {
-            add_skip_vote_range(&keypairs, &mut pool, 20, 30, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 20, 30, rank);
         }
         for slot in 5..31 {
             assert!(!pool.skip_certified(slot));
@@ -1397,13 +1269,13 @@ mod tests {
 
     #[test]
     fn test_update_and_skip_range_certify() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         // half voted (5, 15) and the other half voted (10, 30)
         for rank in 0..5 {
-            add_skip_vote_range(&keypairs, &mut pool, 5, 15, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 5, 15, rank);
         }
         for rank in 5..10 {
-            add_skip_vote_range(&keypairs, &mut pool, 10, 30, rank);
+            add_skip_vote_range(&validator_keypairs, &mut pool, 10, 30, rank);
         }
         for slot in 5..10 {
             assert!(!pool.skip_certified(slot));
@@ -1416,7 +1288,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_notar() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         let mut vote_history = VoteHistory::default();
 
         // Create bank 2
@@ -1428,18 +1300,16 @@ mod tests {
         assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Add a skip from myself.
+        let vote = Vote::new_skip_vote(2);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(2), 0))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 0),)
             .is_ok());
         vote_history.add_vote(Vote::new_skip_vote(2));
         // 40% notarized, should succeed
         for rank in 1..5 {
+            let vote = Vote::new_notarization_vote(2, block_id, bank_hash);
             assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(2, block_id, bank_hash),
-                    rank
-                ),)
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
         assert_eq!(
@@ -1454,12 +1324,9 @@ mod tests {
 
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
+            let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
             assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(3, block_id, bank_hash),
-                    rank
-                ),)
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
         assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
@@ -1467,15 +1334,16 @@ mod tests {
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
         let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique());
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &vote, 0))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 0),)
             .is_ok());
         vote_history.add_vote(vote);
         assert!(pool.safe_to_notar(slot, &vote_history).is_empty());
 
         // Now add 40% skip, should succeed
         for rank in 3..7 {
+            let vote = Vote::new_skip_vote(3);
             assert!(pool
-                .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(3), rank))
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
         assert_eq!(
@@ -1487,12 +1355,9 @@ mod tests {
         let duplicate_block_id = Hash::new_unique();
         let duplicate_bank_hash = Hash::new_unique();
         for rank in 7..9 {
+            let vote = Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash);
             assert!(pool
-                .add_vote(dummy_transaction(
-                    &keypairs,
-                    &Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash),
-                    rank
-                ),)
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
 
@@ -1521,7 +1386,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_skip() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         let slot = 2;
         let mut vote_history = VoteHistory::default();
         // No vote from myself, should fail.
@@ -1532,25 +1397,23 @@ mod tests {
         let block_hash = Hash::new_unique();
         let vote = Vote::new_notarization_vote(2, block_id, block_hash);
         assert!(pool
-            .add_vote(dummy_transaction(&keypairs, &vote, 0))
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 0),)
             .is_ok());
         vote_history.add_vote(vote);
         // Should still fail because there are no other votes.
         assert!(!pool.safe_to_skip(slot, &vote_history));
         // Add 50% skip, should succeed
         for rank in 1..6 {
+            let vote = Vote::new_skip_vote(2);
             assert!(pool
-                .add_vote(dummy_transaction(&keypairs, &Vote::new_skip_vote(2), rank))
+                .add_vote(dummy_transaction(&validator_keypairs, &vote, rank),)
                 .is_ok());
         }
         assert!(pool.safe_to_skip(slot, &vote_history));
         // Add 10% more notarize, still safe to skip any more because total voted increased.
+        let vote = Vote::new_notarization_vote(2, block_id, block_hash);
         assert!(pool
-            .add_vote(dummy_transaction(
-                &keypairs,
-                &Vote::new_notarization_vote(2, block_id, block_hash),
-                6
-            ),)
+            .add_vote(dummy_transaction(&validator_keypairs, &vote, 6),)
             .is_ok());
         assert!(pool.safe_to_skip(slot, &vote_history));
     }
@@ -1570,9 +1433,8 @@ mod tests {
     }
 
     fn test_reject_conflicting_vote(
-        keypairs: &[ValidatorVoteKeypairs],
         pool: &mut CertificatePool,
-        rank: usize,
+        validator_keypairs: &[ValidatorVoteKeypairs],
         vote_type_1: VoteType,
         vote_type_2: VoteType,
         slot: Slot,
@@ -1580,16 +1442,16 @@ mod tests {
         let vote_1 = create_new_vote(vote_type_1, slot);
         let vote_2 = create_new_vote(vote_type_2, slot);
         assert!(pool
-            .add_vote(dummy_transaction(keypairs, &vote_1, rank))
+            .add_vote(dummy_transaction(validator_keypairs, &vote_1, 0),)
             .is_ok());
         assert!(pool
-            .add_vote(dummy_transaction(keypairs, &vote_2, rank))
+            .add_vote(dummy_transaction(validator_keypairs, &vote_2, 0),)
             .is_err());
     }
 
     #[test]
     fn test_reject_conflicting_votes() {
-        let (keypairs, mut pool) = create_keypairs_and_pool();
+        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         let mut slot = 2;
         for vote_type_1 in [
             VoteType::Finalize,
@@ -1601,9 +1463,8 @@ mod tests {
             let conflicting_vote_types = conflicting_types(vote_type_1);
             for vote_type_2 in conflicting_vote_types {
                 test_reject_conflicting_vote(
-                    &keypairs,
                     &mut pool,
-                    0,
+                    &validator_keypairs,
                     vote_type_1,
                     *vote_type_2,
                     slot,

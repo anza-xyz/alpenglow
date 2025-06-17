@@ -123,11 +123,7 @@ impl VotePool {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
-        solana_bls::Signature as BLSSignature,
-    };
+    use {super::*, alpenglow_vote::vote::Vote, solana_bls::Signature as BLSSignature};
 
     #[test]
     fn test_skip_vote_pool() {
@@ -157,14 +153,15 @@ mod test {
     #[test]
     fn test_notarization_pool() {
         let mut vote_pool = VotePool::new(1);
-        let transaction = VoteMessage {
-            signature: BLSSignature::default(),
-            vote: Vote::new_notarization_vote(0, Hash::new_unique(), Hash::new_unique()),
-            rank: 0,
-        };
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
+        let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
+        let transaction = VoteMessage {
+            signature: BLSSignature::default(),
+            vote,
+            rank: 1,
+        };
 
         assert!(vote_pool.add_vote(&my_pubkey, Some(bank_hash), Some(block_id), transaction, 10));
         assert_eq!(vote_pool.total_stake(), 10);

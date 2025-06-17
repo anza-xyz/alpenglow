@@ -5,19 +5,24 @@ use {
         certificate::{Certificate, CertificateType},
     },
     bitvec::prelude::*,
-    solana_bls::{Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
+    solana_bls::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     thiserror::Error,
 };
 
+/// Maximum number of validators in a certificate
+///
+/// There are around 1500 validators currently. For a clean power-of-two
+/// implementation, we should chosoe either 2048 or 4096. Choose a more
+/// conservative number 4096 for now.
 /// The number of bytes in a bitmap to represent up to 4096 validators
 /// (`MAXIMUM_VALIDATORS` / 8)
 const VALIDATOR_BITMAP_U8_SIZE: usize = 512;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CertificateError {
-    #[error("BLS signature error {0}")]
-    BlsSignatureError(#[from] solana_bls::error::BlsError),
+    #[error("BLS error: {0}")]
+    BlsError(#[from] BlsError),
     #[error("Index out of bounds")]
     IndexOutOfBound,
     #[error("Invalid pubkey")]
@@ -30,29 +35,43 @@ pub enum CertificateError {
     InvalidVoteType,
 }
 
+#[derive(Debug, Clone)]
 pub struct VoteCertificate {
     certificate: CertificateMessage,
-    signature: SignatureProjective,
 }
 
 impl VoteCertificate {
     pub fn new(certificate_id: CertificateId) -> Self {
-        Self {
+        VoteCertificate {
             certificate: CertificateMessage {
                 certificate: certificate_id.into(),
                 signature: Signature::default(),
                 bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
             },
-            signature: SignatureProjective::default(),
         }
     }
 
-    pub fn aggregate<'a, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    pub fn vote_count(&self) -> usize {
+        self.certificate.bitmap.count_ones()
+    }
+
+    pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
         T: Iterator<Item = &'a VoteMessage>,
+        Self: 'b,
+        'b: 'a,
     {
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
+        let mut current_signature_uncompressed =
+            if self.certificate.signature == Signature::default() {
+                SignatureProjective::default()
+            } else {
+                SignatureProjective::try_from(self.certificate.signature)
+                    .map_err(|_| CertificateError::InvalidSignature)?
+            };
+
+        // aggregate the votes
         for vote_message in messages {
             // set bit-vector for the validator
             //
@@ -68,7 +87,7 @@ impl VoteCertificate {
                 .as_deref()
                 == Some(&true)
             {
-                return Ok(());
+                panic!("Conflicting vote check should make this unreachable {vote_message:?}");
             }
             self.certificate
                 .bitmap
@@ -76,30 +95,14 @@ impl VoteCertificate {
             // aggregate the signature
             // TODO(wen): put this into bls crate
             let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
-            self.signature.aggregate_with([&uncompressed]);
+            current_signature_uncompressed.aggregate_with([&uncompressed]);
         }
-        self.certificate.signature = Signature::from(self.signature.clone());
+        self.certificate.signature = Signature::from(current_signature_uncompressed);
         Ok(())
     }
 
-    /// Returns the number of votes in the certificate.
-    pub fn vote_count(&self) -> usize {
-        self.certificate.bitmap.count_ones()
-    }
-
-    /// Copy out the certificate message for transmission.
     pub fn certificate(&self) -> CertificateMessage {
         self.certificate.clone()
-    }
-}
-
-impl From<CertificateMessage> for VoteCertificate {
-    fn from(certificate: CertificateMessage) -> Self {
-        let signature = SignatureProjective::try_from(certificate.signature).unwrap();
-        Self {
-            certificate,
-            signature,
-        }
     }
 }
 
