@@ -6409,3 +6409,28 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
     vote_listener.join().unwrap();
 }
+
+/// A: 20% - eps
+/// B: 40%
+/// C: 20%
+/// D: 20% + eps
+///
+/// A is the leader and votes for b1; but pretend that A is Byzantine and *only* sends node B a
+/// different block, b2.
+///
+/// B votes for b2; to simulate this, initially, have B copy vote A. Then, at some stage, have B
+/// send out fake voting transactions.
+///
+/// D votes for b1.
+///
+/// C's turbine is disabled, and it votes skip. But, it then observes that:
+/// - A and D both voted for b1; this is 40% of stake
+/// - B voted for b2; this is 40% of stake.
+///
+/// As a result, C ends up issuing two notar fallback votes.
+///
+/// After confirming that C issued two notar fallback votes, have B just continue copy voting A
+/// and ensure that we continue seeing roots.
+#[test]
+#[serial]
+fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {}
