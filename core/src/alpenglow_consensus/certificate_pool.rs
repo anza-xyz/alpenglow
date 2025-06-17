@@ -1035,7 +1035,8 @@ mod tests {
 
     fn test_add_vote_and_create_new_certificate_with_type<VC: VoteCertificate>(vote: Vote) {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool::<VC>();
-        let pubkey = validator_keypairs[5].vote_keypair.pubkey();
+        let my_validator_ix = 5;
+        let pubkey = validator_keypairs[my_validator_ix].vote_keypair.pubkey();
         let highest_slot_fn = match &vote {
             Vote::Finalize(_) => |pool: &CertificatePool<VC>| pool.highest_finalized_slot(),
             Vote::Notarize(_) => |pool: &CertificatePool<VC>| pool.highest_notarized_slot(),
@@ -1046,7 +1047,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &vote,
-                dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
+                dummy_transaction::<VC>(&validator_keypairs, &vote, my_validator_ix),
                 &pubkey,
             )
             .is_ok());
@@ -1056,7 +1057,7 @@ mod tests {
         assert!(pool
             .add_vote(
                 &vote,
-                dummy_transaction::<VC>(&validator_keypairs, &vote, 5),
+                dummy_transaction::<VC>(&validator_keypairs, &vote, my_validator_ix),
                 &pubkey,
             )
             .is_ok());
@@ -1071,11 +1072,12 @@ mod tests {
                 .is_ok());
         }
         assert!(highest_slot_fn(&pool) < slot);
+        let new_validator_ix = 6;
         assert!(pool
             .add_vote(
                 &vote,
-                dummy_transaction::<VC>(&validator_keypairs, &vote, 6),
-                &validator_keypairs[6].vote_keypair.pubkey(),
+                dummy_transaction::<VC>(&validator_keypairs, &vote, new_validator_ix),
+                &validator_keypairs[new_validator_ix].vote_keypair.pubkey(),
             )
             .is_ok());
         assert_eq!(highest_slot_fn(&pool), slot);
@@ -1159,13 +1161,15 @@ mod tests {
         for rank in 7..10 {
             add_skip_vote_range::<VC>(&mut pool, 11, 15, &validator_keypairs, rank);
         }
-        // Test slots from 5 to 15, (5, 8) and (11, 15) should be certified, the others aren't
-        for slot in 5..=15 {
-            if slot > 8 && slot < 11 {
-                assert!(!pool.skip_certified(slot));
-            } else {
-                assert!(pool.skip_certified(slot));
-            }
+        // Test slots from 5 to 15, [5, 8] and [11, 15] should be certified, the others aren't
+        for slot in 5..9 {
+            assert!(pool.skip_certified(slot));
+        }
+        for slot in 9..11 {
+            assert!(!pool.skip_certified(slot));
+        }
+        for slot in 11..=15 {
+            assert!(pool.skip_certified(slot));
         }
     }
 
