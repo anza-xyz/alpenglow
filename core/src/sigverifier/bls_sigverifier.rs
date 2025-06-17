@@ -9,7 +9,7 @@ use {
     std::time::{Duration, Instant},
 };
 
-const STATS_INTERVAL_SECONDS: u64 = 1; // Log stats every second
+const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats every second
 
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
@@ -82,9 +82,7 @@ impl SigVerifier for BLSSigVerifier {
                 }
             }
         }
-        if stats.received > 0 {
-            self.stats.accumulate(stats);
-        }
+        self.stats.accumulate(stats);
         // We don't need lock on stats for now because stats are read and written in a single thread.
         self.maybe_report_stats();
         Ok(())
@@ -95,7 +93,7 @@ impl BLSSigVerifier {
     fn maybe_report_stats(&mut self) {
         let now = Instant::now();
         let time_since_last_log = now.duration_since(self.stats.last_stats_logged);
-        if time_since_last_log < Duration::from_secs(STATS_INTERVAL_SECONDS) {
+        if time_since_last_log < STATS_INTERVAL_DURATION {
             return;
         }
         datapoint_info!(
@@ -219,9 +217,7 @@ mod tests {
         assert_eq!(stats.received_malformed, 0);
 
         // Pretend 10 seconds have passed, make sure stats are reset
-        verifier.set_last_stats_logged(
-            Instant::now() - Duration::from_secs(STATS_INTERVAL_SECONDS + 1),
-        );
+        verifier.set_last_stats_logged(Instant::now() - STATS_INTERVAL_DURATION);
         let messages = vec![BLSMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(7),
             signature: Signature::default(),
