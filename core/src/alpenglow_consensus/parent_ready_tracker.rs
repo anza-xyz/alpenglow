@@ -12,7 +12,10 @@
 //! production, i.e., under good network conditions an honest leader proposing
 //! a block with parent `b` in slot `s` will have their block finalized.
 
-use {super::Block, solana_pubkey::Pubkey, solana_sdk::clock::Slot, std::collections::HashMap};
+use {
+    super::Block, crate::alpenglow_consensus::MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+    solana_pubkey::Pubkey, solana_sdk::clock::Slot, std::collections::HashMap,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct ParentReadyTracker {
@@ -25,11 +28,11 @@ pub struct ParentReadyTracker {
     /// Root
     root: Slot,
 
-    /// Highest parent ready slot
+    /// Highest slot with parent ready status
     // TODO: While the voting loop is sequential we track every slot (not just the first in window)
     // However once we handle all slots concurrently we will update this to only count first leader
     // slot in window
-    highest_parent_ready: Slot,
+    highest_with_parent_ready: Slot,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -38,7 +41,8 @@ struct ParentReadyStatus {
     skip: bool,
     /// The blocks that have been notar fallbacked in this slot
     notar_fallbacks: Vec<Block>,
-    /// The parent blocks that achieve parent ready in this slot
+    /// The parent blocks that achieve parent ready in this slot,
+    /// Theses blocks are all potential parents choosable in this slot
     parents_ready: Vec<Block>,
 }
 
@@ -66,7 +70,7 @@ impl ParentReadyTracker {
             my_pubkey,
             slot_statuses,
             root: root_slot,
-            highest_parent_ready: root_slot + 1,
+            highest_with_parent_ready: root_slot + 1,
         }
     }
 
@@ -85,7 +89,7 @@ impl ParentReadyTracker {
             self.my_pubkey
         );
         status.notar_fallbacks.push(block);
-        assert!(status.notar_fallbacks.len() <= 3);
+        assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE);
 
         // Add this block as valid parent to skip connected future blocks
         for s in slot + 1.. {
@@ -96,7 +100,7 @@ impl ParentReadyTracker {
             let status = self.slot_statuses.entry(s).or_default();
             status.parents_ready.push(block);
 
-            self.highest_parent_ready = s.max(self.highest_parent_ready);
+            self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
 
             if !status.skip {
                 break;
@@ -150,7 +154,7 @@ impl ParentReadyTracker {
             let status = self.slot_statuses.entry(s).or_default();
             status.parents_ready.extend_from_slice(&potential_parents);
 
-            self.highest_parent_ready = s.max(self.highest_parent_ready);
+            self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
         }
     }
 
@@ -172,7 +176,7 @@ impl ParentReadyTracker {
     }
 
     pub fn highest_parent_ready(&self) -> Slot {
-        self.highest_parent_ready
+        self.highest_with_parent_ready
     }
 
     pub fn set_root(&mut self, root: Slot) {

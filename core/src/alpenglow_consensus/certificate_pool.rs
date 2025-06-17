@@ -74,7 +74,9 @@ pub struct CertificatePool<VC: VoteCertificate> {
     vote_pools: BTreeMap<PoolId, VotePool<VC>>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateId, VC>,
-    /// Parent ready tracker
+    /// Tracks slots which have reached the parent ready condition:
+    /// - They have a potential parent block with a NotarizeFallback certificate
+    /// - All slots from the parent have a Skip certificate
     pub(crate) parent_ready_tracker: ParentReadyTracker,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
@@ -228,32 +230,26 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                     }
                 }
 
-                if cert_id.is_notarize_fallback()
-                    && self
-                        .highest_notarized_fallback
-                        .map_or(true, |(s, _, _)| s < slot)
-                {
-                    self.highest_notarized_fallback =
-                        Some((slot, block_id.unwrap(), bank_hash.unwrap()));
-                    self.parent_ready_tracker.add_new_notar_fallback((
-                        slot,
-                        block_id.unwrap(),
-                        bank_hash.unwrap(),
-                    ));
-                }
-
-                if cert_id.is_skip() {
-                    self.parent_ready_tracker.add_new_skip(slot);
-                }
-
-                if cert_id.is_finalization_variant()
-                    && self.highest_finalized_slot.map_or(true, |s| s < slot)
-                {
-                    self.highest_finalized_slot = Some(slot);
-                    if self.highest_finalized_slot > highest {
-                        return Ok(Some(slot));
+                match cert_id {
+                    CertificateId::Notarize(_, _, _) => (),
+                    CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
+                        self.parent_ready_tracker
+                            .add_new_notar_fallback((slot, block_id, bank_hash));
+                        if self
+                            .highest_notarized_fallback
+                            .map_or(true, |(s, _, _)| s < slot)
+                        {
+                            self.highest_notarized_fallback = Some((slot, block_id, bank_hash));
+                        }
                     }
-                }
+                    CertificateId::Skip(_) => self.parent_ready_tracker.add_new_skip(slot),
+                    CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
+                        if self.highest_finalized_slot.map_or(true, |s| s < slot) {
+                            self.highest_finalized_slot = Some(slot);
+                            return Ok(Some(slot));
+                        }
+                    }
+                };
 
                 Ok(highest)
             })

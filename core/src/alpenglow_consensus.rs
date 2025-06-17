@@ -44,14 +44,17 @@ impl CertificateId {
         matches!(self, Self::FinalizeFast(_, _, _))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_finalization_variant(&self) -> bool {
         matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_notarize_fallback(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_skip(&self) -> bool {
         matches!(self, Self::Skip(_))
     }
