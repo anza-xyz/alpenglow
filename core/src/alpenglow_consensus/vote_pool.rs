@@ -1,8 +1,9 @@
 use {
-    super::{vote_certificate::VoteCertificate, Stake},
+    super::Stake,
+    crate::alpenglow_consensus::vote_certificate::{CertificateError, VoteCertificate},
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
-    std::{collections::HashMap, sync::Arc},
+    std::collections::HashMap,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -13,7 +14,7 @@ pub(crate) struct VoteKey {
 
 #[derive(Debug)]
 pub(crate) struct VoteEntry<VC: VoteCertificate> {
-    pub(crate) transactions: Vec<Arc<VC::VoteTransaction>>,
+    pub(crate) transactions: Vec<VC::VoteTransaction>,
     pub(crate) total_stake_by_key: Stake,
 }
 
@@ -50,7 +51,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         validator_key: &Pubkey,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: Arc<VC::VoteTransaction>,
+        transaction: VC::VoteTransaction,
         validator_stake: Stake,
     ) -> bool {
         // Check whether the validator_key already used the same vote_key or exceeded max_entries_per_pubkey
@@ -70,7 +71,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         prev_vote_keys.push(vote_key.clone());
 
         let vote_entry = self.votes.entry(vote_key).or_insert_with(VoteEntry::new);
-        vote_entry.transactions.push(transaction.clone());
+        vote_entry.transactions.push(transaction);
         vote_entry.total_stake_by_key += validator_stake;
 
         if inserted_first_time {
@@ -99,18 +100,19 @@ impl<VC: VoteCertificate> VotePool<VC> {
         self.top_entry_stake
     }
 
-    pub fn copy_out_transactions(
+    pub fn add_to_certificate(
         &self,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        output: &mut Vec<Arc<VC::VoteTransaction>>,
-    ) {
+        output: &mut VC,
+    ) -> Result<(), CertificateError> {
         if let Some(vote_entries) = self.votes.get(&VoteKey {
             bank_hash,
             block_id,
         }) {
-            output.extend(vote_entries.transactions.iter().cloned());
+            output.aggregate(vote_entries.transactions.iter())?;
         }
+        Ok(())
     }
 
     pub fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
@@ -127,9 +129,8 @@ mod test {
             },
             *,
         },
-        alpenglow_vote::bls_message::CertificateMessage,
-        solana_bls::keypair::Keypair as BLSKeypair,
-        std::sync::Arc,
+        alpenglow_vote::{bls_message::CertificateMessage, vote::Vote},
+        solana_bls::Signature as BLSSignature,
     };
 
     #[test]
@@ -140,7 +141,8 @@ mod test {
 
     fn test_skip_vote_pool_for_type<VC: VoteCertificate>() {
         let mut vote_pool = VotePool::<VC>::new(1);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
+        let vote = Vote::new_skip_vote(5);
+        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
         let my_pubkey = Pubkey::new_unique();
 
         assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
@@ -166,10 +168,11 @@ mod test {
 
     fn test_notarization_pool_for_type<VC: VoteCertificate>() {
         let mut vote_pool = VotePool::<VC>::new(1);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
+        let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
+        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
 
         assert!(vote_pool.add_vote(
             &my_pubkey,
@@ -229,7 +232,8 @@ mod test {
     fn test_notarization_fallback_pool_for_type<VC: VoteCertificate>() {
         solana_logger::setup();
         let mut vote_pool = VotePool::<VC>::new(3);
-        let transaction = Arc::new(VC::VoteTransaction::new_for_test(BLSKeypair::new()));
+        let vote = Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique());
+        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();

@@ -5411,6 +5411,9 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_with",
+ "solana-signature",
+ "solana-signer",
+ "subtle",
  "thiserror 2.0.12",
 ]
 
