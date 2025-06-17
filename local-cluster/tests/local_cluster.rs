@@ -6512,11 +6512,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     assert_eq!(vote_pubkeys.len(), num_nodes);
 
-    // Track Node A's votes and when the test can conclude
-    let node_a_filtered_votes = Arc::new(Mutex::new(HashMap::new()));
-    let mut post_experiment_votes = HashMap::new();
-    let mut post_experiment_roots = HashSet::new();
-
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
         // TODO: set up the vote listener thread
@@ -6525,66 +6520,4 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     });
 
     vote_listener.join().unwrap();
-}
-
-/// A: 20% - eps
-/// B: 40%
-/// C: 20%
-/// D: 20% + eps
-///
-/// A is the leader and votes for b1; but pretend that A is Byzantine and *only* sends node B a
-/// different block, b2.
-///
-/// B votes for b2; to simulate this, initially, have B copy vote A. Then, at some stage, have B
-/// send out fake voting transactions.
-///
-/// D votes for b1.
-///
-/// C's turbine is disabled, and it votes skip. But, it then observes that:
-/// - A and D both voted for b1; this is 40% of stake
-/// - B voted for b2; this is 40% of stake.
-///
-/// As a result, C ends up issuing two notar fallback votes.
-///
-/// After confirming that C issued two notar fallback votes, have B just continue copy voting A
-/// and ensure that we continue seeing roots.
-#[test]
-#[serial]
-fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
-    // Configure total stake and stake distribution
-    let total_stake = 10 * DEFAULT_NODE_STAKE;
-    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
-
-    let node_a_stake = total_stake * 2 / 10 - 1;
-    let node_b_stake = total_stake * 4 / 10;
-    let node_c_stake = total_stake * 2 / 10;
-    let node_d_stake = total_stake * 2 / 10 + 1;
-
-    let node_stakes = vec![node_a_stake, node_b_stake, node_c_stake, node_d_stake];
-    let num_nodes = node_stakes.len();
-
-    assert_eq!(
-        total_stake,
-        node_a_stake + node_b_stake + node_c_stake + node_d_stake
-    );
-
-    // Control components
-    let node_a_is_byzantine = Arc::new(AtomicBool::new(false));
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
-
-    // Create leader schedule
-    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
-
-    let leader_schedule = FixedSchedule {
-        leader_schedule: Arc::new(leader_schedule),
-    };
-
-    // Create our UDP socket to listen to votes
-    let vote_listener = solana_net_utils::bind_to_localhost().unwrap();
-
-    // Create validator configs
-    let mut validator_config = ValidatorConfig::default_for_test();
-    validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener.local_addr().unwrap()]);
 }
