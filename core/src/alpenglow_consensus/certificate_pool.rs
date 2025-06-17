@@ -1089,13 +1089,12 @@ mod tests {
     fn test_add_vote_zero_stake() {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
+        let mut bad_transaction =
+            dummy_transaction(&validator_keypairs, &Vote::new_skip_vote(5), 0);
+        bad_transaction.rank = 100; // Invalid rank
         assert_eq!(
-            pool.add_vote(dummy_transaction(
-                &validator_keypairs,
-                &Vote::new_skip_vote(5),
-                100
-            ),),
-            Err(AddVoteError::ZeroStake)
+            pool.add_vote(bad_transaction),
+            Err(AddVoteError::InvalidRank(100))
         );
     }
 
