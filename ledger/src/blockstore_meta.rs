@@ -3,12 +3,12 @@ use {
         blockstore::MAX_DATA_SHREDS_PER_SLOT,
         shred::{self, Shred, ShredType},
     },
+    alpenglow_vote::bls_message::CertificateMessage,
     bitflags::bitflags,
     serde::{Deserialize, Deserializer, Serialize, Serializer},
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         hash::Hash,
-        transaction::VersionedTransaction,
     },
     std::{
         collections::{BTreeSet, HashMap},
@@ -881,16 +881,16 @@ impl OptimisticSlotMetaVersioned {
 /// - 3 `notarize_fallback certificates`
 /// - plus 1 `skip_certificate`
 ///
-/// Note: Currently these are pre BLS `Vec<VersionedTransaction>`, but post BLS
+/// Note: Currently these are pre BLS `CertificateMessage`, but post BLS
 /// the certificate will be one transaction / similar, roughly 800 bytes in size
 ///
 /// This will normally be written to once per slot, but in the worst case 4 times per slot
 /// It will be read to serve repair to other nodes.
 pub struct SlotCertificates {
     /// The notarization fallback certificates keyed by (block_id, bank_hash)
-    pub notarize_fallback_certificates: HashMap<(Hash, Hash), Vec<VersionedTransaction>>,
+    pub notarize_fallback_certificates: HashMap<(Hash, Hash), CertificateMessage>,
     /// The skip certificate
-    pub skip_certificate: Option<Vec<VersionedTransaction>>,
+    pub skip_certificate: Option<CertificateMessage>,
 }
 
 impl SlotCertificates {
@@ -900,13 +900,13 @@ impl SlotCertificates {
         &mut self,
         block_id: Hash,
         bank_hash: Hash,
-        cert: Vec<VersionedTransaction>,
+        cert: CertificateMessage,
     ) {
         self.notarize_fallback_certificates
             .insert((block_id, bank_hash), cert);
     }
 
-    pub fn set_skip_certificate(&mut self, cert: Vec<VersionedTransaction>) {
+    pub fn set_skip_certificate(&mut self, cert: CertificateMessage) {
         self.skip_certificate.replace(cert);
     }
 }

@@ -2,7 +2,7 @@ use {
     super::transaction::AlpenglowVoteTransaction,
     crate::alpenglow_consensus::CertificateId,
     alpenglow_vote::{
-        bls_message::{CertificateMessage, VoteMessage},
+        bls_message::{BLSMessage, CertificateMessage},
         certificate::{Certificate, CertificateType},
     },
     bitvec::prelude::*,
@@ -59,17 +59,6 @@ pub struct LegacyVoteCertificate {
     transactions: Vec<Arc<VersionedTransaction>>,
 }
 
-impl LegacyVoteCertificate {
-    /// Clone the transactions for insertion in blockstore
-    pub(crate) fn transactions(self) -> Vec<VersionedTransaction> {
-        // There's a better way to do this without the copy here, but this is going away for BLS anyway
-        self.transactions
-            .into_iter()
-            .map(Arc::unwrap_or_clone)
-            .collect()
-    }
-}
-
 impl VoteCertificate for LegacyVoteCertificate {
     type VoteTransaction = VersionedTransaction;
 
@@ -97,7 +86,7 @@ impl VoteCertificate for LegacyVoteCertificate {
 }
 
 impl VoteCertificate for CertificateMessage {
-    type VoteTransaction = VoteMessage;
+    type VoteTransaction = BLSMessage;
 
     fn new(certificate_id: CertificateId) -> Self {
         CertificateMessage {
@@ -127,7 +116,10 @@ impl VoteCertificate for CertificateMessage {
         };
 
         // aggregate the votes
-        for vote_message in messages {
+        for bls_message in messages {
+            let BLSMessage::Vote(vote_message) = bls_message else {
+                return Err(CertificateError::InvalidVoteType);
+            };
             // set bit-vector for the validator
             //
             // TODO: This only accounts for one type of vote. Update this after
