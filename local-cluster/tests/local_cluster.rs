@@ -6270,6 +6270,7 @@ fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     // Configure total stake and stake distribution
     let total_stake = 2 * DEFAULT_NODE_STAKE;
     let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;

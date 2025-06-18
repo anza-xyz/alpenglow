@@ -41,7 +41,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
         ThreadPool,
@@ -112,6 +112,15 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub(crate) const MAX_VOTE_SIGNATURES: usize = 200;
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 const MAX_REPAIR_RETRY_LOOP_ATTEMPTS: usize = 10;
+
+pub struct CompletedBlock {
+    pub slot: Slot,
+    // TODO: once we have the async execution changes this can be (block_id, parent_block_id) instead
+    pub bank: Arc<Bank>,
+}
+
+pub type CompletedBlockSender = Sender<CompletedBlock>;
+pub type CompletedBlockReceiver = Receiver<CompletedBlock>;
 
 #[cfg(test)]
 static_assertions::const_assert!(REFRESH_VOTE_BLOCKHEIGHT < solana_sdk::clock::MAX_PROCESSING_AGE);
@@ -654,17 +663,18 @@ impl ReplayStage {
             .highest_frozen_bank()
             .map_or(0, |hfs| hfs.slot());
         *replay_highest_frozen.highest_frozen_slot.lock().unwrap() = highest_frozen_slot;
+        let (completed_block_sender, completed_block_receiver) = unbounded();
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
             let voting_loop_config = VotingLoopConfig {
                 exit: exit.clone(),
                 vote_account,
-                wait_for_vote_to_start_leader,
                 wait_to_vote_slot,
-                authorized_voter_keypairs: authorized_voter_keypairs.clone(),
+                wait_for_vote_to_start_leader,
                 vote_history,
                 vote_history_storage,
+                authorized_voter_keypairs: authorized_voter_keypairs.clone(),
                 blockstore: blockstore.clone(),
                 bank_forks: bank_forks.clone(),
                 cluster_info: cluster_info.clone(),
@@ -675,9 +685,10 @@ impl ReplayStage {
                 commitment_sender: lockouts_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
-                vote_receiver: alpenglow_vote_receiver,
                 leader_window_notifier,
                 certificate_sender,
+                completed_block_receiver,
+                vote_receiver: alpenglow_vote_receiver,
             };
             Some(VotingLoop::new(voting_loop_config))
         } else {
@@ -849,6 +860,7 @@ impl ReplayStage {
                     first_alpenglow_slot,
                     (!is_alpenglow_migration_complete).then_some(&mut tbft_structs),
                     &mut is_alpenglow_migration_complete,
+                    &completed_block_sender,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
                 if is_alpenglow_migration_complete {
@@ -3367,6 +3379,7 @@ impl ReplayStage {
         poh_recorder: &RwLock<PohRecorder>,
         is_alpenglow_migration_complete: &mut bool,
         mut tbft_structs: Option<&mut TowerBFTStructures>,
+        completed_block_sender: &CompletedBlockSender,
     ) -> Vec<Slot> {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
         let mut tx_count = 0;
@@ -3589,6 +3602,14 @@ impl ReplayStage {
                         );
                     }
                 }
+
+                if *is_alpenglow_migration_complete {
+                    let _ = completed_block_sender.send(CompletedBlock {
+                        slot: bank.slot(),
+                        bank: bank.clone_without_scheduler(),
+                    });
+                }
+
                 if let Some(sender) = bank_notification_sender {
                     sender
                         .sender
@@ -3685,6 +3706,7 @@ impl ReplayStage {
         first_alpenglow_slot: Option<Slot>,
         tbft_structs: Option<&mut TowerBFTStructures>,
         is_alpenglow_migration_complete: &mut bool,
+        completed_block_sender: &CompletedBlockSender,
     ) -> Vec<Slot> /* completed slots */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
         let num_active_banks = active_bank_slots.len();
@@ -3765,6 +3787,7 @@ impl ReplayStage {
             poh_recorder,
             is_alpenglow_migration_complete,
             tbft_structs,
+            completed_block_sender,
         )
     }
 
