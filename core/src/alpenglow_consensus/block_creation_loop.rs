@@ -3,7 +3,7 @@
 //! within the block timeouts. Responsible for inserting empty banks for
 //! banking stage to fill, and clearing banks once the timeout has been reached.
 use {
-    super::block_timeout,
+    super::{block_timeout, Block},
     crate::{
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
@@ -81,7 +81,7 @@ pub struct ReplayHighestFrozen {
 pub struct LeaderWindowInfo {
     pub start_slot: Slot,
     pub end_slot: Slot,
-    pub parent_slot: Slot,
+    pub parent_block: Block,
     pub skip_timer: Instant,
 }
 
@@ -161,7 +161,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         let LeaderWindowInfo {
             start_slot,
             end_slot,
-            parent_slot,
+            // TODO: handle duplicate blocks by using the hash here
+            parent_block: (parent_slot, _, _),
             skip_timer,
         } = {
             let window_info = leader_window_notifier.window_info.lock().unwrap();
