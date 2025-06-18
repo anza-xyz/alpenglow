@@ -55,7 +55,6 @@ solana-bloom = { workspace = true }
 solana-bls = { workspace = true, features = ["solana-signer-derive"] }
 solana-builtins-default-costs = { workspace = true }
 solana-client = { workspace = true }
-solana-clock = { workspace = true }
 solana-compute-budget = { workspace = true }
 solana-compute-budget-instruction = { workspace = true }
 solana-connection-cache = { workspace = true }

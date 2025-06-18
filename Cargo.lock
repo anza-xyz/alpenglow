@@ -7466,7 +7466,6 @@ dependencies = [
  "solana-build-alpenglow-vote",
  "solana-builtins-default-costs",
  "solana-client",
- "solana-clock",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-compute-budget-program",
