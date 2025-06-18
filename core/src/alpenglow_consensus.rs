@@ -6,6 +6,7 @@ use {
 
 pub mod block_creation_loop;
 pub mod certificate_pool;
+pub mod parent_ready_tracker;
 pub mod transaction;
 pub mod utils;
 pub mod vote_certificate;
@@ -43,12 +44,19 @@ impl CertificateId {
         matches!(self, Self::FinalizeFast(_, _, _))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_finalization_variant(&self) -> bool {
         matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_notarize_fallback(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_skip(&self) -> bool {
+        matches!(self, Self::Skip(_))
     }
 
     pub(crate) fn to_block(self) -> Option<Block> {
@@ -64,8 +72,7 @@ impl CertificateId {
 
     /// "Critical" certs are the certificates necessary to make progress
     /// We do not consider the next slot for voting until we've seen either
-    /// a Skip certificate (SkipCertified) or a NotarizeFallback certificate
-    /// (BranchCertified/ParentReady).
+    /// a Skip certificate or a NotarizeFallback certificate for ParentReady
     ///
     /// Note: Notarization certificates necessarily generate a
     /// NotarizeFallback certificate as well
