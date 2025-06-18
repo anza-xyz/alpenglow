@@ -52,6 +52,10 @@ pub enum VoteOp {
         tx: Transaction,
         last_voted_slot: Slot,
     },
+    RefreshALpenglowBLSMessage {
+        bls_message: BLSMessage,
+        slot: Slot,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -327,6 +331,16 @@ impl VotingService {
                 last_voted_slot,
             } => {
                 cluster_info.refresh_vote(tx, last_voted_slot, false);
+            }
+            VoteOp::RefreshALpenglowBLSMessage { bls_message, slot } => {
+                Self::broadcast_alpenglow_message(
+                    slot,
+                    cluster_info,
+                    &bls_message,
+                    connection_cache,
+                    additional_listeners,
+                    staked_validators_cache,
+                );
             }
         }
     }

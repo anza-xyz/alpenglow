@@ -51,7 +51,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         validator_key: &Pubkey,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: VC::VoteTransaction,
+        transaction: &VC::VoteTransaction,
         validator_stake: Stake,
     ) -> bool {
         // Check whether the validator_key already used the same vote_key or exceeded max_entries_per_pubkey
@@ -71,7 +71,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         prev_vote_keys.push(vote_key.clone());
 
         let vote_entry = self.votes.entry(vote_key).or_insert_with(VoteEntry::new);
-        vote_entry.transactions.push(transaction);
+        vote_entry.transactions.push(transaction.clone());
         vote_entry.total_stake_by_key += validator_stake;
 
         if inserted_first_time {
@@ -145,17 +145,17 @@ mod test {
         let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
         let my_pubkey = Pubkey::new_unique();
 
-        assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
+        assert!(vote_pool.add_vote(&my_pubkey, None, None, &transaction, 10));
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 10);
 
         // Adding the same key again should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
+        assert!(!vote_pool.add_vote(&my_pubkey, None, None, &transaction, 10));
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        assert!(vote_pool.add_vote(&new_pubkey, None, None, transaction.clone(), 60),);
+        assert!(vote_pool.add_vote(&new_pubkey, None, None, &transaction, 60),);
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 70);
     }
@@ -178,7 +178,7 @@ mod test {
             &my_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -192,7 +192,7 @@ mod test {
             &my_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -202,7 +202,7 @@ mod test {
             &my_pubkey,
             Some(Hash::new_unique()),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -213,7 +213,7 @@ mod test {
             &new_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             60
         ),);
         assert_eq!(vote_pool.total_stake(), 70);
@@ -245,7 +245,7 @@ mod test {
                 &my_pubkey,
                 Some(bank_hashes[i]),
                 Some(block_ids[i]),
-                transaction.clone(),
+                &transaction,
                 10
             ));
             assert_eq!(vote_pool.total_stake(), 10);
@@ -259,7 +259,7 @@ mod test {
             &my_pubkey,
             Some(bank_hashes[3]),
             Some(block_ids[3]),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -275,7 +275,7 @@ mod test {
                 &new_pubkey,
                 Some(bank_hashes[i]),
                 Some(block_ids[i]),
-                transaction.clone(),
+                &transaction,
                 60
             ));
             assert_eq!(vote_pool.total_stake(), 70);
@@ -290,7 +290,7 @@ mod test {
             &new_pubkey,
             Some(bank_hashes[3]),
             Some(block_ids[3]),
-            transaction.clone(),
+            &transaction,
             60
         ));
         assert_eq!(vote_pool.total_stake(), 70);
@@ -304,7 +304,7 @@ mod test {
             &new_pubkey,
             Some(bank_hashes[0]),
             Some(block_ids[0]),
-            transaction.clone(),
+            &transaction,
             60
         ));
     }

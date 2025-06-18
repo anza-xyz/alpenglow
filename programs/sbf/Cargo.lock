@@ -6013,6 +6013,7 @@ dependencies = [
  "solana-bls",
  "solana-builtins-default-costs",
  "solana-client",
+ "solana-clock",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-connection-cache",
@@ -6650,6 +6651,7 @@ dependencies = [
 name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bitflags 2.9.0",

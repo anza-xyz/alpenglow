@@ -7466,6 +7466,7 @@ dependencies = [
  "solana-build-alpenglow-vote",
  "solana-builtins-default-costs",
  "solana-client",
+ "solana-clock",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-compute-budget-program",
@@ -8337,6 +8338,7 @@ dependencies = [
 name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bitflags 2.9.0",
