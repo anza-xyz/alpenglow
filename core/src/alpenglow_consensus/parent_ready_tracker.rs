@@ -1,0 +1,269 @@
+//! Tracks the parent-ready condition
+//!
+//! The parent-ready condition pertains to a slot `s` and a block hash `hash(b)`,
+//! where `s` is the first slot of a leader window and `s > slot(b)`.
+//! Specifically, it is defined as the following:
+//!   - Block `b` is notarized or notarized-fallback, and
+//!   - slots `slot(b) + 1` (inclusive) to `s` (non-inclusive) are skip-certified.
+//!
+//! Additional restriction on notarization votes ensure that the parent-ready
+//! condition holds for a block `b` only if it also holds for all ancestors of `b`.
+//! Together this ensures that the block `b` is a valid parent for block
+//! production, i.e., under good network conditions an honest leader proposing
+//! a block with parent `b` in slot `s` will have their block finalized.
+
+use {
+    super::Block, crate::alpenglow_consensus::MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+    solana_pubkey::Pubkey, solana_sdk::clock::Slot, std::collections::HashMap,
+};
+
+#[derive(Clone, Debug, Default)]
+pub struct ParentReadyTracker {
+    /// Our pubkey for logging
+    my_pubkey: Pubkey,
+
+    /// Parent ready status for each slot
+    slot_statuses: HashMap<Slot, ParentReadyStatus>,
+
+    /// Root
+    root: Slot,
+
+    /// Highest slot with parent ready status
+    // TODO: While the voting loop is sequential we track every slot (not just the first in window)
+    // However once we handle all slots concurrently we will update this to only count first leader
+    // slot in window
+    highest_with_parent_ready: Slot,
+}
+
+#[derive(Clone, Default, Debug)]
+struct ParentReadyStatus {
+    /// Whether this slot has a skip certificate
+    skip: bool,
+    /// The blocks that have been notar fallbacked in this slot
+    notar_fallbacks: Vec<Block>,
+    /// The parent blocks that achieve parent ready in this slot,
+    /// Theses blocks are all potential parents choosable in this slot
+    parents_ready: Vec<Block>,
+}
+
+impl ParentReadyTracker {
+    /// Creates a new tracker with the root bank as implicitely notarized fallback
+    pub fn new(my_pubkey: Pubkey, root_block @ (root_slot, _, _): Block) -> Self {
+        let mut slot_statuses = HashMap::new();
+        slot_statuses.insert(
+            root_slot,
+            ParentReadyStatus {
+                skip: false,
+                notar_fallbacks: vec![root_block],
+                parents_ready: vec![],
+            },
+        );
+        slot_statuses.insert(
+            root_slot + 1,
+            ParentReadyStatus {
+                skip: false,
+                notar_fallbacks: vec![],
+                parents_ready: vec![root_block],
+            },
+        );
+        Self {
+            my_pubkey,
+            slot_statuses,
+            root: root_slot,
+            highest_with_parent_ready: root_slot + 1,
+        }
+    }
+
+    /// Adds a new notar-fallback certificate
+    pub fn add_new_notar_fallback(&mut self, block @ (slot, _, _): Block) {
+        if slot <= self.root {
+            return;
+        }
+
+        let status = self.slot_statuses.entry(slot).or_default();
+        if status.notar_fallbacks.contains(&block) {
+            return;
+        }
+        trace!(
+            "{}: Adding new notar fallback for {block:?}",
+            self.my_pubkey
+        );
+        status.notar_fallbacks.push(block);
+        assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE);
+
+        // Add this block as valid parent to skip connected future blocks
+        for s in slot + 1.. {
+            trace!(
+                "{}: Adding new parent ready for {s} parent {block:?}",
+                self.my_pubkey
+            );
+            let status = self.slot_statuses.entry(s).or_default();
+            status.parents_ready.push(block);
+
+            self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
+
+            if !status.skip {
+                break;
+            }
+        }
+    }
+
+    /// Adds a new skip certificate
+    pub fn add_new_skip(&mut self, slot: Slot) {
+        if slot <= self.root {
+            return;
+        }
+
+        trace!("{}: Adding new skip for {slot:?}", self.my_pubkey);
+        let status = self.slot_statuses.entry(slot).or_default();
+        status.skip = true;
+
+        // Get newly connected future slots
+        let mut future_slots = vec![];
+        for s in slot + 1.. {
+            future_slots.push(s);
+            if !self.slot_statuses.get(&s).is_some_and(|ss| ss.skip) {
+                break;
+            }
+        }
+
+        // Find possible parents using the previous slot
+        let mut potential_parents = vec![];
+        let Some(status) = self.slot_statuses.get(&(slot - 1)) else {
+            return;
+        };
+        for nf in &status.notar_fallbacks {
+            // If there's a notarize fallback certificate we can use the previous slot
+            // as a parent
+            potential_parents.push(*nf);
+        }
+        if status.skip {
+            // If there's a skip certificate we can use the parents of the previous slot
+            // as a parent
+            for parent in &status.parents_ready {
+                potential_parents.push(*parent);
+            }
+        }
+
+        // Add these as valid parents to the future slots
+        for s in future_slots {
+            trace!(
+                "{}: Adding new parent ready for {s} parents {potential_parents:?}",
+                self.my_pubkey,
+            );
+            let status = self.slot_statuses.entry(s).or_default();
+            status.parents_ready.extend_from_slice(&potential_parents);
+
+            self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
+        }
+    }
+
+    pub fn parent_ready(&self, slot: Slot, parent: Block) -> bool {
+        self.slot_statuses
+            .get(&slot)
+            .is_some_and(|ss| ss.parents_ready.contains(&parent))
+    }
+
+    /// For our leader slot `slot`, which block should we use as the parent
+    pub fn block_production_parent(&self, slot: Slot) -> Option<Block> {
+        // TODO: for duplicate blocks we should adjust this to choose the
+        // parent with the least amount of duplicate blocks if possible.
+        // Notice that each scenario with multiple NotarFallbacks also will eventually
+        // have a skip for that slot, so prefer the skip if we've received it
+        self.slot_statuses
+            .get(&slot)
+            .and_then(|ss| ss.parents_ready.iter().max().copied())
+    }
+
+    pub fn highest_parent_ready(&self) -> Slot {
+        self.highest_with_parent_ready
+    }
+
+    pub fn set_root(&mut self, root: Slot) {
+        self.root = root;
+        self.slot_statuses.retain(|&s, _| s >= root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        solana_pubkey::Pubkey,
+        solana_sdk::{clock::NUM_CONSECUTIVE_LEADER_SLOTS, hash::Hash},
+    };
+
+    #[test]
+    fn basic() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+
+        for i in 1..2 * NUM_CONSECUTIVE_LEADER_SLOTS {
+            let block = (i, Hash::new_unique(), Hash::new_unique());
+            tracker.add_new_notar_fallback(block);
+            assert_eq!(tracker.highest_parent_ready(), i + 1);
+            assert!(tracker.parent_ready(i + 1, block));
+        }
+    }
+
+    #[test]
+    fn skips() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+        let block = (1, Hash::new_unique(), Hash::new_unique());
+
+        tracker.add_new_notar_fallback(block);
+        tracker.add_new_skip(1);
+        tracker.add_new_skip(2);
+        tracker.add_new_skip(3);
+
+        assert!(tracker.parent_ready(4, block));
+        assert!(tracker.parent_ready(4, genesis));
+        assert_eq!(tracker.highest_parent_ready(), 4);
+    }
+
+    #[test]
+    fn out_of_order() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+        let block = (1, Hash::new_unique(), Hash::new_unique());
+
+        tracker.add_new_skip(3);
+        tracker.add_new_skip(2);
+
+        tracker.add_new_notar_fallback(block);
+        assert!(tracker.parent_ready(4, block));
+        assert!(!tracker.parent_ready(4, genesis));
+
+        tracker.add_new_skip(1);
+        assert!(tracker.parent_ready(4, block));
+        assert!(tracker.parent_ready(4, genesis));
+    }
+
+    #[test]
+    fn snapshot_wfsm() {
+        let root_slot = 2147;
+        let root_block = (root_slot, Hash::new_unique(), Hash::new_unique());
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), root_block);
+
+        assert!(tracker.parent_ready(root_slot + 1, root_block));
+        assert_eq!(tracker.highest_parent_ready(), root_slot + 1);
+
+        // Skipping root slot shouldn't do anything
+        tracker.add_new_skip(root_slot);
+        assert!(tracker.parent_ready(root_slot + 1, root_block));
+        assert_eq!(tracker.highest_parent_ready(), root_slot + 1);
+
+        // Adding new certs should work as root slot is implicitely notarized fallback
+        tracker.add_new_skip(root_slot + 1);
+        tracker.add_new_skip(root_slot + 2);
+        assert!(tracker.parent_ready(root_slot + 3, root_block));
+        assert_eq!(tracker.highest_parent_ready(), root_slot + 3);
+
+        let block = (root_slot + 4, Hash::new_unique(), Hash::new_unique());
+        tracker.add_new_notar_fallback(block);
+        assert!(tracker.parent_ready(root_slot + 3, root_block));
+        assert!(tracker.parent_ready(root_slot + 5, block));
+        assert_eq!(tracker.highest_parent_ready(), root_slot + 5);
+    }
+}
