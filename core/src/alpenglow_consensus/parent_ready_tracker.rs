@@ -145,6 +145,10 @@ impl ParentReadyTracker {
             }
         }
 
+        if potential_parents.is_empty() {
+            return;
+        }
+
         // Add these as valid parents to the future slots
         for s in future_slots {
             trace!(
@@ -265,5 +269,23 @@ mod tests {
         assert!(tracker.parent_ready(root_slot + 3, root_block));
         assert!(tracker.parent_ready(root_slot + 5, block));
         assert_eq!(tracker.highest_parent_ready(), root_slot + 5);
+    }
+
+    #[test]
+    fn highest_parent_ready_out_of_order() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+        assert_eq!(tracker.highest_parent_ready(), 1);
+
+        tracker.add_new_skip(2);
+        assert_eq!(tracker.highest_parent_ready(), 1);
+
+        tracker.add_new_skip(3);
+        assert_eq!(tracker.highest_parent_ready(), 1);
+
+        tracker.add_new_skip(1);
+        assert!(tracker.parent_ready(4, genesis));
+        assert_eq!(tracker.highest_parent_ready(), 4);
+        assert_eq!(tracker.block_production_parent(4), Some(genesis));
     }
 }
