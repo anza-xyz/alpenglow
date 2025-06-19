@@ -4,6 +4,7 @@ use {
     super::{
         block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
         certificate_pool::{self, AddVoteError},
+        parent_ready_tracker::BlockProductionParent,
         vote_history_storage::VoteHistoryStorage,
         Block, CertificateId,
     },
@@ -257,20 +258,37 @@ impl VotingLoop {
                 .collect();
 
             if is_leader {
+                let start_slot = first_of_consecutive_leader_slots(current_slot).max(1);
                 // Let the block creation loop know it is time for it to produce the window
-                let parent_block = cert_pool
+                match cert_pool
                     .parent_ready_tracker
                     .block_production_parent(current_slot)
-                    .expect("Must have a block production parent in sequential voting loop");
-                Self::notify_block_creation_loop_of_leader_window(
-                    &my_pubkey,
-                    &cert_pool,
-                    &leader_window_notifier,
-                    first_of_consecutive_leader_slots(current_slot),
-                    leader_end_slot,
-                    parent_block,
-                    skip_timer,
-                );
+                {
+                    BlockProductionParent::MissedWindow => {
+                        warn!(
+                            "{my_pubkey}: Leader slot {start_slot} has already been certified, \
+                            skipping production of {start_slot}-{leader_end_slot}"
+                        );
+                    }
+                    BlockProductionParent::ParentNotReady => {
+                        // This can't happen before we start optimistically producing blocks
+                        // When optimistically producing blocks, we can check for the parent in the block creation loop
+                        panic!(
+                            "Must have a block production parent in sequential voting loop: {:#?}",
+                            cert_pool.parent_ready_tracker
+                        );
+                    }
+                    BlockProductionParent::Parent(parent_block) => {
+                        Self::notify_block_creation_loop_of_leader_window(
+                            &my_pubkey,
+                            &leader_window_notifier,
+                            start_slot,
+                            leader_end_slot,
+                            parent_block,
+                            skip_timer,
+                        );
+                    }
+                };
             }
 
             ReplayStage::log_leader_change(
@@ -972,30 +990,15 @@ impl VotingLoop {
     ///
     /// Fails to notify and returns false if the leader window has already
     /// been skipped, or if the parent is greater than or equal to the first leader slot
-    fn notify_block_creation_loop_of_leader_window<VC: VoteCertificate>(
+    fn notify_block_creation_loop_of_leader_window(
         my_pubkey: &Pubkey,
-        cert_pool: &CertificatePool<VC>,
         leader_window_notifier: &LeaderWindowNotifier,
         start_slot: Slot,
         end_slot: Slot,
         parent_block @ (parent_slot, _, _): Block,
         skip_timer: Instant,
     ) -> bool {
-        // Check if we missed our window
-        if (start_slot..=end_slot).any(|s| cert_pool.skip_certified(s)) {
-            warn!(
-                "{my_pubkey}: Leader slot {start_slot} has already been skip certified, \
-                skipping production of {start_slot}-{end_slot}"
-            );
-            return false;
-        }
-        if parent_slot >= start_slot {
-            warn!(
-                "{my_pubkey}: Leader slot {start_slot} has a higher certified slot {parent_slot}, \
-                skipping production of {start_slot}-{end_slot}"
-            );
-            return false;
-        }
+        debug_assert!(parent_slot < start_slot);
 
         // Notify the block creation loop.
         let mut l_window_info = leader_window_notifier.window_info.lock().unwrap();

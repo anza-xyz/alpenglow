@@ -17,6 +17,13 @@ use {
     solana_pubkey::Pubkey, solana_sdk::clock::Slot, std::collections::HashMap,
 };
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BlockProductionParent {
+    MissedWindow,
+    ParentNotReady,
+    Parent(Block),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ParentReadyTracker {
     /// Our pubkey for logging
@@ -169,14 +176,26 @@ impl ParentReadyTracker {
     }
 
     /// For our leader slot `slot`, which block should we use as the parent
-    pub fn block_production_parent(&self, slot: Slot) -> Option<Block> {
+    pub fn block_production_parent(&self, slot: Slot) -> BlockProductionParent {
+        if self.highest_parent_ready() > slot {
+            // This indicates that our block has already received a certificate
+            // either because we were too slow, or because we are restarting
+            // and catching up. Either way we should not attempt to produce this slot
+            return BlockProductionParent::MissedWindow;
+        }
         // TODO: for duplicate blocks we should adjust this to choose the
         // parent with the least amount of duplicate blocks if possible.
         // Notice that each scenario with multiple NotarFallbacks also will eventually
         // have a skip for that slot, so prefer the skip if we've received it
-        self.slot_statuses
+        match self
+            .slot_statuses
             .get(&slot)
             .and_then(|ss| ss.parents_ready.iter().max().copied())
+        {
+            Some(parent) => BlockProductionParent::Parent(parent),
+            // TODO: this will be plugged in for optimistic block production
+            None => BlockProductionParent::ParentNotReady,
+        }
     }
 
     pub fn highest_parent_ready(&self) -> Slot {
@@ -286,6 +305,38 @@ mod tests {
         tracker.add_new_skip(1);
         assert!(tracker.parent_ready(4, genesis));
         assert_eq!(tracker.highest_parent_ready(), 4);
-        assert_eq!(tracker.block_production_parent(4), Some(genesis));
+        assert_eq!(
+            tracker.block_production_parent(4),
+            BlockProductionParent::Parent(genesis)
+        );
+    }
+
+    #[test]
+    fn missed_window() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+        assert_eq!(tracker.highest_parent_ready(), 1);
+        assert_eq!(
+            tracker.block_production_parent(4),
+            BlockProductionParent::ParentNotReady
+        );
+
+        tracker.add_new_notar_fallback((4, Hash::new_unique(), Hash::new_unique()));
+        assert_eq!(tracker.highest_parent_ready(), 5);
+        assert_eq!(
+            tracker.block_production_parent(4),
+            BlockProductionParent::MissedWindow
+        );
+
+        assert_eq!(
+            tracker.block_production_parent(8),
+            BlockProductionParent::ParentNotReady
+        );
+        tracker.add_new_notar_fallback((64, Hash::new_unique(), Hash::new_unique()));
+        assert_eq!(tracker.highest_parent_ready(), 65);
+        assert_eq!(
+            tracker.block_production_parent(8),
+            BlockProductionParent::MissedWindow
+        );
     }
 }
