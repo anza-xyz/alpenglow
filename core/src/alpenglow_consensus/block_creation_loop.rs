@@ -114,7 +114,9 @@ fn start_receive_and_record_loop(
     record_receiver: Receiver<Record>,
 ) {
     while !exit.load(Ordering::Relaxed) {
-        match record_receiver.recv_timeout(Duration::from_millis(100)) {
+        // We need a timeout here to check the exit flag, chose 400ms
+        // for now but can be longer if needed.
+        match record_receiver.recv_timeout(Duration::from_millis(400)) {
             Ok(record) => {
                 if record
                     .sender
