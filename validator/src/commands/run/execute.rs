@@ -1138,7 +1138,7 @@ pub fn execute(
                         )
                 })
             } else {
-                Some(bind_address)
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
             }
         })
         .ok_or_else(|| "unable to determine the validator's public IP address".to_string())?;
