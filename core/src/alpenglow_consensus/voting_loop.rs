@@ -19,11 +19,13 @@ use {
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
         consensus::progress_map::ProgressMap,
-        replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
+        replay_stage::{
+            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
+        },
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,
-    crossbeam_channel::Sender,
+    crossbeam_channel::{RecvTimeoutError, Sender},
     solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -52,6 +54,7 @@ use {
         transaction::{Transaction, VersionedTransaction},
     },
     std::{
+        collections::BTreeMap,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
@@ -60,6 +63,9 @@ use {
         time::{Duration, Instant},
     },
 };
+
+/// Banks that have completed replay, but are yet to be voted on
+type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
@@ -89,6 +95,7 @@ pub struct VotingLoopConfig {
     pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
 
     // Receivers
+    pub(crate) completed_block_receiver: CompletedBlockReceiver,
     pub vote_receiver: VoteReceiver,
 }
 
@@ -179,6 +186,7 @@ impl VotingLoop {
             bank_notification_sender,
             leader_window_notifier,
             certificate_sender,
+            completed_block_receiver,
             vote_receiver,
         } = config;
 
@@ -217,6 +225,7 @@ impl VotingLoop {
             blockstore.as_ref(),
             Some(certificate_sender),
         );
+        let mut pending_blocks = PendingBlocks::default();
 
         let mut voting_context = VotingContext {
             vote_history,
@@ -329,23 +338,31 @@ impl VotingLoop {
                     }
 
                     // Check if replay has successfully completed
-                    let Some(bank) = bank_forks.read().unwrap().get(current_slot) else {
-                        continue;
-                    };
-                    if !bank.is_frozen() {
-                        continue;
-                    };
+                    if let Some(bank) = pending_blocks.get(&current_slot) {
+                        debug_assert!(bank.is_frozen());
+                        // Vote notarize
+                        if Self::try_notar(
+                            &my_pubkey,
+                            bank.as_ref(),
+                            &blockstore,
+                            &mut cert_pool,
+                            &mut voting_context,
+                        ) {
+                            debug_assert!(voting_context.vote_history.voted(current_slot));
+                            pending_blocks.remove(&current_slot);
+                            break;
+                        }
+                    }
 
-                    // Vote notarize
-                    if Self::try_notar(
-                        &my_pubkey,
-                        bank.as_ref(),
-                        &blockstore,
-                        &mut cert_pool,
-                        &mut voting_context,
-                    ) {
-                        debug_assert!(voting_context.vote_history.voted(current_slot));
-                        break;
+                    // Ingest replayed blocks
+                    match completed_block_receiver
+                        .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
+                    {
+                        Ok(CompletedBlock { slot, bank }) => {
+                            pending_blocks.insert(slot, bank);
+                        }
+                        Err(RecvTimeoutError::Timeout) => (),
+                        Err(RecvTimeoutError::Disconnected) => return,
                     }
                 }
 
@@ -419,6 +436,7 @@ impl VotingLoop {
             Self::maybe_set_root(
                 leader_end_slot,
                 &mut cert_pool,
+                &mut pending_blocks,
                 &accounts_background_request_sender,
                 &bank_notification_sender,
                 &drop_bank_sender,
@@ -439,6 +457,7 @@ impl VotingLoop {
     fn maybe_set_root(
         slot: Slot,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        pending_blocks: &mut PendingBlocks,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -456,6 +475,7 @@ impl VotingLoop {
         trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
         cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
+        pending_blocks.split_off(&new_root);
         if let Err(e) = ReplayStage::check_and_handle_new_root(
             &ctx.my_pubkey,
             slot,
