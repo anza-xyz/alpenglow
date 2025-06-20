@@ -8,16 +8,13 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::Receiver,
+    crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::leader_slot_index,
     },
-    solana_poh::{
-        poh_recorder::{PohRecorder, Record, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
-        poh_service::PohService,
-    },
+    solana_poh::poh_recorder::{PohRecorder, Record, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     solana_rpc::{rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier},
     solana_runtime::{
         bank::{Bank, NewBankOptions},
@@ -29,6 +26,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
+        thread,
         time::{Duration, Instant},
     },
     thiserror::Error,
@@ -110,6 +108,37 @@ enum StartLeaderError {
     VoteNotRooted,
 }
 
+fn start_receive_and_record_loop(
+    exit: Arc<AtomicBool>,
+    poh_recorder: Arc<RwLock<PohRecorder>>,
+    record_receiver: Receiver<Record>,
+) {
+    while !exit.load(Ordering::Relaxed) {
+        // We need a timeout here to check the exit flag, chose 400ms
+        // for now but can be longer if needed.
+        match record_receiver.recv_timeout(Duration::from_millis(400)) {
+            Ok(record) => {
+                if record
+                    .sender
+                    .send(poh_recorder.write().unwrap().record(
+                        record.slot,
+                        record.mixin,
+                        record.transactions,
+                    ))
+                    .is_err()
+                {
+                    panic!("Error returning mixin hash");
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                info!("Record receiver disconnected");
+                return;
+            }
+            Err(RecvTimeoutError::Timeout) => (),
+        }
+    }
+}
+
 /// The block creation loop.
 ///
 /// The `alpenglow_consensus::voting_loop` tracks when it is our leader window, and populates
@@ -139,6 +168,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
     // TODO: set-identity
     let my_pubkey = cluster_info.id();
+    let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
 
     let ctx = LeaderContext {
         my_pubkey,
@@ -155,6 +185,13 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
     // Setup poh
     reset_poh_recorder(&ctx.bank_forks.read().unwrap().working_bank(), &ctx);
+
+    // Start receive and record loop
+    let exit_c = exit.clone();
+    let p_rec = poh_recorder.clone();
+    let receive_record_loop = thread::spawn(move || {
+        start_receive_and_record_loop(exit_c, p_rec, record_receiver);
+    });
 
     while !exit.load(Ordering::Relaxed) {
         // Wait for the voting loop to notify us
@@ -200,25 +237,17 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         while !exit.load(Ordering::Relaxed) {
             let leader_index = leader_slot_index(slot);
             let timeout = block_timeout(leader_index);
-            let mut remaining_slot_time = timeout.saturating_sub(skip_timer.elapsed());
 
-            // Wait for either the block timeout or the bank to fill up
-            while !remaining_slot_time.is_zero() && poh_recorder.read().unwrap().has_bank() {
-                trace!(
-                    "{my_pubkey}: waiting for leader bank {slot} to finish, remaining time: {}",
-                    remaining_slot_time.as_millis(),
-                );
-                // Process records
-                PohService::read_record_receiver_and_process(
-                    &poh_recorder,
-                    &record_receiver,
-                    remaining_slot_time,
-                );
+            // Wait for either the block timeout or for the bank to be completed
+            // The receive and record loop will fill the bank
+            let remaining_slot_time = timeout.saturating_sub(skip_timer.elapsed());
+            trace!(
+                "{my_pubkey}: waiting for leader bank {slot} to finish, remaining time: {}",
+                remaining_slot_time.as_millis(),
+            );
+            leader_bank_notifier.wait_for_completed(remaining_slot_time);
 
-                remaining_slot_time = timeout.saturating_sub(skip_timer.elapsed());
-            }
-
-            // Bank has completed, there are two possibilities:
+            // Time to complete the bank, there are two possibilities:
             // (1) We hit the block timeout, the bank is still present we must clear it
             // (2) The bank has filled up and been cleared by banking stage
             {
@@ -246,11 +275,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             }
 
             assert!(!poh_recorder.read().unwrap().has_bank());
-            PohService::read_record_receiver_and_process(
-                &poh_recorder,
-                &record_receiver,
-                remaining_slot_time, /* 0 */
-            );
 
             // Produce our next slot
             slot += 1;
@@ -267,6 +291,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             }
         }
     }
+
+    receive_record_loop.join().unwrap();
 }
 
 /// Is `slot` the first of leader window, accounts for (TODO) WFSM and genesis
