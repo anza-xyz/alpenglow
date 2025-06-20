@@ -71,7 +71,7 @@ use {
     std::{
         collections::HashSet,
         fs::{self, File},
-        net::{IpAddr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         num::NonZeroUsize,
         path::{Path, PathBuf},
         process::exit,
