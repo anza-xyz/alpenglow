@@ -63,6 +63,7 @@ use {
     },
 };
 
+/// Banks that have completed replay, but are yet to be voted on
 type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
 
 /// Inputs to the voting loop
