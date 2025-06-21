@@ -11,6 +11,8 @@ use {
     solana_accounts_db::{
         hardened_unpack::open_genesis_config, utils::create_accounts_run_and_snapshot_dirs,
     },
+    solana_client::connection_cache::ConnectionCache,
+    solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
         consensus::{
             tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH,
@@ -21,7 +23,9 @@ use {
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
-    solana_gossip::{crds_data::MAX_VOTES, gossip_service::discover_cluster},
+    solana_gossip::{
+        contact_info::Protocol, crds_data::MAX_VOTES, gossip_service::discover_cluster,
+    },
     solana_keypair::keypair_from_seed,
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
@@ -86,10 +90,13 @@ use {
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
     },
-    solana_vote::{vote_parser, vote_transaction},
+    solana_vote::{
+        vote_parser::{self, ParsedVoteTransaction},
+        vote_transaction,
+    },
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
     std::{
-        collections::{BTreeSet, HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet, VecDeque},
         fs,
         io::Read,
         iter,
@@ -6247,6 +6254,48 @@ fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     (slot, discriminant)
 }
 
+fn copied_vote_txn(
+    vote_txn: &Transaction,
+    signer_node_keypair: &Keypair,
+    signer_vote_keypair: &Keypair,
+) -> Transaction {
+    let (_, parsed_vote, ..) = vote_parser::parse_alpenglow_vote_transaction(vote_txn).unwrap();
+
+    let signer_node_keypair = signer_node_keypair.insecure_clone();
+    let signer_vote_keypair = signer_vote_keypair.insecure_clone();
+
+    let copied_vote_ixn = parsed_vote
+        .as_alpenglow_transaction_ref()
+        .unwrap()
+        .to_vote_instruction(signer_vote_keypair.pubkey(), signer_node_keypair.pubkey());
+
+    Transaction::new_signed_with_payer(
+        &[copied_vote_ixn],
+        Some(&signer_node_keypair.pubkey()),
+        &[signer_node_keypair],
+        vote_txn.message.recent_blockhash,
+    )
+}
+
+fn broadcast_vote(
+    txn: &Transaction,
+    tpu_socket_addrs: &[std::net::SocketAddr],
+    additional_listeners: Option<&Vec<std::net::SocketAddr>>,
+    connection_cache: Arc<ConnectionCache>,
+) {
+    for tpu_socket_addr in tpu_socket_addrs
+        .iter()
+        .chain(additional_listeners.unwrap_or(&vec![]).into_iter())
+    {
+        let buf = bincode::serialize(&txn).unwrap();
+        let client = connection_cache.get_connection(&tpu_socket_addr);
+
+        client.send_data_async(buf).unwrap_or_else(|_| {
+            panic!("Failed to broadcast vote to {}", tpu_socket_addr);
+        });
+    }
+}
+
 /// This test validates the Alpenglow consensus protocol's ability to maintain liveness when a node
 /// needs to issue a NotarizeFallback vote. The test sets up a two-node cluster with a specific
 /// stake distribution to create a scenario where:
@@ -6452,11 +6501,11 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     );
 
     // Control components
-    let node_a_is_byzantine = Arc::new(AtomicBool::new(false));
     let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
 
     // Create leader schedule
-    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6495,7 +6544,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     };
 
     // Create local cluster
-    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
 
     assert_eq!(cluster.validators.len(), num_nodes);
 
@@ -6512,11 +6562,182 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     assert_eq!(vote_pubkeys.len(), num_nodes);
 
+    // Collect node pubkeys
+    let node_pubkeys = validator_keys
+        .iter()
+        .map(|key| key.pubkey())
+        .collect::<Vec<_>>();
+
+    assert_eq!(num_nodes, validator_keys.len());
+
+    let tpu_socket_addrs = node_pubkeys
+        .iter()
+        .map(|pubkey| {
+            let addr = cluster.get_contact_info(&pubkey).unwrap();
+            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
+            // However, doing this when invoking exit_node results in skips everywhere.
+            // addr.tpu_vote(Protocol::UDP)
+            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+
+            println!(
+                "cluster.connection_cache.protocol() :: {:?}",
+                cluster.connection_cache.protocol()
+            );
+
+            // NOTE: doing this results in liveness - but, C ends up purely generating skips and
+            // weirdly, B and C end up sharing the same port number?
+            addr.tpu_vote(cluster.connection_cache.protocol())
+                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+        })
+        .collect::<Vec<_>>();
+
+    // Exit node B
+    let node_b_keypair2 = validator_keys[1].clone();
+    let node_b_vote_keypair2 = cluster
+        .validators
+        .get(&node_pubkeys[1])
+        .unwrap()
+        .info
+        .voting_keypair
+        .clone();
+
+    let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
+    let node_b_keypair = node_b_info.info.keypair.clone();
+    let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+
+    let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
+    let node_d_keypair = node_d_info.info.keypair.clone();
+    let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+
+    println!("{:?} :: {:?}", node_b_keypair, node_b_vote_keypair);
+    println!("{:?} :: {:?}", node_b_keypair2, node_b_vote_keypair2);
+
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
-        // TODO: set up the vote listener thread
+        let mut buf = [0_u8; 65_535];
+        let mut special_slot = None;
+        let mut b_sent_bs_vote = false;
+        let mut back_to_normal = false;
 
-        move || loop {}
+        move || loop {
+            let n_bytes = vote_listener.recv(&mut buf).unwrap();
+            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
+
+            let (vote_pubkey, parsed_vote, ..) =
+                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+            let node_name = vote_pubkeys[&vote_pubkey];
+            let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+            let mut num_notar_fallbacks = 0;
+
+            dbg!((node_name, vote));
+
+            if node_name == 0 {
+                // (1) node D should just copy vote A
+                let vote_txn_d = copied_vote_txn(
+                    &vote_txn,
+                    &node_d_keypair.insecure_clone(),
+                    &node_d_vote_keypair.insecure_clone(),
+                );
+
+                {
+                    let (_, parsed_vote, ..) =
+                        vote_parser::parse_alpenglow_vote_transaction(&vote_txn_d).unwrap();
+                    let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+                    dbg!((3, vote));
+                }
+
+                broadcast_vote(
+                    &vote_txn_d,
+                    &tpu_socket_addrs,
+                    None,
+                    cluster.connection_cache.clone(),
+                );
+
+                // B's voting logic - B should respond to all of A's votes
+                let (_, parsed_vote_a, ..) =
+                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+                if vote.slot() == 151 {
+                    // Once B's at slot 151, it should broadcast a notar vote for some bs block.
+                    let block_id = Hash::new_unique();
+                    let bank_hash = Hash::new_unique();
+                    let bs_vote = Vote::new_notarization_vote(vote.slot(), block_id, bank_hash);
+                    let bs_vote_ixn = bs_vote
+                        .to_vote_instruction(node_b_vote_keypair.pubkey(), node_b_keypair.pubkey());
+                    let bs_vote_txn = Transaction::new_signed_with_payer(
+                        &[bs_vote_ixn],
+                        Some(&node_b_keypair.pubkey()),
+                        &[node_b_keypair.insecure_clone()],
+                        vote_txn.message.recent_blockhash,
+                    );
+
+                    // debug
+                    println!("BS VOTE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    {
+                        let (_, parsed_vote, ..) =
+                            vote_parser::parse_alpenglow_vote_transaction(&bs_vote_txn).unwrap();
+                        let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+                        dbg!((1, vote));
+                    }
+                    println!("BS VOTE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    // end debug
+                    //
+
+                    broadcast_vote(
+                        &bs_vote_txn,
+                        &tpu_socket_addrs,
+                        None,
+                        cluster.connection_cache.clone(),
+                    );
+                    b_sent_bs_vote = true;
+                }
+                // Until (a special slot is set) slot 151, B should copy A's vote and broadcast
+                else {
+                    let vote_txn_b =
+                        copied_vote_txn(&vote_txn, &node_b_keypair, &node_b_vote_keypair);
+                    {
+                        let (_, parsed_vote, ..) =
+                            vote_parser::parse_alpenglow_vote_transaction(&vote_txn_b).unwrap();
+                        let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+                        dbg!((1, vote));
+                    }
+                    broadcast_vote(
+                        &vote_txn_b,
+                        &tpu_socket_addrs,
+                        None,
+                        cluster.connection_cache.clone(),
+                    );
+                }
+            }
+
+            // C's voting logic
+            if node_name == 2 {
+                // Disable turbine on slot 150
+                if vote.slot() == 150 {
+                    node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                }
+                // Determine the first slot where (1) C issues a skip and (2) C's turbine is disabled
+                else if vote.slot() == 151 {
+                    assert!(node_c_turbine_disabled.load(Ordering::Relaxed));
+
+                    // First vote should be a skip
+                    if vote.is_skip() {
+                        special_slot = Some(vote.slot());
+                    }
+
+                    if vote.is_notarize_fallback() {
+                        num_notar_fallbacks += 1;
+
+                        if num_notar_fallbacks == 2 {
+                            back_to_normal = true;
+                        }
+                    }
+                } else {
+                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                }
+            }
+        }
     });
 
     vote_listener.join().unwrap();
