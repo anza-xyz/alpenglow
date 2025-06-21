@@ -874,6 +874,10 @@ impl ReplayStage {
                             replay_highest_frozen.freeze_notification.notify_one();
                         }
                     }
+                    if did_complete_bank {
+                        let bank_forks_r = bank_forks.read().unwrap();
+                        progress.handle_new_root(&bank_forks_r);
+                    }
                 }
                 replay_active_banks_time.stop();
 
