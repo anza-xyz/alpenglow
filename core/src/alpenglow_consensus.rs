@@ -182,7 +182,6 @@ pub fn skip_timeout(leader_block_index: usize) -> Duration {
 /// within the leader window
 #[inline]
 pub fn block_timeout(leader_block_index: usize) -> Duration {
-    // TODO: What should be a reasonable buffer for this?
-    // Release the final shred `DELTA`ms before the skip timeout
-    skip_timeout(leader_block_index).saturating_sub(DELTA)
+    // TODO: based on testing, perhaps adjust this
+    BLOCKTIME * (leader_block_index as u32 + 1)
 }
