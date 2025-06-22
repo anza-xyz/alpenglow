@@ -11,7 +11,6 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
-            vote_certificate::VoteCertificate,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -473,7 +472,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         pending_blocks: &mut PendingBlocks,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
@@ -580,7 +579,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -607,7 +606,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if voting_context.vote_history.its_over(slot) {
@@ -644,7 +643,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         bank: &Bank,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -708,7 +707,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         bank: &Bank,
         blockstore: &Blockstore,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -740,7 +739,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
@@ -777,7 +776,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
@@ -808,7 +807,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let highest_finalization_slot = cert_pool
@@ -847,7 +846,7 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         context: &mut VotingContext,
     ) -> bool {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
@@ -1065,7 +1064,7 @@ impl VotingLoop {
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool<CertificateMessage>,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
@@ -1132,10 +1131,10 @@ impl VotingLoop {
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
-    fn add_message_and_maybe_update_commitment<VC: VoteCertificate>(
+    fn add_message_and_maybe_update_commitment(
         my_pubkey: &Pubkey,
-        message: &VC::VoteTransaction,
-        cert_pool: &mut CertificatePool<VC>,
+        message: &BLSMessage,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {

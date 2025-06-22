@@ -1,5 +1,4 @@
 use {
-    super::transaction::AlpenglowVoteTransaction,
     crate::alpenglow_consensus::CertificateId,
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage},
@@ -8,8 +7,6 @@ use {
     bitvec::prelude::*,
     solana_bls::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
-    solana_sdk::transaction::VersionedTransaction,
-    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -38,82 +35,45 @@ pub enum CertificateError {
     InvalidVoteType,
 }
 
-pub trait VoteCertificate: Clone {
-    type VoteTransaction: AlpenglowVoteTransaction;
-
-    fn new(certificate_id: CertificateId) -> Self;
-
-    fn vote_count(&self) -> usize;
-
-    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
-    where
-        T: Iterator<Item = &'a Self::VoteTransaction>,
-        Self: 'b,
-        'b: 'a;
+#[derive(Clone)]
+pub struct VoteCertificate {
+    pub certificate: CertificateMessage,
 }
 
-// NOTE: This will go away after BLS implementation is finished.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct LegacyVoteCertificate {
-    // We don't need to send the actual vote transactions out for now.
-    transactions: Vec<Arc<VersionedTransaction>>,
-}
-
-impl VoteCertificate for LegacyVoteCertificate {
-    type VoteTransaction = VersionedTransaction;
-
-    fn new(_certificate_id: CertificateId) -> Self {
+impl VoteCertificate {
+    pub fn new(certificate_id: CertificateId) -> Self {
         Self {
-            transactions: Vec::new(),
+            certificate: CertificateMessage {
+                certificate: certificate_id.into(),
+                signature: Signature::default(),
+                bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
+            },
         }
     }
 
-    fn vote_count(&self) -> usize {
-        self.transactions.len()
+    pub fn new_from_certificate(certificate: CertificateMessage) -> Self {
+        Self { certificate }
     }
 
-    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    pub fn vote_count(&self) -> usize {
+        self.certificate.bitmap.count_ones()
+    }
+
+    pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
-        T: Iterator<Item = &'a Self::VoteTransaction>,
-        Self: 'b,
-        'b: 'a,
-    {
-        for message in messages {
-            self.transactions.push(Arc::new(message.clone()));
-        }
-        Ok(())
-    }
-}
-
-impl VoteCertificate for CertificateMessage {
-    type VoteTransaction = BLSMessage;
-
-    fn new(certificate_id: CertificateId) -> Self {
-        CertificateMessage {
-            certificate: certificate_id.into(),
-            signature: Signature::default(),
-            bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
-        }
-    }
-
-    fn vote_count(&self) -> usize {
-        self.bitmap.count_ones()
-    }
-
-    fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
-    where
-        T: Iterator<Item = &'a Self::VoteTransaction>,
+        T: Iterator<Item = &'a BLSMessage>,
         Self: 'b,
         'b: 'a,
     {
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
-        let mut current_signature_uncompressed = if self.signature == Signature::default() {
-            SignatureProjective::default()
-        } else {
-            SignatureProjective::try_from(self.signature)
-                .map_err(|_| CertificateError::InvalidSignature)?
-        };
+        let mut current_signature_uncompressed =
+            if self.certificate.signature == Signature::default() {
+                SignatureProjective::default()
+            } else {
+                SignatureProjective::try_from(self.certificate.signature)
+                    .map_err(|_| CertificateError::InvalidSignature)?
+            };
 
         // aggregate the votes
         for bls_message in messages {
@@ -124,20 +84,32 @@ impl VoteCertificate for CertificateMessage {
             //
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
-            if self.bitmap.len() < vote_message.rank as usize {
+            if self.certificate.bitmap.len() < vote_message.rank as usize {
                 return Err(CertificateError::IndexOutOfBound);
             }
-            if self.bitmap.get(vote_message.rank as usize).as_deref() == Some(&true) {
+            if self
+                .certificate
+                .bitmap
+                .get(vote_message.rank as usize)
+                .as_deref()
+                == Some(&true)
+            {
                 panic!("Conflicting vote check should make this unreachable {vote_message:?}");
             }
-            self.bitmap.set(vote_message.rank as usize, true);
+            self.certificate
+                .bitmap
+                .set(vote_message.rank as usize, true);
             // aggregate the signature
             // TODO(wen): put this into bls crate
             let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
             current_signature_uncompressed.aggregate_with([&uncompressed]);
         }
-        self.signature = Signature::from(current_signature_uncompressed);
+        self.certificate.signature = Signature::from(current_signature_uncompressed);
         Ok(())
+    }
+
+    pub fn ceritifcate(&self) -> CertificateMessage {
+        self.certificate.clone()
     }
 }
 
