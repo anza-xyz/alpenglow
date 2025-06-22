@@ -160,6 +160,7 @@ fn main() {
     let ticks_per_slot = value_t!(matches, "ticks_per_slot", u64).ok();
     let slots_per_epoch = value_t!(matches, "slots_per_epoch", Slot).ok();
     let gossip_host = matches.value_of("gossip_host").map(|gossip_host| {
+        warn!("--gossip-host is deprecated. Use --bind-address instead.");
         solana_net_utils::parse_host(gossip_host).unwrap_or_else(|err| {
             eprintln!("Failed to parse --gossip-host: {err}");
             exit(1);
@@ -172,12 +173,24 @@ fn main() {
             exit(1);
         })
     });
-    let bind_address = matches.value_of("bind_address").map(|bind_address| {
-        solana_net_utils::parse_host(bind_address).unwrap_or_else(|err| {
-            eprintln!("Failed to parse --bind-address: {err}");
-            exit(1);
-        })
+    let bind_address = solana_net_utils::parse_host(
+        matches
+            .value_of("bind_address")
+            .expect("Bind address has default value"),
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("Failed to parse --bind-address: {err}");
+        exit(1);
     });
+
+    let advertised_ip = if let Some(ip) = gossip_host {
+        ip
+    } else if !bind_address.is_unspecified() && !bind_address.is_loopback() {
+        bind_address
+    } else {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    };
+
     let compute_unit_limit = value_t!(matches, "compute_unit_limit", u64).ok();
 
     let faucet_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), faucet_port);
@@ -540,9 +553,7 @@ fn main() {
         genesis.rent = Rent::with_slots_per_epoch(slots_per_epoch);
     }
 
-    if let Some(gossip_host) = gossip_host {
-        genesis.gossip_host(gossip_host);
-    }
+    genesis.gossip_host(advertised_ip);
 
     if let Some(gossip_port) = gossip_port {
         genesis.gossip_port(gossip_port);
@@ -552,9 +563,7 @@ fn main() {
         genesis.port_range(dynamic_port_range);
     }
 
-    if let Some(bind_address) = bind_address {
-        genesis.bind_ip_addr(bind_address);
-    }
+    genesis.bind_ip_addr(bind_address);
 
     if matches.is_present("geyser_plugin_config") {
         genesis.geyser_plugin_config_files = Some(

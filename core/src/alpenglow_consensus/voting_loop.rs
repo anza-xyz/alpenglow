@@ -4,6 +4,7 @@ use {
     super::{
         block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
         certificate_pool::{self, AddVoteError},
+        parent_ready_tracker::BlockProductionParent,
         vote_history_storage::VoteHistoryStorage,
         Block, CertificateId,
     },
@@ -18,15 +19,16 @@ use {
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
         consensus::progress_map::ProgressMap,
-        replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
+        replay_stage::{
+            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
+        },
         voting_service::VoteOp,
     },
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage},
         vote::Vote,
     },
-    crossbeam_channel::Sender,
-    solana_bls::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
+    crossbeam_channel::{RecvTimeoutError, Sender},
     solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -55,7 +57,7 @@ use {
         transaction::Transaction,
     },
     std::{
-        collections::HashMap,
+        collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
@@ -64,6 +66,9 @@ use {
         time::{Duration, Instant},
     },
 };
+
+/// Banks that have completed replay, but are yet to be voted on
+type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
@@ -93,6 +98,7 @@ pub struct VotingLoopConfig {
     pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 
     // Receivers
+    pub(crate) completed_block_receiver: CompletedBlockReceiver,
     pub vote_receiver: VoteReceiver,
 }
 
@@ -193,6 +199,7 @@ impl VotingLoop {
             bank_notification_sender,
             leader_window_notifier,
             certificate_sender,
+            completed_block_receiver,
             vote_receiver,
         } = config;
 
@@ -231,6 +238,7 @@ impl VotingLoop {
             blockstore.as_ref(),
             Some(certificate_sender),
         );
+        let mut pending_blocks = PendingBlocks::default();
 
         let mut voting_context = VotingContext {
             vote_history,
@@ -274,20 +282,37 @@ impl VotingLoop {
                 .collect();
 
             if is_leader {
+                let start_slot = first_of_consecutive_leader_slots(current_slot).max(1);
                 // Let the block creation loop know it is time for it to produce the window
-                let parent_block = cert_pool
+                match cert_pool
                     .parent_ready_tracker
                     .block_production_parent(current_slot)
-                    .expect("Must have a block production parent in sequential voting loop");
-                Self::notify_block_creation_loop_of_leader_window(
-                    &my_pubkey,
-                    &cert_pool,
-                    &leader_window_notifier,
-                    first_of_consecutive_leader_slots(current_slot),
-                    leader_end_slot,
-                    parent_block,
-                    skip_timer,
-                );
+                {
+                    BlockProductionParent::MissedWindow => {
+                        warn!(
+                            "{my_pubkey}: Leader slot {start_slot} has already been certified, \
+                            skipping production of {start_slot}-{leader_end_slot}"
+                        );
+                    }
+                    BlockProductionParent::ParentNotReady => {
+                        // This can't happen before we start optimistically producing blocks
+                        // When optimistically producing blocks, we can check for the parent in the block creation loop
+                        panic!(
+                            "Must have a block production parent in sequential voting loop: {:#?}",
+                            cert_pool.parent_ready_tracker
+                        );
+                    }
+                    BlockProductionParent::Parent(parent_block) => {
+                        Self::notify_block_creation_loop_of_leader_window(
+                            &my_pubkey,
+                            &leader_window_notifier,
+                            start_slot,
+                            leader_end_slot,
+                            parent_block,
+                            skip_timer,
+                        );
+                    }
+                };
             }
 
             ReplayStage::log_leader_change(
@@ -328,23 +353,31 @@ impl VotingLoop {
                     }
 
                     // Check if replay has successfully completed
-                    let Some(bank) = bank_forks.read().unwrap().get(current_slot) else {
-                        continue;
-                    };
-                    if !bank.is_frozen() {
-                        continue;
-                    };
+                    if let Some(bank) = pending_blocks.get(&current_slot) {
+                        debug_assert!(bank.is_frozen());
+                        // Vote notarize
+                        if Self::try_notar(
+                            &my_pubkey,
+                            bank.as_ref(),
+                            &blockstore,
+                            &mut cert_pool,
+                            &mut voting_context,
+                        ) {
+                            debug_assert!(voting_context.vote_history.voted(current_slot));
+                            pending_blocks.remove(&current_slot);
+                            break;
+                        }
+                    }
 
-                    // Vote notarize
-                    if Self::try_notar(
-                        &my_pubkey,
-                        bank.as_ref(),
-                        &blockstore,
-                        &mut cert_pool,
-                        &mut voting_context,
-                    ) {
-                        debug_assert!(voting_context.vote_history.voted(current_slot));
-                        break;
+                    // Ingest replayed blocks
+                    match completed_block_receiver
+                        .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
+                    {
+                        Ok(CompletedBlock { slot, bank }) => {
+                            pending_blocks.insert(slot, bank);
+                        }
+                        Err(RecvTimeoutError::Timeout) => (),
+                        Err(RecvTimeoutError::Disconnected) => return,
                     }
                 }
 
@@ -418,6 +451,7 @@ impl VotingLoop {
             Self::maybe_set_root(
                 leader_end_slot,
                 &mut cert_pool,
+                &mut pending_blocks,
                 &accounts_background_request_sender,
                 &bank_notification_sender,
                 &drop_bank_sender,
@@ -438,6 +472,7 @@ impl VotingLoop {
     fn maybe_set_root(
         slot: Slot,
         cert_pool: &mut CertificatePool<CertificateMessage>,
+        pending_blocks: &mut PendingBlocks,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -455,6 +490,7 @@ impl VotingLoop {
         trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
         cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
+        pending_blocks.split_off(&new_root);
         if let Err(e) = ReplayStage::check_and_handle_new_root(
             &ctx.my_pubkey,
             slot,
@@ -1051,30 +1087,15 @@ impl VotingLoop {
     ///
     /// Fails to notify and returns false if the leader window has already
     /// been skipped, or if the parent is greater than or equal to the first leader slot
-    fn notify_block_creation_loop_of_leader_window<VC: VoteCertificate>(
+    fn notify_block_creation_loop_of_leader_window(
         my_pubkey: &Pubkey,
-        cert_pool: &CertificatePool<VC>,
         leader_window_notifier: &LeaderWindowNotifier,
         start_slot: Slot,
         end_slot: Slot,
         parent_block @ (parent_slot, _, _): Block,
         skip_timer: Instant,
     ) -> bool {
-        // Check if we missed our window
-        if (start_slot..=end_slot).any(|s| cert_pool.skip_certified(s)) {
-            warn!(
-                "{my_pubkey}: Leader slot {start_slot} has already been skip certified, \
-                skipping production of {start_slot}-{end_slot}"
-            );
-            return false;
-        }
-        if parent_slot >= start_slot {
-            warn!(
-                "{my_pubkey}: Leader slot {start_slot} has a higher certified slot {parent_slot}, \
-                skipping production of {start_slot}-{end_slot}"
-            );
-            return false;
-        }
+        debug_assert!(parent_slot < start_slot);
 
         // Notify the block creation loop.
         let mut l_window_info = leader_window_notifier.window_info.lock().unwrap();
