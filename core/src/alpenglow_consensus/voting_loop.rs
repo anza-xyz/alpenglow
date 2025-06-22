@@ -957,7 +957,10 @@ impl VotingLoop {
         context: &VotingContext,
         vote_slot: Slot,
         bank: &Bank,
-    ) -> (Option<Arc<Keypair>>, Option<GenerateVoteTxResult>) {
+    ) -> (
+        Option<(Arc<Keypair>, BLSPubkey)>,
+        Option<GenerateVoteTxResult>,
+    ) {
         let vote_account_pubkey = context.vote_account_pubkey;
         let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
         if authorized_voter_keypairs.is_empty() {
@@ -1012,7 +1015,10 @@ impl VotingLoop {
                 );
                 (None, Some(GenerateVoteTxResult::NonVoting))
             }
-            Some(authorized_voter_keypair) => (Some(authorized_voter_keypair.clone()), None),
+            Some(authorized_voter_keypair) => (
+                Some((authorized_voter_keypair.clone(), *vote_state.bls_pubkey())),
+                None,
+            ),
         }
     }
 
@@ -1021,7 +1027,7 @@ impl VotingLoop {
         bank: &Bank,
         context: &mut VotingContext,
     ) -> GenerateVoteTxResult {
-        let authorized_voter_keypair =
+        let (authorized_voter_keypair, my_bls_pubkey) =
             match Self::get_authorized_voter_keypair(context, vote.slot(), bank) {
                 (Some(keypair), None) => keypair,
                 (_, Some(result)) => return result,
@@ -1050,7 +1056,6 @@ impl VotingLoop {
             context.voted_signatures.clear();
         }
 
-        let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
         let Some(my_rank) = Self::get_my_rank(context, bank, &my_bls_pubkey) else {
             return GenerateVoteTxResult::NoRankFound;
         };

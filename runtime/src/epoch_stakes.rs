@@ -118,6 +118,10 @@ impl EpochStakes {
         vote_accounts_hash_map: VoteAccountsHashMap,
         leader_schedule_epoch: Epoch,
     ) -> Self {
+        log::warn!(
+            "Creating EpochStakes for tests with {:?} vote accounts",
+            vote_accounts_hash_map
+        );
         Self::new(
             Arc::new(StakesEnum::Accounts(crate::stakes::Stakes::new_for_tests(
                 0,
