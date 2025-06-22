@@ -59,6 +59,12 @@ impl BLSPubkeyToRankMap {
     }
 
     pub fn get_rank(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
+        log::warn!(
+            "get_rank {:?} {:?} {:?}",
+            self.rank_map,
+            bls_pubkey,
+            self.rank_map.get(bls_pubkey)
+        );
         self.rank_map.get(bls_pubkey)
     }
 

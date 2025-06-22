@@ -534,7 +534,6 @@ impl VotingLoop {
     /// the bank for children checks later
     fn get_set_block_id(my_pubkey: &Pubkey, bank: &Bank, blockstore: &Blockstore) -> Option<Hash> {
         let is_leader = bank.collector_id() == my_pubkey;
-        warn!("get_set_block_id 1");
         if bank.slot() == 0 {
             // Genesis does not have a block id
             return Some(Hash::default());
@@ -543,7 +542,6 @@ impl VotingLoop {
             return bank.block_id();
         }
 
-        warn!("get_set_block_id 2");
         if !is_leader {
             warn!(
                 "{my_pubkey}: Unable to retrieve block id or duplicate block checks have failed
@@ -553,8 +551,6 @@ impl VotingLoop {
             );
             return None;
         }
-
-        warn!("get_set_block_id 3");
 
         // We are leader attempt to retrieve from blockstore
         // TODO:(ashwin) We are leader ignore duplicate block checks and just get from last shred?
@@ -574,7 +570,6 @@ impl VotingLoop {
             // suffices, but if the scope expands we could consider moving this to replay.
             bank.set_block_id(block_id);
         }
-        warn!("get_set_block_id 4");
 
         block_id
     }
