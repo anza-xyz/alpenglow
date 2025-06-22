@@ -27,6 +27,12 @@ impl BLSPubkeyToRankMap {
             .iter()
             .filter_map(|(pubkey, (stake, account))| {
                 if *stake > 0 {
+                    log::warn!(
+                        "Epoch stakes {:?} {:?} {:?}",
+                        pubkey,
+                        stake,
+                        account.bls_pubkey()
+                    );
                     account
                         .bls_pubkey()
                         .map(|bls_pubkey| (*pubkey, *bls_pubkey, *stake))

@@ -939,8 +939,9 @@ impl VotingLoop {
         };
         context.my_rank.get(&epoch).copied().or_else(|| {
             warn!(
-                "Looking at epoch stakes {:?}",
-                epoch_stakes.bls_pubkey_to_rank_map()
+                "Looking at epoch stakes {:?} my pubkey {:?}",
+                epoch_stakes.bls_pubkey_to_rank_map(),
+                my_bls_pubkey,
             );
             epoch_stakes
                 .bls_pubkey_to_rank_map()
