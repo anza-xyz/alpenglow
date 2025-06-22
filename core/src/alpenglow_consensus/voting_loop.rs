@@ -660,6 +660,7 @@ impl VotingLoop {
         )
         // To account for child of genesis and snapshots we allow default block id
         .unwrap_or_default();
+        warn!("Try_notar {}", slot);
 
         // Check if the certificates are valid for us to vote notarize.
         // - If this is the first leader slot (leader index = 0 or slot = 1) check
@@ -676,17 +677,20 @@ impl VotingLoop {
                 .parent_ready(slot, (parent_slot, parent_block_id, parent_bank_hash))
             {
                 // Need to ingest more votes
+                warn!("Need to ingest more votes");
                 return false;
             }
         } else {
             if parent_slot + 1 != slot {
                 // Non consecutive
+                warn!("Parent {parent_slot} {slot}");
                 return false;
             }
             if voting_context.vote_history.voted_notar(parent_slot)
                 != Some((parent_block_id, parent_bank_hash))
             {
                 // Voted skip or notarize on a different version of the parent
+                warn!("Already voted");
                 return false;
             }
         }
