@@ -279,6 +279,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             // Produce our next slot
             slot += 1;
             if slot > end_slot {
+                update_next_leader_slot(end_slot, &ctx);
                 trace!("{my_pubkey}: finished leader window {start_slot}-{end_slot}");
                 break;
             }
@@ -302,6 +303,22 @@ fn first_in_leader_window(slot: Slot) -> bool {
         // TODO: figure out the WFSM hack properly
         || slot == 2
     // TODO: also test for restarting in middle of leader window
+}
+
+/// Update poh for next leader slot after the window ending in `end_slot`
+fn update_next_leader_slot(end_slot: Slot, ctx: &LeaderContext) {
+    let next_leader_slot = ctx.leader_schedule_cache.next_leader_slot(
+        &ctx.my_pubkey,
+        end_slot,
+        ctx.bank_forks.read().unwrap().root_bank().as_ref(),
+        Some(ctx.blockstore.as_ref()),
+        GRACE_TICKS_FACTOR * MAX_GRACE_SLOTS,
+    );
+
+    ctx.poh_recorder
+        .write()
+        .unwrap()
+        .update_next_leader_slot(next_leader_slot);
 }
 
 /// Resets poh recorder
@@ -432,6 +449,9 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &Leade
         //
         // TODO: On migration need to keep the ticks around for parent slots in previous epoch
         // because reset below will delete those ticks
+        //
+        // TODO: do we need this anymore or can we get away with just calling
+        // `update_next_leader_slot`
         reset_poh_recorder(&parent_bank, ctx);
     }
 

@@ -463,6 +463,15 @@ impl PohRecorder {
         self.leader_last_tick_height = leader_last_tick_height;
     }
 
+    // update next leader slot tick heights
+    pub fn update_next_leader_slot(&mut self, next_leader_slot: Option<(Slot, Slot)>) {
+        let (leader_first_tick_height, leader_last_tick_height, grace_ticks) =
+            Self::compute_leader_slot_tick_heights(next_leader_slot, self.ticks_per_slot);
+        self.grace_ticks = grace_ticks;
+        self.leader_first_tick_height = leader_first_tick_height;
+        self.leader_last_tick_height = leader_last_tick_height;
+    }
+
     // Returns the index of `transactions.first()` in the slot, if being tracked by WorkingBank
     pub fn record(
         &mut self,
@@ -770,6 +779,11 @@ impl PohRecorder {
                     self.tick_height + within_next_n_ticks >= leader_first_tick_height
                         && self.tick_height <= self.leader_last_tick_height
                 })
+    }
+
+    /// Sets the current tick height to the starting tick of `slot`
+    pub fn set_tick_height_to_start_of_slot(&mut self, slot: Slot) {
+        self.tick_height = slot * self.ticks_per_slot
     }
 
     // Return the slot for a given tick height

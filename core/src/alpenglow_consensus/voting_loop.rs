@@ -36,6 +36,7 @@ use {
         },
     },
     solana_measure::measure::Measure,
+    solana_poh::poh_recorder::PohRecorder,
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions,
@@ -81,6 +82,7 @@ pub struct VotingLoopConfig {
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub blockstore: Arc<Blockstore>,
     pub bank_forks: Arc<RwLock<BankForks>>,
+    pub poh_recorder: Arc<RwLock<PohRecorder>>,
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Arc<RpcSubscriptions>,
@@ -176,6 +178,7 @@ impl VotingLoop {
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
+            poh_recorder,
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
@@ -316,6 +319,16 @@ impl VotingLoop {
                     "{my_pubkey}: Entering voting loop for slot: {current_slot}, is_leader: {is_leader}. Skip timer {} vs timeout {}",
                     skip_timer.elapsed().as_millis(), timeout.as_millis()
                 );
+
+                // If we're not the leader for this slot, we should adjust the poh
+                // tick height to the beginning of this slot to keep leader detection
+                // logic accurate
+                if !is_leader {
+                    poh_recorder
+                        .write()
+                        .unwrap()
+                        .set_tick_height_to_start_of_slot(current_slot);
+                }
 
                 // Wait until we either vote notarize or skip
                 while !voting_context.vote_history.voted(current_slot) {
