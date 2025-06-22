@@ -715,6 +715,7 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
+        warn!("vote_notarize {}", bank.slot());
         debug_assert!(bank.is_frozen());
         let slot = bank.slot();
         let hash = bank.hash();
@@ -725,6 +726,7 @@ impl VotingLoop {
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
         Self::send_vote(vote, false, bank, cert_pool, voting_context);
+        warn!("send_vote done {}", bank.slot());
 
         Self::alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
