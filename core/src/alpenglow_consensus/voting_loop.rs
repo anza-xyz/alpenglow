@@ -938,6 +938,10 @@ impl VotingLoop {
             return None;
         };
         context.my_rank.get(&epoch).copied().or_else(|| {
+            warn!(
+                "Looking at epoch stakes {:?}",
+                epoch_stakes.bls_pubkey_to_rank_map()
+            );
             epoch_stakes
                 .bls_pubkey_to_rank_map()
                 .get_rank(my_bls_pubkey)
