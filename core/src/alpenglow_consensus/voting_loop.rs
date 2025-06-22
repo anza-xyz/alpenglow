@@ -592,7 +592,7 @@ impl VotingLoop {
                     bank.slot()
                 );
                 let vote = Vote::new_skip_vote(slot);
-                Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
+                let _ = Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
             }
         }
     }
@@ -631,8 +631,7 @@ impl VotingLoop {
             bank.slot()
         );
         let vote = Vote::new_finalization_vote(slot);
-        Self::send_vote(vote, false, bank, cert_pool, voting_context);
-        true
+        Self::send_vote(vote, false, bank, cert_pool, voting_context)
     }
 
     /// Check if the stored certificates and block id allow us to vote notarize for `bank` at this time.
@@ -661,7 +660,6 @@ impl VotingLoop {
         )
         // To account for child of genesis and snapshots we allow default block id
         .unwrap_or_default();
-        warn!("Try_notar {}", slot);
 
         // Check if the certificates are valid for us to vote notarize.
         // - If this is the first leader slot (leader index = 0 or slot = 1) check
@@ -678,20 +676,17 @@ impl VotingLoop {
                 .parent_ready(slot, (parent_slot, parent_block_id, parent_bank_hash))
             {
                 // Need to ingest more votes
-                warn!("Need to ingest more votes");
                 return false;
             }
         } else {
             if parent_slot + 1 != slot {
                 // Non consecutive
-                warn!("Parent {parent_slot} {slot}");
                 return false;
             }
             if voting_context.vote_history.voted_notar(parent_slot)
                 != Some((parent_block_id, parent_bank_hash))
             {
                 // Voted skip or notarize on a different version of the parent
-                warn!("Already voted");
                 return false;
             }
         }
@@ -716,19 +711,18 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool<CertificateMessage>,
         voting_context: &mut VotingContext,
     ) -> bool {
-        warn!("vote_notarize {}", bank.slot());
         debug_assert!(bank.is_frozen());
         let slot = bank.slot();
         let hash = bank.hash();
         let Some(block_id) = Self::get_set_block_id(my_pubkey, bank, blockstore) else {
-            warn!("No block_id, vote_notarize {} failed", bank.slot());
             return false;
         };
 
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
-        Self::send_vote(vote, false, bank, cert_pool, voting_context);
-        warn!("send_vote done {}", bank.slot());
+        if !Self::send_vote(vote, false, bank, cert_pool, voting_context) {
+            return false;
+        }
 
         Self::alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
@@ -764,7 +758,7 @@ impl VotingLoop {
         for (block_id, bank_hash) in blocks.into_iter() {
             info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
             let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
-            Self::send_vote(
+            let _ = Self::send_vote(
                 vote,
                 false,
                 root_bank_cache.root_bank().as_ref(),
@@ -805,8 +799,7 @@ impl VotingLoop {
             root_bank_cache.root_bank().as_ref(),
             cert_pool,
             voting_context,
-        );
-        true
+        )
     }
 
     /// Refresh the highest recent finalization certificate
@@ -828,7 +821,7 @@ impl VotingLoop {
         for s in highest_finalization_slot..=slot {
             for vote in voting_context.vote_history.votes_cast(s) {
                 info!("{my_pubkey}: Refreshing vote {vote:?}");
-                Self::send_vote(
+                let _ = Self::send_vote(
                     vote,
                     true,
                     root_bank_cache.root_bank().as_ref(),
@@ -856,15 +849,14 @@ impl VotingLoop {
         bank: &Bank,
         cert_pool: &mut CertificatePool<CertificateMessage>,
         context: &mut VotingContext,
-    ) {
+    ) -> bool {
         let mut generate_time = Measure::start("generate_alpenglow_vote");
         let vote_tx_result = Self::generate_vote_tx(&vote, bank, context);
         generate_time.stop();
         // TODO(ashwin): add metrics struct here and throughout the whole file
         // replay_timing.generate_vote_us += generate_time.as_us();
         let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
-            warn!("Actual result {:?}", vote_tx_result);
-            return;
+            return false;
         };
 
         if let Err(e) = Self::add_message_and_maybe_update_commitment(
@@ -875,7 +867,7 @@ impl VotingLoop {
         ) {
             if !is_refresh {
                 warn!("Unable to push our own vote into the pool {}", e);
-                return;
+                return false;
             }
         };
 
@@ -900,6 +892,7 @@ impl VotingLoop {
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
+        true
     }
 
     fn get_bls_keypair(

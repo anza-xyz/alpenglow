@@ -94,7 +94,6 @@ impl VoteHistory {
     /// Have we cast a notarization or skip vote for `slot`
     pub fn voted(&self, slot: Slot) -> bool {
         assert!(slot >= self.root);
-        warn!("{:?}", self.voted);
         self.voted.contains(&slot)
     }
 
@@ -178,12 +177,6 @@ impl VoteHistory {
                 self.voted_skip_fallback.insert(vote.slot());
             }
         }
-        warn!(
-            "Adding vote: {:?} to history for slot: {} voted {:?}",
-            vote,
-            vote.slot(),
-            self.voted
-        );
         self.votes_cast.entry(vote.slot()).or_default().push(vote);
     }
 
