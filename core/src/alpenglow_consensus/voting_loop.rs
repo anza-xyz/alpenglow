@@ -132,6 +132,7 @@ struct SharedContext {
     my_pubkey: Pubkey,
 }
 
+#[derive(Debug)]
 pub(crate) enum GenerateVoteTxResult {
     // non voting validator, not eligible for refresh
     // until authorized keypair is overriden
@@ -725,6 +726,7 @@ impl VotingLoop {
         let slot = bank.slot();
         let hash = bank.hash();
         let Some(block_id) = Self::get_set_block_id(my_pubkey, bank, blockstore) else {
+            warn!("No block_id, vote_notarize {} failed", bank.slot());
             return false;
         };
 
@@ -866,6 +868,7 @@ impl VotingLoop {
         // TODO(ashwin): add metrics struct here and throughout the whole file
         // replay_timing.generate_vote_us += generate_time.as_us();
         let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
+            warn!("Actual result {:?}", vote_tx_result);
             return;
         };
 
