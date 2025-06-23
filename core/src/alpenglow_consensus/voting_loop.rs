@@ -870,25 +870,27 @@ impl VotingLoop {
             }
         };
 
-        // Update and save the vote history
-        if !is_refresh {
-            context.vote_history.add_vote(vote);
-        }
-        let saved_vote_history =
-            SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
-                |err| {
-                    error!("Unable to create saved vote history: {:?}", err);
-                    std::process::exit(1);
-                },
-            );
-
         // Send the vote over the wire
+        let saved_vote_history = if is_refresh {
+            None
+        } else {
+            // Update and save the vote history
+            context.vote_history.add_vote(vote);
+            let saved_vote_history =
+                SavedVoteHistory::new(&context.vote_history, &context.identity_keypair)
+                    .unwrap_or_else(|err| {
+                        error!("Unable to create saved vote history: {:?}", err);
+                        std::process::exit(1);
+                    });
+
+            Some(SavedVoteHistoryVersions::from(saved_vote_history))
+        };
         context
             .voting_sender
             .send(VoteOp::PushAlpenglowBLSMessage {
                 bls_message,
                 slot: vote.slot(),
-                saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+                saved_vote_history,
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
         true

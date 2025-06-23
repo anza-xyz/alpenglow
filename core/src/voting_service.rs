@@ -46,15 +46,12 @@ pub enum VoteOp {
     PushAlpenglowBLSMessage {
         bls_message: BLSMessage,
         slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
+        // For refresh votes, saved_vote_history would be None.
+        saved_vote_history: Option<SavedVoteHistoryVersions>,
     },
     RefreshVote {
         tx: Transaction,
         last_voted_slot: Slot,
-    },
-    RefreshALpenglowBLSMessage {
-        bls_message: BLSMessage,
-        slot: Slot,
     },
 }
 
@@ -309,13 +306,15 @@ impl VotingService {
                 slot,
                 saved_vote_history,
             } => {
-                let mut measure = Measure::start("alpenglow vote history save");
-                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
-                    std::process::exit(1);
+                if let Some(saved_vote_history) = saved_vote_history {
+                    let mut measure = Measure::start("alpenglow vote history save");
+                    if let Err(err) = vote_history_storage.store(&saved_vote_history) {
+                        error!("Unable to save vote history to storage: {:?}", err);
+                        std::process::exit(1);
+                    }
+                    measure.stop();
+                    trace!("{measure}");
                 }
-                measure.stop();
-                trace!("{measure}");
 
                 Self::broadcast_alpenglow_message(
                     slot,
@@ -331,16 +330,6 @@ impl VotingService {
                 last_voted_slot,
             } => {
                 cluster_info.refresh_vote(tx, last_voted_slot, false);
-            }
-            VoteOp::RefreshALpenglowBLSMessage { bls_message, slot } => {
-                Self::broadcast_alpenglow_message(
-                    slot,
-                    cluster_info,
-                    &bls_message,
-                    connection_cache,
-                    additional_listeners,
-                    staked_validators_cache,
-                );
             }
         }
     }
@@ -463,7 +452,9 @@ mod tests {
             signature: BLSSignature::default(),
             rank: 1,
         });
-        let saved_vote_history = SavedVoteHistoryVersions::Current(SavedVoteHistory::default());
+        let saved_vote_history = Some(SavedVoteHistoryVersions::Current(
+            SavedVoteHistory::default(),
+        ));
         assert!(vote_sender
             .send(VoteOp::PushAlpenglowBLSMessage {
                 bls_message: bls_message.clone(),

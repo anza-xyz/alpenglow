@@ -27,12 +27,6 @@ impl BLSPubkeyToRankMap {
             .iter()
             .filter_map(|(pubkey, (stake, account))| {
                 if *stake > 0 {
-                    log::warn!(
-                        "Epoch stakes {:?} {:?} {:?}",
-                        pubkey,
-                        stake,
-                        account.bls_pubkey()
-                    );
                     account
                         .bls_pubkey()
                         .map(|bls_pubkey| (*pubkey, *bls_pubkey, *stake))
@@ -65,12 +59,6 @@ impl BLSPubkeyToRankMap {
     }
 
     pub fn get_rank(&self, bls_pubkey: &BLSPubkey) -> Option<&u16> {
-        log::warn!(
-            "get_rank {:?} {:?} {:?}",
-            self.rank_map,
-            bls_pubkey,
-            self.rank_map.get(bls_pubkey)
-        );
         self.rank_map.get(bls_pubkey)
     }
 
@@ -118,10 +106,6 @@ impl EpochStakes {
         vote_accounts_hash_map: VoteAccountsHashMap,
         leader_schedule_epoch: Epoch,
     ) -> Self {
-        log::warn!(
-            "Creating EpochStakes for tests with {:?} vote accounts",
-            vote_accounts_hash_map
-        );
         Self::new(
             Arc::new(StakesEnum::Accounts(crate::stakes::Stakes::new_for_tests(
                 0,

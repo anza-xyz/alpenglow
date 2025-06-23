@@ -685,10 +685,10 @@ impl ReplayStage {
                 commitment_sender: lockouts_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
-                vote_receiver: bls_verified_message_receiver,
                 leader_window_notifier,
                 certificate_sender,
                 completed_block_receiver,
+                vote_receiver: bls_verified_message_receiver,
             };
             Some(VotingLoop::new(voting_loop_config))
         } else {
