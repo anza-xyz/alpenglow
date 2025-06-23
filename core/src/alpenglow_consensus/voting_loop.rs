@@ -1019,7 +1019,7 @@ impl VotingLoop {
         bank: &Bank,
         context: &mut VotingContext,
     ) -> GenerateVoteTxResult {
-        let (authorized_voter_keypair, my_bls_pubkey) =
+        let (authorized_voter_keypair, account_bls_pubkey) =
             match Self::get_authorized_voter_keypair(context, vote.slot(), bank) {
                 (Some(keypair), None) => keypair,
                 (_, Some(result)) => return result,
@@ -1037,6 +1037,12 @@ impl VotingLoop {
                 return GenerateVoteTxResult::FailedToDeriveBlsKeypair;
             }
         };
+        let my_bls_pubkey = bls_keypair.public.into();
+        assert_eq!(
+            my_bls_pubkey, account_bls_pubkey,
+            "BLS pubkey mismatch: {} != {}",
+            my_bls_pubkey, account_bls_pubkey
+        );
         let vote_serialized = bincode::serialize(&vote).unwrap();
         let signature = authorized_voter_keypair.sign_message(&vote_serialized);
         if !context.has_new_vote_been_rooted {
