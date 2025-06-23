@@ -652,7 +652,7 @@ pub(crate) fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(cert_id, VoteCertificate::new_from_certificate(cert));
+            cert_pool.insert_certificate(cert_id, cert.into());
         }
     }
     cert_pool

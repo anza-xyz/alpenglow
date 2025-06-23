@@ -36,27 +36,25 @@ pub enum CertificateError {
 }
 
 #[derive(Clone)]
-pub struct VoteCertificate {
-    pub certificate: CertificateMessage,
+pub struct VoteCertificate(CertificateMessage);
+
+impl From<CertificateMessage> for VoteCertificate {
+    fn from(certificate_message: CertificateMessage) -> Self {
+        Self(certificate_message)
+    }
 }
 
 impl VoteCertificate {
     pub fn new(certificate_id: CertificateId) -> Self {
-        Self {
-            certificate: CertificateMessage {
-                certificate: certificate_id.into(),
-                signature: Signature::default(),
-                bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
-            },
-        }
-    }
-
-    pub fn new_from_certificate(certificate: CertificateMessage) -> Self {
-        Self { certificate }
+        VoteCertificate(CertificateMessage {
+            certificate: certificate_id.into(),
+            signature: Signature::default(),
+            bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
+        })
     }
 
     pub fn vote_count(&self) -> usize {
-        self.certificate.bitmap.count_ones()
+        self.0.bitmap.count_ones()
     }
 
     pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
@@ -65,48 +63,41 @@ impl VoteCertificate {
         Self: 'b,
         'b: 'a,
     {
+        let signature = &mut self.0.signature;
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
-        let mut current_signature_uncompressed =
-            if self.certificate.signature == Signature::default() {
-                SignatureProjective::default()
-            } else {
-                SignatureProjective::try_from(self.certificate.signature)
-                    .map_err(|_| CertificateError::InvalidSignature)?
-            };
+        let mut current_signature_uncompressed = if signature == &Signature::default() {
+            SignatureProjective::default()
+        } else {
+            SignatureProjective::try_from(*signature)
+                .map_err(|_| CertificateError::InvalidSignature)?
+        };
 
         // aggregate the votes
+        let bitmap = &mut self.0.bitmap;
         for vote_message in messages {
             // set bit-vector for the validator
             //
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
-            if self.certificate.bitmap.len() < vote_message.rank as usize {
+            if bitmap.len() < vote_message.rank as usize {
                 return Err(CertificateError::IndexOutOfBound);
             }
-            if self
-                .certificate
-                .bitmap
-                .get(vote_message.rank as usize)
-                .as_deref()
-                == Some(&true)
-            {
+            if bitmap.get(vote_message.rank as usize).as_deref() == Some(&true) {
                 panic!("Conflicting vote check should make this unreachable {vote_message:?}");
             }
-            self.certificate
-                .bitmap
-                .set(vote_message.rank as usize, true);
+            bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature
             // TODO(wen): put this into bls crate
             let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
             current_signature_uncompressed.aggregate_with([&uncompressed]);
         }
-        self.certificate.signature = Signature::from(current_signature_uncompressed);
+        *signature = Signature::from(current_signature_uncompressed);
         Ok(())
     }
 
     pub fn ceritifcate(&self) -> CertificateMessage {
-        self.certificate.clone()
+        self.0.clone()
     }
 }
 
