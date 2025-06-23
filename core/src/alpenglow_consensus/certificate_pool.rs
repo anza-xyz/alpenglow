@@ -578,7 +578,8 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
 
     /// Cleanup any old slots from the certificate pool
     pub fn handle_new_root(&mut self, bank: Arc<Bank>) {
-        self.root = bank.slot();
+        let new_root = bank.slot();
+        self.root = new_root;
         // `completed_certificates`` now only contains entries >= `slot`
         self.completed_certificates
             .retain(|cert_id, _| match cert_id {
@@ -588,9 +589,8 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 | CertificateId::NotarizeFallback(s, _, _)
                 | CertificateId::Skip(s) => *s >= self.root,
             });
-        self.vote_pools = self
-            .vote_pools
-            .split_off(&(bank.slot(), VoteType::Finalize));
+        self.vote_pools = self.vote_pools.split_off(&(new_root, VoteType::Finalize));
+        self.parent_ready_tracker.set_root(new_root);
         self.update_epoch_stakes_map(&bank);
     }
 }
