@@ -533,6 +533,7 @@ impl VotingLoop {
     /// the bank for children checks later
     fn get_set_block_id(my_pubkey: &Pubkey, bank: &Bank, blockstore: &Blockstore) -> Option<Hash> {
         let is_leader = bank.collector_id() == my_pubkey;
+
         if bank.slot() == 0 {
             // Genesis does not have a block id
             return Some(Hash::default());
@@ -569,7 +570,6 @@ impl VotingLoop {
             // suffices, but if the scope expands we could consider moving this to replay.
             bank.set_block_id(block_id);
         }
-
         block_id
     }
 
@@ -932,11 +932,6 @@ impl VotingLoop {
             return None;
         };
         context.my_rank.get(&epoch).copied().or_else(|| {
-            warn!(
-                "Looking at epoch stakes {:?} my pubkey {:?}",
-                epoch_stakes.bls_pubkey_to_rank_map(),
-                my_bls_pubkey,
-            );
             epoch_stakes
                 .bls_pubkey_to_rank_map()
                 .get_rank(my_bls_pubkey)
@@ -947,89 +942,74 @@ impl VotingLoop {
         })
     }
 
-    fn get_authorized_voter_keypair(
-        context: &VotingContext,
-        vote_slot: Slot,
-        bank: &Bank,
-    ) -> (
-        Option<(Arc<Keypair>, BLSPubkey)>,
-        Option<GenerateVoteTxResult>,
-    ) {
-        let vote_account_pubkey = context.vote_account_pubkey;
-        let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
-        if authorized_voter_keypairs.is_empty() {
-            return (None, Some(GenerateVoteTxResult::NonVoting));
-        }
-        if let Some(wait_to_vote_slot) = context.wait_to_vote_slot {
-            if vote_slot < wait_to_vote_slot {
-                return (None, Some(GenerateVoteTxResult::Failed));
-            }
-        }
-        let vote_account = match bank.get_vote_account(&context.vote_account_pubkey) {
-            None => {
-                warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
-                return (None, Some(GenerateVoteTxResult::Failed));
-            }
-            Some(vote_account) => vote_account,
-        };
-        let vote_state = match vote_account.alpenglow_vote_state() {
-            None => {
-                warn!(
-                    "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
-                );
-                return (None, Some(GenerateVoteTxResult::Failed));
-            }
-            Some(vote_state) => vote_state,
-        };
-        if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
-            info!(
-                "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
-                vote_state.node_pubkey(),
-                context.identity_keypair.pubkey()
-            );
-            return (None, Some(GenerateVoteTxResult::HotSpare));
-        }
-
-        let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
-            warn!(
-                "Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
-                bank.epoch()
-            );
-            return (None, Some(GenerateVoteTxResult::Failed));
-        };
-
-        match authorized_voter_keypairs
-            .iter()
-            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
-        {
-            None => {
-                warn!(
-                    "The authorized keypair {authorized_voter_pubkey} for vote account \
-                     {vote_account_pubkey} is not available.  Unable to vote"
-                );
-                (None, Some(GenerateVoteTxResult::NonVoting))
-            }
-            Some(authorized_voter_keypair) => (
-                Some((authorized_voter_keypair.clone(), *vote_state.bls_pubkey())),
-                None,
-            ),
-        }
-    }
-
     fn generate_vote_tx(
         vote: &Vote,
         bank: &Bank,
         context: &mut VotingContext,
     ) -> GenerateVoteTxResult {
-        let (authorized_voter_keypair, account_bls_pubkey) =
-            match Self::get_authorized_voter_keypair(context, vote.slot(), bank) {
-                (Some(keypair), None) => keypair,
-                (_, Some(result)) => return result,
-                (None, None) => panic!("get_authorized_voter_keypair returned None and no error"),
+        let vote_account_pubkey = context.vote_account_pubkey;
+        let authorized_voter_keypair;
+        {
+            let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
+            if !bank.is_startup_verification_complete() {
+                info!("startup verification incomplete, so unable to vote");
+                return GenerateVoteTxResult::Failed;
+            }
+            if authorized_voter_keypairs.is_empty() {
+                return GenerateVoteTxResult::NonVoting;
+            }
+            if let Some(slot) = context.wait_to_vote_slot {
+                if vote.slot() < slot {
+                    return GenerateVoteTxResult::Failed;
+                }
+            }
+            let vote_account = match bank.get_vote_account(&context.vote_account_pubkey) {
+                None => {
+                    warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
+                    return GenerateVoteTxResult::Failed;
+                }
+                Some(vote_account) => vote_account,
             };
-        if !bank.is_startup_verification_complete() {
-            info!("startup verification incomplete, so unable to vote");
-            return GenerateVoteTxResult::Failed;
+            let vote_state = match vote_account.alpenglow_vote_state() {
+                None => {
+                    warn!(
+                    "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
+                );
+                    return GenerateVoteTxResult::Failed;
+                }
+                Some(vote_state) => vote_state,
+            };
+            if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
+                info!(
+                    "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
+                    vote_state.node_pubkey(),
+                    context.identity_keypair.pubkey()
+                );
+                return GenerateVoteTxResult::HotSpare;
+            }
+
+            let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch())
+            else {
+                warn!(
+                "Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
+                bank.epoch()
+            );
+                return GenerateVoteTxResult::Failed;
+            };
+
+            authorized_voter_keypair = match authorized_voter_keypairs
+                .iter()
+                .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
+            {
+                None => {
+                    warn!(
+                        "The authorized keypair {authorized_voter_pubkey} for vote account \
+                     {vote_account_pubkey} is not available.  Unable to vote"
+                    );
+                    return GenerateVoteTxResult::NonVoting;
+                }
+                Some(authorized_voter_keypair) => authorized_voter_keypair.clone(),
+            };
         }
 
         let bls_keypair = match Self::get_bls_keypair(context, &authorized_voter_keypair) {
@@ -1040,11 +1020,6 @@ impl VotingLoop {
             }
         };
         let my_bls_pubkey = bls_keypair.public.into();
-        assert_eq!(
-            my_bls_pubkey, account_bls_pubkey,
-            "BLS pubkey mismatch: {} != {}",
-            my_bls_pubkey, account_bls_pubkey
-        );
         let vote_serialized = bincode::serialize(&vote).unwrap();
         let signature = authorized_voter_keypair.sign_message(&vote_serialized);
         if !context.has_new_vote_been_rooted {
