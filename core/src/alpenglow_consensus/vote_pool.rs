@@ -1,7 +1,7 @@
 use {
     super::Stake,
     crate::alpenglow_consensus::vote_certificate::{CertificateError, VoteCertificate},
-    alpenglow_vote::bls_message::BLSMessage,
+    alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
     std::collections::HashMap,
@@ -15,7 +15,7 @@ pub(crate) struct VoteKey {
 
 #[derive(Debug)]
 pub(crate) struct VoteEntry {
-    pub(crate) transactions: Vec<BLSMessage>,
+    pub(crate) transactions: Vec<VoteMessage>,
     pub(crate) total_stake_by_key: Stake,
 }
 
@@ -52,7 +52,7 @@ impl VotePool {
         validator_key: &Pubkey,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: &BLSMessage,
+        transaction: &VoteMessage,
         validator_stake: Stake,
     ) -> bool {
         // Check whether the validator_key already used the same vote_key or exceeded max_entries_per_pubkey
@@ -72,7 +72,7 @@ impl VotePool {
         prev_vote_keys.push(vote_key.clone());
 
         let vote_entry = self.votes.entry(vote_key).or_insert_with(VoteEntry::new);
-        vote_entry.transactions.push(transaction.clone());
+        vote_entry.transactions.push(*transaction);
         vote_entry.total_stake_by_key += validator_stake;
 
         if inserted_first_time {
@@ -133,11 +133,11 @@ mod test {
     fn test_skip_vote_pool() {
         let mut vote_pool = VotePool::new(1);
         let vote = Vote::new_skip_vote(5);
-        let transaction = BLSMessage::Vote(VoteMessage {
+        let transaction = VoteMessage {
             vote,
             signature: BLSSignature::default(),
             rank: 1,
-        });
+        };
         let my_pubkey = Pubkey::new_unique();
 
         assert!(vote_pool.add_vote(&my_pubkey, None, None, &transaction, 10));
@@ -162,11 +162,11 @@ mod test {
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
         let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
-        let transaction = BLSMessage::Vote(VoteMessage {
+        let transaction = VoteMessage {
             vote,
             signature: BLSSignature::default(),
             rank: 1,
-        });
+        };
         assert!(vote_pool.add_vote(
             &my_pubkey,
             Some(bank_hash),
@@ -221,11 +221,11 @@ mod test {
         solana_logger::setup();
         let mut vote_pool = VotePool::new(3);
         let vote = Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique());
-        let transaction = BLSMessage::Vote(VoteMessage {
+        let transaction = VoteMessage {
             vote,
             signature: BLSSignature::default(),
             rank: 1,
-        });
+        };
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();

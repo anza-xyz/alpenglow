@@ -1,7 +1,7 @@
 use {
     crate::alpenglow_consensus::CertificateId,
     alpenglow_vote::{
-        bls_message::{BLSMessage, CertificateMessage},
+        bls_message::{CertificateMessage, VoteMessage},
         certificate::{Certificate, CertificateType},
     },
     bitvec::prelude::*,
@@ -61,7 +61,7 @@ impl VoteCertificate {
 
     pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
-        T: Iterator<Item = &'a BLSMessage>,
+        T: Iterator<Item = &'a VoteMessage>,
         Self: 'b,
         'b: 'a,
     {
@@ -76,10 +76,7 @@ impl VoteCertificate {
             };
 
         // aggregate the votes
-        for bls_message in messages {
-            let BLSMessage::Vote(vote_message) = bls_message else {
-                return Err(CertificateError::InvalidVoteType);
-            };
+        for vote_message in messages {
             // set bit-vector for the validator
             //
             // TODO: This only accounts for one type of vote. Update this after

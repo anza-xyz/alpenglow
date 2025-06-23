@@ -14,7 +14,7 @@ use {
         SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::{
-        bls_message::{BLSMessage, CertificateMessage},
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage},
         vote::Vote,
     },
     crossbeam_channel::Sender,
@@ -164,7 +164,7 @@ impl CertificatePool {
         vote_type: VoteType,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: &BLSMessage,
+        transaction: &VoteMessage,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
     ) -> bool {
@@ -325,11 +325,11 @@ impl CertificatePool {
         &mut self,
         transaction: &BLSMessage,
     ) -> Result<Option<Slot>, AddVoteError> {
-        let (vote, rank) = if let BLSMessage::Vote(vote_message) = transaction {
-            (&vote_message.vote, vote_message.rank)
-        } else {
+        let BLSMessage::Vote(vote_message) = transaction else {
             return Err(AddVoteError::InvalidVoteType);
         };
+        let vote = &vote_message.vote;
+        let rank = vote_message.rank;
         let slot = vote.slot();
         let (validator_vote_key, validator_stake, total_stake) =
             self.get_key_and_stakes(slot, rank)?;
@@ -369,7 +369,7 @@ impl CertificatePool {
             vote_type,
             bank_hash,
             block_id,
-            transaction,
+            vote_message,
             &validator_vote_key,
             validator_stake,
         ) {
