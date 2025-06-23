@@ -927,11 +927,11 @@ impl VotingLoop {
         my_bls_pubkey: &BLSPubkey,
     ) -> Option<u16> {
         let epoch = bank.epoch();
-        let Some(epoch_stakes) = bank.epoch_stakes(epoch) else {
-            warn!("Unable to get epoch stakes for epoch {epoch}");
-            return None;
-        };
         context.my_rank.get(&epoch).copied().or_else(|| {
+            let Some(epoch_stakes) = bank.epoch_stakes(epoch) else {
+                warn!("Unable to get epoch stakes for epoch {epoch}");
+                return None;
+            };
             epoch_stakes
                 .bls_pubkey_to_rank_map()
                 .get_rank(my_bls_pubkey)
