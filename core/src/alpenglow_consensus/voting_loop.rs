@@ -900,25 +900,21 @@ impl VotingLoop {
         context: &mut VotingContext,
         authorized_voter_keypair: &Arc<Keypair>,
     ) -> Result<Arc<BLSKeypair>, BlsError> {
-        match context
-            .derived_bls_keypairs
-            .get(&authorized_voter_keypair.pubkey())
-        {
-            Some(derived_bls_keypair) => {
-                // If we have a derived BLS keypair, return it
-                Ok(derived_bls_keypair.clone())
-            }
-            None => {
-                let bls_keypair = Arc::new(BLSKeypair::derive_from_signer(
-                    authorized_voter_keypair,
-                    b"alpenglow",
-                )?);
-                context
-                    .derived_bls_keypairs
-                    .insert(authorized_voter_keypair.pubkey(), bls_keypair.clone());
-                Ok(bls_keypair)
-            }
+        let pubkey = authorized_voter_keypair.pubkey();
+        if let Some(existing) = context.derived_bls_keypairs.get(&pubkey) {
+            return Ok(existing.clone());
         }
+
+        let bls_keypair = Arc::new(BLSKeypair::derive_from_signer(
+            authorized_voter_keypair,
+            b"alpenglow",
+        )?);
+
+        context
+            .derived_bls_keypairs
+            .insert(pubkey, bls_keypair.clone());
+
+        Ok(bls_keypair)
     }
 
     fn get_my_rank(
@@ -927,19 +923,18 @@ impl VotingLoop {
         my_bls_pubkey: &BLSPubkey,
     ) -> Option<u16> {
         let epoch = bank.epoch();
-        context.my_rank.get(&epoch).copied().or_else(|| {
-            let Some(epoch_stakes) = bank.epoch_stakes(epoch) else {
-                warn!("Unable to get epoch stakes for epoch {epoch}");
-                return None;
-            };
-            epoch_stakes
-                .bls_pubkey_to_rank_map()
-                .get_rank(my_bls_pubkey)
-                .map(|rank| {
-                    context.my_rank.insert(epoch, *rank);
-                    *rank
-                })
-        })
+
+        if let Some(&rank) = context.my_rank.get(&epoch) {
+            return Some(rank);
+        }
+
+        let epoch_stakes = bank.epoch_stakes(epoch)?;
+        let rank = epoch_stakes
+            .bls_pubkey_to_rank_map()
+            .get_rank(my_bls_pubkey)?;
+
+        context.my_rank.insert(epoch, *rank);
+        Some(*rank)
     }
 
     fn generate_vote_tx(
