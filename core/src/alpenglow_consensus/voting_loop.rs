@@ -475,7 +475,7 @@ impl VotingLoop {
         trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
         vctx.vote_history.set_root(new_root);
         cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
-        pending_blocks.split_off(&new_root);
+        *pending_blocks = pending_blocks.split_off(&new_root);
         if let Err(e) = ReplayStage::check_and_handle_new_root(
             &ctx.my_pubkey,
             slot,
