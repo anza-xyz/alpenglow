@@ -624,6 +624,13 @@ impl ClusterInfoVoteListener {
         let mut new_optimistic_confirmed_slots = vec![];
 
         // Process votes from gossip and ReplayStage
+        if root_bank
+            .feature_set
+            .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+        {
+            return vec![];
+        }
+
         let mut gossip_vote_txn_processing_time = Measure::start("gossip_vote_processing_time");
         let votes = gossip_vote_txs
             .iter()
