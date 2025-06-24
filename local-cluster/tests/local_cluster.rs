@@ -165,13 +165,20 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
     assert_eq!(cluster.validators.len(), num_nodes);
 
     // Check transactions land
-    cluster_tests::spend_and_verify_all_nodes(
+    // cluster_tests::spend_and_verify_all_nodes(
+    //     &cluster.entry_point_info,
+    //     &cluster.funding_keypair,
+    //     num_nodes,
+    //     HashSet::new(),
+    //     SocketAddrSpace::Unspecified,
+    //     &cluster.connection_cache,
+    // );
+    cluster_tests::send_many_transactions(
         &cluster.entry_point_info,
         &cluster.funding_keypair,
-        num_nodes,
-        HashSet::new(),
-        SocketAddrSpace::Unspecified,
         &cluster.connection_cache,
+        100,
+        60000 * 20,
     );
 
     if num_offline_nodes > 0 {

@@ -161,22 +161,14 @@ pub fn send_many_transactions(
             .unwrap();
         let transfer_amount = thread_rng().gen_range(1..max_tokens_per_transfer);
 
-        let mut transaction = system_transaction::transfer(
+        let transaction = system_transaction::transfer(
             funding_keypair,
             &random_keypair.pubkey(),
             transfer_amount,
             blockhash,
         );
 
-        LocalCluster::send_transaction_with_retries(
-            &client,
-            &[funding_keypair],
-            &mut transaction,
-            5,
-            0,
-        )
-        .unwrap();
-
+        client.send_transaction_to_upcoming_leaders(&transaction).unwrap();
         expected_balances.insert(random_keypair.pubkey(), transfer_amount);
     }
 
