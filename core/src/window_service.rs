@@ -167,6 +167,13 @@ fn run_check_duplicate(
             }
         };
 
+        if root_bank
+            .feature_set
+            .is_active(&solana_feature_set::secp256k1_program_enabled::id())
+        {
+            return Ok(());
+        }
+
         // Propagate duplicate proof through gossip
         cluster_info.push_duplicate_shred(&shred1, &shred2)?;
         // Notify duplicate consensus state machine
