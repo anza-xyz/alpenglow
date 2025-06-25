@@ -50,7 +50,7 @@ use {
         vote_sender_types::BLSVerifiedMessageReceiver as VoteReceiver,
     },
     solana_sdk::{
-        clock::{Epoch, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+        clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
@@ -111,7 +111,6 @@ struct VotingContext {
     authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     // The BLS keypair should always change with authorized_voter_keypairs.
     derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
-    my_rank: HashMap<Epoch, u16>,
     has_new_vote_been_rooted: bool,
     voting_sender: Sender<VoteOp>,
     commitment_sender: Sender<CommitmentAggregationData>,
@@ -246,7 +245,6 @@ impl VotingLoop {
             identity_keypair,
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
-            my_rank: HashMap::new(),
             has_new_vote_been_rooted,
             voting_sender,
             commitment_sender,
@@ -916,26 +914,6 @@ impl VotingLoop {
         Ok(bls_keypair)
     }
 
-    fn get_my_rank(
-        context: &mut VotingContext,
-        bank: &Bank,
-        my_bls_pubkey: &BLSPubkey,
-    ) -> Option<u16> {
-        let epoch = bank.epoch();
-
-        if let Some(&rank) = context.my_rank.get(&epoch) {
-            return Some(rank);
-        }
-
-        let epoch_stakes = bank.epoch_stakes(epoch)?;
-        let rank = epoch_stakes
-            .bls_pubkey_to_rank_map()
-            .get_rank(my_bls_pubkey)?;
-
-        context.my_rank.insert(epoch, *rank);
-        Some(*rank)
-    }
-
     fn generate_vote_tx(
         vote: &Vote,
         bank: &Bank,
@@ -1012,7 +990,7 @@ impl VotingLoop {
                 panic!("Failed to derive my own BLS keypair: {e:?}");
             }
         };
-        let my_bls_pubkey = bls_keypair.public.into();
+        let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
         let vote_serialized = bincode::serialize(&vote).unwrap();
         let signature = authorized_voter_keypair.sign_message(&vote_serialized);
         if !context.has_new_vote_been_rooted {
@@ -1024,13 +1002,23 @@ impl VotingLoop {
             context.voted_signatures.clear();
         }
 
-        let Some(my_rank) = Self::get_my_rank(context, bank, &my_bls_pubkey) else {
+        let Some(epoch_stakes) = bank.epoch_stakes(bank.epoch()) else {
+            panic!(
+                "The bank {} doesn't have its own epoch_stakes for {}",
+                bank.slot(),
+                bank.epoch()
+            );
+        };
+        let Some(my_rank) = epoch_stakes
+            .bls_pubkey_to_rank_map()
+            .get_rank(&my_bls_pubkey)
+        else {
             return GenerateVoteTxResult::NoRankFound;
         };
         GenerateVoteTxResult::BLSMessage(BLSMessage::Vote(VoteMessage {
             vote: *vote,
             signature: bls_keypair.sign(&vote_serialized).into(),
-            rank: my_rank,
+            rank: *my_rank,
         }))
     }
 
