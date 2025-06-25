@@ -4535,16 +4535,18 @@ impl ReplayStage {
 
         let mut generate_new_bank_forks_write_lock =
             Measure::start("generate_new_bank_forks_write_lock");
-        let mut forks = bank_forks.write().unwrap();
-        let root = forks.root();
-        for (slot, bank) in new_banks {
-            if slot < root {
-                continue;
+        if !new_banks.is_empty() {
+            let mut forks = bank_forks.write().unwrap();
+            let root = forks.root();
+            for (slot, bank) in new_banks {
+                if slot < root {
+                    continue;
+                }
+                if forks.get(bank.parent_slot()).is_none() {
+                    continue;
+                }
+                forks.insert(bank);
             }
-            if forks.get(bank.parent_slot()).is_none() {
-                continue;
-            }
-            forks.insert(bank);
         }
         generate_new_bank_forks_write_lock.stop();
         saturating_add_assign!(

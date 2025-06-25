@@ -672,6 +672,12 @@ impl ClusterInfoVoteListener {
                     }
                 }
                 ParsedVoteTransaction::Tower(vote) => {
+                    if root_bank
+                        .feature_set
+                        .is_active(&solana_feature_set::secp256k1_program_enabled::id())
+                    {
+                        continue;
+                    }
                     let is_gossip_vote = transaction.is_some();
                     Self::track_new_votes_and_notify_confirmations(
                         vote,
