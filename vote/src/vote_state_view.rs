@@ -130,6 +130,12 @@ impl VoteStateView {
         }
     }
 
+    pub fn bls_pubkey(&self) -> &BlsPubkey {
+        let offset = self.frame.offset(Field::BlsPubkey);
+        // SAFETY: `frame` was created from `data`.
+        unsafe { &*(self.data.as_ptr().add(offset) as *const BlsPubkey) }
+    }
+
     fn votes_view(&self) -> ListView<VotesFrame> {
         let offset = self.frame.offset(Field::Votes);
         // SAFETY: `frame` was created from `data`.
@@ -152,12 +158,6 @@ impl VoteStateView {
         let offset = self.frame.offset(Field::EpochCredits);
         // SAFETY: `frame` was created from `data`.
         ListView::new(self.frame.epoch_credits_frame(), &self.data[offset..])
-    }
-
-    fn bls_pubkey(&self) -> &BlsPubkey {
-        let offset = self.frame.offset(Field::BlsPubkey);
-        // SAFETY: `frame` was created from `data`.
-        unsafe { &*(self.data.as_ptr().add(offset) as *const BlsPubkey) }
     }
 }
 
