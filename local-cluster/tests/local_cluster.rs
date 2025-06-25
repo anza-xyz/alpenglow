@@ -6342,48 +6342,49 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
             let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
-            if let BLSMessage::Vote(vote_message) = bls_message {
-                let vote = vote_message.vote;
+            let BLSMessage::Vote(vote_message) = bls_message else {
+                continue;
+            };
+            let vote = vote_message.vote;
 
-                // Since A has 60% of the stake, it will be node 0, and B will be node 1
-                let node_index = vote_message.rank;
+            // Since A has 60% of the stake, it will be node 0, and B will be node 1
+            let node_index = vote_message.rank;
 
-                // Once we've received a vote from node B at slot 31, we can start the experiment.
-                if vote.slot() == 31 && node_index == 1 {
-                    node_a_turbine_disabled.store(true, Ordering::Relaxed);
+            // Once we've received a vote from node B at slot 31, we can start the experiment.
+            if vote.slot() == 31 && node_index == 1 {
+                node_a_turbine_disabled.store(true, Ordering::Relaxed);
+            }
+
+            if vote.slot() >= 32 && node_index == 0 {
+                let vote_tuple = _vote_to_tuple(&vote);
+
+                let mut cur_filtered_votes = node_a_filtered_votes.lock().unwrap();
+                let cur_filtered_votes = cur_filtered_votes
+                    .entry(vote_tuple.0)
+                    .or_insert(HashSet::new());
+                cur_filtered_votes.insert(vote_tuple);
+
+                if !check_for_roots && vote_tuple == (32, 3) {
+                    check_for_roots = true;
+                    assert!(cur_filtered_votes.contains(&(32, 2))); // skip on slot 32
                 }
+            }
 
-                if vote.slot() >= 32 && node_index == 0 {
-                    let vote_tuple = _vote_to_tuple(&vote);
+            // We should see a skip followed by a notar fallback. Once we do, the experiment is
+            // complete.
+            if check_for_roots {
+                node_a_turbine_disabled.store(false, Ordering::Relaxed);
 
-                    let mut cur_filtered_votes = node_a_filtered_votes.lock().unwrap();
-                    let cur_filtered_votes = cur_filtered_votes
-                        .entry(vote_tuple.0)
-                        .or_insert(HashSet::new());
-                    cur_filtered_votes.insert(vote_tuple);
+                if vote.is_finalize() {
+                    let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
 
-                    if !check_for_roots && vote_tuple == (32, 3) {
-                        check_for_roots = true;
-                        assert!(cur_filtered_votes.contains(&(32, 2))); // skip on slot 32
-                    }
-                }
+                    value.push(node_index);
 
-                // We should see a skip followed by a notar fallback. Once we do, the experiment is
-                // complete.
-                if check_for_roots {
-                    node_a_turbine_disabled.store(false, Ordering::Relaxed);
+                    if value.len() == 2 {
+                        post_experiment_roots.insert(vote.slot());
 
-                    if vote.is_finalize() {
-                        let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
-
-                        value.push(node_index);
-
-                        if value.len() == 2 {
-                            post_experiment_roots.insert(vote.slot());
-
-                            if post_experiment_roots.len() >= 10 {
-                                break;
-                            }
+                        if post_experiment_roots.len() >= 10 {
+                            break;
                         }
                     }
                 }
