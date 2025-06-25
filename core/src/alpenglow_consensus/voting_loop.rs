@@ -143,6 +143,9 @@ pub(crate) enum GenerateVoteTxResult {
     Failed,
     // no rank found.
     NoRankFound,
+    // BLS pubkey mismatches while ed25519 key matches
+    // this is not recoverable.
+    BLSPubkeyMismatch,
     // Generated a vote transaction
     Tx(Transaction),
     // Generated a BLS message
@@ -921,6 +924,7 @@ impl VotingLoop {
     ) -> GenerateVoteTxResult {
         let vote_account_pubkey = context.vote_account_pubkey;
         let authorized_voter_keypair;
+        let bls_pubkey_in_vote_account;
         {
             let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
             if !bank.is_startup_verification_complete() {
@@ -959,6 +963,16 @@ impl VotingLoop {
                 );
                 return GenerateVoteTxResult::HotSpare;
             }
+            bls_pubkey_in_vote_account = match vote_account.bls_pubkey() {
+                None => {
+                    warn!(
+                        "No BLS pubkey in vote account {}",
+                        context.identity_keypair.pubkey()
+                    );
+                    return GenerateVoteTxResult::BLSPubkeyMismatch;
+                }
+                Some(key) => *key,
+            };
 
             let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch())
             else {
@@ -991,6 +1005,13 @@ impl VotingLoop {
             }
         };
         let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
+        if my_bls_pubkey != bls_pubkey_in_vote_account {
+            error!(
+                "Vote account bls_pubkey mismatch: {:?} (expected: {:?}).  Unable to vote",
+                bls_pubkey_in_vote_account, my_bls_pubkey
+            );
+            return GenerateVoteTxResult::BLSPubkeyMismatch;
+        }
         let vote_serialized = bincode::serialize(&vote).unwrap();
         let signature = authorized_voter_keypair.sign_message(&vote_serialized);
         if !context.has_new_vote_been_rooted {
