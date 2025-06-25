@@ -591,7 +591,10 @@ impl VotingLoop {
                     bank.slot()
                 );
                 let vote = Vote::new_skip_vote(slot);
-                let _ = Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
+                if !Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context) {
+                    warn!("send_vote failed, break out early");
+                    break;
+                }
             }
         }
     }
@@ -757,13 +760,16 @@ impl VotingLoop {
         for (block_id, bank_hash) in blocks.into_iter() {
             info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
             let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
-            let _ = Self::send_vote(
+            if !Self::send_vote(
                 vote,
                 false,
                 root_bank_cache.root_bank().as_ref(),
                 cert_pool,
                 voting_context,
-            );
+            ) {
+                warn!("First send_vote failed, break out early");
+                return false;
+            }
         }
         true
     }
@@ -820,13 +826,16 @@ impl VotingLoop {
         for s in highest_finalization_slot..=slot {
             for vote in voting_context.vote_history.votes_cast(s) {
                 info!("{my_pubkey}: Refreshing vote {vote:?}");
-                let _ = Self::send_vote(
+                if !Self::send_vote(
                     vote,
                     true,
                     root_bank_cache.root_bank().as_ref(),
                     cert_pool,
                     voting_context,
-                );
+                ) {
+                    warn!("send_vote failed, exit early");
+                    return;
+                }
             }
         }
     }
@@ -855,6 +864,7 @@ impl VotingLoop {
         // TODO(ashwin): add metrics struct here and throughout the whole file
         // replay_timing.generate_vote_us += generate_time.as_us();
         let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
+            warn!("Unable to vote, vote_tx_result {:?}", vote_tx_result);
             return false;
         };
 
