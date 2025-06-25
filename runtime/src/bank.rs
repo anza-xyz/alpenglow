@@ -1630,6 +1630,25 @@ impl Bank {
             .prune(new_root_slot, upcoming_environments);
     }
 
+    pub fn prune_program_cache_locked(
+        &self,
+        new_root_slot: Slot,
+        new_root_epoch: Epoch,
+        bank_forks: &BankForks,
+    ) {
+        let upcoming_environments = self
+            .transaction_processor
+            .epoch_boundary_preparation
+            .write()
+            .unwrap()
+            .reroot(new_root_epoch);
+        self.transaction_processor
+            .global_program_cache
+            .write()
+            .unwrap()
+            .prune_locked(new_root_slot, upcoming_environments, bank_forks);
+    }
+
     pub fn prune_program_cache_by_deployment_slot(&self, deployment_slot: Slot) {
         self.transaction_processor
             .global_program_cache

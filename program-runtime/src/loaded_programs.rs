@@ -949,6 +949,15 @@ impl<FG: ForkGraph> ProgramCache<FG> {
             error!("Failed to lock fork graph for reading.");
             return;
         };
+        self.prune_locked(new_root_slot, upcoming_environments, &fork_graph);
+    }
+
+    pub fn prune_locked(
+        &mut self,
+        new_root_slot: Slot,
+        upcoming_environments: Option<ProgramRuntimeEnvironments>,
+        fork_graph: &FG,
+    ) {
         match &mut self.index {
             IndexImplementation::V1 { entries, .. } => {
                 for second_level in entries.values_mut() {
