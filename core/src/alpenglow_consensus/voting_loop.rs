@@ -141,8 +141,6 @@ pub(crate) enum GenerateVoteTxResult {
     HotSpare,
     // failed generation, eligible for refresh
     Failed,
-    // failed to derive BLS keypair
-    FailedToDeriveBlsKeypair,
     // no rank found.
     NoRankFound,
     // Generated a vote transaction
@@ -1010,8 +1008,7 @@ impl VotingLoop {
         let bls_keypair = match Self::get_bls_keypair(context, &authorized_voter_keypair) {
             Ok(keypair) => keypair,
             Err(e) => {
-                warn!("Failed to derive my own BLS keypair: {e:?}");
-                return GenerateVoteTxResult::FailedToDeriveBlsKeypair;
+                panic!("Failed to derive my own BLS keypair: {e:?}");
             }
         };
         let my_bls_pubkey = bls_keypair.public.into();

@@ -35,6 +35,7 @@ pub enum CertificateError {
     InvalidVoteType,
 }
 
+//TODO(wen): Maybe we can merge all the below functions into CertificateMessage.
 #[derive(Clone)]
 pub struct VoteCertificate(CertificateMessage);
 
@@ -96,7 +97,7 @@ impl VoteCertificate {
         Ok(())
     }
 
-    pub fn ceritifcate(&self) -> CertificateMessage {
+    pub fn certificate(&self) -> CertificateMessage {
         self.0.clone()
     }
 }

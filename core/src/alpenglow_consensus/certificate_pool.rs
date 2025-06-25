@@ -55,9 +55,6 @@ pub enum AddVoteError {
     #[error("Epoch stakes missing for epoch: {0}")]
     EpochStakesNotFound(Epoch),
 
-    #[error("Zero stake")]
-    ZeroStake,
-
     #[error("Unrooted slot")]
     UnrootedSlot,
 
@@ -232,7 +229,7 @@ impl CertificatePool {
                     .insert(cert_id, vote_certificate.clone());
                 if let Some(sender) = &self.certificate_sender {
                     if cert_id.is_critical() {
-                        if let Err(e) = sender.try_send((cert_id, vote_certificate.ceritifcate())) {
+                        if let Err(e) = sender.try_send((cert_id, vote_certificate.certificate())) {
                             error!("Unable to send certificate {cert_id:?}: {e:?}");
                             return Err(AddVoteError::CertificateSenderError);
                         }
@@ -311,7 +308,8 @@ impl CertificatePool {
         };
         let stake = epoch_stakes.vote_account_stake(vote_key);
         if stake == 0 {
-            return Err(AddVoteError::ZeroStake);
+            // Since we have a valid rank, this should never happen, there is no rank for zero stake.
+            panic!("Validator stake is zero for pubkey: {vote_key}");
         }
         Ok((*vote_key, stake, epoch_stakes.total_stake()))
     }
@@ -596,7 +594,7 @@ impl CertificatePool {
             for slot in begin_skip_slot..my_leader_slot {
                 if !self.skip_certified(slot) {
                     error!(
-                        "Missing skip certificate for {slot}, required for skip ceritifcate \
+                        "Missing skip certificate for {slot}, required for skip certificate \
                         from {begin_skip_slot} to build {my_leader_slot}"
                     );
                     return false;
