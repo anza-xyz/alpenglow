@@ -13,6 +13,7 @@ use {
             certificate_pool::CertificatePool,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
+            BLS_KEYPAIR_DERIVE_SEED,
         },
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
@@ -905,7 +906,7 @@ impl VotingLoop {
 
         let bls_keypair = Arc::new(BLSKeypair::derive_from_signer(
             authorized_voter_keypair,
-            b"alpenglow",
+            BLS_KEYPAIR_DERIVE_SEED,
         )?);
 
         context

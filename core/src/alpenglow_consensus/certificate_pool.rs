@@ -660,6 +660,7 @@ pub(crate) fn load_from_blockstore(
 mod tests {
     use {
         super::*,
+        crate::alpenglow_consensus::BLS_KEYPAIR_DERIVE_SEED,
         alpenglow_vote::bls_message::{BLSMessage, VoteMessage},
         itertools::Itertools,
         solana_bls::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
@@ -682,7 +683,8 @@ mod tests {
         rank: usize,
     ) -> BLSMessage {
         let bls_keypair =
-            BLSKeypair::derive_from_signer(&keypairs[rank].vote_keypair, b"alpenglow").unwrap();
+            BLSKeypair::derive_from_signer(&keypairs[rank].vote_keypair, BLS_KEYPAIR_DERIVE_SEED)
+                .unwrap();
         let signature: BLSSignature = bls_keypair
             .sign(bincode::serialize(vote).unwrap().as_slice())
             .into();
