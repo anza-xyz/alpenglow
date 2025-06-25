@@ -5,6 +5,7 @@ use {
         },
         EpochCreditsListFrame, Field, Result, VoteStateViewError,
     },
+    solana_bls::Pubkey as BlsPubkey,
     solana_pubkey::Pubkey,
     solana_vote_interface::state::BlockTimestamp,
     std::io::BufRead,
@@ -54,6 +55,7 @@ impl VoteStateFrameV1_14_11 {
             Field::AuthorizedVoters => self.authorized_voters_offset(),
             Field::EpochCredits => self.epoch_credits_offset(),
             Field::LastTimestamp => self.last_timestamp_offset(),
+            Field::BlsPubkey => self.bls_pubkey_offset(),
         }
     }
 
@@ -91,6 +93,10 @@ impl VoteStateFrameV1_14_11 {
 
     fn last_timestamp_offset(&self) -> usize {
         self.epoch_credits_offset() + self.epoch_credits_frame.total_size()
+    }
+
+    fn bls_pubkey_offset(&self) -> usize {
+        self.last_timestamp_offset() + core::mem::size_of::<BlsPubkey>()
     }
 }
 

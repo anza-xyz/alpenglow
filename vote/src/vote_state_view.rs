@@ -9,6 +9,7 @@ use {
         list_view::ListView,
     },
     core::fmt::Debug,
+    solana_bls::Pubkey as BlsPubkey,
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
     solana_vote_interface::state::{BlockTimestamp, Lockout},
@@ -46,6 +47,7 @@ enum Field {
     AuthorizedVoters,
     EpochCredits,
     LastTimestamp,
+    BlsPubkey,
 }
 
 /// A view into a serialized VoteState.
@@ -150,6 +152,12 @@ impl VoteStateView {
         let offset = self.frame.offset(Field::EpochCredits);
         // SAFETY: `frame` was created from `data`.
         ListView::new(self.frame.epoch_credits_frame(), &self.data[offset..])
+    }
+
+    fn bls_pubkey(&self) -> &BlsPubkey {
+        let offset = self.frame.offset(Field::BlsPubkey);
+        // SAFETY: `frame` was created from `data`.
+        unsafe { &*(self.data.as_ptr().add(offset) as *const BlsPubkey) }
     }
 }
 
