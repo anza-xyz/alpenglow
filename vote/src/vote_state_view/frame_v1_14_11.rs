@@ -95,8 +95,9 @@ impl VoteStateFrameV1_14_11 {
         self.epoch_credits_offset() + self.epoch_credits_frame.total_size()
     }
 
+    // TODO(ksn): add tests for this
     fn bls_pubkey_offset(&self) -> usize {
-        self.last_timestamp_offset() + core::mem::size_of::<BlsPubkey>()
+        self.last_timestamp_offset() + core::mem::size_of::<BlockTimestamp>()
     }
 }
 
