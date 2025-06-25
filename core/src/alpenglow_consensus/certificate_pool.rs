@@ -229,7 +229,9 @@ impl CertificatePool {
                     .insert(cert_id, vote_certificate.clone());
                 if let Some(sender) = &self.certificate_sender {
                     if cert_id.is_critical() {
-                        if let Err(e) = sender.try_send((cert_id, vote_certificate.certificate())) {
+                        if let Err(e) =
+                            sender.try_send((cert_id, vote_certificate.certificate().clone()))
+                        {
                             error!("Unable to send certificate {cert_id:?}: {e:?}");
                             return Err(AddVoteError::CertificateSenderError);
                         }

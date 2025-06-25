@@ -81,11 +81,13 @@ impl VoteCertificate {
             //
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
-            if bitmap.len() < vote_message.rank as usize {
+            if bitmap.len() <= vote_message.rank as usize {
                 return Err(CertificateError::IndexOutOfBound);
             }
             if bitmap.get(vote_message.rank as usize).as_deref() == Some(&true) {
-                panic!("Conflicting vote check should make this unreachable {vote_message:?}");
+                unreachable!(
+                    "Conflicting vote check should make this unreachable {vote_message:?}"
+                );
             }
             bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature
@@ -97,8 +99,8 @@ impl VoteCertificate {
         Ok(())
     }
 
-    pub fn certificate(&self) -> CertificateMessage {
-        self.0.clone()
+    pub fn certificate(&self) -> &CertificateMessage {
+        &self.0
     }
 }
 

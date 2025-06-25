@@ -949,21 +949,15 @@ impl VotingLoop {
                     return GenerateVoteTxResult::Failed;
                 }
             }
-            let vote_account = match bank.get_vote_account(&context.vote_account_pubkey) {
-                None => {
-                    warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
-                    return GenerateVoteTxResult::Failed;
-                }
-                Some(vote_account) => vote_account,
+            let Some(vote_account) = bank.get_vote_account(&context.vote_account_pubkey) else {
+                warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
+                return GenerateVoteTxResult::Failed;
             };
-            let vote_state = match vote_account.alpenglow_vote_state() {
-                None => {
-                    warn!(
+            let Some(vote_state) = vote_account.alpenglow_vote_state() else {
+                warn!(
                     "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
                 );
-                    return GenerateVoteTxResult::Failed;
-                }
-                Some(vote_state) => vote_state,
+                return GenerateVoteTxResult::Failed;
             };
             if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
                 info!(
@@ -986,34 +980,28 @@ impl VotingLoop {
 
             let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch())
             else {
-                warn!(
-                "Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
-                bank.epoch()
-            );
+                warn!("Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
+                    bank.epoch()
+                );
                 return GenerateVoteTxResult::Failed;
             };
 
-            authorized_voter_keypair = match authorized_voter_keypairs
+            let Some(keypair) = authorized_voter_keypairs
                 .iter()
                 .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
-            {
-                None => {
-                    warn!(
-                        "The authorized keypair {authorized_voter_pubkey} for vote account \
+            else {
+                warn!(
+                    "The authorized keypair {authorized_voter_pubkey} for vote account \
                      {vote_account_pubkey} is not available.  Unable to vote"
-                    );
-                    return GenerateVoteTxResult::NonVoting;
-                }
-                Some(authorized_voter_keypair) => authorized_voter_keypair.clone(),
+                );
+                return GenerateVoteTxResult::NonVoting;
             };
+
+            authorized_voter_keypair = keypair.clone();
         }
 
-        let bls_keypair = match Self::get_bls_keypair(context, &authorized_voter_keypair) {
-            Ok(keypair) => keypair,
-            Err(e) => {
-                panic!("Failed to derive my own BLS keypair: {e:?}");
-            }
-        };
+        let bls_keypair = Self::get_bls_keypair(context, &authorized_voter_keypair)
+            .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
         let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
         if my_bls_pubkey != bls_pubkey_in_vote_account {
             error!(
@@ -1064,20 +1052,20 @@ impl VotingLoop {
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
             trace!("{my_pubkey}: ingesting BLS Message: {bls_message:?}");
-            match Self::add_message_and_maybe_update_commitment(
+            Self::add_message_and_maybe_update_commitment(
                 my_pubkey,
                 &bls_message,
                 cert_pool,
                 commitment_sender,
-            ) {
-                err @ Err(AddVoteError::CertificateSenderError) => err,
-                Err(e) => {
+            )
+            .or_else(|e| match e {
+                AddVoteError::CertificateSenderError => Err(e),
+                e => {
                     // TODO(ashwin): increment metrics on non duplicate failures
                     trace!("{my_pubkey}: unable to push vote into the pool {}", e);
                     Ok(())
                 }
-                Ok(()) => Ok(()),
-            }
+            })
         };
 
         let Ok(first) = vote_receiver.recv_timeout(Duration::from_secs(1)) else {
