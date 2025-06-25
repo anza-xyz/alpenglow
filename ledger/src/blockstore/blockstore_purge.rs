@@ -274,6 +274,8 @@ impl Blockstore {
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
         self.merkle_root_meta_cf
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.slot_certificates_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
 
         match purge_type {
             PurgeType::Exact => self.purge_special_columns_exact(write_batch, from_slot, to_slot),
@@ -312,6 +314,8 @@ impl Blockstore {
         self.optimistic_slots_cf
             .delete_file_in_range(from_slot, to_slot)?;
         self.merkle_root_meta_cf
+            .delete_file_in_range(from_slot, to_slot)?;
+        self.slot_certificates_cf
             .delete_file_in_range(from_slot, to_slot)
     }
 
