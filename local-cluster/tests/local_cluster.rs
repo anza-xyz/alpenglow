@@ -6610,21 +6610,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let tpu_socket_addrs = node_pubkeys
         .iter()
         .map(|pubkey| {
-            let addr = cluster.get_contact_info(&pubkey).unwrap();
-
-            println!(
-                "cluster.connection_cache.protocol() :: {:?}",
-                cluster.connection_cache.protocol()
-            );
-
-            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
-            // However, doing this when invoking exit_node results in skips everywhere.
-            // addr.tpu_vote(Protocol::UDP)
-            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
-
-            // NOTE: doing this results in liveness - but, C ends up purely generating skips and
-            // weirdly, B and C end up sharing the same port number?
-            addr.tpu_vote(cluster.connection_cache.protocol())
+            cluster
+                .get_contact_info(&pubkey)
+                .unwrap()
+                .tpu_vote(cluster.connection_cache.protocol())
                 .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
         })
         .collect::<Vec<_>>();
@@ -6653,8 +6642,9 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
-        let mut b_sent_bs_vote = false;
-        let mut back_to_normal = false;
+
+        let mut num_skip_state_votes = 0;
+        let mut a_equivocates = false;
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6665,17 +6655,33 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
             let node_name = vote_pubkeys[&vote_pubkey];
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-            let mut num_notar_fallbacks = 0;
 
             dbg!((node_name, vote));
 
             if node_name == 0 {
                 // (1) node B should just copy vote A
-                let vote_txn_b = copied_vote_txn(
-                    &vote_txn,
-                    &node_b_keypair.insecure_clone(),
-                    &node_b_vote_keypair.insecure_clone(),
-                );
+                let vote_txn_b = if a_equivocates && vote.is_notarization() {
+                    let new_block_id = Hash::new_unique();
+                    let new_bank_hash = Hash::new_unique();
+                    let equivocated_notar_vote =
+                        Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
+                            .to_vote_instruction(
+                                node_b_vote_keypair.pubkey(),
+                                node_b_keypair.pubkey(),
+                            );
+                    Transaction::new_signed_with_payer(
+                        &[equivocated_notar_vote],
+                        Some(&node_b_keypair.pubkey()),
+                        &[node_b_keypair.insecure_clone()],
+                        vote_txn.message.recent_blockhash,
+                    )
+                } else {
+                    copied_vote_txn(
+                        &vote_txn,
+                        &node_b_keypair.insecure_clone(),
+                        &node_b_vote_keypair.insecure_clone(),
+                    )
+                };
 
                 {
                     let (_, parsed_vote, ..) =
@@ -6715,9 +6721,28 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
             // C's voting logic
             if node_name == 2 {
+                // If C isn't receiving any blocks, then ensure that it's only voting Skip or
+                // NotarFallback.
+                println!(
+                    "NODE C TURBINE DISABLED: {}",
+                    node_c_turbine_disabled.load(Ordering::Acquire)
+                );
+
+                if node_c_turbine_disabled.load(Ordering::Acquire) {
+                    // assert!(vote.is_notarize_fallback() || vote.is_skip());
+                    num_skip_state_votes += 1;
+                    println!("SKIP STATE VOTES :: {}", num_skip_state_votes);
+                }
+
+                // At this point, we're in a stable state where C is voting Skip + NotarFallback.
+                if num_skip_state_votes == 20 {
+                    println!("!!!!! A NOW EQUIVOCATES !!!!!");
+                    a_equivocates = true;
+                }
+
                 // Disable turbine on slot 150
-                if vote.slot() == 150 {
-                    node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                if vote.slot() == 50 {
+                    node_c_turbine_disabled.store(true, Ordering::Release);
                     dbg!("DISABLED TURBINE FOR NODE C");
                 }
             }
