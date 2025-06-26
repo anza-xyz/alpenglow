@@ -6283,10 +6283,10 @@ fn broadcast_vote(
 ) {
     for tpu_socket_addr in tpu_socket_addrs
         .iter()
-        .chain(additional_listeners.unwrap_or(&vec![]).into_iter())
+        .chain(additional_listeners.unwrap_or(&vec![]).iter())
     {
         let buf = bincode::serialize(&txn).unwrap();
-        let client = connection_cache.get_connection(&tpu_socket_addr);
+        let client = connection_cache.get_connection(tpu_socket_addr);
 
         client.send_data_async(buf).unwrap_or_else(|_| {
             panic!("Failed to broadcast vote to {}", tpu_socket_addr);
@@ -6606,7 +6606,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         .iter()
         .map(|pubkey| {
             cluster
-                .get_contact_info(&pubkey)
+                .get_contact_info(pubkey)
                 .unwrap()
                 .tpu_vote(cluster.connection_cache.protocol())
                 .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
@@ -6703,7 +6703,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     let block_id = vote.block_id().copied().unwrap();
                     let bank_hash = vote.replayed_bank_hash().copied().unwrap();
 
-                    let entry = notar_fallback_map.entry(vote.slot()).or_insert(vec![]);
+                    let entry = notar_fallback_map.entry(vote.slot()).or_default();
                     entry.push((block_id, bank_hash));
 
                     assert!(entry.len() <= 2);
