@@ -18,7 +18,6 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        consensus::progress_map::ProgressMap,
         replay_stage::{
             CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
         },
@@ -119,8 +118,6 @@ struct SharedContext {
     bank_forks: Arc<RwLock<BankForks>>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
     vote_receiver: VoteReceiver,
-    // TODO(ashwin): share this with replay (currently empty)
-    progress: ProgressMap,
     // TODO(ashwin): integrate with gossip set-identity
     my_pubkey: Pubkey,
 }
@@ -244,7 +241,6 @@ impl VotingLoop {
             bank_forks: bank_forks.clone(),
             rpc_subscriptions: rpc_subscriptions.clone(),
             vote_receiver,
-            progress: ProgressMap::default(),
             my_pubkey,
         };
 
@@ -481,7 +477,7 @@ impl VotingLoop {
             slot,
             new_root,
             ctx.bank_forks.as_ref(),
-            &mut ctx.progress,
+            None,
             ctx.blockstore.as_ref(),
             &ctx.leader_schedule_cache,
             accounts_background_request_sender,
