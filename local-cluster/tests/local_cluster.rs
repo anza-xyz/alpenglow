@@ -6480,6 +6480,43 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 ///
 /// After confirming that C issued two notar fallback votes, have B just continue copy voting A
 /// and ensure that we continue seeing roots.
+///
+/// We can't just time things to be at the exact slot of 151. Suppose that C's votes are lagging
+/// behind and that A issued b1 on slot 151.
+///
+/// - A: issues a vote for b1 on slot 151.
+/// - B: issues a vote for b2 on slot 151.
+/// - C's votes are missing
+/// - D: issues a vote for b1 on slot 151.
+///
+/// There isn't consensus on a block - A + D only have 40% stake while B only has 40% stake as well.
+/// They wait for C to catch up, but it's possible that the timer runs out.
+///
+/// Then, A, B and D should all trigger SafeToSkip, issuing SkipFallbacks. This is because they all
+/// have (20 - eps) + (40) + (20 + eps) = 80% stake, and the max notar'ed block has 40% stake, so
+/// 80% - 40% >= 40% stake.
+///
+/// Note that we can't make B just wait around to vote until C catches up, since that's not
+/// following the protocol, and is thus Byzantine behavior, and B has too much stake to be
+/// considered Byzantine.
+///
+/// Correct way - have C issue a skip once its turbine is disabled. Now, C is going to just keep
+/// producing skips. Note that C will keep observing the votes from the other nodes; as a result, C
+/// will also be producing NotarFallbacks on A's leader blocks. Progress will be made on the
+/// network; it's just that C keeps producing skips + NotarFallbacks. This is a steady state.
+///
+/// Then, at some point, B will issue a vote for a duplicate block, since A equivocates. Suppose
+/// that A keeps equivocating steadily. Then, in this steady state:
+///
+/// A: votes for b1
+/// B: votes for b2
+/// C: votes skip
+/// D: votes for b1
+///
+/// b1 - has 40% stake, b2 - has 40% stake; SafeToNotar triggers for C for b1 and b2, so C ends up
+/// issuing NotarFallbacks for b1 and b2. Eventually, SafeToSkip triggers for A, B, and D, which all
+/// end up issuing SkipFallbacks. The sum of the SkipFallback stake is 80%, so the network makes
+/// progress, but keeps issuing skips.
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
@@ -6574,15 +6611,16 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         .iter()
         .map(|pubkey| {
             let addr = cluster.get_contact_info(&pubkey).unwrap();
-            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
-            // However, doing this when invoking exit_node results in skips everywhere.
-            // addr.tpu_vote(Protocol::UDP)
-            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
 
             println!(
                 "cluster.connection_cache.protocol() :: {:?}",
                 cluster.connection_cache.protocol()
             );
+
+            // NOTE: this makes tpu_socket_addrs match the sockets used in all-to-all dissemination.
+            // However, doing this when invoking exit_node results in skips everywhere.
+            // addr.tpu_vote(Protocol::UDP)
+            //     .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
 
             // NOTE: doing this results in liveness - but, C ends up purely generating skips and
             // weirdly, B and C end up sharing the same port number?
@@ -6615,7 +6653,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
-        let mut special_slot = None;
         let mut b_sent_bs_vote = false;
         let mut back_to_normal = false;
 
@@ -6633,7 +6670,28 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             dbg!((node_name, vote));
 
             if node_name == 0 {
-                // (1) node D should just copy vote A
+                // (1) node B should just copy vote A
+                let vote_txn_b = copied_vote_txn(
+                    &vote_txn,
+                    &node_b_keypair.insecure_clone(),
+                    &node_b_vote_keypair.insecure_clone(),
+                );
+
+                {
+                    let (_, parsed_vote, ..) =
+                        vote_parser::parse_alpenglow_vote_transaction(&vote_txn_b).unwrap();
+                    let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+                    dbg!((1, vote));
+                }
+
+                broadcast_vote(
+                    &vote_txn_b,
+                    &tpu_socket_addrs,
+                    None,
+                    cluster.connection_cache.clone(),
+                );
+
+                // (2) node D should just copy vote A
                 let vote_txn_d = copied_vote_txn(
                     &vote_txn,
                     &node_d_keypair.insecure_clone(),
@@ -6653,62 +6711,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     None,
                     cluster.connection_cache.clone(),
                 );
-
-                // B's voting logic - B should respond to all of A's votes
-                let (_, parsed_vote_a, ..) =
-                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
-
-                if vote.slot() == 151 {
-                    // Once B's at slot 151, it should broadcast a notar vote for some bs block.
-                    let block_id = Hash::new_unique();
-                    let bank_hash = Hash::new_unique();
-                    let bs_vote = Vote::new_notarization_vote(vote.slot(), block_id, bank_hash);
-                    let bs_vote_ixn = bs_vote
-                        .to_vote_instruction(node_b_vote_keypair.pubkey(), node_b_keypair.pubkey());
-                    let bs_vote_txn = Transaction::new_signed_with_payer(
-                        &[bs_vote_ixn],
-                        Some(&node_b_keypair.pubkey()),
-                        &[node_b_keypair.insecure_clone()],
-                        vote_txn.message.recent_blockhash,
-                    );
-
-                    // debug
-                    println!("BS VOTE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    {
-                        let (_, parsed_vote, ..) =
-                            vote_parser::parse_alpenglow_vote_transaction(&bs_vote_txn).unwrap();
-                        let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-                        dbg!((1, vote));
-                    }
-                    println!("BS VOTE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    // end debug
-                    //
-
-                    broadcast_vote(
-                        &bs_vote_txn,
-                        &tpu_socket_addrs,
-                        None,
-                        cluster.connection_cache.clone(),
-                    );
-                    b_sent_bs_vote = true;
-                }
-                // Until (a special slot is set) slot 151, B should copy A's vote and broadcast
-                else {
-                    let vote_txn_b =
-                        copied_vote_txn(&vote_txn, &node_b_keypair, &node_b_vote_keypair);
-                    {
-                        let (_, parsed_vote, ..) =
-                            vote_parser::parse_alpenglow_vote_transaction(&vote_txn_b).unwrap();
-                        let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-                        dbg!((1, vote));
-                    }
-                    broadcast_vote(
-                        &vote_txn_b,
-                        &tpu_socket_addrs,
-                        None,
-                        cluster.connection_cache.clone(),
-                    );
-                }
             }
 
             // C's voting logic
@@ -6716,25 +6718,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 // Disable turbine on slot 150
                 if vote.slot() == 150 {
                     node_c_turbine_disabled.store(true, Ordering::Relaxed);
-                }
-                // Determine the first slot where (1) C issues a skip and (2) C's turbine is disabled
-                else if vote.slot() == 151 {
-                    assert!(node_c_turbine_disabled.load(Ordering::Relaxed));
-
-                    // First vote should be a skip
-                    if vote.is_skip() {
-                        special_slot = Some(vote.slot());
-                    }
-
-                    if vote.is_notarize_fallback() {
-                        num_notar_fallbacks += 1;
-
-                        if num_notar_fallbacks == 2 {
-                            back_to_normal = true;
-                        }
-                    }
-                } else {
-                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                    dbg!("DISABLED TURBINE FOR NODE C");
                 }
             }
         }
