@@ -315,6 +315,10 @@ impl Blockstore {
             & self
                 .merkle_root_meta_cf
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .slot_certificates_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok();
 
         match purge_type {
@@ -394,6 +398,10 @@ impl Blockstore {
                 .is_ok()
             & self
                 .merkle_root_meta_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .slot_certificates_cf
                 .delete_file_in_range(from_slot, to_slot)
                 .is_ok()
     }
