@@ -23,9 +23,7 @@ use {
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
-    solana_gossip::{
-        contact_info::Protocol, crds_data::MAX_VOTES, gossip_service::discover_cluster,
-    },
+    solana_gossip::{crds_data::MAX_VOTES, gossip_service::discover_cluster},
     solana_keypair::keypair_from_seed,
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
@@ -91,12 +89,12 @@ use {
         BroadcastStageType,
     },
     solana_vote::{
-        vote_parser::{self, ParsedVoteTransaction},
+        vote_parser::{self},
         vote_transaction,
     },
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
     std::{
-        collections::{BTreeSet, HashMap, HashSet, VecDeque},
+        collections::{BTreeSet, HashMap, HashSet},
         fs,
         io::Read,
         iter,
@@ -6648,6 +6646,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
         let mut notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>> = HashMap::new();
         let mut double_notar_fallback_slots = vec![];
+        let mut check_for_roots = false;
+
+        let mut post_experiment_votes = HashMap::new();
+        let mut post_experiment_roots = HashSet::new();
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6731,7 +6733,9 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     node_c_turbine_disabled.load(Ordering::Acquire)
                 );
 
-                if node_c_turbine_disabled.load(Ordering::Acquire) && vote.is_notarize_fallback() {
+                let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
+
+                if turbine_disabled && vote.is_notarize_fallback() {
                     num_notar_fallback_votes += 1;
                     println!("SKIP STATE VOTES :: {}", num_notar_fallback_votes);
                 }
@@ -6756,11 +6760,20 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                             "DOUBLE NOTARIZE FALLBACK :: {:?}",
                             double_notar_fallback_slots
                         );
+
+                        // Once we have three double notar fallbacks, let's get back to normal
+                        if double_notar_fallback_slots.len() == 3 {
+                            a_equivocates = false;
+                            node_c_turbine_disabled.store(false, Ordering::Release);
+                            check_for_roots = true;
+
+                            println!("GOING BACK TO NORMAL");
+                        }
                     }
                 }
 
                 // At this point, we're in a stable state where C is voting Skip + NotarFallback.
-                if num_notar_fallback_votes == 10 {
+                if turbine_disabled && num_notar_fallback_votes == 10 {
                     println!("!!!!! A NOW EQUIVOCATES !!!!!");
                     a_equivocates = true;
                 }
@@ -6771,8 +6784,29 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     dbg!("DISABLED TURBINE FOR NODE C");
                 }
             }
+
+            if check_for_roots && vote.is_finalize() {
+                let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
+
+                value.push(node_name);
+
+                // We have four nodes, but two are copy voting, so we'll only get
+                // "additional_listener" votes from the two non-copy voting nodes.
+                if value.len() == 2 {
+                    post_experiment_roots.insert(vote.slot());
+
+                    if post_experiment_roots.len() >= 10 {
+                        println!("SUCCESS");
+                        break;
+                    }
+                }
+
+                println!("{:?}", &post_experiment_votes);
+            }
         }
     });
+
+    println!("SUCCESS");
 
     vote_listener.join().unwrap();
 }
