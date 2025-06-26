@@ -242,7 +242,7 @@ impl VoteSimulator {
         ReplayStage::handle_new_root(
             new_root,
             &self.bank_forks,
-            &mut self.progress,
+            Some(&mut self.progress),
             &AbsRequestSender::default(),
             None,
             &mut true,

@@ -874,6 +874,10 @@ impl ReplayStage {
                             replay_highest_frozen.freeze_notification.notify_one();
                         }
                     }
+                    if did_complete_bank {
+                        let bank_forks_r = bank_forks.read().unwrap();
+                        progress.handle_new_root(&bank_forks_r);
+                    }
                 }
                 replay_active_banks_time.stop();
 
@@ -2694,7 +2698,7 @@ impl ReplayStage {
                 bank.parent_slot(),
                 new_root,
                 bank_forks,
-                progress,
+                Some(progress),
                 blockstore,
                 leader_schedule_cache,
                 accounts_background_request_sender,
@@ -4322,7 +4326,7 @@ impl ReplayStage {
         parent_slot: Slot,
         new_root: Slot,
         bank_forks: &RwLock<BankForks>,
-        progress: &mut ProgressMap,
+        progress: Option<&mut ProgressMap>,
         blockstore: &Blockstore,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         accounts_background_request_sender: &AbsRequestSender,
@@ -4396,7 +4400,7 @@ impl ReplayStage {
     pub fn handle_new_root(
         new_root: Slot,
         bank_forks: &RwLock<BankForks>,
-        progress: &mut ProgressMap,
+        progress: Option<&mut ProgressMap>,
         accounts_background_request_sender: &AbsRequestSender,
         highest_super_majority_root: Option<Slot>,
         has_new_vote_been_rooted: &mut bool,
@@ -4430,7 +4434,9 @@ impl ReplayStage {
                 std::mem::take(voted_signatures);
             }
         }
-        progress.handle_new_root(&r_bank_forks);
+        if let Some(progress) = progress {
+            progress.handle_new_root(&r_bank_forks);
+        }
         if let Some(TowerBFTStructures {
             heaviest_subtree_fork_choice,
             duplicate_slots_tracker,
@@ -5036,7 +5042,7 @@ pub(crate) mod tests {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            &mut progress,
+            Some(&mut progress),
             &AbsRequestSender::default(),
             None,
             &mut true,
@@ -5125,7 +5131,7 @@ pub(crate) mod tests {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            &mut progress,
+            Some(&mut progress),
             &AbsRequestSender::default(),
             Some(confirmed_root),
             &mut true,
