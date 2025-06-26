@@ -7,7 +7,6 @@ use {
 pub mod block_creation_loop;
 pub mod certificate_pool;
 pub mod parent_ready_tracker;
-pub mod transaction;
 pub mod utils;
 pub mod vote_certificate;
 pub mod vote_history;
@@ -18,6 +17,7 @@ pub mod voting_loop;
 pub type Stake = u64;
 pub type Block = (Slot, Hash, Hash);
 pub const SUPERMAJORITY: f64 = 2f64 / 3f64;
+pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateId {

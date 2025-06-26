@@ -58,8 +58,8 @@ pub struct ValidatorVoteKeypairs {
 
 impl ValidatorVoteKeypairs {
     pub fn new(node_keypair: Keypair, vote_keypair: Keypair, stake_keypair: Keypair) -> Self {
-        // TODO(wen): change to derive from vote private key when bls crate is published.
-        let bls_keypair = BLSKeypair::new();
+        let bls_keypair = BLSKeypair::derive_from_signer(&vote_keypair, b"alpenglow")
+            .expect("Failed to derive BLS keypair from vote keypair");
         Self {
             node_keypair,
             vote_keypair,
