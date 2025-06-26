@@ -6507,6 +6507,11 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 /// - Network maintains liveness despite Byzantine behavior and temporary partitions
 /// - Protocol correctly handles the edge case where multiple blocks have equal stake
 /// - Recovery is possible once Byzantine behavior stops
+///
+/// NOTE: we could get away with just three nodes in this test, assigning A a total of 40% stake,
+/// since node D *always* copy votes node A. But, doing so technically makes all nodes have >= 20%
+/// stake, meaning that none of them is allowed to be Byzantine. We opt to be a bit more explicit in
+/// this test.
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
@@ -6609,19 +6614,11 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         .collect::<Vec<_>>();
 
     // Exit node B
-    let _node_b_keypair2 = validator_keys[1].clone();
-    let _node_b_vote_keypair2 = cluster
-        .validators
-        .get(&node_pubkeys[1])
-        .unwrap()
-        .info
-        .voting_keypair
-        .clone();
-
     let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
     let node_b_keypair = node_b_info.info.keypair.clone();
     let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
 
+    // Exit node D
     let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
     let node_d_keypair = node_d_info.info.keypair.clone();
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
@@ -6651,7 +6648,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
             if node_name == 0 {
-                // (1) node B should just copy vote A
                 let vote_txn_b = if a_equivocates && vote.is_notarization() {
                     let new_block_id = Hash::new_unique();
                     let new_bank_hash = Hash::new_unique();
@@ -6682,7 +6678,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     cluster.connection_cache.clone(),
                 );
 
-                // (2) node D should just copy vote A
                 let vote_txn_d = copied_vote_txn(
                     &vote_txn,
                     &node_d_keypair.insecure_clone(),
@@ -6697,10 +6692,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 );
             }
 
-            // C's voting logic
             if node_name == 2 {
-                // If C isn't receiving any blocks, then ensure that it's only voting Skip or
-                // NotarFallback.
                 let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
 
                 if turbine_disabled && vote.is_notarize_fallback() {
@@ -6713,6 +6705,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
                     let entry = notar_fallback_map.entry(vote.slot()).or_insert(vec![]);
                     entry.push((block_id, bank_hash));
+
+                    assert!(entry.len() <= 2);
 
                     if entry.len() == 2 {
                         // Ensure that the block IDs don't match (due to equivocation)
@@ -6737,7 +6731,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     a_equivocates = true;
                 }
 
-                // Disable turbine on slot 150
+                // Disable turbine on slot 50
                 if vote.slot() == 50 {
                     node_c_turbine_disabled.store(true, Ordering::Release);
                 }
