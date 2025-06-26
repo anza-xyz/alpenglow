@@ -167,7 +167,7 @@ fn test_scheduler_waited_by_drop_bank_service() {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            &mut progress,
+            Some(&mut progress),
             &AbsRequestSender::default(),
             None,
             &mut true,
