@@ -6515,27 +6515,26 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
     // Configure total stake and stake distribution
-    let total_stake = 10 * DEFAULT_NODE_STAKE;
-    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+    const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
+    const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
 
-    let node_a_stake = total_stake * 2 / 10 - 1;
-    let node_b_stake = total_stake * 4 / 10;
-    let node_c_stake = total_stake * 2 / 10;
-    let node_d_stake = total_stake * 2 / 10 + 1;
+    // Node stakes with slight imbalance to trigger fallback behavior
+    let node_stakes = [
+        TOTAL_STAKE * 2 / 10 - 1, // Node A (Leader): 20% - ε
+        TOTAL_STAKE * 4 / 10,     // Node B: 40%
+        TOTAL_STAKE * 2 / 10,     // Node C: 20%
+        TOTAL_STAKE * 2 / 10 + 1, // Node D: 20% + ε
+    ];
 
-    let node_stakes = vec![node_a_stake, node_b_stake, node_c_stake, node_d_stake];
-    let num_nodes = node_stakes.len();
-
-    assert_eq!(
-        total_stake,
-        node_a_stake + node_b_stake + node_c_stake + node_d_stake
-    );
+    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control components
     let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
 
-    // Create leader schedule
+    // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
         create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
 
@@ -6543,34 +6542,33 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         leader_schedule: Arc::new(leader_schedule),
     };
 
-    // Create our UDP socket to listen to votes
-    let vote_listener = solana_net_utils::bind_to_localhost().unwrap();
+    // Create UDP socket to listen to votes
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
 
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener.local_addr().unwrap()]);
+        Some(vec![vote_listener_socket.local_addr().unwrap()]);
 
-    let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
+    let mut validator_configs =
+        make_identical_validator_configs(&validator_config, node_stakes.len());
     validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
-
-    assert_eq!(num_nodes, validator_keys.len());
 
     // Cluster config
     let mut cluster_config = ClusterConfig {
-        mint_lamports: total_stake,
-        node_stakes,
+        mint_lamports: TOTAL_STAKE,
+        node_stakes: node_stakes.to_vec(),
         validator_configs,
         validator_keys: Some(
             validator_keys
                 .iter()
                 .cloned()
-                .zip(iter::repeat_with(|| true))
+                .zip(std::iter::repeat(true))
                 .collect(),
         ),
-        slots_per_epoch,
-        stakers_slot_offset: slots_per_epoch,
+        slots_per_epoch: SLOTS_PER_EPOCH,
+        stakers_slot_offset: SLOTS_PER_EPOCH,
         ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
         ..ClusterConfig::default()
     };
@@ -6579,9 +6577,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let mut cluster =
         LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
 
-    assert_eq!(cluster.validators.len(), num_nodes);
-
-    let vote_pubkeys = validator_keys
+    // Create mapping from vote pubkeys to node indices
+    let vote_pubkeys: HashMap<_, _> = validator_keys
         .iter()
         .enumerate()
         .filter_map(|(index, keypair)| {
@@ -6590,19 +6587,14 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 .get(&keypair.pubkey())
                 .map(|validator| (validator.info.voting_keypair.pubkey(), index))
         })
-        .collect::<HashMap<_, _>>();
+        .collect();
 
-    assert_eq!(vote_pubkeys.len(), num_nodes);
+    assert_eq!(vote_pubkeys.len(), node_stakes.len());
 
-    // Collect node pubkeys
-    let node_pubkeys = validator_keys
-        .iter()
-        .map(|key| key.pubkey())
-        .collect::<Vec<_>>();
+    // Collect node pubkeys and TPU addresses
+    let node_pubkeys: Vec<_> = validator_keys.iter().map(|key| key.pubkey()).collect();
 
-    assert_eq!(num_nodes, validator_keys.len());
-
-    let tpu_socket_addrs = node_pubkeys
+    let tpu_socket_addrs: Vec<_> = node_pubkeys
         .iter()
         .map(|pubkey| {
             cluster
@@ -6611,149 +6603,217 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 .tpu_vote(cluster.connection_cache.protocol())
                 .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
         })
-        .collect::<Vec<_>>();
+        .collect();
 
-    // Exit node B
+    // Exit nodes B and D to control their voting behavior
     let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
     let node_b_keypair = node_b_info.info.keypair.clone();
     let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
 
-    // Exit node D
     let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
     let node_d_keypair = node_d_info.info.keypair.clone();
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
+    // Vote listener state
+    struct VoteListenerState {
+        num_notar_fallback_votes: u32,
+        a_equivocates: bool,
+        notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>>,
+        double_notar_fallback_slots: Vec<Slot>,
+        check_for_roots: bool,
+        post_experiment_votes: HashMap<Slot, Vec<usize>>,
+        post_experiment_roots: HashSet<Slot>,
+    }
+
+    impl VoteListenerState {
+        fn new() -> Self {
+            Self {
+                num_notar_fallback_votes: 0,
+                a_equivocates: false,
+                notar_fallback_map: HashMap::new(),
+                double_notar_fallback_slots: Vec::new(),
+                check_for_roots: false,
+                post_experiment_votes: HashMap::new(),
+                post_experiment_roots: HashSet::new(),
+            }
+        }
+
+        fn handle_node_a_vote(
+            &self,
+            vote_txn: &Transaction,
+            vote: &Vote,
+            node_b_keypair: &Keypair,
+            node_b_vote_keypair: &Keypair,
+            node_d_keypair: &Keypair,
+            node_d_vote_keypair: &Keypair,
+            tpu_socket_addrs: &[std::net::SocketAddr],
+            connection_cache: Arc<ConnectionCache>,
+        ) {
+            // Create vote for Node B (potentially equivocated)
+            let vote_txn_b = if self.a_equivocates && vote.is_notarization() {
+                let new_block_id = Hash::new_unique();
+                let new_bank_hash = Hash::new_unique();
+                let equivocated_notar_vote =
+                    Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
+                        .to_vote_instruction(node_b_vote_keypair.pubkey(), node_b_keypair.pubkey());
+                Transaction::new_signed_with_payer(
+                    &[equivocated_notar_vote],
+                    Some(&node_b_keypair.pubkey()),
+                    &[node_b_keypair.insecure_clone()],
+                    vote_txn.message.recent_blockhash,
+                )
+            } else {
+                copied_vote_txn(
+                    vote_txn,
+                    &node_b_keypair.insecure_clone(),
+                    &node_b_vote_keypair.insecure_clone(),
+                )
+            };
+
+            broadcast_vote(
+                &vote_txn_b,
+                tpu_socket_addrs,
+                None,
+                connection_cache.clone(),
+            );
+
+            // Create vote for Node D (always copies Node A)
+            let vote_txn_d = copied_vote_txn(
+                vote_txn,
+                &node_d_keypair.insecure_clone(),
+                &node_d_vote_keypair.insecure_clone(),
+            );
+
+            broadcast_vote(&vote_txn_d, tpu_socket_addrs, None, connection_cache);
+        }
+
+        fn handle_node_c_vote(
+            &mut self,
+            vote: &Vote,
+            node_c_turbine_disabled: &Arc<AtomicBool>,
+        ) -> bool {
+            let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
+
+            // Count NotarizeFallback votes while turbine is disabled
+            if turbine_disabled && vote.is_notarize_fallback() {
+                self.num_notar_fallback_votes += 1;
+            }
+
+            // Handle double NotarizeFallback during equivocation
+            if self.a_equivocates && vote.is_notarize_fallback() {
+                let block_id = vote.block_id().copied().unwrap();
+                let bank_hash = vote.replayed_bank_hash().copied().unwrap();
+
+                let entry = self.notar_fallback_map.entry(vote.slot()).or_default();
+                entry.push((block_id, bank_hash));
+
+                assert!(
+                    entry.len() <= 2,
+                    "More than 2 NotarizeFallback votes for slot {}",
+                    vote.slot()
+                );
+
+                if entry.len() == 2 {
+                    // Verify equivocation: different block IDs and bank hashes
+                    assert_ne!(
+                        entry[0].0, entry[1].0,
+                        "Block IDs should differ due to equivocation"
+                    );
+                    assert_ne!(
+                        entry[0].1, entry[1].1,
+                        "Bank hashes should differ due to equivocation"
+                    );
+
+                    self.double_notar_fallback_slots.push(vote.slot());
+
+                    // End experiment after 3 double NotarizeFallback slots
+                    if self.double_notar_fallback_slots.len() == 3 {
+                        self.a_equivocates = false;
+                        node_c_turbine_disabled.store(false, Ordering::Release);
+                        self.check_for_roots = true;
+                    }
+                }
+            }
+
+            // Start equivocation after stable NotarizeFallback behavior
+            if turbine_disabled && self.num_notar_fallback_votes == 10 {
+                self.a_equivocates = true;
+            }
+
+            // Disable turbine at slot 50 to start the experiment
+            if vote.slot() == 50 {
+                node_c_turbine_disabled.store(true, Ordering::Release);
+            }
+
+            false
+        }
+
+        fn handle_finalize_vote(&mut self, vote: &Vote, node_name: usize) -> bool {
+            if !self.check_for_roots {
+                return false;
+            }
+
+            let slot_votes = self.post_experiment_votes.entry(vote.slot()).or_default();
+            slot_votes.push(node_name);
+
+            // We expect votes from 2 nodes (A and C) since B and D are copy-voting
+            if slot_votes.len() == 2 {
+                self.post_experiment_roots.insert(vote.slot());
+
+                // End test after 10 new roots
+                if self.post_experiment_roots.len() >= 10 {
+                    return true;
+                }
+            }
+
+            false
+        }
+    }
+
     // Start vote listener thread to monitor and control the experiment
-    let vote_listener = std::thread::spawn({
-        let mut buf = [0_u8; 65_535];
+    let vote_listener_thread = std::thread::spawn({
+        let mut buf = [0u8; 65_535];
+        let mut state = VoteListenerState::new();
 
-        let mut num_notar_fallback_votes = 0;
-        let mut a_equivocates = false;
+        move || {
+            loop {
+                let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
+                let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
 
-        let mut notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>> = HashMap::new();
-        let mut double_notar_fallback_slots = vec![];
-        let mut check_for_roots = false;
+                let (vote_pubkey, parsed_vote, ..) =
+                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
 
-        let mut post_experiment_votes = HashMap::new();
-        let mut post_experiment_roots = HashSet::new();
+                let node_name = vote_pubkeys[&vote_pubkey];
+                let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
-        move || loop {
-            let n_bytes = vote_listener.recv(&mut buf).unwrap();
-            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
-
-            let (vote_pubkey, parsed_vote, ..) =
-                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
-
-            let node_name = vote_pubkeys[&vote_pubkey];
-            let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-
-            if node_name == 0 {
-                let vote_txn_b = if a_equivocates && vote.is_notarization() {
-                    let new_block_id = Hash::new_unique();
-                    let new_bank_hash = Hash::new_unique();
-                    let equivocated_notar_vote =
-                        Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
-                            .to_vote_instruction(
-                                node_b_vote_keypair.pubkey(),
-                                node_b_keypair.pubkey(),
-                            );
-                    Transaction::new_signed_with_payer(
-                        &[equivocated_notar_vote],
-                        Some(&node_b_keypair.pubkey()),
-                        &[node_b_keypair.insecure_clone()],
-                        vote_txn.message.recent_blockhash,
-                    )
-                } else {
-                    copied_vote_txn(
-                        &vote_txn,
-                        &node_b_keypair.insecure_clone(),
-                        &node_b_vote_keypair.insecure_clone(),
-                    )
-                };
-
-                broadcast_vote(
-                    &vote_txn_b,
-                    &tpu_socket_addrs,
-                    None,
-                    cluster.connection_cache.clone(),
-                );
-
-                let vote_txn_d = copied_vote_txn(
-                    &vote_txn,
-                    &node_d_keypair.insecure_clone(),
-                    &node_d_vote_keypair.insecure_clone(),
-                );
-
-                broadcast_vote(
-                    &vote_txn_d,
-                    &tpu_socket_addrs,
-                    None,
-                    cluster.connection_cache.clone(),
-                );
-            }
-
-            if node_name == 2 {
-                let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
-
-                if turbine_disabled && vote.is_notarize_fallback() {
-                    num_notar_fallback_votes += 1;
-                }
-
-                if a_equivocates && vote.is_notarize_fallback() {
-                    let block_id = vote.block_id().copied().unwrap();
-                    let bank_hash = vote.replayed_bank_hash().copied().unwrap();
-
-                    let entry = notar_fallback_map.entry(vote.slot()).or_default();
-                    entry.push((block_id, bank_hash));
-
-                    assert!(entry.len() <= 2);
-
-                    if entry.len() == 2 {
-                        // Ensure that the block IDs don't match (due to equivocation)
-                        assert!(entry[0].0 != entry[1].0);
-
-                        // Ensure that the block IDs don't match (due to equivocation)
-                        assert!(entry[0].1 != entry[1].1);
-
-                        double_notar_fallback_slots.push(vote.slot());
-
-                        // Once we have three double notar fallbacks, let's get back to normal
-                        if double_notar_fallback_slots.len() == 3 {
-                            a_equivocates = false;
-                            node_c_turbine_disabled.store(false, Ordering::Release);
-                            check_for_roots = true;
-                        }
+                match node_name {
+                    0 => {
+                        // Node A: Handle vote broadcasting to B and D
+                        state.handle_node_a_vote(
+                            &vote_txn,
+                            vote,
+                            &node_b_keypair,
+                            &node_b_vote_keypair,
+                            &node_d_keypair,
+                            &node_d_vote_keypair,
+                            &tpu_socket_addrs,
+                            cluster.connection_cache.clone(),
+                        );
                     }
-                }
-
-                // At this point, we're in a stable state where C is voting Skip + NotarFallback.
-                if turbine_disabled && num_notar_fallback_votes == 10 {
-                    a_equivocates = true;
-                }
-
-                // Disable turbine on slot 50
-                if vote.slot() == 50 {
-                    node_c_turbine_disabled.store(true, Ordering::Release);
-                }
-            }
-
-            if check_for_roots && vote.is_finalize() {
-                let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
-
-                value.push(node_name);
-
-                // We have four nodes, but two are copy voting, so we'll only get
-                // "additional_listener" votes from the two non-copy voting nodes.
-                if value.len() == 2 {
-                    post_experiment_roots.insert(vote.slot());
-
-                    if post_experiment_roots.len() >= 10 {
-                        break;
+                    2 => {
+                        // Node C: Handle experiment state transitions
+                        state.handle_node_c_vote(vote, &node_c_turbine_disabled);
                     }
+                    _ => {}
+                }
+
+                // Check for finalization votes to determine test completion
+                if vote.is_finalize() && state.handle_finalize_vote(vote, node_name) {
+                    break;
                 }
             }
         }
     });
 
-    vote_listener.join().unwrap();
+    vote_listener_thread.join().unwrap();
 }
