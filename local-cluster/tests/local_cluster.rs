@@ -6643,8 +6643,11 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
 
-        let mut num_skip_state_votes = 0;
+        let mut num_notar_fallback_votes = 0;
         let mut a_equivocates = false;
+
+        let mut notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>> = HashMap::new();
+        let mut double_notar_fallback_slots = vec![];
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6728,14 +6731,36 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     node_c_turbine_disabled.load(Ordering::Acquire)
                 );
 
-                if node_c_turbine_disabled.load(Ordering::Acquire) {
-                    // assert!(vote.is_notarize_fallback() || vote.is_skip());
-                    num_skip_state_votes += 1;
-                    println!("SKIP STATE VOTES :: {}", num_skip_state_votes);
+                if node_c_turbine_disabled.load(Ordering::Acquire) && vote.is_notarize_fallback() {
+                    num_notar_fallback_votes += 1;
+                    println!("SKIP STATE VOTES :: {}", num_notar_fallback_votes);
+                }
+
+                if a_equivocates && vote.is_notarize_fallback() {
+                    let block_id = vote.block_id().copied().unwrap();
+                    let bank_hash = vote.replayed_bank_hash().copied().unwrap();
+
+                    let entry = notar_fallback_map.entry(vote.slot()).or_insert(vec![]);
+                    entry.push((block_id, bank_hash));
+
+                    if entry.len() == 2 {
+                        // Ensure that the block IDs don't match (due to equivocation)
+                        assert!(entry[0].0 != entry[1].0);
+
+                        // Ensure that the block IDs don't match (due to equivocation)
+                        assert!(entry[0].1 != entry[1].1);
+
+                        double_notar_fallback_slots.push(vote.slot());
+
+                        println!(
+                            "DOUBLE NOTARIZE FALLBACK :: {:?}",
+                            double_notar_fallback_slots
+                        );
+                    }
                 }
 
                 // At this point, we're in a stable state where C is voting Skip + NotarFallback.
-                if num_skip_state_votes == 20 {
+                if num_notar_fallback_votes == 10 {
                     println!("!!!!! A NOW EQUIVOCATES !!!!!");
                     a_equivocates = true;
                 }
