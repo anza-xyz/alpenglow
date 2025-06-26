@@ -6457,64 +6457,56 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     vote_listener.join().unwrap();
 }
 
-/// A: 20% - eps
-/// B: 40%
-/// C: 20%
-/// D: 20% + eps
+/// Test to validate the Alpenglow consensus protocol's ability to maintain liveness when a node
+/// needs to issue multiple NotarizeFallback votes due to Byzantine behavior and network partitioning.
 ///
-/// A is the leader and votes for b1; but pretend that A is Byzantine and *only* sends node B a
-/// different block, b2.
+/// This test simulates a complex Byzantine scenario with four nodes having the following stake distribution:
+/// - Node A (Leader): 20% - ε (small epsilon)
+/// - Node B: 40%
+/// - Node C: 20%
+/// - Node D: 20% + ε
 ///
-/// B votes for b2; to simulate this, initially, have B copy vote A. Then, at some stage, have B
-/// send out fake voting transactions.
+/// The test validates the protocol's behavior through the following phases:
 ///
-/// D votes for b1.
+/// ## Phase 1: Initial Network Partition
+/// - Node C's turbine is disabled at slot 50, causing it to miss blocks and vote Skip
+/// - Node A (leader) proposes blocks normally
+/// - Node B initially copies Node A's votes
+/// - Node D copies Node A's votes
+/// - Node C accumulates 10 NotarizeFallback votes while in this steady state
 ///
-/// C's turbine is disabled, and it votes skip. But, it then observes that:
-/// - A and D both voted for b1; this is 40% of stake
-/// - B voted for b2; this is 40% of stake.
+/// ## Phase 2: Byzantine Equivocation
+/// After Node C has issued sufficient NotarizeFallback votes, Node A begins equivocating:
+/// - Node A votes for block b1 (original block)
+/// - Node B votes for block b2 (equivocated block with different block_id and bank_hash)
+/// - Node C continues voting Skip but observes conflicting votes
+/// - Node D votes for block b1 (same as Node A)
 ///
-/// As a result, C ends up issuing two notar fallback votes.
+/// This creates a voting distribution where:
+/// - b1 has 40% stake (A: 20%-ε + D: 20%+ε)
+/// - b2 has 40% stake (B: 40%)
+/// - Skip has 20% stake (C: 20%)
 ///
-/// After confirming that C issued two notar fallback votes, have B just continue copy voting A
-/// and ensure that we continue seeing roots.
+/// ## Phase 3: Double NotarizeFallback
+/// Node C, observing the conflicting votes, triggers SafeToNotar for both blocks:
+/// - Issues NotarizeFallback for b1 (A's block)
+/// - Issues NotarizeFallback for b2 (B's equivocated block)
+/// - Verifies the block IDs and bank hashes are different due to equivocation
+/// - Continues this pattern until 3 slots have double NotarizeFallback votes
 ///
-/// We can't just time things to be at the exact slot of 151. Suppose that C's votes are lagging
-/// behind and that A issued b1 on slot 151.
+/// ## Phase 4: Recovery and Liveness
+/// After confirming the double NotarizeFallback behavior:
+/// - Node A stops equivocating
+/// - Node C's turbine is re-enabled
+/// - Network returns to normal operation
+/// - Test verifies 10+ new roots are created, ensuring liveness is maintained
 ///
-/// - A: issues a vote for b1 on slot 151.
-/// - B: issues a vote for b2 on slot 151.
-/// - C's votes are missing
-/// - D: issues a vote for b1 on slot 151.
-///
-/// There isn't consensus on a block - A + D only have 40% stake while B only has 40% stake as well.
-/// They wait for C to catch up, but it's possible that the timer runs out.
-///
-/// Then, A, B and D should all trigger SafeToSkip, issuing SkipFallbacks. This is because they all
-/// have (20 - eps) + (40) + (20 + eps) = 80% stake, and the max notar'ed block has 40% stake, so
-/// 80% - 40% >= 40% stake.
-///
-/// Note that we can't make B just wait around to vote until C catches up, since that's not
-/// following the protocol, and is thus Byzantine behavior, and B has too much stake to be
-/// considered Byzantine.
-///
-/// Correct way - have C issue a skip once its turbine is disabled. Now, C is going to just keep
-/// producing skips. Note that C will keep observing the votes from the other nodes; as a result, C
-/// will also be producing NotarFallbacks on A's leader blocks. Progress will be made on the
-/// network; it's just that C keeps producing skips + NotarFallbacks. This is a steady state.
-///
-/// Then, at some point, B will issue a vote for a duplicate block, since A equivocates. Suppose
-/// that A keeps equivocating steadily. Then, in this steady state:
-///
-/// A: votes for b1
-/// B: votes for b2
-/// C: votes skip
-/// D: votes for b1
-///
-/// b1 - has 40% stake, b2 - has 40% stake; SafeToNotar triggers for C for b1 and b2, so C ends up
-/// issuing NotarFallbacks for b1 and b2. Eventually, SafeToSkip triggers for A, B, and D, which all
-/// end up issuing SkipFallbacks. The sum of the SkipFallback stake is 80%, so the network makes
-/// progress, but keeps issuing skips.
+/// ## Key Validation Points
+/// - SafeToNotar triggers correctly when conflicting blocks have sufficient stake
+/// - NotarizeFallback votes are issued for both equivocated blocks
+/// - Network maintains liveness despite Byzantine behavior and temporary partitions
+/// - Protocol correctly handles the edge case where multiple blocks have equal stake
+/// - Recovery is possible once Byzantine behavior stops
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
@@ -6617,8 +6609,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         .collect::<Vec<_>>();
 
     // Exit node B
-    let node_b_keypair2 = validator_keys[1].clone();
-    let node_b_vote_keypair2 = cluster
+    let _node_b_keypair2 = validator_keys[1].clone();
+    let _node_b_vote_keypair2 = cluster
         .validators
         .get(&node_pubkeys[1])
         .unwrap()
@@ -6633,9 +6625,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
     let node_d_keypair = node_d_info.info.keypair.clone();
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
-
-    println!("{:?} :: {:?}", node_b_keypair, node_b_vote_keypair);
-    println!("{:?} :: {:?}", node_b_keypair2, node_b_vote_keypair2);
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
@@ -6660,8 +6649,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
             let node_name = vote_pubkeys[&vote_pubkey];
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-
-            dbg!((node_name, vote));
 
             if node_name == 0 {
                 // (1) node B should just copy vote A
@@ -6688,13 +6675,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     )
                 };
 
-                {
-                    let (_, parsed_vote, ..) =
-                        vote_parser::parse_alpenglow_vote_transaction(&vote_txn_b).unwrap();
-                    let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-                    dbg!((1, vote));
-                }
-
                 broadcast_vote(
                     &vote_txn_b,
                     &tpu_socket_addrs,
@@ -6709,13 +6689,6 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     &node_d_vote_keypair.insecure_clone(),
                 );
 
-                {
-                    let (_, parsed_vote, ..) =
-                        vote_parser::parse_alpenglow_vote_transaction(&vote_txn_d).unwrap();
-                    let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-                    dbg!((3, vote));
-                }
-
                 broadcast_vote(
                     &vote_txn_d,
                     &tpu_socket_addrs,
@@ -6728,16 +6701,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             if node_name == 2 {
                 // If C isn't receiving any blocks, then ensure that it's only voting Skip or
                 // NotarFallback.
-                println!(
-                    "NODE C TURBINE DISABLED: {}",
-                    node_c_turbine_disabled.load(Ordering::Acquire)
-                );
-
                 let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
 
                 if turbine_disabled && vote.is_notarize_fallback() {
                     num_notar_fallback_votes += 1;
-                    println!("SKIP STATE VOTES :: {}", num_notar_fallback_votes);
                 }
 
                 if a_equivocates && vote.is_notarize_fallback() {
@@ -6756,32 +6723,23 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
                         double_notar_fallback_slots.push(vote.slot());
 
-                        println!(
-                            "DOUBLE NOTARIZE FALLBACK :: {:?}",
-                            double_notar_fallback_slots
-                        );
-
                         // Once we have three double notar fallbacks, let's get back to normal
                         if double_notar_fallback_slots.len() == 3 {
                             a_equivocates = false;
                             node_c_turbine_disabled.store(false, Ordering::Release);
                             check_for_roots = true;
-
-                            println!("GOING BACK TO NORMAL");
                         }
                     }
                 }
 
                 // At this point, we're in a stable state where C is voting Skip + NotarFallback.
                 if turbine_disabled && num_notar_fallback_votes == 10 {
-                    println!("!!!!! A NOW EQUIVOCATES !!!!!");
                     a_equivocates = true;
                 }
 
                 // Disable turbine on slot 150
                 if vote.slot() == 50 {
                     node_c_turbine_disabled.store(true, Ordering::Release);
-                    dbg!("DISABLED TURBINE FOR NODE C");
                 }
             }
 
@@ -6796,17 +6754,12 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     post_experiment_roots.insert(vote.slot());
 
                     if post_experiment_roots.len() >= 10 {
-                        println!("SUCCESS");
                         break;
                     }
                 }
-
-                println!("{:?}", &post_experiment_votes);
             }
         }
     });
-
-    println!("SUCCESS");
 
     vote_listener.join().unwrap();
 }
