@@ -15,21 +15,17 @@ use {
 /// There are around 1500 validators currently. For a clean power-of-two
 /// implementation, we should chosoe either 2048 or 4096. Choose a more
 /// conservative number 4096 for now.
-/// The number of bytes in a bitmap to represent up to 4096 validators
-/// (`MAXIMUM_VALIDATORS` / 8)
-const VALIDATOR_BITMAP_U8_SIZE: usize = 512;
+const MAXIMUM_VALIDATORS: usize = 4096;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CertificateError {
     #[error("BLS error: {0}")]
     BlsError(#[from] BlsError),
-    #[error("Index out of bounds")]
-    IndexOutOfBound,
     #[error("Invalid pubkey")]
     InvalidPubkey,
     #[error("Invalid signature")]
     InvalidSignature,
-    #[error("Validator does not exist")]
+    #[error("Validator does not exist for given rank")]
     ValidatorDoesNotExist,
     #[error("Invalid vote type")]
     InvalidVoteType,
@@ -50,7 +46,7 @@ impl VoteCertificate {
         VoteCertificate(CertificateMessage {
             certificate: certificate_id.into(),
             signature: Signature::default(),
-            bitmap: BitVec::<u8, Lsb0>::repeat(false, VALIDATOR_BITMAP_U8_SIZE),
+            bitmap: BitVec::<u8, Lsb0>::repeat(false, MAXIMUM_VALIDATORS),
         })
     }
 
@@ -82,13 +78,12 @@ impl VoteCertificate {
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
             if bitmap.len() <= vote_message.rank as usize {
-                return Err(CertificateError::IndexOutOfBound);
+                return Err(CertificateError::ValidatorDoesNotExist);
             }
-            if bitmap.get(vote_message.rank as usize).as_deref() == Some(&true) {
-                unreachable!(
-                    "Conflicting vote check should make this unreachable {vote_message:?}"
-                );
-            }
+            assert!(
+                bitmap.get(vote_message.rank as usize).as_deref() != Some(&true),
+                "Conflicting vote check should make this unreachable {vote_message:?}"
+            );
             bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature
             // TODO(wen): put this into bls crate
@@ -115,7 +110,7 @@ pub fn aggregate_pubkey(
         if *included {
             let bls_pubkey: PubkeyProjective = bls_pubkey_to_rank_map
                 .get_pubkey(i)
-                .ok_or(CertificateError::IndexOutOfBound)?
+                .ok_or(CertificateError::ValidatorDoesNotExist)?
                 .1
                 .try_into()
                 .map_err(|_| CertificateError::InvalidPubkey)?;

@@ -334,10 +334,11 @@ impl CertificatePool {
         let (validator_vote_key, validator_stake, total_stake) =
             self.get_key_and_stakes(slot, rank)?;
 
-        if validator_stake == 0 {
-            // Since we have a valid rank, this should never happen, there is no rank for zero stake.
-            panic!("Validator stake is zero for pubkey: {validator_vote_key}");
-        }
+        // Since we have a valid rank, this should never happen, there is no rank for zero stake.
+        assert_ne!(
+            validator_stake, 0,
+            "Validator stake is zero for pubkey: {validator_vote_key}"
+        );
 
         if slot < self.root {
             return Err(AddVoteError::UnrootedSlot);
