@@ -772,6 +772,11 @@ impl PohRecorder {
                 })
     }
 
+    /// Sets the current tick height to the starting tick of `slot`
+    pub fn set_tick_height_to_start_of_slot(&mut self, slot: Slot) {
+        self.tick_height = slot * self.ticks_per_slot
+    }
+
     // Return the slot for a given tick height
     fn slot_for_tick_height(&self, tick_height: u64) -> Slot {
         // We need to subtract by one here because, assuming ticks per slot is 64,

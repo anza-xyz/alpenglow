@@ -677,6 +677,7 @@ impl ReplayStage {
                 authorized_voter_keypairs: authorized_voter_keypairs.clone(),
                 blockstore: blockstore.clone(),
                 bank_forks: bank_forks.clone(),
+                poh_recorder: poh_recorder.clone(),
                 cluster_info: cluster_info.clone(),
                 leader_schedule_cache: leader_schedule_cache.clone(),
                 rpc_subscriptions: rpc_subscriptions.clone(),
