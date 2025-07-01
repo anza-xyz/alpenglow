@@ -6770,3 +6770,260 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     vote_listener_thread.join().unwrap();
 }
+
+/// Test to validate Alpenglow's ability to maintain liveness when nodes issue both NotarizeFallback
+/// and SkipFallback votes in an intertwined manner.
+///
+/// This test simulates a consensus scenario with four nodes having specific stake distributions:
+/// - Node A: epsilon stake (minimal, acts as perpetual leader)
+/// - Node B: 20% - epsilon stake
+/// - Node C: 40% + epsilon stake
+/// - Node D: 40% - epsilon stake
+///
+/// The test proceeds through two main stages:
+///
+/// ## Stage 1: Stable Network Operation
+/// All nodes are voting normally for leader A's proposals, with notarization votes going through
+/// successfully and the network maintaining consensus.
+///
+/// ## Stage 2: Network Partition and Fallback Scenario
+/// At slot 50, Node C's turbine is disabled, creating a network partition. This triggers the
+/// following sequence:
+/// 1. Node A (leader) proposes a block b1
+/// 2. Nodes A, B, and D can communicate and vote to notarize b1
+/// 3. Node C is partitioned and cannot receive b1, so it issues a skip vote
+/// 4. The vote distribution creates a complex fallback scenario:
+///    - Nodes A, B, D: Issue notarize votes initially, then skip fallback votes
+///    - Node C: Issues skip vote initially, then notarize fallback vote
+/// 5. This creates the specific vote pattern:
+///    - A, B, D: notarize + skip_fallback
+///    - C: skip + notarize_fallback
+///
+/// The test validates that:
+/// - The network can handle intertwined fallback scenarios
+/// - Consensus is maintained despite complex vote patterns
+/// - The network continues to make progress and create new roots after the partition is resolved
+/// - At least 10 new roots are created post-experiment to ensure sustained liveness
+#[test]
+#[serial]
+fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    // Configure stake distribution for the four-node cluster
+    const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
+    const EPSILON: u64 = 1;
+    const NUM_NODES: usize = 4;
+
+    let node_stakes = [
+        EPSILON,                        // Node A: epsilon
+        TOTAL_STAKE * 2 / 10 - EPSILON, // Node B: 20% - epsilon
+        TOTAL_STAKE * 4 / 10 + EPSILON, // Node C: 40% + epsilon
+        TOTAL_STAKE * 4 / 10 - EPSILON, // Node D: 40% - epsilon
+    ];
+
+    assert_eq!(NUM_NODES, node_stakes.len());
+
+    // Verify stake distribution adds up correctly
+    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
+
+    // Control mechanism for network partition
+    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+
+    // Create leader schedule with A as perpetual leader
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Set up vote monitoring
+    let vote_listener_socket =
+        solana_net_utils::bind_to_localhost().expect("Failed to bind vote listener socket");
+
+    // Configure validators
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+
+    let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
+    // Node C (index 2) will have its turbine disabled during the experiment
+    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+
+    assert_eq!(NUM_NODES, validator_keys.len());
+
+    // Set up cluster configuration
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: TOTAL_STAKE,
+        node_stakes: node_stakes.to_vec(),
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(std::iter::repeat(true))
+                .collect(),
+        ),
+        ..ClusterConfig::default()
+    };
+
+    // Initialize the cluster
+    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+    assert_eq!(NUM_NODES, cluster.validators.len());
+
+    // Create mapping from vote pubkeys to node indices
+    let vote_pubkey_to_node_index: HashMap<_, _> = validator_keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, keypair)| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
+        })
+        .collect();
+
+    assert_eq!(NUM_NODES, vote_pubkey_to_node_index.len());
+
+    /// Helper struct to manage experiment state and vote pattern tracking
+    #[derive(PartialEq, Eq)]
+    enum Stage {
+        Stability,
+        ObserveSkipFallbacks,
+        ObserveLiveness,
+    }
+
+    struct ExperimentState {
+        stage: Stage,
+        vote_type_bitmap: HashMap<u64, [u8; 4]>, // slot -> [node_vote_pattern; 4]
+        consecutive_pattern_matches: usize,
+        post_experiment_vote_weights: HashMap<u64, u64>, // slot -> total_weight
+        post_experiment_roots: HashSet<u64>,
+    }
+
+    impl ExperimentState {
+        fn new() -> Self {
+            Self {
+                stage: Stage::Stability,
+                vote_type_bitmap: HashMap::new(),
+                consecutive_pattern_matches: 0,
+                post_experiment_vote_weights: HashMap::new(),
+                post_experiment_roots: HashSet::new(),
+            }
+        }
+
+        fn record_vote_bitmap(&mut self, slot: u64, node_index: usize, vote: &Vote) {
+            let (_, vote_type) = _vote_to_tuple(vote);
+            let slot_pattern = self.vote_type_bitmap.entry(slot).or_insert([0u8; 4]);
+
+            assert!(node_index < NUM_NODES, "Invalid node index: {}", node_index);
+            slot_pattern[node_index] |= 1 << vote_type;
+        }
+
+        fn matches_expected_pattern(&mut self) -> bool {
+            // Expected patterns:
+            // Nodes 0, 1, 3: notarize + skip_fallback = (1 << 0) | (1 << 4) = 17
+            // Node 2: skip + notarize_fallback = (1 << 2) | (1 << 3) = 12
+            const EXPECTED_PATTERN_MAJORITY: u8 = 17; // notarize + skip_fallback
+            const EXPECTED_PATTERN_MINORITY: u8 = 12; // skip + notarize_fallback
+
+            for pattern in self.vote_type_bitmap.values() {
+                if pattern[0] == EXPECTED_PATTERN_MAJORITY
+                    && pattern[1] == EXPECTED_PATTERN_MAJORITY
+                    && pattern[2] == EXPECTED_PATTERN_MINORITY
+                    && pattern[3] == EXPECTED_PATTERN_MAJORITY
+                {
+                    self.consecutive_pattern_matches += 1;
+                    if self.consecutive_pattern_matches >= 3 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        fn record_finalization_vote(
+            &mut self,
+            slot: u64,
+            node_index: usize,
+            node_stakes: &[u64; 4],
+        ) {
+            let total_weight = self.post_experiment_vote_weights.entry(slot).or_insert(0);
+            *total_weight += node_stakes[node_index];
+
+            // Check if we have sufficient stake for finalization (60% threshold)
+            if *total_weight >= TOTAL_STAKE * 6 / 10 {
+                self.post_experiment_roots.insert(slot);
+            }
+        }
+
+        fn sufficient_roots_created(&self) -> bool {
+            self.post_experiment_roots.len() >= 10
+        }
+    }
+
+    // Start vote monitoring thread
+    let vote_listener_thread = std::thread::spawn({
+        let vote_pubkey_to_node_index = vote_pubkey_to_node_index.clone();
+        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+
+        move || {
+            let mut buffer = [0u8; 65_535];
+            let mut experiment_state = ExperimentState::new();
+
+            loop {
+                let bytes_received = vote_listener_socket
+                    .recv(&mut buffer)
+                    .expect("Failed to receive vote data");
+
+                let vote_transaction =
+                    bincode::deserialize::<Transaction>(&buffer[..bytes_received])
+                        .expect("Failed to deserialize vote transaction");
+
+                let (vote_pubkey, parsed_vote, ..) =
+                    vote_parser::parse_alpenglow_vote_transaction(&vote_transaction)
+                        .expect("Failed to parse vote transaction");
+
+                let node_index = vote_pubkey_to_node_index[&vote_pubkey];
+                let vote = parsed_vote
+                    .as_alpenglow_transaction_ref()
+                    .expect("Failed to get alpenglow vote reference");
+
+                // Stage 1: Wait for stability, then introduce partition at slot 50
+                if vote.slot() == 50 && !node_c_turbine_disabled.load(Ordering::Acquire) {
+                    node_c_turbine_disabled.store(true, Ordering::Release);
+                    experiment_state.stage = Stage::ObserveSkipFallbacks;
+                }
+
+                // Stage 2: Monitor for expected fallback vote patterns
+                if experiment_state.stage == Stage::ObserveSkipFallbacks {
+                    experiment_state.record_vote_bitmap(vote.slot(), node_index, vote);
+
+                    // Check if we've observed the expected pattern for 3 consecutive slots
+                    if experiment_state.matches_expected_pattern() {
+                        node_c_turbine_disabled.store(false, Ordering::Release);
+                        experiment_state.stage = Stage::ObserveLiveness;
+                    }
+                }
+
+                // Stage 3: Verify continued liveness after partition resolution
+                if experiment_state.stage == Stage::ObserveLiveness && vote.is_finalize() {
+                    experiment_state.record_finalization_vote(
+                        vote.slot(),
+                        node_index,
+                        &node_stakes,
+                    );
+
+                    if experiment_state.sufficient_roots_created() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    vote_listener_thread
+        .join()
+        .expect("Vote listener thread panicked");
+}
