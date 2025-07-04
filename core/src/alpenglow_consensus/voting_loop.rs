@@ -829,6 +829,11 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         context: &mut VotingContext,
     ) {
+        // Update and save the vote history
+        if !is_refresh {
+            context.vote_history.add_vote(vote);
+        }
+
         let mut generate_time = Measure::start("generate_alpenglow_vote");
         let vote_tx_result = Self::generate_vote_tx(&vote, bank, context);
         generate_time.stop();
@@ -852,10 +857,6 @@ impl VotingLoop {
             }
         };
 
-        // Update and save the vote history
-        if !is_refresh {
-            context.vote_history.add_vote(vote);
-        }
         let saved_vote_history =
             SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
                 |err| {
