@@ -7159,7 +7159,7 @@ fn test_tmp() {
                 let node_name = vote_pubkeys[&vote_pubkey];
                 let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
-                dbg!(node_name, vote);
+                dbg!((node_name, vote));
 
                 match node_name {
                     0 => {
