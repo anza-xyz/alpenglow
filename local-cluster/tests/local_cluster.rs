@@ -6848,6 +6848,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
     // Configure total stake and stake distribution
     const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
     const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
@@ -6937,21 +6939,34 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
         })
         .collect();
 
-    // let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
-    // let node_b_keypair = node_b_info.info.keypair.clone();
-    // let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+    let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
+    let node_b_keypair = node_b_info.info.keypair.clone();
+    let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
 
-    // let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
-    // let node_d_keypair = node_d_info.info.keypair.clone();
-    // let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+    let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
+    let node_d_keypair = node_d_info.info.keypair.clone();
+    let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
-    // let node_e_info = cluster.exit_node(&validator_keys[4].pubkey());
-    // let node_e_keypair = node_e_info.info.keypair.clone();
-    // let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
+    let node_e_info = cluster.exit_node(&validator_keys[4].pubkey());
+    let node_e_keypair = node_e_info.info.keypair.clone();
+    let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
         let mut buf = [0u8; 65_535];
+
+        let node_b_keypair = node_b_info.info.keypair.clone();
+        let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+
+        let node_d_keypair = node_d_info.info.keypair.clone();
+        let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+
+        let node_e_keypair = node_e_info.info.keypair.clone();
+        let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
+
+        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let mut stage_ix = 0;
+        let mut a_equivocates = false;
 
         move || loop {
             let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
@@ -6964,6 +6979,243 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
             dbg!((node_name, vote));
+
+            // if vote.slot() == 50 {
+            //     node_c_turbine_disabled.store(true, Ordering::Release);
+            // }
+
+            if node_name == 0 {
+                // Copy vote for B, D, and E
+                for (keypair, vote_keypair) in [
+                    (&node_b_keypair, &node_b_vote_keypair),
+                    (&node_d_keypair, &node_d_vote_keypair),
+                    (&node_e_keypair, &node_e_vote_keypair),
+                ] {
+                    let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
+                    broadcast_vote(
+                        &vote_tx,
+                        &tpu_socket_addrs,
+                        None,
+                        cluster.connection_cache.clone(),
+                    );
+                }
+            }
+
+            // match node_name {
+            //     0 => {
+            //         match stage_ix {
+            //             0 | 1 => {
+            //                 // Copy vote for B, D, and E
+            //                 for (keypair, vote_keypair) in [
+            //                     (&node_b_keypair, &node_b_vote_keypair),
+            //                     (&node_d_keypair, &node_d_vote_keypair),
+            //                     (&node_e_keypair, &node_e_vote_keypair),
+            //                 ] {
+            //                     let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
+            //                     broadcast_vote(
+            //                         &vote_tx,
+            //                         &tpu_socket_addrs,
+            //                         None,
+            //                         cluster.connection_cache.clone(),
+            //                     );
+            //                 }
+            //             }
+            //             2 => {
+            //                 // Equivocate
+            //             }
+            //             _ => unreachable!(),
+            //         }
+            //     }
+            //     2 => {
+            //         // Track C's votes
+            //     }
+            //     _ => {}
+            // }
+        }
+    });
+
+    vote_listener_thread.join().unwrap();
+}
+
+#[test]
+#[serial]
+fn test_tmp() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    // Configure total stake and stake distribution
+    const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
+    const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
+
+    // Node stakes with slight imbalance to trigger fallback behavior
+    let node_stakes = [
+        1,
+        TOTAL_STAKE * 2 / 10 - 1, // Node A (Leader): 20% - ε
+        TOTAL_STAKE * 4 / 10,     // Node B: 40%
+        TOTAL_STAKE * 2 / 10,     // Node C: 20%
+        TOTAL_STAKE * 2 / 10,     // Node D: 20% + ε
+    ];
+
+    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
+
+    // Control components
+    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+
+    // Create leader schedule with Node A as primary leader
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0, 0]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create UDP socket to listen to votes
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
+
+    // Create validator configs
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+
+    let mut validator_configs =
+        make_identical_validator_configs(&validator_config, node_stakes.len());
+    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+
+    // Cluster config
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: TOTAL_STAKE,
+        node_stakes: node_stakes.to_vec(),
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(std::iter::repeat(true))
+                .collect(),
+        ),
+        slots_per_epoch: SLOTS_PER_EPOCH,
+        stakers_slot_offset: SLOTS_PER_EPOCH,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    // Create mapping from vote pubkeys to node indices
+    let vote_pubkeys: HashMap<_, _> = validator_keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, keypair)| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
+        })
+        .collect();
+
+    assert_eq!(vote_pubkeys.len(), node_stakes.len());
+
+    // Collect node pubkeys and TPU addresses
+    let node_pubkeys: Vec<_> = validator_keys.iter().map(|key| key.pubkey()).collect();
+
+    let tpu_socket_addrs: Vec<_> = node_pubkeys
+        .iter()
+        .map(|pubkey| {
+            cluster
+                .get_contact_info(pubkey)
+                .unwrap()
+                .tpu_vote(cluster.connection_cache.protocol())
+                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+        })
+        .collect();
+
+    // Exit nodes B and D to control their voting behavior
+    let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
+    let node_b_keypair = node_b_info.info.keypair.clone();
+    let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+
+    let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
+    let node_d_keypair = node_d_info.info.keypair.clone();
+    let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+
+    let node_e_info = cluster.exit_node(&validator_keys[4].pubkey());
+    let node_e_keypair = node_e_info.info.keypair.clone();
+    let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
+
+    // Start vote listener thread to monitor and control the experiment
+    let vote_listener_thread = std::thread::spawn({
+        let mut buf = [0u8; 65_535];
+
+        move || {
+            loop {
+                let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
+                let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
+
+                let (vote_pubkey, parsed_vote, ..) =
+                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
+
+                let node_name = vote_pubkeys[&vote_pubkey];
+                let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+
+                dbg!(node_name, vote);
+
+                match node_name {
+                    0 => {
+                        // Create vote for Node B (always copies node A)
+                        let vote_txn_b = copied_vote_txn(
+                            &vote_txn,
+                            &node_b_keypair.insecure_clone(),
+                            &node_b_vote_keypair.insecure_clone(),
+                        );
+
+                        broadcast_vote(
+                            &vote_txn_b,
+                            &tpu_socket_addrs,
+                            None,
+                            cluster.connection_cache.clone(),
+                        );
+
+                        // Create vote for Node D (always copies Node A)
+                        let vote_txn_d = copied_vote_txn(
+                            &vote_txn,
+                            &node_d_keypair.insecure_clone(),
+                            &node_d_vote_keypair.insecure_clone(),
+                        );
+
+                        broadcast_vote(
+                            &vote_txn_d,
+                            &tpu_socket_addrs,
+                            None,
+                            cluster.connection_cache.clone(),
+                        );
+
+                        // Create vote for Node E (always copies Node A)
+                        let vote_txn_e = copied_vote_txn(
+                            &vote_txn,
+                            &node_e_keypair.insecure_clone(),
+                            &node_e_vote_keypair.insecure_clone(),
+                        );
+
+                        broadcast_vote(
+                            &vote_txn_e,
+                            &tpu_socket_addrs,
+                            None,
+                            cluster.connection_cache.clone(),
+                        );
+                    }
+                    2 => {
+                        // Node C: Handle experiment state transitions
+                    }
+                    _ => {}
+                }
+
+                // Check for finalization votes to determine test completion
+                // if vote.is_finalize() && state.handle_finalize_vote(vote, node_name) {
+                //     break;
+                // }
+            }
         }
     });
 
