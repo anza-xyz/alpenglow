@@ -36,7 +36,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_rpc::{
-        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
+        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
@@ -503,6 +503,16 @@ impl VotingLoop {
                 "failed to record optimistic slot in blockstore: slot={}: {:?}",
                 new_root, &e
             );
+        }
+        // It is critical to send the OC notification in order to keep compatibility with
+        // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
+        // in order to perform cleanup. In the future we will look to deprecate OC and remove
+        // these code paths.
+        if let Some(config) = bank_notification_sender {
+            config
+                .sender
+                .send(BankNotification::OptimisticallyConfirmed(new_root))
+                .unwrap();
         }
 
         Some(new_root)
