@@ -18,6 +18,7 @@ log = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 solana-accounts-db = { workspace = true }
+solana-bls = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
 solana-client = { workspace = true }
 solana-config-program = { workspace = true }
