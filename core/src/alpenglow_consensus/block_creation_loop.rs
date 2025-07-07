@@ -400,12 +400,6 @@ fn maybe_start_leader(
         return Err(StartLeaderError::StartupVerificationIncomplete(parent_slot));
     }
 
-    // TODO(ashwin): plug this in from replay
-    let has_new_vote_been_rooted = true;
-    if !has_new_vote_been_rooted {
-        return Err(StartLeaderError::VoteNotRooted);
-    }
-
     // Create and insert the bank
     create_and_insert_leader_bank(slot, parent_bank, ctx);
     Ok(())

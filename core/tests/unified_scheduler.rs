@@ -170,8 +170,6 @@ fn test_scheduler_waited_by_drop_bank_service() {
             Some(&mut progress),
             &AbsRequestSender::default(),
             None,
-            &mut true,
-            &mut Vec::new(),
             &drop_bank_sender1,
             Some(&mut tbft_structs),
         )
