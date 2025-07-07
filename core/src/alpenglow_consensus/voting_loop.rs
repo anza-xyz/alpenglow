@@ -18,9 +18,7 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        replay_stage::{
-            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage,
-        },
+        replay_stage::{CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage},
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,

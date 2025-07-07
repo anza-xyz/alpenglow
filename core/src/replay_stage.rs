@@ -2221,7 +2221,7 @@ impl ReplayStage {
 
         if let Some(next_leader) =
             leader_schedule_cache.slot_leader_at(maybe_my_leader_slot, Some(parent_bank))
-        {          
+        {
             trace!(
                 "{} leader {} at poh slot: {}",
                 my_pubkey,
@@ -7934,7 +7934,6 @@ pub(crate) mod tests {
             last_print_time: Instant::now(),
         };
 
-
         let identity_keypair = cluster_info.keypair().clone();
         let my_vote_keypair = vec![Arc::new(
             validator_keypairs.remove(&my_pubkey).unwrap().vote_keypair,
@@ -9682,7 +9681,7 @@ pub(crate) mod tests {
         let poh_recorder = Arc::new(poh_recorder);
         let (retransmit_slots_sender, _) = unbounded();
         let (banking_tracer, _) = BankingTracer::new(None).unwrap();
-  
+
         let track_transaction_indexes = false;
 
         // We should not attempt to start leader for the dummy_slot

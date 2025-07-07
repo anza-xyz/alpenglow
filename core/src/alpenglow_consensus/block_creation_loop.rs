@@ -102,7 +102,6 @@ enum StartLeaderError {
     /// Bank forks already contains bank
     #[error("Already contain bank for leader slot {0}")]
     AlreadyHaveBank(/* leader slot */ Slot),
-
 }
 
 fn start_receive_and_record_loop(
