@@ -18,7 +18,6 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        consensus::progress_map::ProgressMap,
         replay_stage::{
             CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
         },
@@ -41,7 +40,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_rpc::{
-        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
+        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
@@ -125,8 +124,6 @@ struct SharedContext {
     bank_forks: Arc<RwLock<BankForks>>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
     vote_receiver: VoteReceiver,
-    // TODO(ashwin): share this with replay (currently empty)
-    progress: ProgressMap,
     // TODO(ashwin): integrate with gossip set-identity
     my_pubkey: Pubkey,
 }
@@ -260,7 +257,6 @@ impl VotingLoop {
             bank_forks: bank_forks.clone(),
             rpc_subscriptions: rpc_subscriptions.clone(),
             vote_receiver,
-            progress: ProgressMap::default(),
             my_pubkey,
         };
 
@@ -497,7 +493,7 @@ impl VotingLoop {
             slot,
             new_root,
             ctx.bank_forks.as_ref(),
-            &mut ctx.progress,
+            None,
             ctx.blockstore.as_ref(),
             &ctx.leader_schedule_cache,
             accounts_background_request_sender,
@@ -523,6 +519,16 @@ impl VotingLoop {
                 "failed to record optimistic slot in blockstore: slot={}: {:?}",
                 new_root, &e
             );
+        }
+        // It is critical to send the OC notification in order to keep compatibility with
+        // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
+        // in order to perform cleanup. In the future we will look to deprecate OC and remove
+        // these code paths.
+        if let Some(config) = bank_notification_sender {
+            config
+                .sender
+                .send(BankNotification::OptimisticallyConfirmed(new_root))
+                .unwrap();
         }
 
         Some(new_root)
@@ -858,6 +864,11 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         context: &mut VotingContext,
     ) -> bool {
+        // Update and save the vote history
+        if !is_refresh {
+            context.vote_history.add_vote(vote);
+        }
+
         let mut generate_time = Measure::start("generate_alpenglow_vote");
         let vote_tx_result = Self::generate_vote_tx(&vote, bank, context);
         generate_time.stop();
@@ -879,6 +890,14 @@ impl VotingLoop {
                 return false;
             }
         };
+
+        let saved_vote_history =
+            SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
+                |err| {
+                    error!("Unable to create saved vote history: {:?}", err);
+                    std::process::exit(1);
+                },
+            );
 
         // Send the vote over the wire
         let saved_vote_history = if is_refresh {

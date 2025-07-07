@@ -66,11 +66,12 @@ impl From<SavedVoteHistory> for SavedVoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "Po74P8NvXw5FkTnF6XqC9CenLUpDLYwQjyLgH51qTzP")
+    frozen_abi(digest = "2kq63kt6dJvJaUG7c1jGazLKeGXZc5yN3GDocMz8c5jB")
 )]
 #[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct SavedVoteHistory {
     signature: Signature,
+    #[serde(with = "serde_bytes")]
     data: Vec<u8>,
     #[serde(skip)]
     node_pubkey: Pubkey,
