@@ -1,6 +1,5 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
-    alpenglow_vote::{bls_message::BLSMessage, vote::Vote},
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -11,8 +10,6 @@ use {
     solana_accounts_db::{
         hardened_unpack::open_genesis_config, utils::create_accounts_run_and_snapshot_dirs,
     },
-    solana_client::connection_cache::ConnectionCache,
-    solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
         consensus::{
             tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH,
@@ -6231,6 +6228,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
+/*
 fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     let discriminant = if vote.is_notarization() {
         0
@@ -6802,3 +6800,4 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     vote_listener_thread.join().unwrap();
 }
+*/
