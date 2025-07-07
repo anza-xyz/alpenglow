@@ -19,7 +19,7 @@ use {
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
         replay_stage::{
-            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
+            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage,
         },
         voting_service::VoteOp,
     },
