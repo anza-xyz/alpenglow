@@ -166,11 +166,11 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
     // Similar to the voting loop, if this loop dies kill the validator
     let _exit = Finalizer::new(exit.clone());
 
-    // TODO: set-identity
-    let my_pubkey = cluster_info.id();
+    // get latest identity pubkey during startup
+    let mut my_pubkey = cluster_info.id();
     let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
 
-    let ctx = LeaderContext {
+    let mut ctx = LeaderContext {
         my_pubkey,
         blockstore,
         poh_recorder: poh_recorder.clone(),
@@ -194,6 +194,19 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
     });
 
     while !exit.load(Ordering::Relaxed) {
+        // Check if set-identity was called at each leader window start
+        if my_pubkey != cluster_info.id() {
+            // set-identity cli has been called during runtime
+            let my_old_pubkey = my_pubkey;
+            my_pubkey = cluster_info.id();
+            ctx.my_pubkey = my_pubkey;
+
+            warn!(
+                "Identity changed from {} to {} during block creation loop",
+                my_old_pubkey, my_pubkey
+            );
+        }
+
         // Wait for the voting loop to notify us
         let LeaderWindowInfo {
             start_slot,
