@@ -18,7 +18,9 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        replay_stage::{CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage},
+        replay_stage::{
+            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
+        },
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,
@@ -46,7 +48,7 @@ use {
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         hash::Hash,
         pubkey::Pubkey,
-        signature::{Keypair, Signer},
+        signature::{Keypair, Signature, Signer},
         timing::timestamp,
         transaction::{Transaction, VersionedTransaction},
     },
@@ -102,9 +104,11 @@ struct VotingContext {
     vote_account_pubkey: Pubkey,
     identity_keypair: Arc<Keypair>,
     authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
+    has_new_vote_been_rooted: bool,
     voting_sender: Sender<VoteOp>,
     commitment_sender: Sender<CommitmentAggregationData>,
     wait_to_vote_slot: Option<Slot>,
+    voted_signatures: Vec<Signature>,
 }
 
 /// Context shared with replay, gossip, banking stage etc
@@ -188,6 +192,7 @@ impl VotingLoop {
 
         let identity_keypair = cluster_info.keypair().clone();
         let my_pubkey = identity_keypair.pubkey();
+        let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
         // TODO(ashwin): handle set identity here and in loop
         // reminder prev 3 need to be mutable
         if my_pubkey != vote_history.node_pubkey {
@@ -224,9 +229,11 @@ impl VotingLoop {
             vote_account_pubkey: vote_account,
             identity_keypair,
             authorized_voter_keypairs,
+            has_new_vote_been_rooted,
             voting_sender,
             commitment_sender,
             wait_to_vote_slot,
+            voted_signatures: vec![],
         };
         let mut shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -477,6 +484,8 @@ impl VotingLoop {
             &ctx.rpc_subscriptions,
             Some(new_root),
             bank_notification_sender,
+            &mut vctx.has_new_vote_been_rooted,
+            &mut vctx.voted_signatures,
             drop_bank_sender,
             None,
         ) {
@@ -952,6 +961,8 @@ impl VotingLoop {
             &[&context.identity_keypair, authorized_voter_keypair],
             bank.last_blockhash(),
         );
+
+        // No-op: we don't store voted_signatures anymore
 
         GenerateVoteTxResult::Tx(vote_tx)
     }

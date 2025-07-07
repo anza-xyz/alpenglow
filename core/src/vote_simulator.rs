@@ -245,6 +245,8 @@ impl VoteSimulator {
             Some(&mut self.progress),
             &AbsRequestSender::default(),
             None,
+            &mut true,
+            &mut Vec::new(),
             &drop_bank_sender,
             Some(&mut self.tbft_structs),
         )

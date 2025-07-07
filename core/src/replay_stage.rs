@@ -84,7 +84,7 @@ use {
         hash::Hash,
         pubkey::Pubkey,
         saturating_add_assign,
-        signature::{Keypair, Signer},
+        signature::{Keypair, Signature, Signer},
         timing::timestamp,
         transaction::Transaction,
     },
@@ -109,7 +109,7 @@ pub const MAX_UNCONFIRMED_SLOTS: usize = 5;
 pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
-// pub(crate) const MAX_VOTE_SIGNATURES: usize = 200;
+pub(crate) const MAX_VOTE_SIGNATURES: usize = 200;
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 const MAX_REPAIR_RETRY_LOOP_ATTEMPTS: usize = 10;
 
@@ -759,6 +759,8 @@ impl ReplayStage {
                 unfrozen_gossip_verified_vote_hashes,
                 epoch_slots_frozen_slots,
             };
+            let mut voted_signatures = Vec::new();
+            let mut has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
             let mut last_vote_refresh_time = LastVoteRefreshTime {
                 last_refresh_time: Instant::now(),
                 last_print_time: Instant::now(),
@@ -1067,6 +1069,8 @@ impl ReplayStage {
                             &vote_account,
                             &identity_keypair,
                             &authorized_voter_keypairs.read().unwrap(),
+                            &mut voted_signatures,
+                            has_new_vote_been_rooted,
                             &mut last_vote_refresh_time,
                             &voting_sender,
                             wait_to_vote_slot,
@@ -1118,6 +1122,8 @@ impl ReplayStage {
                             &rpc_subscriptions,
                             &block_commitment_cache,
                             &bank_notification_sender,
+                            &mut voted_signatures,
+                            &mut has_new_vote_been_rooted,
                             &mut replay_timing,
                             &voting_sender,
                             &drop_bank_sender,
@@ -1196,6 +1202,7 @@ impl ReplayStage {
                                 };
                                 // Ensure the validator can land votes with the new identity before
                                 // becoming leader
+                                has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
                                 warn!("Identity changed from {} to {}", my_old_pubkey, my_pubkey);
                             }
 
@@ -1298,6 +1305,7 @@ impl ReplayStage {
                             &retransmit_slots_sender,
                             &mut skipped_slots_info,
                             &banking_tracer,
+                            has_new_vote_been_rooted,
                             transaction_status_sender.is_some(),
                             &first_alpenglow_slot,
                             &mut is_alpenglow_migration_complete,
@@ -2194,6 +2202,7 @@ impl ReplayStage {
         parent_bank: &Bank,
         bank_forks: &RwLock<BankForks>,
         maybe_my_leader_slot: Slot,
+        has_new_vote_been_rooted: bool,
     ) -> bool {
         if !parent_bank.is_startup_verification_complete() {
             info!("startup verification incomplete, so skipping my leader slot");
@@ -2222,6 +2231,11 @@ impl ReplayStage {
         if let Some(next_leader) =
             leader_schedule_cache.slot_leader_at(maybe_my_leader_slot, Some(parent_bank))
         {
+            if !has_new_vote_been_rooted {
+                info!("Haven't landed a vote, so skipping my leader slot");
+                return false;
+            }
+
             trace!(
                 "{} leader {} at poh slot: {}",
                 my_pubkey,
@@ -2352,6 +2366,7 @@ impl ReplayStage {
         retransmit_slots_sender: &Sender<Slot>,
         skipped_slots_info: &mut SkippedSlotsInfo,
         banking_tracer: &Arc<BankingTracer>,
+        has_new_vote_been_rooted: bool,
         track_transaction_indexes: bool,
         first_alpenglow_slot: &Option<Slot>,
         is_alpenglow_migration_complete: &mut bool,
@@ -2431,6 +2446,7 @@ impl ReplayStage {
             &parent_bank,
             bank_forks,
             maybe_my_leader_slot,
+            has_new_vote_been_rooted,
         ) {
             return false;
         }
@@ -2641,6 +2657,8 @@ impl ReplayStage {
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
+        vote_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: &mut bool,
         replay_timing: &mut ReplayLoopTiming,
         voting_sender: &Sender<VoteOp>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
@@ -2687,6 +2705,8 @@ impl ReplayStage {
                 rpc_subscriptions,
                 highest_super_majority_root,
                 bank_notification_sender,
+                has_new_vote_been_rooted,
+                vote_signatures,
                 drop_bank_sender,
                 Some(tbft_structs),
             )?;
@@ -2727,6 +2747,8 @@ impl ReplayStage {
             authorized_voter_keypairs,
             tower,
             switch_fork_decision,
+            vote_signatures,
+            *has_new_vote_been_rooted,
             replay_timing,
             voting_sender,
             wait_to_vote_slot,
@@ -2741,6 +2763,8 @@ impl ReplayStage {
         authorized_voter_keypairs: &[Arc<Keypair>],
         vote: VoteTransaction,
         switch_fork_decision: &SwitchForkDecision,
+        vote_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: bool,
         wait_to_vote_slot: Option<Slot>,
     ) -> GenerateVoteTxResult {
         if !bank.is_startup_verification_complete() {
@@ -2831,6 +2855,15 @@ impl ReplayStage {
         vote_tx.partial_sign(&[node_keypair], blockhash);
         vote_tx.partial_sign(&[authorized_voter_keypair.as_ref()], blockhash);
 
+        if !has_new_vote_been_rooted {
+            vote_signatures.push(vote_tx.signatures[0]);
+            if vote_signatures.len() > MAX_VOTE_SIGNATURES {
+                vote_signatures.remove(0);
+            }
+        } else {
+            vote_signatures.clear();
+        }
+
         GenerateVoteTxResult::Tx(vote_tx)
     }
 
@@ -2856,6 +2889,8 @@ impl ReplayStage {
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
+        vote_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: bool,
         last_vote_refresh_time: &mut LastVoteRefreshTime,
         voting_sender: &Sender<VoteOp>,
         wait_to_vote_slot: Option<Slot>,
@@ -2947,6 +2982,8 @@ impl ReplayStage {
             vote_account_pubkey,
             identity_keypair,
             authorized_voter_keypairs,
+            vote_signatures,
+            has_new_vote_been_rooted,
             last_vote_refresh_time,
             voting_sender,
             wait_to_vote_slot,
@@ -2961,6 +2998,8 @@ impl ReplayStage {
         vote_account_pubkey: &Pubkey,
         identity_keypair: &Keypair,
         authorized_voter_keypairs: &[Arc<Keypair>],
+        vote_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: bool,
         last_vote_refresh_time: &mut LastVoteRefreshTime,
         voting_sender: &Sender<VoteOp>,
         wait_to_vote_slot: Option<Slot>,
@@ -2975,6 +3014,8 @@ impl ReplayStage {
             authorized_voter_keypairs,
             tower.last_vote(),
             &SwitchForkDecision::SameFork,
+            vote_signatures,
+            has_new_vote_been_rooted,
             wait_to_vote_slot,
         );
 
@@ -3017,6 +3058,8 @@ impl ReplayStage {
         authorized_voter_keypairs: &[Arc<Keypair>],
         tower: &mut Tower,
         switch_fork_decision: &SwitchForkDecision,
+        vote_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: bool,
         replay_timing: &mut ReplayLoopTiming,
         voting_sender: &Sender<VoteOp>,
         wait_to_vote_slot: Option<Slot>,
@@ -3029,6 +3072,8 @@ impl ReplayStage {
             authorized_voter_keypairs,
             tower.last_vote(),
             switch_fork_decision,
+            vote_signatures,
+            has_new_vote_been_rooted,
             wait_to_vote_slot,
         );
         generate_time.stop();
@@ -4288,6 +4333,8 @@ impl ReplayStage {
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         highest_super_majority_root: Option<Slot>,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
+        has_new_vote_been_rooted: &mut bool,
+        voted_signatures: &mut Vec<Signature>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         tbft_structs: Option<&mut TowerBFTStructures>,
     ) -> Result<(), SetRootError> {
@@ -4325,6 +4372,8 @@ impl ReplayStage {
             progress,
             accounts_background_request_sender,
             highest_super_majority_root,
+            has_new_vote_been_rooted,
+            voted_signatures,
             drop_bank_sender,
             tbft_structs,
         )?;
@@ -4354,6 +4403,8 @@ impl ReplayStage {
         progress: Option<&mut ProgressMap>,
         accounts_background_request_sender: &AbsRequestSender,
         highest_super_majority_root: Option<Slot>,
+        has_new_vote_been_rooted: &mut bool,
+        voted_signatures: &mut Vec<Signature>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         tbft_structs: Option<&mut TowerBFTStructures>,
     ) -> Result<(), SetRootError> {
@@ -4372,7 +4423,17 @@ impl ReplayStage {
         // safe because updates to bank_forks are only made by a single thread.
         let r_bank_forks = bank_forks.read().unwrap();
         let new_root_bank = &r_bank_forks[new_root];
-
+        if !*has_new_vote_been_rooted {
+            for signature in voted_signatures.iter() {
+                if new_root_bank.get_signature_status(signature).is_some() {
+                    *has_new_vote_been_rooted = true;
+                    break;
+                }
+            }
+            if *has_new_vote_been_rooted {
+                std::mem::take(voted_signatures);
+            }
+        }
         if let Some(progress) = progress {
             progress.handle_new_root(&r_bank_forks);
         }
@@ -4984,6 +5045,8 @@ pub(crate) mod tests {
             Some(&mut progress),
             &AbsRequestSender::default(),
             None,
+            &mut true,
+            &mut Vec::new(),
             &drop_bank_sender,
             Some(&mut tbft_structs),
         )
@@ -5071,6 +5134,8 @@ pub(crate) mod tests {
             Some(&mut progress),
             &AbsRequestSender::default(),
             Some(confirmed_root),
+            &mut true,
+            &mut Vec::new(),
             &drop_bank_sender,
             Some(&mut tbft_structs),
         )
@@ -7933,6 +7998,8 @@ pub(crate) mod tests {
             last_refresh_time: Instant::now(),
             last_print_time: Instant::now(),
         };
+        let has_new_vote_been_rooted = false;
+        let mut voted_signatures = vec![];
 
         let identity_keypair = cluster_info.keypair().clone();
         let my_vote_keypair = vec![Arc::new(
@@ -7983,6 +8050,8 @@ pub(crate) mod tests {
             &my_vote_keypair,
             &mut tower,
             &SwitchForkDecision::SameFork,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &mut ReplayLoopTiming::default(),
             &voting_sender,
             None,
@@ -8069,6 +8138,8 @@ pub(crate) mod tests {
                 &my_vote_pubkey,
                 &identity_keypair,
                 &my_vote_keypair,
+                &mut voted_signatures,
+                has_new_vote_been_rooted,
                 &mut last_vote_refresh_time,
                 &voting_sender,
                 None,
@@ -8095,6 +8166,8 @@ pub(crate) mod tests {
             &my_vote_keypair,
             &mut tower,
             &SwitchForkDecision::SameFork,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &mut ReplayLoopTiming::default(),
             &voting_sender,
             None,
@@ -8165,6 +8238,8 @@ pub(crate) mod tests {
             &my_vote_pubkey,
             &identity_keypair,
             &my_vote_keypair,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &mut last_vote_refresh_time,
             &voting_sender,
             None,
@@ -8231,6 +8306,8 @@ pub(crate) mod tests {
             &my_vote_pubkey,
             &identity_keypair,
             &my_vote_keypair,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &mut last_vote_refresh_time,
             &voting_sender,
             None,
@@ -8335,6 +8412,8 @@ pub(crate) mod tests {
             &my_vote_pubkey,
             &identity_keypair,
             &my_vote_keypair,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &mut last_vote_refresh_time,
             &voting_sender,
             None,
@@ -8360,6 +8439,8 @@ pub(crate) mod tests {
         my_vote_keypair: &[Arc<Keypair>],
         tower: &mut Tower,
         identity_keypair: &Keypair,
+        voted_signatures: &mut Vec<Signature>,
+        has_new_vote_been_rooted: bool,
         voting_sender: &Sender<VoteOp>,
         voting_receiver: &Receiver<VoteOp>,
         cluster_info: &ClusterInfo,
@@ -8380,6 +8461,8 @@ pub(crate) mod tests {
             my_vote_keypair,
             tower,
             &SwitchForkDecision::SameFork,
+            voted_signatures,
+            has_new_vote_been_rooted,
             &mut ReplayLoopTiming::default(),
             voting_sender,
             None,
@@ -8477,6 +8560,9 @@ pub(crate) mod tests {
             ..
         } = vote_simulator;
 
+        let has_new_vote_been_rooted = false;
+        let mut voted_signatures = vec![];
+
         let identity_keypair = cluster_info.keypair().clone();
         let my_vote_keypair = vec![Arc::new(
             validator_keypairs.remove(&my_pubkey).unwrap().vote_keypair,
@@ -8517,6 +8603,8 @@ pub(crate) mod tests {
             &my_vote_keypair,
             &mut tower,
             &identity_keypair,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &voting_sender,
             &voting_receiver,
             &cluster_info,
@@ -8534,6 +8622,8 @@ pub(crate) mod tests {
             &my_vote_keypair,
             &mut tower,
             &identity_keypair,
+            &mut voted_signatures,
+            has_new_vote_been_rooted,
             &voting_sender,
             &voting_receiver,
             &cluster_info,
@@ -9014,7 +9104,9 @@ pub(crate) mod tests {
         );
 
         let (banking_tracer, _) = BankingTracer::new(None).unwrap();
-
+        // A vote has not technically been rooted, but it doesn't matter for
+        // this test to use true to avoid skipping the leader slot
+        let has_new_vote_been_rooted = true;
         let track_transaction_indexes = false;
 
         assert!(!ReplayStage::maybe_start_leader(
@@ -9028,6 +9120,7 @@ pub(crate) mod tests {
             &retransmit_slots_sender,
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
+            has_new_vote_been_rooted,
             track_transaction_indexes,
             &None,
             &mut false,
@@ -9681,7 +9774,9 @@ pub(crate) mod tests {
         let poh_recorder = Arc::new(poh_recorder);
         let (retransmit_slots_sender, _) = unbounded();
         let (banking_tracer, _) = BankingTracer::new(None).unwrap();
-
+        // A vote has not technically been rooted, but it doesn't matter for
+        // this test to use true to avoid skipping the leader slot
+        let has_new_vote_been_rooted = true;
         let track_transaction_indexes = false;
 
         // We should not attempt to start leader for the dummy_slot
@@ -9701,6 +9796,7 @@ pub(crate) mod tests {
             &retransmit_slots_sender,
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
+            has_new_vote_been_rooted,
             track_transaction_indexes,
             &None,
             &mut false,
@@ -9729,6 +9825,7 @@ pub(crate) mod tests {
             &retransmit_slots_sender,
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
+            has_new_vote_been_rooted,
             track_transaction_indexes,
             &None,
             &mut false,
