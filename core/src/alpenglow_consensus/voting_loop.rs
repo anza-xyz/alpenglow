@@ -118,7 +118,6 @@ struct SharedContext {
     bank_forks: Arc<RwLock<BankForks>>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
     vote_receiver: VoteReceiver,
-    // TODO(ashwin): integrate with gossip set-identity
     my_pubkey: Pubkey,
 }
 
@@ -168,8 +167,8 @@ impl VotingLoop {
             vote_account,
             wait_to_vote_slot,
             wait_for_vote_to_start_leader,
-            vote_history,
-            vote_history_storage: _, // TODO: set-identity
+            mut vote_history,
+            vote_history_storage,
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
@@ -190,13 +189,29 @@ impl VotingLoop {
         let _exit = Finalizer::new(exit.clone());
         let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
 
-        let identity_keypair = cluster_info.keypair().clone();
-        let my_pubkey = identity_keypair.pubkey();
+        let mut identity_keypair = cluster_info.keypair().clone();
+        let mut my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
         // TODO(ashwin): handle set identity here and in loop
         // reminder prev 3 need to be mutable
         if my_pubkey != vote_history.node_pubkey {
-            todo!();
+            // set-identity has been called during startup
+            let my_old_pubkey = vote_history.node_pubkey;
+            vote_history = match VoteHistory::restore(vote_history_storage.as_ref(), &my_pubkey) {
+                Ok(vote_history) => vote_history,
+                Err(err) => {
+                    error!(
+                            "Unable to load new vote history when attempting to change identity from {} \
+                             to {} on voting loop startup, Exiting: {}",
+                            my_old_pubkey, my_pubkey, err
+                        );
+                    return;
+                }
+            };
+            warn!(
+                "Identity changed during startup from {} to {}",
+                my_old_pubkey, my_pubkey
+            );
         }
 
         let mut current_leader = None;
@@ -227,7 +242,7 @@ impl VotingLoop {
         let mut voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
-            identity_keypair,
+            identity_keypair: identity_keypair.clone(),
             authorized_voter_keypairs,
             has_new_vote_been_rooted,
             voting_sender,
@@ -246,6 +261,37 @@ impl VotingLoop {
 
         // TODO(ashwin): Start loop once migration is complete current_slot from vote history
         loop {
+            // Check if set-identity was called during runtime. Do this before the `is_leader` check.
+            if my_pubkey != cluster_info.id() {
+                identity_keypair = cluster_info.keypair().clone();
+                let my_old_pubkey = my_pubkey;
+                my_pubkey = identity_keypair.pubkey();
+
+                voting_context.vote_history = match VoteHistory::restore(
+                    vote_history_storage.as_ref(),
+                    &my_pubkey,
+                ) {
+                    Ok(vote_history) => vote_history,
+                    Err(err) => {
+                        error!(
+                                "Unable to load new vote history when attempting to change identity from {} \
+                                 to {} in voting loop, Exiting: {}",
+                                my_old_pubkey, my_pubkey, err
+                            );
+                        return;
+                    }
+                };
+
+                // Update contexts with new identity
+                voting_context.identity_keypair = identity_keypair.clone();
+                shared_context.my_pubkey = my_pubkey;
+
+                // Update the certificate pool's pubkey (which is used for logging purposes)
+                cert_pool.update_pubkey(my_pubkey);
+
+                warn!("{my_pubkey}: Identity changed from {my_old_pubkey} to {my_pubkey}");
+            }
+
             let leader_end_slot = last_of_consecutive_leader_slots(current_slot);
 
             let Some(leader_pubkey) = leader_schedule_cache

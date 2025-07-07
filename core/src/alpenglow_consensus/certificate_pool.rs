@@ -593,6 +593,13 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
         self.parent_ready_tracker.set_root(new_root);
         self.update_epoch_stakes_map(&bank);
     }
+
+    /// Updates the pubkey used for logging purposes only.
+    /// This avoids the need to recreate the entire certificate pool since it's
+    /// not distinguished by the pubkey.
+    pub fn update_pubkey(&mut self, new_pubkey: Pubkey) {
+        self.parent_ready_tracker.update_pubkey(new_pubkey);
+    }
 }
 
 pub(crate) fn load_from_blockstore(
