@@ -202,7 +202,7 @@ impl VotingLoop {
                 Err(err) => {
                     error!(
                             "Unable to load new vote history when attempting to change identity from {} \
-                             to {} on VotingLoop startup, Exiting: {}",
+                             to {} on voting loop startup, Exiting: {}",
                             my_old_pubkey, my_pubkey, err
                         );
                     return;
