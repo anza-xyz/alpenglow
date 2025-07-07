@@ -103,9 +103,6 @@ enum StartLeaderError {
     #[error("Already contain bank for leader slot {0}")]
     AlreadyHaveBank(/* leader slot */ Slot),
 
-    /// Haven't landed a vote
-    #[error("Have not rooted a block with our vote")]
-    VoteNotRooted,
 }
 
 fn start_receive_and_record_loop(

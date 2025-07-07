@@ -48,7 +48,7 @@ use {
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         hash::Hash,
         pubkey::Pubkey,
-        signature::{Keypair, Signature, Signer},
+        signature::{Keypair, Signer},
         timing::timestamp,
         transaction::{Transaction, VersionedTransaction},
     },
