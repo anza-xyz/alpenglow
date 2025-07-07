@@ -206,6 +206,11 @@ impl ParentReadyTracker {
         self.root = root;
         self.slot_statuses.retain(|&s, _| s >= root);
     }
+
+    /// Updates the pubkey. Note that the pubkey is used for logging purposes only.
+    pub fn update_pubkey(&mut self, new_pubkey: Pubkey) {
+        self.my_pubkey = new_pubkey;
+    }
 }
 
 #[cfg(test)]

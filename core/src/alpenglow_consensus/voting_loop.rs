@@ -118,7 +118,6 @@ struct SharedContext {
     bank_forks: Arc<RwLock<BankForks>>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
     vote_receiver: VoteReceiver,
-    // TODO(ashwin): integrate with gossip set-identity
     my_pubkey: Pubkey,
 }
 
@@ -284,13 +283,8 @@ impl VotingLoop {
                 voting_context.identity_keypair = identity_keypair.clone();
                 shared_context.my_pubkey = my_pubkey;
                 
-                // Recreate certificate pool with new identity
-                cert_pool = certificate_pool::load_from_blockstore(
-                    &my_pubkey,
-                    &root_bank_cache.root_bank(),
-                    blockstore.as_ref(),
-                    Some(certificate_sender),
-                );
+                // Update the certificate pool's pubkey (which is used for logging purposes)
+                cert_pool.update_pubkey(my_pubkey);
                 
                 warn!("{my_pubkey}: Identity changed from {my_old_pubkey} to {my_pubkey}");
             }
