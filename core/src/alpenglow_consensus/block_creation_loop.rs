@@ -200,10 +200,13 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             let my_old_pubkey = my_pubkey;
             my_pubkey = cluster_info.id();
             ctx.my_pubkey = my_pubkey;
-            
-            warn!("Identity changed from {} to {} during block creation loop", my_old_pubkey, my_pubkey);
+
+            warn!(
+                "Identity changed from {} to {} during block creation loop",
+                my_old_pubkey, my_pubkey
+            );
         }
-        
+
         // Wait for the voting loop to notify us
         let LeaderWindowInfo {
             start_slot,

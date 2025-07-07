@@ -199,14 +199,14 @@ impl VotingLoop {
             let my_old_pubkey = vote_history.node_pubkey;
             vote_history = match VoteHistory::restore(vote_history_storage.as_ref(), &my_pubkey) {
                 Ok(vote_history) => vote_history,
-                    Err(err) => {
-                        error!(
+                Err(err) => {
+                    error!(
                             "Unable to load new vote history when attempting to change identity from {} \
                              to {} on VotingLoop startup, Exiting: {}",
                             my_old_pubkey, my_pubkey, err
                         );
-                        return;
-                    }
+                    return;
+                }
             };
             warn!(
                 "Identity changed during startup from {} to {}",
@@ -267,25 +267,28 @@ impl VotingLoop {
                 let my_old_pubkey = my_pubkey;
                 my_pubkey = identity_keypair.pubkey();
 
-                voting_context.vote_history = match VoteHistory::restore(vote_history_storage.as_ref(), &my_pubkey) {
+                voting_context.vote_history = match VoteHistory::restore(
+                    vote_history_storage.as_ref(),
+                    &my_pubkey,
+                ) {
                     Ok(vote_history) => vote_history,
-                        Err(err) => {
-                            error!(
+                    Err(err) => {
+                        error!(
                                 "Unable to load new vote history when attempting to change identity from {} \
                                  to {} on VotingLoop startup, Exiting: {}",
                                 my_old_pubkey, my_pubkey, err
                             );
-                            return;
-                        }
+                        return;
+                    }
                 };
-                
+
                 // Update contexts with new identity
                 voting_context.identity_keypair = identity_keypair.clone();
                 shared_context.my_pubkey = my_pubkey;
-                
+
                 // Update the certificate pool's pubkey (which is used for logging purposes)
                 cert_pool.update_pubkey(my_pubkey);
-                
+
                 warn!("{my_pubkey}: Identity changed from {my_old_pubkey} to {my_pubkey}");
             }
 
