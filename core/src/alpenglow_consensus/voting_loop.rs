@@ -36,7 +36,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_rpc::{
-        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
+        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
@@ -553,6 +553,16 @@ impl VotingLoop {
                 new_root, &e
             );
         }
+        // It is critical to send the OC notification in order to keep compatibility with
+        // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
+        // in order to perform cleanup. In the future we will look to deprecate OC and remove
+        // these code paths.
+        if let Some(config) = bank_notification_sender {
+            config
+                .sender
+                .send(BankNotification::OptimisticallyConfirmed(new_root))
+                .unwrap();
+        }
 
         Some(new_root)
     }
@@ -878,6 +888,11 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         context: &mut VotingContext,
     ) {
+        // Update and save the vote history
+        if !is_refresh {
+            context.vote_history.add_vote(vote);
+        }
+
         let mut generate_time = Measure::start("generate_alpenglow_vote");
         let vote_tx_result = Self::generate_vote_tx(&vote, bank, context);
         generate_time.stop();
@@ -901,10 +916,6 @@ impl VotingLoop {
             }
         };
 
-        // Update and save the vote history
-        if !is_refresh {
-            context.vote_history.add_vote(vote);
-        }
         let saved_vote_history =
             SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
                 |err| {
