@@ -276,8 +276,8 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     ])
     .unwrap();
 
-    // TODO(wen): change to derive from vote private key when bls crate is published.
-    let bls_keypair = BLSKeypair::new();
+    // TODO(wen): Move b"alpenglow" to alpenglow-vote crate.
+    let bls_keypair = BLSKeypair::derive_from_signer(&voting_keypair, b"alpenglow").unwrap();
     let bls_pubkey: BLSPubkey = bls_keypair.public.into();
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
