@@ -394,17 +394,17 @@ impl VotingLoop {
                             pending_blocks.remove(&current_slot);
                             break;
                         }
-                    }
-
-                    // Ingest replayed blocks
-                    match completed_block_receiver
-                        .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
-                    {
-                        Ok(CompletedBlock { slot, bank }) => {
-                            pending_blocks.insert(slot, bank);
+                    } else {
+                        // Ingest replayed blocks
+                        match completed_block_receiver
+                            .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
+                        {
+                            Ok(CompletedBlock { slot, bank }) => {
+                                pending_blocks.insert(slot, bank);
+                            }
+                            Err(RecvTimeoutError::Timeout) => (),
+                            Err(RecvTimeoutError::Disconnected) => return,
                         }
-                        Err(RecvTimeoutError::Timeout) => (),
-                        Err(RecvTimeoutError::Disconnected) => return,
                     }
                 }
 
