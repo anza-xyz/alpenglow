@@ -394,18 +394,20 @@ impl VotingLoop {
                             pending_blocks.remove(&current_slot);
                             break;
                         }
+                    } else {
+                        // Ingest replayed blocks
+                        match completed_block_receiver
+                            .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
+                        {
+                            Ok(CompletedBlock { slot, bank }) => {
+                                pending_blocks.insert(slot, bank);
+                            }
+                            Err(RecvTimeoutError::Timeout) => (),
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
                     }
 
-                    // Ingest replayed blocks
-                    match completed_block_receiver
-                        .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
-                    {
-                        Ok(CompletedBlock { slot, bank }) => {
-                            pending_blocks.insert(slot, bank);
-                        }
-                        Err(RecvTimeoutError::Timeout) => (),
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
 
                 // Wait for certificates to indicate we can move to the next slot
