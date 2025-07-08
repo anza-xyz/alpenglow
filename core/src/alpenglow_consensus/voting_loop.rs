@@ -641,8 +641,7 @@ impl VotingLoop {
                 );
                 let vote = Vote::new_skip_vote(slot);
                 if !Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context) {
-                    warn!("send_vote failed, break out early");
-                    break;
+                    warn!("send_vote failed for {:?}", vote);
                 }
             }
         }
@@ -816,8 +815,7 @@ impl VotingLoop {
                 cert_pool,
                 voting_context,
             ) {
-                warn!("First send_vote failed, break out early");
-                return false;
+                warn!("send_vote failed for {:?}", vote);
             }
         }
         true
@@ -882,8 +880,7 @@ impl VotingLoop {
                     cert_pool,
                     voting_context,
                 ) {
-                    warn!("send_vote failed, exit early");
-                    return;
+                    warn!("send_vote failed for {:?}", vote);
                 }
             }
         }
