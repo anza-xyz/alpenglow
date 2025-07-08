@@ -41,7 +41,7 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
         ThreadPool,
@@ -52,7 +52,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::Blockstore,
+        blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver, CompletedBlockSender},
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -112,15 +112,6 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 pub(crate) const MAX_VOTE_SIGNATURES: usize = 200;
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 const MAX_REPAIR_RETRY_LOOP_ATTEMPTS: usize = 10;
-
-pub struct CompletedBlock {
-    pub slot: Slot,
-    // TODO: once we have the async execution changes this can be (block_id, parent_block_id) instead
-    pub bank: Arc<Bank>,
-}
-
-pub type CompletedBlockSender = Sender<CompletedBlock>;
-pub type CompletedBlockReceiver = Receiver<CompletedBlock>;
 
 #[cfg(test)]
 static_assertions::const_assert!(REFRESH_VOTE_BLOCKHEIGHT < solana_sdk::clock::MAX_PROCESSING_AGE);
@@ -308,6 +299,7 @@ pub struct ReplaySenders {
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub alpenglow_vote_sender: AlpenglowVoteSender,
     pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
+    pub completed_block_sender: CompletedBlockSender,
 }
 
 pub struct ReplayReceivers {
@@ -318,6 +310,7 @@ pub struct ReplayReceivers {
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
     pub alpenglow_vote_receiver: AlpenglowVoteReceiver,
+    pub completed_block_receiver: CompletedBlockReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -612,6 +605,7 @@ impl ReplayStage {
             dumped_slots_sender,
             alpenglow_vote_sender,
             certificate_sender,
+            completed_block_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -622,6 +616,7 @@ impl ReplayStage {
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
             alpenglow_vote_receiver,
+            completed_block_receiver,
         } = receivers;
 
         trace!("replay stage");
@@ -663,7 +658,6 @@ impl ReplayStage {
             .highest_frozen_bank()
             .map_or(0, |hfs| hfs.slot());
         *replay_highest_frozen.highest_frozen_slot.lock().unwrap() = highest_frozen_slot;
-        let (completed_block_sender, completed_block_receiver) = unbounded();
 
         let voting_loop = if is_alpenglow_migration_complete {
             info!("Starting alpenglow voting loop");
@@ -687,7 +681,7 @@ impl ReplayStage {
                 bank_notification_sender: bank_notification_sender.clone(),
                 leader_window_notifier,
                 certificate_sender,
-                completed_block_receiver,
+                completed_block_receiver: completed_block_receiver.clone(),
                 vote_receiver: alpenglow_vote_receiver,
             };
             Some(VotingLoop::new(voting_loop_config))
@@ -883,6 +877,10 @@ impl ReplayStage {
 
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !is_alpenglow_migration_complete {
+                    // TODO(ashwin): This will be moved to the event coordinator once we figure out
+                    // migration
+                    for _ in completed_block_receiver.try_iter() {}
+
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
@@ -3607,7 +3605,9 @@ impl ReplayStage {
                     }
                 }
 
-                if *is_alpenglow_migration_complete {
+                if *is_alpenglow_migration_complete && bank.block_id().is_some() {
+                    // Leader blocks will not have a block id, broadcast stage will
+                    // take care of notifying the voting loop
                     let _ = completed_block_sender.send(CompletedBlock {
                         slot: bank.slot(),
                         bank: bank.clone_without_scheduler(),

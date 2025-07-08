@@ -1539,6 +1539,7 @@ impl Validator {
             Arc::<RwLock<repair::repair_service::OutstandingShredRepairs>>::default();
         let cluster_slots =
             Arc::new(crate::cluster_slots_service::cluster_slots::ClusterSlots::default());
+        let (completed_block_sender, completed_block_receiver) = bounded(1000);
 
         let tvu = Tvu::new(
             vote_account,
@@ -1608,6 +1609,8 @@ impl Validator {
             replay_highest_frozen,
             leader_window_notifier,
             config.voting_service_additional_listeners.as_ref(),
+            completed_block_sender.clone(),
+            completed_block_receiver,
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1666,6 +1669,7 @@ impl Validator {
             alpenglow_vote_sender,
             &connection_cache,
             turbine_quic_endpoint_sender,
+            completed_block_sender,
             &identity_keypair,
             config.runtime_config.log_messages_bytes_limit,
             &staked_nodes,
