@@ -139,9 +139,6 @@ pub(crate) enum GenerateVoteTxResult {
     Failed,
     // no rank found.
     NoRankFound,
-    // BLS pubkey mismatches while ed25519 key matches
-    // this is not recoverable.
-    BLSPubkeyMismatch,
     // Generated a vote transaction
     Tx(Transaction),
     // Generated a BLS message
@@ -1020,11 +1017,10 @@ impl VotingLoop {
             }
             bls_pubkey_in_vote_account = match vote_account.bls_pubkey() {
                 None => {
-                    warn!(
+                    panic!(
                         "No BLS pubkey in vote account {}",
                         context.identity_keypair.pubkey()
                     );
-                    return GenerateVoteTxResult::BLSPubkeyMismatch;
                 }
                 Some(key) => *key,
             };
@@ -1055,11 +1051,10 @@ impl VotingLoop {
             .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
         let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
         if my_bls_pubkey != bls_pubkey_in_vote_account {
-            error!(
+            panic!(
                 "Vote account bls_pubkey mismatch: {:?} (expected: {:?}).  Unable to vote",
                 bls_pubkey_in_vote_account, my_bls_pubkey
             );
-            return GenerateVoteTxResult::BLSPubkeyMismatch;
         }
         let vote_serialized = bincode::serialize(&vote).unwrap();
         let signature = authorized_voter_keypair.sign_message(&vote_serialized);
