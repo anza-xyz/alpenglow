@@ -871,9 +871,9 @@ pub fn process_create_vote_account(
         let to_pubkey = &vote_account_address;
 
         let mut ixs = if is_alpenglow {
-            //TODO(wen): After the bls crate is merged into main, we can use derived key.
-            let bls_keypair = BLSKeypair::new();
-            //                BLSKeypair::derive_from_signer(config.signers[0], b"bls_keypair").unwrap();
+            //TODO(wen): Pass in authorized_voter_bls_pubkey
+            //TODO(wen): Maybe move b"alpenglow" constant to alpenglow_vote crate
+            let bls_keypair = BLSKeypair::derive_from_signer(vote_account, b"alpenglow").unwrap();
             let bls_pubkey: BLSPubkey = bls_keypair.public.into();
             let initialize_account_ixn_meta = InitializeAccountInstructionData {
                 node_pubkey,
