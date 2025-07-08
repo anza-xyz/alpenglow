@@ -90,6 +90,12 @@ pub enum VoteType {
     SkipFallback,
 }
 
+impl VoteType {
+    fn is_block_type(&self) -> bool {
+        matches!(self, Self::Notarize | Self::NotarizeFallback)
+    }
+}
+
 pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
     match vote_type {
         VoteType::Finalize => &[VoteType::NotarizeFallback, VoteType::Skip],

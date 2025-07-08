@@ -115,8 +115,14 @@ impl<VC: VoteCertificate> VotePool<VC> {
         Ok(())
     }
 
-    pub fn has_prev_vote(&self, validator_key: &Pubkey) -> bool {
-        self.prev_votes.contains_key(validator_key)
+    pub(crate) fn has_prev_vote(&self, validator_key: &Pubkey, vote_key: Option<&VoteKey>) -> bool {
+        if let Some(vote_key) = vote_key {
+            self.prev_votes
+                .get(validator_key)
+                .is_some_and(|vs| vs.contains(vote_key))
+        } else {
+            self.prev_votes.contains_key(validator_key)
+        }
     }
 }
 
