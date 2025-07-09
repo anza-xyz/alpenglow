@@ -90,6 +90,12 @@ pub enum VoteType {
     SkipFallback,
 }
 
+impl VoteType {
+    fn is_notarize_type(&self) -> bool {
+        matches!(self, Self::Notarize | Self::NotarizeFallback)
+    }
+}
+
 pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
     match vote_type {
         VoteType::Finalize => &[VoteType::NotarizeFallback, VoteType::Skip],
@@ -165,7 +171,7 @@ pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 pub const BLOCKTIME: Duration = Duration::from_millis(400);
 
 /// The maximum message delay
-pub const DELTA: Duration = Duration::from_millis(100);
+pub const DELTA: Duration = Duration::from_millis(200);
 
 /// The maximum delay a node can observe between entering the loop iteration
 /// for a window and receiving any shred of the first block of the leader.
