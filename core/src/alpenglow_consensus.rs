@@ -91,7 +91,7 @@ pub enum VoteType {
 }
 
 impl VoteType {
-    fn is_block_type(&self) -> bool {
+    fn is_notarize_type(&self) -> bool {
         matches!(self, Self::Notarize | Self::NotarizeFallback)
     }
 }

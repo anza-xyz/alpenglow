@@ -267,7 +267,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
                 if pool.has_prev_vote(
                     validator_vote_key,
                     conflicting_type
-                        .is_block_type()
+                        .is_notarize_type()
                         .then_some(vote_key.as_ref())
                         .flatten(),
                 ) {
@@ -330,7 +330,7 @@ impl<VC: VoteCertificate> CertificatePool<VC> {
             }
             _ => (None, None),
         };
-        let vote_key = (block_id.is_some()).then_some(VoteKey {
+        let vote_key = block_id.map(|_| VoteKey {
             block_id,
             bank_hash,
         });
