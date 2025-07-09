@@ -1539,6 +1539,8 @@ impl Validator {
             Arc::<RwLock<repair::repair_service::OutstandingShredRepairs>>::default();
         let cluster_slots =
             Arc::new(crate::cluster_slots_service::cluster_slots::ClusterSlots::default());
+        // This channel backing up indicates a serious problem in the voting loop
+        // Capping at 1000 for now, TODO: add metrics for channel len
         let (completed_block_sender, completed_block_receiver) = bounded(1000);
 
         let tvu = Tvu::new(

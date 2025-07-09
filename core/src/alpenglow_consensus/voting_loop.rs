@@ -377,8 +377,6 @@ impl VotingLoop {
 
                     // Check if replay has successfully completed
                     if let Some(bank) = pending_blocks.get(&current_slot) {
-                        debug_assert!(bank.is_frozen());
-                        debug_assert!(bank.block_id().is_some());
                         // Vote notarize
                         if Self::try_notar(
                             &my_pubkey,
