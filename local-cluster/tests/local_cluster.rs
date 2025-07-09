@@ -6887,13 +6887,40 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     assert_eq!(NUM_NODES, vote_pubkey_to_node_index.len());
 
     /// Helper struct to manage experiment state and vote pattern tracking
-    #[derive(PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     enum Stage {
         Stability,
         ObserveSkipFallbacks,
         ObserveLiveness,
     }
 
+    impl Stage {
+        fn timeout(&self) -> Duration {
+            match self {
+                Stage::Stability => Duration::from_secs(60),
+                Stage::ObserveSkipFallbacks => Duration::from_secs(120),
+                Stage::ObserveLiveness => Duration::from_secs(180),
+            }
+        }
+
+        fn name(&self) -> &'static str {
+            match self {
+                Stage::Stability => "Stability",
+                Stage::ObserveSkipFallbacks => "ObserveSkipFallbacks",
+                Stage::ObserveLiveness => "ObserveLiveness",
+            }
+        }
+
+        fn all() -> Vec<Stage> {
+            vec![
+                Stage::Stability,
+                Stage::ObserveSkipFallbacks,
+                Stage::ObserveLiveness,
+            ]
+        }
+    }
+
+    #[derive(Debug)]
     struct ExperimentState {
         stage: Stage,
         vote_type_bitmap: HashMap<u64, [u8; 4]>, // slot -> [node_vote_pattern; 4]
@@ -6972,6 +6999,8 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
             let mut buffer = [0u8; 65_535];
             let mut experiment_state = ExperimentState::new();
 
+            let timer = std::time::Instant::now();
+
             loop {
                 let bytes_received = vote_listener_socket
                     .recv(&mut buffer)
@@ -6989,6 +7018,21 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                 let vote = parsed_vote
                     .as_alpenglow_transaction_ref()
                     .expect("Failed to get alpenglow vote reference");
+
+                // Stage timeouts
+                let elapsed_time = timer.elapsed();
+
+                for stage in Stage::all() {
+                    if elapsed_time > stage.timeout() {
+                        panic!(
+                            "Timeout during {} stage. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
+                            stage.name(),
+                            node_c_turbine_disabled.load(Ordering::Acquire),
+                            vote,
+                            experiment_state
+                        );
+                    }
+                }
 
                 // Stage 1: Wait for stability, then introduce partition at slot 50
                 if vote.slot() == 50 && !node_c_turbine_disabled.load(Ordering::Acquire) {
