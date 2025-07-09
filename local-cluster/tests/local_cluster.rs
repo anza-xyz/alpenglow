@@ -6344,6 +6344,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
         let mut check_for_roots = false;
+        let mut slots_with_skip = HashSet::new();
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
@@ -6362,7 +6363,6 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
             }
 
             if vote.slot() >= 32 && node_index == 0 {
-                let mut slots_with_skip = HashSet::new();
                 if vote.is_skip() {
                     slots_with_skip.insert(vote.slot());
                 }
