@@ -14,7 +14,8 @@ use {
         stake::check_current_authority,
     },
     alpenglow_vote::{
-        self, instruction::InitializeAccountInstructionData, state::VoteState as AlpenglowVoteState,
+        self, bls_message::BLS_KEYPAIR_DERIVE_SEED, instruction::InitializeAccountInstructionData,
+        state::VoteState as AlpenglowVoteState,
     },
     clap::{value_t_or_exit, App, Arg, ArgMatches, SubCommand},
     solana_account::Account,
@@ -871,10 +872,8 @@ pub fn process_create_vote_account(
         let to_pubkey = &vote_account_address;
 
         let mut ixs = if is_alpenglow {
-            //TODO(wen): Pass in authorized_voter_bls_pubkey
-            //TODO(wen): Maybe move b"alpenglow" constant to alpenglow_vote crate
             let bls_keypair =
-                BLSKeypair::derive_from_signer(identity_account, b"alpenglow").unwrap();
+                BLSKeypair::derive_from_signer(&identity_account, BLS_KEYPAIR_DERIVE_SEED).unwrap();
             let bls_pubkey: BLSPubkey = bls_keypair.public.into();
             let initialize_account_ixn_meta = InitializeAccountInstructionData {
                 node_pubkey,

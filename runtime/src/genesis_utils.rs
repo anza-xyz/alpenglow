@@ -1,5 +1,7 @@
 use {
-    alpenglow_vote::state::VoteState as AlpenglowVoteState,
+    alpenglow_vote::{
+        bls_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
+    },
     log::*,
     solana_bls::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
@@ -58,8 +60,8 @@ pub struct ValidatorVoteKeypairs {
 
 impl ValidatorVoteKeypairs {
     pub fn new(node_keypair: Keypair, vote_keypair: Keypair, stake_keypair: Keypair) -> Self {
-        let bls_keypair = BLSKeypair::derive_from_signer(&vote_keypair, b"alpenglow")
-            .expect("Failed to derive BLS keypair from vote keypair");
+        let bls_keypair =
+            BLSKeypair::derive_from_signer(&vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
         Self {
             node_keypair,
             vote_keypair,
@@ -276,8 +278,8 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     ])
     .unwrap();
 
-    // TODO(wen): Move b"alpenglow" to alpenglow-vote crate.
-    let bls_keypair = BLSKeypair::derive_from_signer(&voting_keypair, b"alpenglow").unwrap();
+    let bls_keypair =
+        BLSKeypair::derive_from_signer(&voting_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
     let bls_pubkey: BLSPubkey = bls_keypair.public.into();
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
