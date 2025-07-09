@@ -4,7 +4,10 @@ use {
     crossbeam_channel::Sender,
     itertools::Itertools,
     solana_entry::entry::Entry,
-    solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
+    solana_ledger::{
+        blockstore::CompletedBlockSender,
+        shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
+    },
     solana_sdk::{
         hash::Hash,
         signature::{Keypair, Signature, Signer},
@@ -82,6 +85,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
+        _completed_block_sender: &CompletedBlockSender,
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let mut receive_results = broadcast_utils::recv_slot_entries(receiver)?;
