@@ -102,10 +102,6 @@ enum StartLeaderError {
     /// Bank forks already contains bank
     #[error("Already contain bank for leader slot {0}")]
     AlreadyHaveBank(/* leader slot */ Slot),
-
-    /// Haven't landed a vote
-    #[error("Have not rooted a block with our vote")]
-    VoteNotRooted,
 }
 
 fn start_receive_and_record_loop(
@@ -411,12 +407,6 @@ fn maybe_start_leader(
 
     if !parent_bank.is_startup_verification_complete() {
         return Err(StartLeaderError::StartupVerificationIncomplete(parent_slot));
-    }
-
-    // TODO(ashwin): plug this in from replay
-    let has_new_vote_been_rooted = true;
-    if !has_new_vote_been_rooted {
-        return Err(StartLeaderError::VoteNotRooted);
     }
 
     // Create and insert the bank

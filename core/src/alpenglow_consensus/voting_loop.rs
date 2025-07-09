@@ -18,9 +18,7 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        replay_stage::{
-            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
-        },
+        replay_stage::{CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage},
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,
@@ -1008,14 +1006,7 @@ impl VotingLoop {
             bank.last_blockhash(),
         );
 
-        if !context.has_new_vote_been_rooted {
-            context.voted_signatures.push(vote_tx.signatures[0]);
-            if context.voted_signatures.len() > MAX_VOTE_SIGNATURES {
-                context.voted_signatures.remove(0);
-            }
-        } else {
-            context.voted_signatures.clear();
-        }
+        // No-op: we don't store voted_signatures anymore
 
         GenerateVoteTxResult::Tx(vote_tx)
     }
