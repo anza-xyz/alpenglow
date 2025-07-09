@@ -389,7 +389,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 .help("The bootstrap validator's identity, vote and stake pubkeys"),
         )
         .arg(
-            Arg::with_name("bootstrap-validator-bls-pubkey")
+            Arg::with_name("bootstrap_validator_bls_pubkey")
+                .long("bootstrap-validator-bls-pubkey")
                 .value_name("BLS_PUBKEY")
                 .takes_value(true)
                 .help("The bootstrap validator's bls pubkey"),
@@ -671,7 +672,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     assert_eq!(bootstrap_validator_pubkeys.len() % 3, 0);
 
     let bootstrap_validator_bls_pubkey = matches
-        .value_of("bootstrap-validator-bls-pubkey")
+        .value_of("bootstrap_validator_bls_pubkey")
         .map(BLSPubkey::from_str)
         .transpose()
         .map_err(|e| format!("Invalid BLS pubkey: {e}"))?;
