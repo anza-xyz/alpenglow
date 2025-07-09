@@ -268,10 +268,17 @@ impl CertificatePool {
         slot: Slot,
         vote_type: VoteType,
         validator_vote_key: &Pubkey,
+        vote_key: Option<VoteKey>,
     ) -> Option<VoteType> {
         for conflicting_type in conflicting_types(vote_type) {
             if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
-                if pool.has_prev_vote(validator_vote_key) {
+                if pool.has_prev_vote(
+                    validator_vote_key,
+                    conflicting_type
+                        .is_notarize_type()
+                        .then_some(vote_key.as_ref())
+                        .flatten(),
+                ) {
                     return Some(*conflicting_type);
                 }
             }
@@ -355,8 +362,12 @@ impl CertificatePool {
             }
             _ => (None, None),
         };
+        let vote_key = block_id.map(|_| VoteKey {
+            block_id,
+            bank_hash,
+        });
         if let Some(conflicting_type) =
-            self.has_conflicting_vote(slot, vote_type, &validator_vote_key)
+            self.has_conflicting_vote(slot, vote_type, validator_vote_key, vote_key)
         {
             return Err(AddVoteError::ConflictingVoteType(
                 vote_type,
