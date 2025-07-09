@@ -392,6 +392,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             Arg::with_name("bootstrap_validator_bls_pubkey")
                 .long("bootstrap-validator-bls-pubkey")
                 .value_name("BLS_PUBKEY")
+                .multiple(true)
                 .takes_value(true)
                 .help("The bootstrap validator's bls pubkey"),
         )
