@@ -17,7 +17,7 @@ use {
         contact_info::Protocol,
     },
     solana_ledger::{
-        blockstore::Blockstore,
+        blockstore::{Blockstore, CompletedBlockSender},
         shred::{self, Shred},
     },
     solana_measure::measure::Measure,
@@ -121,6 +121,7 @@ impl BroadcastStageType {
         bank_forks: Arc<RwLock<BankForks>>,
         shred_version: u16,
         quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
+        completed_block_sender: CompletedBlockSender,
     ) -> BroadcastStage {
         match self {
             BroadcastStageType::Standard => BroadcastStage::new(
@@ -132,6 +133,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 quic_endpoint_sender,
+                completed_block_sender,
                 StandardBroadcastRun::new(shred_version),
             ),
 
@@ -144,6 +146,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 quic_endpoint_sender,
+                completed_block_sender,
                 FailEntryVerificationBroadcastRun::new(shred_version),
             ),
 
@@ -156,6 +159,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 quic_endpoint_sender,
+                completed_block_sender,
                 BroadcastFakeShredsRun::new(0, shred_version),
             ),
 
@@ -168,6 +172,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 quic_endpoint_sender,
+                completed_block_sender,
                 BroadcastDuplicatesRun::new(shred_version, config.clone()),
             ),
         }
@@ -182,6 +187,7 @@ trait BroadcastRun {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
+        completed_block_sender: &CompletedBlockSender,
     ) -> Result<()>;
     fn transmit(
         &mut self,
@@ -224,6 +230,7 @@ impl BroadcastStage {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
+        completed_block_sender: &CompletedBlockSender,
         mut broadcast_stage_run: impl BroadcastRun,
     ) -> BroadcastStageReturnType {
         loop {
@@ -233,6 +240,7 @@ impl BroadcastStage {
                 receiver,
                 socket_sender,
                 blockstore_sender,
+                completed_block_sender,
             );
             let res = Self::handle_error(res, "run");
             if let Some(res) = res {
@@ -285,6 +293,7 @@ impl BroadcastStage {
         blockstore: Arc<Blockstore>,
         bank_forks: Arc<RwLock<BankForks>>,
         quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
+        completed_block_sender: CompletedBlockSender,
         mut broadcast_stage_run: impl BroadcastRun + Send + 'static + Clone,
     ) -> Self {
         let (socket_sender, socket_receiver) = unbounded();
@@ -305,6 +314,7 @@ impl BroadcastStage {
                         &receiver,
                         &socket_sender_,
                         &blockstore_sender,
+                        &completed_block_sender,
                         bs_run,
                     )
                 })
@@ -693,6 +703,8 @@ pub mod test {
         let bank_forks = BankForks::new_rw_arc(bank);
         let bank = bank_forks.read().unwrap().root_bank();
 
+        let (completed_block_sender, _) = unbounded();
+
         // Start up the broadcast stage
         let broadcast_service = BroadcastStage::new(
             leader_info.sockets.broadcast,
@@ -703,6 +715,7 @@ pub mod test {
             blockstore.clone(),
             bank_forks,
             quic_endpoint_sender,
+            completed_block_sender,
             StandardBroadcastRun::new(0),
         );
 
