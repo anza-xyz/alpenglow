@@ -31,7 +31,8 @@ use {
     solana_client::connection_cache::ConnectionCache,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::Blockstore, blockstore_processor::TransactionStatusSender,
+        blockstore::{Blockstore, CompletedBlockSender},
+        blockstore_processor::TransactionStatusSender,
         entry_notifier_service::EntryNotifierSender,
     },
     solana_perf::data_budget::DataBudget,
@@ -120,6 +121,7 @@ impl Tpu {
         alpenglow_vote_sender: AlpenglowVoteSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
+        completed_block_sender: CompletedBlockSender,
         keypair: &Keypair,
         log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
@@ -333,6 +335,7 @@ impl Tpu {
             bank_forks,
             shred_version,
             turbine_quic_endpoint_sender,
+            completed_block_sender,
         );
 
         (
