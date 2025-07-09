@@ -27,7 +27,6 @@ use {
     },
     crossbeam_channel::{RecvTimeoutError, Sender},
     solana_bls::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
-    solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver},
@@ -661,7 +660,7 @@ impl VotingLoop {
     fn try_notar(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -717,7 +716,7 @@ impl VotingLoop {
     fn vote_notarize(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());

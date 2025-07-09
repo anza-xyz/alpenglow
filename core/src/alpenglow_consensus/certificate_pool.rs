@@ -367,7 +367,7 @@ impl CertificatePool {
             bank_hash,
         });
         if let Some(conflicting_type) =
-            self.has_conflicting_vote(slot, vote_type, validator_vote_key, vote_key)
+            self.has_conflicting_vote(slot, vote_type, &validator_vote_key, vote_key)
         {
             return Err(AddVoteError::ConflictingVoteType(
                 vote_type,
