@@ -171,7 +171,7 @@ pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 pub const BLOCKTIME: Duration = Duration::from_millis(400);
 
 /// The maximum message delay
-pub const DELTA: Duration = Duration::from_millis(100);
+pub const DELTA: Duration = Duration::from_millis(200);
 
 /// The maximum delay a node can observe between entering the loop iteration
 /// for a window and receiving any shred of the first block of the leader.
