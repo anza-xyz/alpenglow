@@ -48,7 +48,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 solana-accounts-db = { workspace = true }
-solana-bls = { workspace = true, features = ["serde"] }
+solana-bls-signatures = { workspace = true, features = ["serde"] }
 solana-bpf-loader-program = { workspace = true }
 solana-bucket-map = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
@@ -142,7 +142,7 @@ frozen-abi = [
     "dep:solana-frozen-abi",
     "dep:solana-frozen-abi-macro",
     "solana-accounts-db/frozen-abi",
-    "solana-bls/frozen-abi",
+    "solana-bls-signatures/frozen-abi",
     "solana-compute-budget/frozen-abi",
     "solana-cost-model/frozen-abi",
     "solana-perf/frozen-abi",
