@@ -174,7 +174,9 @@ check-cfg = [
 
 [workspace.dependencies]
 Inflector = "0.11.4"
-alpenglow-vote = { git = "https://github.com/solana-program/alpenglow-vote.git", rev = "e5df52d", features = ["serde"] }
+alpenglow-vote = { git = "https://github.com/solana-program/alpenglow-vote.git", rev = "e5df52d", features = [
+    "serde",
+] }
 axum = "0.7.9"
 agave-banking-stage-ingress-types = { path = "banking-stage-ingress-types", version = "=2.3.0" }
 agave-transaction-view = { path = "transaction-view", version = "=2.3.0" }
@@ -446,7 +448,7 @@ solana-inline-spl = { path = "inline-spl", version = "=2.3.0" }
 solana-instruction = "=2.2.1"
 solana-instructions-sysvar = "=2.2.1"
 solana-keccak-hasher = "=2.2.1"
-solana-keypair = "=2.2.1"
+solana-keypair = "=2.2.3"
 solana-last-restart-slot = "=2.2.1"
 solana-lattice-hash = { path = "lattice-hash", version = "=2.3.0" }
 solana-ledger = { path = "ledger", version = "=2.3.0" }
@@ -505,7 +507,7 @@ solana-serde = "=2.2.1"
 solana-serde-varint = "=2.2.1"
 solana-serialize-utils = "=2.2.1"
 solana-sha256-hasher = "=2.2.1"
-solana-signature = { version = "=2.2.1", default-features = false }
+solana-signature = { version = "=2.3.0", default-features = false }
 solana-signer = "=2.2.1"
 solana-slot-hashes = "=2.2.1"
 solana-slot-history = "=2.2.1"

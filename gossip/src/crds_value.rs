@@ -360,6 +360,11 @@ mod test {
         assert!(!node.should_force_push(&Pubkey::new_unique()));
     }
 
+    fn new_test_keypair(rng: &mut ChaChaRng) -> Keypair {
+        let random_bytes: [u8; 32] = rng.gen();
+        Keypair::new_from_array(random_bytes)
+    }
+
     #[test]
     fn test_serialize_round_trip() {
         let mut rng = ChaChaRng::from_seed(
@@ -371,7 +376,7 @@ mod test {
         );
         let values: Vec<CrdsValue> = vec![
             {
-                let keypair = Keypair::generate(&mut rng);
+                let keypair = new_test_keypair(&mut rng);
                 let lockouts: [Lockout; 4] = [
                     Lockout::new_with_confirmation_count(302_388_991, 11),
                     Lockout::new_with_confirmation_count(302_388_995, 7),
@@ -389,8 +394,8 @@ mod test {
                     tower_sync,
                     Hash::new_from_array(rng.gen()), // blockhash
                     &keypair,                        // node_keypair
-                    &Keypair::generate(&mut rng),    // vote_keypair
-                    &Keypair::generate(&mut rng),    // authorized_voter_keypair
+                    &new_test_keypair(&mut rng),     // vote_keypair
+                    &new_test_keypair(&mut rng),     // authorized_voter_keypair
                     None,                            // switch_proof_hash
                 );
                 let vote = Vote::new(
@@ -402,7 +407,7 @@ mod test {
                 CrdsValue::new(CrdsData::Vote(5, vote), &keypair)
             },
             {
-                let keypair = Keypair::generate(&mut rng);
+                let keypair = new_test_keypair(&mut rng);
                 let lockouts: [Lockout; 3] = [
                     Lockout::new_with_confirmation_count(302_410_500, 9),
                     Lockout::new_with_confirmation_count(302_410_505, 5),
@@ -419,8 +424,8 @@ mod test {
                     tower_sync,
                     Hash::new_from_array(rng.gen()), // blockhash
                     &keypair,                        // node_keypair
-                    &Keypair::generate(&mut rng),    // vote_keypair
-                    &Keypair::generate(&mut rng),    // authorized_voter_keypair
+                    &new_test_keypair(&mut rng),     // vote_keypair
+                    &new_test_keypair(&mut rng),     // authorized_voter_keypair
                     None,                            // switch_proof_hash
                 );
                 let vote = Vote::new(
