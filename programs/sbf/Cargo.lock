@@ -157,6 +157,7 @@ dependencies = [
  "solana-unified-scheduler-pool",
  "solana-version",
  "solana-vote-program",
+ "solana-votor",
  "symlink",
  "thiserror 2.0.12",
  "tikv-jemallocator",
@@ -6064,6 +6065,7 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor",
  "solana-wen-restart",
  "strum",
  "strum_macros",
@@ -9360,6 +9362,41 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-context 2.3.0",
  "solana-vote-interface",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "solana-votor"
+version = "2.3.0"
+dependencies = [
+ "alpenglow-vote",
+ "anyhow",
+ "bincode",
+ "bitvec",
+ "bs58",
+ "crossbeam-channel",
+ "dashmap",
+ "etcd-client",
+ "itertools 0.12.1",
+ "log",
+ "qualifier_attr",
+ "rayon",
+ "serde",
+ "serde_bytes",
+ "serde_derive",
+ "solana-accounts-db",
+ "solana-bloom",
+ "solana-bls",
+ "solana-entry",
+ "solana-ledger",
+ "solana-logger",
+ "solana-measure",
+ "solana-metrics",
+ "solana-pubkey",
+ "solana-runtime",
+ "solana-sdk",
+ "solana-vote",
+ "solana-vote-program",
  "thiserror 2.0.12",
 ]
 
