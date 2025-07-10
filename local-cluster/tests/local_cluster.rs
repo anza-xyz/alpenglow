@@ -6615,6 +6615,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
     // Vote listener state
+    #[derive(Debug)]
     struct VoteListenerState {
         num_notar_fallback_votes: u32,
         a_equivocates: bool,
@@ -6651,6 +6652,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         ) {
             // Create vote for Node B (potentially equivocated)
             let vote_txn_b = if self.a_equivocates && vote.is_notarization() {
+                println!("!!! A equivocating !!!");
+
                 let new_block_id = Hash::new_unique();
                 let new_bank_hash = Hash::new_unique();
                 let equivocated_notar_vote =
@@ -6697,12 +6700,15 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             // Count NotarizeFallback votes while turbine is disabled
             if turbine_disabled && vote.is_notarize_fallback() {
                 self.num_notar_fallback_votes += 1;
+                dbg!(self.num_notar_fallback_votes);
             }
 
             // Handle double NotarizeFallback during equivocation
             if self.a_equivocates && vote.is_notarize_fallback() {
                 let block_id = vote.block_id().copied().unwrap();
                 let bank_hash = vote.replayed_bank_hash().copied().unwrap();
+
+                dbg!(&self.notar_fallback_map);
 
                 let entry = self.notar_fallback_map.entry(vote.slot()).or_default();
                 entry.push((block_id, bank_hash));
@@ -6742,6 +6748,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
             // Disable turbine at slot 50 to start the experiment
             if vote.slot() == 50 {
+                println!("!!! STARTING EXPERIMENT !!!");
                 node_c_turbine_disabled.store(true, Ordering::Release);
             }
 
@@ -6752,6 +6759,11 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             if !self.check_for_roots {
                 return false;
             }
+
+            println!("!!! CHECKING FOR ROOTS !!!");
+
+            dbg!(&self.post_experiment_votes);
+            dbg!(&self.post_experiment_roots);
 
             let slot_votes = self.post_experiment_votes.entry(vote.slot()).or_default();
             slot_votes.push(node_name);
@@ -6785,6 +6797,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
                 let node_name = vote_pubkeys[&vote_pubkey];
                 let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+
+                dbg!((node_name, vote));
 
                 match node_name {
                     0 => {
