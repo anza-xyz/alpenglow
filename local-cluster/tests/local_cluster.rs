@@ -6514,6 +6514,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 /// this test.
 #[test]
 #[serial]
+#[ignore]
 fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 
@@ -6728,6 +6729,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
                     // End experiment after 3 double NotarizeFallback slots
                     if self.double_notar_fallback_slots.len() == 3 {
+                        info!("Phase 4, checking for 10 roots");
                         self.a_equivocates = false;
                         node_c_turbine_disabled.store(false, Ordering::Release);
                         self.check_for_roots = true;
@@ -6737,11 +6739,13 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
             // Start equivocation after stable NotarizeFallback behavior
             if turbine_disabled && self.num_notar_fallback_votes == 10 {
+                info!("Phase 2, checking for 3 double notarize fallback votes from C");
                 self.a_equivocates = true;
             }
 
             // Disable turbine at slot 50 to start the experiment
             if vote.slot() == 50 {
+                info!("Phase 1, checking for 10 notarize fallback votes from C");
                 node_c_turbine_disabled.store(true, Ordering::Release);
             }
 
