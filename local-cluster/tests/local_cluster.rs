@@ -6996,6 +6996,7 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
         let node_c_turbine_disabled = node_c_turbine_disabled.clone();
         let mut stage = Stage::Stability;
         let mut n_skips = 0;
+        let timer = std::time::Instant::now();
 
         let mut notar_fallback_map: HashMap<Slot, HashSet<(Hash, Hash)>> = HashMap::new();
         let mut triple_notar_fallback_slots = HashSet::new();
@@ -7012,10 +7013,22 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
             let node_name = vote_pubkeys[&vote_pubkey];
             let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
 
-            dbg!((node_name, vote));
+            // Stage timeouts
+            let elapsed_time = timer.elapsed();
+
+            for stage in Stage::all() {
+                if elapsed_time > stage.timeout() {
+                    panic!(
+                        "Timeout during {} stage. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}.",
+                        stage.name(),
+                        node_c_turbine_disabled.load(Ordering::Acquire),
+                        vote
+                    );
+                }
+            }
 
             if stage == Stage::Stability && vote.slot() == 50 {
-                node_c_turbine_disabled.store(true, Ordering::Release);
+                node_c_turbine_disabled.store(true, Ordering::Relaxed);
                 stage = Stage::ObserveSkips;
             }
 
@@ -7100,7 +7113,7 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
 
                                 if triple_notar_fallback_slots.len() == 3 {
                                     stage = Stage::ObserveLiveness;
-                                    node_c_turbine_disabled.store(false, Ordering::Release);
+                                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
                                 }
                             }
                         }
@@ -7109,12 +7122,35 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
                     }
                 }
 
-                (_, Stage::ObserveLiveness) => {
+                (cur_node_name, Stage::ObserveLiveness) => {
+                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+
+                    if cur_node_name == 0 {
+                        // Copy vote for B, D, and E
+                        for (keypair, vote_keypair) in [
+                            (&node_b_keypair, &node_b_vote_keypair),
+                            (&node_d_keypair, &node_d_vote_keypair),
+                            (&node_e_keypair, &node_e_vote_keypair),
+                        ] {
+                            let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
+                            broadcast_vote(
+                                &vote_tx,
+                                &tpu_socket_addrs,
+                                None,
+                                cluster.connection_cache.clone(),
+                            );
+                        }
+                    }
+
                     if vote.is_finalize() {
                         {
                             let total_weight =
                                 post_experiment_vote_weights.entry(node_name).or_insert(0);
-                            *total_weight += node_stakes[node_name];
+                            *total_weight += match node_name {
+                                0 => TOTAL_STAKE * 6 / 10,
+                                2 => TOTAL_STAKE,
+                                _ => unreachable!(),
+                            };
 
                             if *total_weight >= TOTAL_STAKE * 6 / 10 {
                                 post_experiment_roots.insert(vote.slot());
