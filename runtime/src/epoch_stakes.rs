@@ -1,7 +1,7 @@
 use {
     crate::stakes::{serde_stakes_to_delegation_format, SerdeStakesToStakeFormat, StakesEnum},
     serde::{Deserialize, Serialize},
-    solana_bls::Pubkey as BLSPubkey,
+    solana_bls_signatures::Pubkey as BLSPubkey,
     solana_sdk::{clock::Epoch, pubkey::Pubkey},
     solana_vote::vote_account::VoteAccountsHashMap,
     std::{collections::HashMap, sync::Arc},
@@ -297,7 +297,7 @@ pub(crate) mod tests {
             stakes::{Stakes, StakesCache},
         },
         alpenglow_vote::state::VoteState as AlpenglowVoteState,
-        solana_bls::keypair::Keypair as BLSKeypair,
+        solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_sdk::{account::AccountSharedData, rent::Rent},
         solana_stake_program::stake_state::{self, Delegation, Stake},
         solana_vote::vote_account::VoteAccount,

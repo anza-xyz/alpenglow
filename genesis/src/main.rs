@@ -8,7 +8,7 @@ use {
     itertools::Itertools,
     solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
     solana_accounts_db::hardened_unpack::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
-    solana_bls::Pubkey as BLSPubkey,
+    solana_bls_signatures::Pubkey as BLSPubkey,
     solana_clap_utils::{
         input_parsers::{
             bls_pubkeys_of, cluster_type_of, pubkey_of, pubkeys_of,
