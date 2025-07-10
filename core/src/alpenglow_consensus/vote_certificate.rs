@@ -6,7 +6,7 @@ use {
         certificate::{Certificate, CertificateType},
     },
     bitvec::prelude::*,
-    solana_bls::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
+    solana_bls_signatures::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_sdk::transaction::VersionedTransaction,
     std::sync::Arc,
@@ -119,8 +119,8 @@ impl VoteCertificate for CertificateMessage {
     {
         // TODO: signature aggregation can be done out-of-order;
         // consider aggregating signatures separately in parallel
-        let mut current_signature_uncompressed = if self.signature == Signature::default() {
-            SignatureProjective::default()
+        let mut current_signature = if self.signature == Signature::default() {
+            SignatureProjective::identity()
         } else {
             SignatureProjective::try_from(self.signature)
                 .map_err(|_| CertificateError::InvalidSignature)?
@@ -141,10 +141,9 @@ impl VoteCertificate for CertificateMessage {
             self.bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature
             // TODO(wen): put this into bls crate
-            let uncompressed = SignatureProjective::try_from(vote_message.signature)?;
-            current_signature_uncompressed.aggregate_with([&uncompressed]);
+            current_signature.aggregate_with([&vote_message.signature])?;
         }
-        self.signature = Signature::from(current_signature_uncompressed);
+        self.signature = Signature::from(current_signature);
         Ok(())
     }
 }
@@ -155,7 +154,7 @@ pub fn aggregate_pubkey(
     bitmap: &BitVec<u8, Lsb0>,
     bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,
 ) -> Result<BlsPubkey, CertificateError> {
-    let mut aggregate_pubkey = PubkeyProjective::default();
+    let mut aggregate_pubkey = PubkeyProjective::identity();
     for (i, included) in bitmap.iter().enumerate() {
         if *included {
             let bls_pubkey: PubkeyProjective = bls_pubkey_to_rank_map
@@ -165,7 +164,7 @@ pub fn aggregate_pubkey(
                 .try_into()
                 .map_err(|_| CertificateError::InvalidPubkey)?;
 
-            aggregate_pubkey.aggregate_with([&bls_pubkey]);
+            aggregate_pubkey.aggregate_with([&bls_pubkey])?;
         }
     }
 

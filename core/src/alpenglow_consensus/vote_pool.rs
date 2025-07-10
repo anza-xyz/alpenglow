@@ -130,7 +130,7 @@ mod test {
             *,
         },
         alpenglow_vote::{bls_message::CertificateMessage, vote::Vote},
-        solana_bls::Signature as BLSSignature,
+        solana_bls_signatures::Signature as BLSSignature,
     };
 
     #[test]

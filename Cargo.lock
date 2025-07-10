@@ -472,7 +472,7 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=e5df52d#e5df52d304301aa85628155c9f0535cb416e8800"
+source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=cdae90a#cdae90a3c3f57f56bfa6f4c7e05d5b77b83926f1"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -485,7 +485,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-account",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
@@ -6706,9 +6706,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-bls"
-version = "0.1.1"
-source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#ce5dd055f2c6e3adacae2e21827f79ee0d3804b5"
+name = "solana-bls-signatures"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af089f712fb5cbef2d73ac7ffee9cad05ada6cd1fd5c812338df040bcd3c410b"
 dependencies = [
  "base64 0.22.1",
  "blst",
@@ -7036,7 +7037,7 @@ dependencies = [
  "serde_json",
  "solana-account",
  "solana-account-decoder",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-borsh",
  "solana-bpf-loader-program",
  "solana-clap-utils",
@@ -7471,7 +7472,7 @@ dependencies = [
  "solana-accounts-db",
  "solana-address-lookup-table-program",
  "solana-bloom",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-build-alpenglow-vote",
  "solana-builtins-default-costs",
  "solana-client",
@@ -7989,7 +7990,7 @@ dependencies = [
  "serde_yaml 0.9.34+deprecated",
  "solana-account",
  "solana-accounts-db",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-borsh",
  "solana-clap-utils",
  "solana-cli-config",
@@ -9604,7 +9605,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "solana-accounts-db",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",
@@ -10460,7 +10461,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "solana-accounts-db",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-cli-output",
  "solana-compute-budget",
  "solana-core",
@@ -11057,7 +11058,7 @@ dependencies = [
  "serde_derive",
  "solana-account",
  "solana-bincode",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
@@ -11203,7 +11204,7 @@ dependencies = [
  "bs58",
  "clap 3.2.23",
  "dirs-next",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-clap-v3-utils",
  "solana-pubkey",
  "solana-remote-wallet",
