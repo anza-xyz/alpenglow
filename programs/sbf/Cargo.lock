@@ -5731,6 +5731,7 @@ dependencies = [
  "chrono",
  "clap",
  "rpassword",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-cluster-type",
  "solana-commitment-config",
