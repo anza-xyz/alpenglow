@@ -13,7 +13,6 @@ use {
             certificate_pool::CertificatePool,
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
-            BLS_KEYPAIR_DERIVE_SEED,
         },
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
@@ -22,7 +21,7 @@ use {
         voting_service::VoteOp,
     },
     alpenglow_vote::{
-        bls_message::{BLSMessage, CertificateMessage, VoteMessage},
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     crossbeam_channel::{RecvTimeoutError, Sender},

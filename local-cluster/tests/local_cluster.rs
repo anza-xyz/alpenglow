@@ -1,7 +1,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
     alpenglow_vote::{
-        bls_message::{BLSMessage, VoteMessage},
+        bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     assert_matches::assert_matches,
@@ -18,7 +18,6 @@ use {
     solana_client::connection_cache::ConnectionCache,
     solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
-        alpenglow_consensus::BLS_KEYPAIR_DERIVE_SEED,
         consensus::{
             tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH,
         },
