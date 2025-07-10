@@ -237,6 +237,7 @@ EOF
                                        "$(solana-keygen pubkey "config/validator-vote-$i.json")"
                                        "$(solana-keygen pubkey "config/validator-stake-$i.json")"
           )
+          args+=(--bootstrap-validator-bls-pubkey "$(solana-keygen bls_pubkey "config/validator-identity-$i.json")")
         done
       fi
 
