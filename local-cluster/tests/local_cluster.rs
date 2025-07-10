@@ -6562,6 +6562,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
     // Vote listener state
+    #[derive(Debug)]
     struct VoteListenerState {
         num_notar_fallback_votes: u32,
         a_equivocates: bool,
@@ -6651,12 +6652,15 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             // Count NotarizeFallback votes while turbine is disabled
             if turbine_disabled && vote.is_notarize_fallback() {
                 self.num_notar_fallback_votes += 1;
+                dbg!(self.num_notar_fallback_votes);
             }
 
             // Handle double NotarizeFallback during equivocation
             if self.a_equivocates && vote.is_notarize_fallback() {
                 let block_id = vote.block_id().copied().unwrap();
                 let bank_hash = vote.replayed_bank_hash().copied().unwrap();
+
+                dbg!(&self.notar_fallback_map);
 
                 let entry = self.notar_fallback_map.entry(vote.slot()).or_default();
                 entry.push((block_id, bank_hash));
