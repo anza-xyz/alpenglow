@@ -6955,18 +6955,52 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
     let vote_listener_thread = std::thread::spawn({
         let mut buf = [0u8; 65_535];
 
-        let node_b_keypair = node_b_info.info.keypair.clone();
-        let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
+        /// Helper struct to manage experiment state and vote pattern tracking
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Stage {
+            Stability,
+            ObserveSkips,
+            ObserveThreeNotarFallbacks,
+            ObserveLiveness,
+        }
 
-        let node_d_keypair = node_d_info.info.keypair.clone();
-        let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+        impl Stage {
+            fn timeout(&self) -> Duration {
+                match self {
+                    Stage::Stability => Duration::from_secs(60),
+                    Stage::ObserveSkips => Duration::from_secs(120),
+                    Stage::ObserveThreeNotarFallbacks => Duration::from_secs(180),
+                    Stage::ObserveLiveness => Duration::from_secs(240),
+                }
+            }
 
-        let node_e_keypair = node_e_info.info.keypair.clone();
-        let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
+            fn name(&self) -> &'static str {
+                match self {
+                    Stage::Stability => "Stability",
+                    Stage::ObserveSkips => "ObserveSkips",
+                    Stage::ObserveThreeNotarFallbacks => "ObserveThreeNotarFallbacks",
+                    Stage::ObserveLiveness => "ObserveLiveness",
+                }
+            }
+
+            fn all() -> Vec<Stage> {
+                vec![
+                    Stage::Stability,
+                    Stage::ObserveSkips,
+                    Stage::ObserveThreeNotarFallbacks,
+                    Stage::ObserveLiveness,
+                ]
+            }
+        }
 
         let node_c_turbine_disabled = node_c_turbine_disabled.clone();
-        let mut stage_ix = 0;
-        let mut a_equivocates = false;
+        let mut stage = Stage::Stability;
+        let mut n_skips = 0;
+
+        let mut notar_fallback_map: HashMap<Slot, HashSet<(Hash, Hash)>> = HashMap::new();
+        let mut triple_notar_fallback_slots = HashSet::new();
+        let mut post_experiment_vote_weights = HashMap::new(); // slot -> total_weight
+        let mut post_experiment_roots = HashSet::new();
 
         move || loop {
             let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
@@ -6980,241 +7014,123 @@ fn test_alpenglow_ensure_liveness_after_triple_notar_fallback() {
 
             dbg!((node_name, vote));
 
-            // if vote.slot() == 50 {
-            //     node_c_turbine_disabled.store(true, Ordering::Release);
-            // }
+            if stage == Stage::Stability && vote.slot() == 50 {
+                node_c_turbine_disabled.store(true, Ordering::Release);
+                stage = Stage::ObserveSkips;
+            }
 
-            if node_name == 0 {
-                // Copy vote for B, D, and E
-                for (keypair, vote_keypair) in [
-                    (&node_b_keypair, &node_b_vote_keypair),
-                    (&node_d_keypair, &node_d_vote_keypair),
-                    (&node_e_keypair, &node_e_vote_keypair),
-                ] {
-                    let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
+            if stage == Stage::ObserveSkips && node_name == 2 && vote.is_skip() {
+                n_skips += 1;
+
+                if n_skips >= 8 {
+                    stage = Stage::ObserveThreeNotarFallbacks;
+                }
+            }
+
+            match (node_name, stage) {
+                (0, Stage::Stability) | (0, Stage::ObserveSkips) => {
+                    // Copy vote for B, D, and E
+                    for (keypair, vote_keypair) in [
+                        (&node_b_keypair, &node_b_vote_keypair),
+                        (&node_d_keypair, &node_d_vote_keypair),
+                        (&node_e_keypair, &node_e_vote_keypair),
+                    ] {
+                        let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
+                        broadcast_vote(
+                            &vote_tx,
+                            &tpu_socket_addrs,
+                            None,
+                            cluster.connection_cache.clone(),
+                        );
+                    }
+                }
+
+                (0, Stage::ObserveThreeNotarFallbacks) => {
+                    // B copy votes
+                    let vote_tx = copied_vote_txn(&vote_txn, &node_b_keypair, &node_b_vote_keypair);
                     broadcast_vote(
                         &vote_tx,
                         &tpu_socket_addrs,
                         None,
                         cluster.connection_cache.clone(),
                     );
-                }
-            }
 
-            // match node_name {
-            //     0 => {
-            //         match stage_ix {
-            //             0 | 1 => {
-            //                 // Copy vote for B, D, and E
-            //                 for (keypair, vote_keypair) in [
-            //                     (&node_b_keypair, &node_b_vote_keypair),
-            //                     (&node_d_keypair, &node_d_vote_keypair),
-            //                     (&node_e_keypair, &node_e_vote_keypair),
-            //                 ] {
-            //                     let vote_tx = copied_vote_txn(&vote_txn, keypair, vote_keypair);
-            //                     broadcast_vote(
-            //                         &vote_tx,
-            //                         &tpu_socket_addrs,
-            //                         None,
-            //                         cluster.connection_cache.clone(),
-            //                     );
-            //                 }
-            //             }
-            //             2 => {
-            //                 // Equivocate
-            //             }
-            //             _ => unreachable!(),
-            //         }
-            //     }
-            //     2 => {
-            //         // Track C's votes
-            //     }
-            //     _ => {}
-            // }
-        }
-    });
-
-    vote_listener_thread.join().unwrap();
-}
-
-#[test]
-#[serial]
-fn test_tmp() {
-    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
-
-    // Configure total stake and stake distribution
-    const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
-    const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
-
-    // Node stakes with slight imbalance to trigger fallback behavior
-    let node_stakes = [
-        1,
-        TOTAL_STAKE * 2 / 10 - 1, // Node A (Leader): 20% - ε
-        TOTAL_STAKE * 4 / 10,     // Node B: 40%
-        TOTAL_STAKE * 2 / 10,     // Node C: 20%
-        TOTAL_STAKE * 2 / 10,     // Node D: 20% + ε
-    ];
-
-    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
-
-    // Control components
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
-
-    // Create leader schedule with Node A as primary leader
-    let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0, 0]);
-
-    let leader_schedule = FixedSchedule {
-        leader_schedule: Arc::new(leader_schedule),
-    };
-
-    // Create UDP socket to listen to votes
-    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
-
-    // Create validator configs
-    let mut validator_config = ValidatorConfig::default_for_test();
-    validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
-
-    let mut validator_configs =
-        make_identical_validator_configs(&validator_config, node_stakes.len());
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
-
-    // Cluster config
-    let mut cluster_config = ClusterConfig {
-        mint_lamports: TOTAL_STAKE,
-        node_stakes: node_stakes.to_vec(),
-        validator_configs,
-        validator_keys: Some(
-            validator_keys
-                .iter()
-                .cloned()
-                .zip(std::iter::repeat(true))
-                .collect(),
-        ),
-        slots_per_epoch: SLOTS_PER_EPOCH,
-        stakers_slot_offset: SLOTS_PER_EPOCH,
-        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
-        ..ClusterConfig::default()
-    };
-
-    // Create local cluster
-    let mut cluster =
-        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
-
-    // Create mapping from vote pubkeys to node indices
-    let vote_pubkeys: HashMap<_, _> = validator_keys
-        .iter()
-        .enumerate()
-        .filter_map(|(index, keypair)| {
-            cluster
-                .validators
-                .get(&keypair.pubkey())
-                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
-        })
-        .collect();
-
-    assert_eq!(vote_pubkeys.len(), node_stakes.len());
-
-    // Collect node pubkeys and TPU addresses
-    let node_pubkeys: Vec<_> = validator_keys.iter().map(|key| key.pubkey()).collect();
-
-    let tpu_socket_addrs: Vec<_> = node_pubkeys
-        .iter()
-        .map(|pubkey| {
-            cluster
-                .get_contact_info(pubkey)
-                .unwrap()
-                .tpu_vote(cluster.connection_cache.protocol())
-                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
-        })
-        .collect();
-
-    // Exit nodes B and D to control their voting behavior
-    let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
-    let node_b_keypair = node_b_info.info.keypair.clone();
-    let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
-
-    let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
-    let node_d_keypair = node_d_info.info.keypair.clone();
-    let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
-
-    let node_e_info = cluster.exit_node(&validator_keys[4].pubkey());
-    let node_e_keypair = node_e_info.info.keypair.clone();
-    let node_e_vote_keypair = node_e_info.info.voting_keypair.clone();
-
-    // Start vote listener thread to monitor and control the experiment
-    let vote_listener_thread = std::thread::spawn({
-        let mut buf = [0u8; 65_535];
-
-        move || {
-            loop {
-                let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
-                let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
-
-                let (vote_pubkey, parsed_vote, ..) =
-                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
-
-                let node_name = vote_pubkeys[&vote_pubkey];
-                let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-
-                dbg!((node_name, vote));
-
-                match node_name {
-                    0 => {
-                        // Create vote for Node B (always copies node A)
-                        let vote_txn_b = copied_vote_txn(
-                            &vote_txn,
-                            &node_b_keypair.insecure_clone(),
-                            &node_b_vote_keypair.insecure_clone(),
+                    // D and E vote for different blocks
+                    for (keypair, vote_keypair) in [
+                        (&node_d_keypair, &node_d_vote_keypair),
+                        (&node_e_keypair, &node_e_vote_keypair),
+                    ] {
+                        let new_block_id = Hash::new_unique();
+                        let new_bank_hash = Hash::new_unique();
+                        let equivocated_notar_vote =
+                            Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
+                                .to_vote_instruction(vote_keypair.pubkey(), keypair.pubkey());
+                        let vote_txn = Transaction::new_signed_with_payer(
+                            &[equivocated_notar_vote],
+                            Some(&keypair.pubkey()),
+                            &[keypair.insecure_clone()],
+                            vote_txn.message.recent_blockhash,
                         );
 
                         broadcast_vote(
-                            &vote_txn_b,
-                            &tpu_socket_addrs,
-                            None,
-                            cluster.connection_cache.clone(),
-                        );
-
-                        // Create vote for Node D (always copies Node A)
-                        let vote_txn_d = copied_vote_txn(
                             &vote_txn,
-                            &node_d_keypair.insecure_clone(),
-                            &node_d_vote_keypair.insecure_clone(),
-                        );
-
-                        broadcast_vote(
-                            &vote_txn_d,
-                            &tpu_socket_addrs,
-                            None,
-                            cluster.connection_cache.clone(),
-                        );
-
-                        // Create vote for Node E (always copies Node A)
-                        let vote_txn_e = copied_vote_txn(
-                            &vote_txn,
-                            &node_e_keypair.insecure_clone(),
-                            &node_e_vote_keypair.insecure_clone(),
-                        );
-
-                        broadcast_vote(
-                            &vote_txn_e,
                             &tpu_socket_addrs,
                             None,
                             cluster.connection_cache.clone(),
                         );
                     }
-                    2 => {
-                        // Node C: Handle experiment state transitions
-                    }
-                    _ => {}
                 }
 
-                // Check for finalization votes to determine test completion
-                // if vote.is_finalize() && state.handle_finalize_vote(vote, node_name) {
-                //     break;
-                // }
+                (2, Stage::ObserveThreeNotarFallbacks) => {
+                    if vote.is_notarize_fallback() {
+                        {
+                            let entry = notar_fallback_map
+                                .entry(vote.slot())
+                                .or_insert(HashSet::new());
+
+                            entry.insert((
+                                vote.block_id().copied().unwrap(),
+                                vote.replayed_bank_hash().copied().unwrap(),
+                            ));
+
+                            assert!(entry.len() <= 3);
+
+                            if entry.len() == 3 {
+                                triple_notar_fallback_slots.insert(vote.slot());
+
+                                if triple_notar_fallback_slots.len() == 3 {
+                                    stage = Stage::ObserveLiveness;
+                                    node_c_turbine_disabled.store(false, Ordering::Release);
+                                }
+                            }
+                        }
+
+                        dbg!(&notar_fallback_map);
+                    }
+                }
+
+                (_, Stage::ObserveLiveness) => {
+                    if vote.is_finalize() {
+                        {
+                            let total_weight =
+                                post_experiment_vote_weights.entry(node_name).or_insert(0);
+                            *total_weight += node_stakes[node_name];
+
+                            if *total_weight >= TOTAL_STAKE * 6 / 10 {
+                                post_experiment_roots.insert(vote.slot());
+
+                                if post_experiment_roots.len() > 10 {
+                                    break;
+                                }
+                            }
+                        }
+
+                        dbg!(&post_experiment_vote_weights);
+                        dbg!(&post_experiment_roots);
+                    }
+                }
+
+                _ => {}
             }
         }
     });
