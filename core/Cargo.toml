@@ -52,7 +52,7 @@ serde_derive = { workspace = true }
 slab = { workspace = true }
 solana-accounts-db = { workspace = true }
 solana-bloom = { workspace = true }
-solana-bls = { workspace = true, features = ["solana-signer-derive"] }
+solana-bls-signatures = { workspace = true, features = ["solana-signer-derive"] }
 solana-builtins-default-costs = { workspace = true }
 solana-client = { workspace = true }
 solana-compute-budget = { workspace = true }

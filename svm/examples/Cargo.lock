@@ -154,7 +154,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "alpenglow-vote"
 version = "0.1.0"
-source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=e5df52d#e5df52d304301aa85628155c9f0535cb416e8800"
+source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=cdae90a#cdae90a3c3f57f56bfa6f4c7e05d5b77b83926f1"
 dependencies = [
  "bincode",
  "bitflags 2.9.0",
@@ -167,7 +167,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "solana-account",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-hash",
  "solana-program",
  "solana-signature",
@@ -1779,6 +1779,15 @@ dependencies = [
  "libc",
  "libredox",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "five8"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a75b8549488b4715defcb0d8a8a1c1c76a80661b5fa106b4ca0e7fce59d7d875"
+dependencies = [
+ "five8_core",
 ]
 
 [[package]]
@@ -5397,9 +5406,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-bls"
-version = "0.1.1"
-source = "git+https://github.com/anza-xyz/solana-sdk?branch=bls#9e1431b3e83310bb118c47404265d905acea2dce"
+name = "solana-bls-signatures"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af089f712fb5cbef2d73ac7ffee9cad05ada6cd1fd5c812338df040bcd3c410b"
 dependencies = [
  "base64 0.22.1",
  "blst",
@@ -5410,6 +5420,7 @@ dependencies = [
  "group",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "serde_with",
  "solana-signature",
  "solana-signer",
@@ -5886,7 +5897,7 @@ dependencies = [
  "slab",
  "solana-accounts-db",
  "solana-bloom",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-builtins-default-costs",
  "solana-client",
  "solana-compute-budget",
@@ -7495,7 +7506,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "solana-accounts-db",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",
@@ -7828,12 +7839,12 @@ dependencies = [
 
 [[package]]
 name = "solana-signature"
-version = "2.2.1"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d251c8f3dc015f320b4161daac7f108156c837428e5a8cc61136d25beb11d6"
+checksum = "64c8ec8e657aecfc187522fc67495142c12f35e55ddeca8698edbb738b8dbd8c"
 dependencies = [
- "bs58",
  "ed25519-dalek",
+ "five8",
  "rand 0.8.5",
  "serde",
  "serde-big-array",
@@ -8237,7 +8248,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "solana-accounts-db",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-cli-output",
  "solana-compute-budget",
  "solana-core",
@@ -8644,7 +8655,7 @@ dependencies = [
  "serde_derive",
  "solana-account",
  "solana-bincode",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-hash",
  "solana-instruction",

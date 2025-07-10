@@ -662,7 +662,7 @@ mod tests {
         },
         alpenglow_vote::bls_message::CertificateMessage,
         itertools::Itertools,
-        solana_bls::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
+        solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,

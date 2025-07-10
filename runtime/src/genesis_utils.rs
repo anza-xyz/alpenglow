@@ -1,7 +1,7 @@
 use {
     alpenglow_vote::state::VoteState as AlpenglowVoteState,
     log::*,
-    solana_bls::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
     solana_loader_v3_interface::state::UpgradeableLoaderState,
     solana_sdk::{
