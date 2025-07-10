@@ -17,7 +17,7 @@ log = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 solana-accounts-db = { workspace = true }
-solana-bls = { workspace = true }
+solana-bls-signatures = { workspace = true }
 solana-cli-output = { workspace = true }
 solana-compute-budget = { workspace = true }
 solana-core = { workspace = true }

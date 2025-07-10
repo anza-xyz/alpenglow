@@ -1,11 +1,12 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
+    alpenglow_vote::bls_message::BLS_KEYPAIR_DERIVE_SEED,
     bip39::{Mnemonic, MnemonicType, Seed},
     clap::{
         builder::ValueParser, crate_description, crate_name, value_parser, Arg, ArgAction,
         ArgMatches, Command,
     },
-    solana_bls::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_clap_v3_utils::{
         input_parsers::{
             signer::{SignerSource, SignerSourceParserBuilder},
@@ -391,7 +392,7 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
         )
         .subcommand(
             Command::new("bls_pubkey")
-                .about("Display the BLS pubkey from a keypair file")
+                .about("Display the BLS pubkey derived from given ed25519 keypair file")
                 .disable_version_flag(true)
                 .arg(
                     Arg::new("keypair")
@@ -525,7 +526,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
         }
         ("bls_pubkey", matches) => {
             let keypair = get_keypair_from_matches(matches, config, &mut wallet_manager)?;
-            let bls_keypair = BLSKeypair::derive_from_signer(&keypair, b"alpenglow")?;
+            let bls_keypair = BLSKeypair::derive_from_signer(&keypair, BLS_KEYPAIR_DERIVE_SEED)?;
             let bls_pubkey: BLSPubkey = bls_keypair.public.into();
 
             if matches.try_contains_id("outfile")? {

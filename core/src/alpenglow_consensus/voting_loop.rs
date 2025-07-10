@@ -26,7 +26,7 @@ use {
         vote::Vote,
     },
     crossbeam_channel::{RecvTimeoutError, Sender},
-    solana_bls::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver},

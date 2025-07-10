@@ -681,10 +681,9 @@ pub(crate) fn load_from_blockstore(
 mod tests {
     use {
         super::*,
-        crate::alpenglow_consensus::BLS_KEYPAIR_DERIVE_SEED,
-        alpenglow_vote::bls_message::{BLSMessage, VoteMessage},
+        alpenglow_vote::bls_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         itertools::Itertools,
-        solana_bls::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
+        solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
