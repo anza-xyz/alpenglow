@@ -6818,29 +6818,15 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     vote_listener_thread.join().unwrap();
 }
 
-/// A: eps
-/// B: 20
-/// C: 40
-/// D: 40 - eps
+/// A: 40 - eps
+/// B: 30 + eps
+/// C: 30
 ///
-/// stage 1: everything is good
+/// stage 1: start by A going offline; this represents 20% - eps Byzantine stake and 20% offline
+/// stake. We're still able to fast finalize things.
 ///
-/// stage 2: disable turbine for C
-/// - C issues a skip repeatedly; we can still slow-finalize
-///
-/// stage 3:
-/// - A votes for b1
-/// - A sends b1 to B, so B sends notar for b1
-/// - A still sends nothing to C (simulated via disabled turbine for C), so C still skips
-/// - A sends b2 to D, so D sends notar for b2
-///
-/// - b1: has 20 + eps stake vote
-/// - b2: has 40 - eps stake vote
-///
-/// As a result of this, C issues repeated notar fallbacks for b1 and b2, but due to the skip +
-/// notar condition rather than just the notar condition.
-///
-/// C's turbine
+/// stage 2: disable turbine for C. B issues notar for b1 while C issues skip. At this point, C
+/// issues a notar-fallback due to condition (2).
 #[test]
 #[serial]
 fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
@@ -6850,12 +6836,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
     const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
 
-    // Node stakes with slight imbalance to trigger fallback behavior
     let node_stakes = [
-        1,
-        TOTAL_STAKE * 2 / 10,
-        TOTAL_STAKE * 4 / 10,
         TOTAL_STAKE * 4 / 10 - 1,
+        TOTAL_STAKE * 3 / 10 + 1,
+        TOTAL_STAKE * 3 / 10,
     ];
 
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
@@ -6865,7 +6849,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
     // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[0, 1, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6920,32 +6904,18 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
     assert_eq!(vote_pubkeys.len(), node_stakes.len());
 
-    // Collect node pubkeys and TPU addresses
-    let node_pubkeys: Vec<_> = validator_keys.iter().map(|key| key.pubkey()).collect();
-
-    let tpu_socket_addrs: Vec<_> = node_pubkeys
-        .iter()
-        .map(|pubkey| {
-            cluster
-                .get_contact_info(pubkey)
-                .unwrap()
-                .tpu_vote(cluster.connection_cache.protocol())
-                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
-        })
-        .collect();
-
-    // Exit nodes B and D to control their voting behavior
-    // let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
-    // let node_b_keypair = node_b_info.info.keypair.clone();
-    // let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
-
-    // let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
-    // let node_d_keypair = node_d_info.info.keypair.clone();
-    // let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+    // Exit node A, which represents our Byzantine stake + 20% offline
+    cluster.exit_node(&validator_keys[0].pubkey());
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
         let mut buf = [0u8; 65_535];
+        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let mut check_for_notar_fallbacks = false;
+        let mut notar_fallbacks: HashSet<Slot> = HashSet::new();
+        let mut check_for_roots = false;
+        let mut post_experiment_votes: HashMap<Slot, Vec<usize>> = HashMap::new();
+        let mut post_experiment_roots = HashSet::new();
 
         move || {
             loop {
@@ -6960,42 +6930,43 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
                 dbg!((node_name, vote));
 
-                match node_name {
-                    0 => {
-                        // Create vote for Node B (potentially equivocated)
-                        // let vote_txn_b = copied_vote_txn(
-                        //     &vote_txn,
-                        //     &node_b_keypair.insecure_clone(),
-                        //     &node_b_vote_keypair.insecure_clone(),
-                        // );
+                // Experiment starts once we're at slot 50 somewhere.
+                if vote.slot() >= 50 {
+                    node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                    check_for_notar_fallbacks = true;
+                }
 
-                        // broadcast_vote(
-                        //     &vote_txn_b,
-                        //     &tpu_socket_addrs,
-                        //     None,
-                        //     cluster.connection_cache.clone(),
-                        // );
+                if !check_for_roots
+                    && check_for_notar_fallbacks
+                    && node_name == 2
+                    && vote.is_notarize_fallback()
+                {
+                    notar_fallbacks.insert(vote.slot());
 
-                        // dbg!((1, vote_txn_b));
+                    dbg!(&notar_fallbacks);
 
-                        // Create vote for Node D (always copies Node A)
-                        // let vote_txn_d = copied_vote_txn(
-                        //     &vote_txn,
-                        //     &node_d_keypair.insecure_clone(),
-                        //     &node_d_vote_keypair.insecure_clone(),
-                        // );
-
-                        // broadcast_vote(
-                        //     &vote_txn_d,
-                        //     &tpu_socket_addrs,
-                        //     None,
-                        //     cluster.connection_cache.clone(),
-                        // );
-
-                        // dbg!((1, vote_txn_d));
+                    if notar_fallbacks.len() >= 5 {
+                        node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                        check_for_roots = true;
                     }
-                    2 => {}
-                    _ => {}
+                }
+
+                if check_for_roots && vote.is_finalize() {
+                    dbg!(&post_experiment_votes);
+
+                    let slot_votes = post_experiment_votes.entry(vote.slot()).or_default();
+                    slot_votes.push(node_name);
+
+                    if slot_votes.len() == 2 {
+                        post_experiment_roots.insert(vote.slot());
+
+                        dbg!(&post_experiment_roots);
+
+                        // End test after 10 new roots
+                        if post_experiment_roots.len() >= 10 {
+                            break;
+                        }
+                    }
                 }
             }
         }
