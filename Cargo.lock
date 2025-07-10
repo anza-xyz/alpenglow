@@ -7094,6 +7094,7 @@ dependencies = [
  "chrono",
  "clap 2.33.3",
  "rpassword",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-cluster-type",
  "solana-commitment-config",
@@ -8416,11 +8417,13 @@ dependencies = [
 name = "solana-keygen"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "bs58",
  "clap 3.2.23",
  "dirs-next",
  "num_cpus",
  "serde_json",
+ "solana-bls-signatures",
  "solana-clap-v3-utils",
  "solana-cli-config",
  "solana-derivation-path",
