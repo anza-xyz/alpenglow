@@ -5,7 +5,7 @@ use {
     },
     chrono::DateTime,
     clap::ArgMatches,
-    solana_bls::Pubkey as BLSPubkey,
+    solana_bls_signatures::Pubkey as BLSPubkey,
     solana_clock::UnixTimestamp,
     solana_cluster_type::ClusterType,
     solana_commitment_config::CommitmentConfig,
@@ -213,6 +213,7 @@ mod tests {
     use {
         super::*,
         clap::{App, Arg},
+        solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
         solana_keypair::write_keypair_file,
         std::fs,
     };
@@ -340,6 +341,23 @@ mod tests {
         assert_eq!(
             pubkeys_sigs_of(&matches, "multiple"),
             Some(vec![(key1, sig1), (key2, sig2)])
+        );
+    }
+
+    #[test]
+    fn test_bls_pubkeys_of() {
+        let bls_pubkey1: BLSPubkey = BLSKeypair::new().public.into();
+        let bls_pubkey2: BLSPubkey = BLSKeypair::new().public.into();
+        let matches = app().get_matches_from(vec![
+            "test",
+            "--multiple",
+            &bls_pubkey1.to_string(),
+            "--multiple",
+            &bls_pubkey2.to_string(),
+        ]);
+        assert_eq!(
+            bls_pubkeys_of(&matches, "multiple"),
+            Some(vec![bls_pubkey1, bls_pubkey2])
         );
     }
 

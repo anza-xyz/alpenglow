@@ -6,7 +6,7 @@ use {
         builder::ValueParser, crate_description, crate_name, value_parser, Arg, ArgAction,
         ArgMatches, Command,
     },
-    solana_bls::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_clap_v3_utils::{
         input_parsers::{
             signer::{SignerSource, SignerSourceParserBuilder},
