@@ -192,6 +192,14 @@ impl<T> AsRef<T> for WorkingEntry<T> {
     }
 }
 
+pub struct CompletedBlock {
+    pub slot: Slot,
+    // TODO: once we have the async execution changes this can be (block_id, parent_block_id) instead
+    pub bank: Arc<Bank>,
+}
+pub type CompletedBlockSender = Sender<CompletedBlock>;
+pub type CompletedBlockReceiver = Receiver<CompletedBlock>;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LastFECSetCheckResults {
     last_fec_set_merkle_root: Option<Hash>,

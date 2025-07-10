@@ -18,17 +18,14 @@ use {
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
-        replay_stage::{
-            CompletedBlock, CompletedBlockReceiver, Finalizer, ReplayStage, MAX_VOTE_SIGNATURES,
-        },
+        replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
         voting_service::VoteOp,
     },
     alpenglow_vote::vote::Vote,
     crossbeam_channel::{RecvTimeoutError, Sender},
-    solana_feature_set::FeatureSet,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::Blockstore,
+        blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver},
         leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::{
             first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
@@ -46,7 +43,6 @@ use {
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
-        hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
@@ -381,12 +377,10 @@ impl VotingLoop {
 
                     // Check if replay has successfully completed
                     if let Some(bank) = pending_blocks.get(&current_slot) {
-                        debug_assert!(bank.is_frozen());
                         // Vote notarize
                         if Self::try_notar(
                             &my_pubkey,
                             bank.as_ref(),
-                            &blockstore,
                             &mut cert_pool,
                             &mut voting_context,
                         ) {
@@ -394,17 +388,32 @@ impl VotingLoop {
                             pending_blocks.remove(&current_slot);
                             break;
                         }
+                    } else {
+                        // Block on replay ingest
+                        match completed_block_receiver
+                            .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
+                        {
+                            Ok(CompletedBlock { slot, bank }) => {
+                                pending_blocks.insert(slot, bank);
+                                // Reassess if we can vote
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Timeout) => continue,
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
                     }
 
-                    // Ingest replayed blocks
-                    match completed_block_receiver
-                        .recv_timeout(timeout.saturating_sub(skip_timer.elapsed()))
-                    {
-                        Ok(CompletedBlock { slot, bank }) => {
-                            pending_blocks.insert(slot, bank);
-                        }
-                        Err(RecvTimeoutError::Timeout) => (),
-                        Err(RecvTimeoutError::Disconnected) => return,
+                    // Block on certificate ingest
+                    if let Err(e) = Self::ingest_votes_into_certificate_pool(
+                        &my_pubkey,
+                        &shared_context.vote_receiver,
+                        &mut cert_pool,
+                        &voting_context.commitment_sender,
+                        timeout.saturating_sub(skip_timer.elapsed()),
+                    ) {
+                        error!("{my_pubkey}: error ingesting votes into certificate pool, exiting: {e:?}");
+                        // Finalizer will set exit flag
+                        return;
                     }
                 }
 
@@ -420,6 +429,8 @@ impl VotingLoop {
                         &shared_context.vote_receiver,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
+                        // Need to provide a timeout to check exit flag
+                        Duration::from_secs(1),
                     ) {
                         error!("{my_pubkey}: error ingesting votes into certificate pool, exiting: {e:?}");
                         // Finalizer will set exit flag
@@ -564,51 +575,6 @@ impl VotingLoop {
         Some(new_root)
     }
 
-    /// Gets the block id of a bank. If this is a leader bank,
-    /// shredding might not be complete when initially set, so update
-    /// the bank for children checks later
-    fn get_set_block_id(my_pubkey: &Pubkey, bank: &Bank, blockstore: &Blockstore) -> Option<Hash> {
-        let is_leader = bank.collector_id() == my_pubkey;
-
-        if bank.slot() == 0 {
-            // Genesis does not have a block id
-            return Some(Hash::default());
-        }
-        if bank.block_id().is_some() {
-            return bank.block_id();
-        }
-
-        if !is_leader {
-            warn!(
-                "{my_pubkey}: Unable to retrieve block id or duplicate block checks have failed
-                for non leader slot {} {}",
-                bank.slot(),
-                bank.hash()
-            );
-            return None;
-        }
-
-        // We are leader attempt to retrieve from blockstore
-        // TODO:(ashwin) We are leader ignore duplicate block checks and just get from last shred?
-        let block_id = blockstore
-            .check_last_fec_set_and_get_block_id(
-                bank.slot(),
-                bank.hash(),
-                is_leader,
-                &FeatureSet::all_enabled(),
-            )
-            .unwrap_or(None);
-
-        if block_id.is_some() {
-            // Prior to asynchronous execution, the leader's blocks could be frozen before shredded
-            // As such we choose to set the block id here, so that future parent block id lookups
-            // succeed. Since the scope of parent block id lookups is the voting loop, doing it here
-            // suffices, but if the scope expands we could consider moving this to replay.
-            bank.set_block_id(block_id);
-        }
-        block_id
-    }
-
     /// Attempts to create and send a skip vote for all unvoted slots in `[start, end]`
     fn try_skip_window(
         my_pubkey: &Pubkey,
@@ -675,11 +641,11 @@ impl VotingLoop {
     /// The conditions are:
     /// - If this is the first leader block of this window, check for notarization and skip certificates
     /// - Else ensure that this is a consecutive slot and that we have voted notarize on the parent
-    /// - Finally check if the block id for `bank` is present and passes the duplicate checks
+    ///
+    /// Returns false if these conditions fail
     fn try_notar(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        blockstore: &Blockstore,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) -> bool {
@@ -689,13 +655,10 @@ impl VotingLoop {
 
         let parent_slot = bank.parent_slot();
         let parent_bank_hash = bank.parent_hash();
-        let parent_block_id = Self::get_set_block_id(
-            my_pubkey,
-            bank.parent().expect("Cannot vote on genesis").as_ref(),
-            blockstore,
-        )
-        // To account for child of genesis and snapshots we allow default block id
-        .unwrap_or_default();
+        let parent_block_id = bank
+            .parent_block_id()
+            // To account for child of genesis and snapshots we allow default block id
+            .unwrap_or_default();
 
         // Check if the certificates are valid for us to vote notarize.
         // - If this is the first leader slot (leader index = 0 or slot = 1) check
@@ -728,7 +691,7 @@ impl VotingLoop {
         }
 
         // Broadcast notarize vote
-        let voted = Self::vote_notarize(my_pubkey, bank, blockstore, cert_pool, voting_context);
+        let voted = Self::vote_notarize(my_pubkey, bank, cert_pool, voting_context);
 
         // Try to finalize
         Self::try_final(my_pubkey, slot, bank, cert_pool, voting_context);
@@ -736,23 +699,19 @@ impl VotingLoop {
     }
 
     /// Create and send a Notarization or Finalization vote
-    /// Attempts to retrieve the block id from blockstore.
-    ///
-    /// Returns false if we should attempt to retry this vote later
-    /// because the block_id/bank hash is not yet populated.
     fn vote_notarize(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        blockstore: &Blockstore,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
+        debug_assert!(bank.block_id().is_some());
         let slot = bank.slot();
         let hash = bank.hash();
-        let Some(block_id) = Self::get_set_block_id(my_pubkey, bank, blockstore) else {
-            return false;
-        };
+        let block_id = bank
+            .block_id()
+            .expect("Block id must be present for all banks in pending_blocks");
 
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
@@ -1028,6 +987,7 @@ impl VotingLoop {
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
         commitment_sender: &Sender<CommitmentAggregationData>,
+        timeout: Duration,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool =
             |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
@@ -1049,7 +1009,7 @@ impl VotingLoop {
                 }
             };
 
-        let Ok(first) = vote_receiver.recv_timeout(Duration::from_secs(1)) else {
+        let Ok(first) = vote_receiver.recv_timeout(timeout) else {
             // Either timeout or sender disconnected, return so we can check exit
             return Ok(());
         };

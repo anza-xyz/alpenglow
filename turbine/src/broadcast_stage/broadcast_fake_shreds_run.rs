@@ -2,7 +2,10 @@ use {
     super::*,
     solana_entry::entry::Entry,
     solana_gossip::contact_info::ContactInfo,
-    solana_ledger::shred::{self, ProcessShredsStats, ReedSolomonCache, Shredder},
+    solana_ledger::{
+        blockstore::CompletedBlockSender,
+        shred::{self, ProcessShredsStats, ReedSolomonCache, Shredder},
+    },
     solana_sdk::{hash::Hash, signature::Keypair},
 };
 
@@ -35,6 +38,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
+        _completed_block_sender: &CompletedBlockSender,
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let receive_results = broadcast_utils::recv_slot_entries(receiver)?;
