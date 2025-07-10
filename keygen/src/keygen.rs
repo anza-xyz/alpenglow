@@ -392,7 +392,7 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
         )
         .subcommand(
             Command::new("bls_pubkey")
-                .about("Display the BLS pubkey from a keypair file")
+                .about("Display the BLS pubkey derived from given ed25519 keypair file")
                 .disable_version_flag(true)
                 .arg(
                     Arg::new("keypair")
