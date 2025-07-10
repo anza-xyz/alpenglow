@@ -397,6 +397,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 .value_name("BLS_PUBKEY")
                 .multiple(true)
                 .takes_value(true)
+                .required(false)
                 .help("The bootstrap validator's bls pubkey"),
         )
         .arg(
@@ -676,7 +677,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     assert_eq!(bootstrap_validator_pubkeys.len() % 3, 0);
 
     let bootstrap_validator_bls_pubkeys =
-        bls_pubkeys_of(&matches, "bootstrap_validator_bls_pubkey").unwrap();
+        bls_pubkeys_of(&matches, "bootstrap_validator_bls_pubkey").unwrap_or_default();
     if !bootstrap_validator_bls_pubkeys.is_empty() {
         assert_eq!(
             bootstrap_validator_bls_pubkeys.len() * 3,
