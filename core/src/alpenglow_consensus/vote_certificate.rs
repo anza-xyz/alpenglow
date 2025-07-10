@@ -6,7 +6,9 @@ use {
         certificate::{Certificate, CertificateType},
     },
     bitvec::prelude::*,
-    solana_bls_signatures::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective},
+    solana_bls_signatures::{
+        BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective,
+    },
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_sdk::transaction::VersionedTransaction,
     std::sync::Arc,
