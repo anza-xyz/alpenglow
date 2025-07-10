@@ -1,7 +1,7 @@
 use {
     bip39::{Mnemonic, MnemonicType, Seed},
     clap::{crate_description, crate_name, Arg, ArgMatches, Command, PossibleValue},
-    solana_bls::{keypair::Keypair as BlsKeypair, Pubkey as BlsPubkey},
+    solana_bls_signatures::{keypair::Keypair as BlsKeypair, Pubkey as BlsPubkey},
     solana_clap_v3_utils::{
         input_parsers::{signer::SignerSourceParserBuilder, STDOUT_OUTFILE_TOKEN},
         keygen::{

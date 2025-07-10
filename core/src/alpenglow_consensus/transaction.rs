@@ -1,6 +1,6 @@
 use {
     alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
-    solana_bls::Signature as BLSSignature,
+    solana_bls_signatures::Signature as BLSSignature,
     solana_sdk::transaction::VersionedTransaction,
 };
 

@@ -136,7 +136,7 @@ mod tests {
         },
         bitvec::prelude::*,
         crossbeam_channel::Receiver,
-        solana_bls::Signature,
+        solana_bls_signatures::Signature,
         solana_perf::packet::Packet,
         solana_sdk::hash::Hash,
         std::time::Duration,
