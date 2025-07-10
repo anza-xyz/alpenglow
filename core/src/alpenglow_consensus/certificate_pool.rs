@@ -660,7 +660,7 @@ mod tests {
             },
             *,
         },
-        alpenglow_vote::bls_message::CertificateMessage,
+        alpenglow_vote::bls_message::{CertificateMessage, BLS_KEYPAIR_DERIVE_SEED},
         itertools::Itertools,
         solana_bls::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
@@ -682,7 +682,8 @@ mod tests {
         rank: usize,
     ) -> VC::VoteTransaction {
         let bls_keypair =
-            BLSKeypair::derive_from_signer(&keypairs[rank].vote_keypair, b"alpenglow").unwrap();
+            BLSKeypair::derive_from_signer(&keypairs[rank].vote_keypair, BLS_KEYPAIR_DERIVE_SEED)
+                .unwrap();
         let signature: BLSSignature = bls_keypair
             .sign(bincode::serialize(vote).unwrap().as_slice())
             .into();

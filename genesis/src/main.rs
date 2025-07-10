@@ -11,7 +11,8 @@ use {
     solana_bls::Pubkey as BLSPubkey,
     solana_clap_utils::{
         input_parsers::{
-            cluster_type_of, pubkey_of, pubkeys_of, unix_timestamp_from_rfc3339_datetime,
+            bls_pubkeys_of, cluster_type_of, pubkey_of, pubkeys_of,
+            unix_timestamp_from_rfc3339_datetime,
         },
         input_validators::{
             is_pubkey, is_pubkey_or_keypair, is_rfc3339_datetime, is_slot, is_url_or_moniker,
@@ -168,7 +169,7 @@ pub fn load_validator_accounts(
         add_validator_accounts(
             genesis_config,
             &mut pubkeys.iter(),
-            Some(bls_pubkey),
+            &mut [bls_pubkey].iter(),
             account_details.balance_lamports,
             account_details.stake_lamports,
             commission,
@@ -248,7 +249,7 @@ fn features_to_deactivate_for_cluster(
 fn add_validator_accounts(
     genesis_config: &mut GenesisConfig,
     pubkeys_iter: &mut Iter<Pubkey>,
-    bls_pubkey: Option<BLSPubkey>,
+    bls_pubkeys_iter: &mut Iter<BLSPubkey>,
     lamports: u64,
     stake_lamports: u64,
     commission: u8,
@@ -280,7 +281,9 @@ fn add_validator_accounts(
                 identity_pubkey,
                 commission,
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
-                bls_pubkey.expect("BLS pubkey is required for Alpenglow"),
+                *bls_pubkeys_iter
+                    .next()
+                    .expect("Missing BLS pubkey for {identity_pubkey}"),
             )
         } else {
             vote_state::create_account_with_authorized(
@@ -672,11 +675,15 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let bootstrap_validator_pubkeys = pubkeys_of(&matches, "bootstrap_validator").unwrap();
     assert_eq!(bootstrap_validator_pubkeys.len() % 3, 0);
 
-    let bootstrap_validator_bls_pubkey = matches
-        .value_of("bootstrap_validator_bls_pubkey")
-        .map(BLSPubkey::from_str)
-        .transpose()
-        .map_err(|e| format!("Invalid BLS pubkey: {e}"))?;
+    let bootstrap_validator_bls_pubkeys =
+        bls_pubkeys_of(&matches, "bootstrap_validator_bls_pubkey").unwrap();
+    if !bootstrap_validator_bls_pubkeys.is_empty() {
+        assert_eq!(
+            bootstrap_validator_bls_pubkeys.len() * 3,
+            bootstrap_validator_pubkeys.len(),
+            "Number of BLS pubkeys must match the number of bootstrap validator identities"
+        );
+    }
 
     // Ensure there are no duplicated pubkeys in the --bootstrap-validator list
     {
@@ -790,7 +797,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     add_validator_accounts(
         &mut genesis_config,
         &mut bootstrap_validator_pubkeys.iter(),
-        bootstrap_validator_bls_pubkey,
+        &mut bootstrap_validator_bls_pubkeys.iter(),
         bootstrap_validator_lamports,
         bootstrap_validator_stake_lamports,
         commission,

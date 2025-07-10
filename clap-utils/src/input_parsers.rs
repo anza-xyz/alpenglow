@@ -5,6 +5,7 @@ use {
     },
     chrono::DateTime,
     clap::ArgMatches,
+    solana_bls::Pubkey as BLSPubkey,
     solana_clock::UnixTimestamp,
     solana_cluster_type::ClusterType,
     solana_commitment_config::CommitmentConfig,
@@ -98,6 +99,19 @@ pub fn pubkeys_of(matches: &ArgMatches<'_>, name: &str) -> Option<Vec<Pubkey>> {
                     read_keypair_file(value)
                         .expect("read_keypair_file failed")
                         .pubkey()
+                })
+            })
+            .collect()
+    })
+}
+
+pub fn bls_pubkeys_of(matches: &ArgMatches<'_>, name: &str) -> Option<Vec<BLSPubkey>> {
+    matches.values_of(name).map(|values| {
+        values
+            .map(|value| {
+                BLSPubkey::from_str(value).unwrap_or_else(|_| {
+                    //TODO(wen): support reading BLS keypair files
+                    panic!("Failed to parse BLS public key from value: {}", value)
                 })
             })
             .collect()
