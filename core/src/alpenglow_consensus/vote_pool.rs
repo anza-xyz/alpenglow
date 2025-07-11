@@ -1,6 +1,7 @@
 use {
     super::Stake,
     crate::alpenglow_consensus::vote_certificate::{CertificateError, VoteCertificate},
+    alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
     std::collections::HashMap,
@@ -13,12 +14,12 @@ pub(crate) struct VoteKey {
 }
 
 #[derive(Debug)]
-pub(crate) struct VoteEntry<VC: VoteCertificate> {
-    pub(crate) transactions: Vec<VC::VoteTransaction>,
+pub(crate) struct VoteEntry {
+    pub(crate) transactions: Vec<VoteMessage>,
     pub(crate) total_stake_by_key: Stake,
 }
 
-impl<VC: VoteCertificate> VoteEntry<VC> {
+impl VoteEntry {
     pub fn new() -> Self {
         Self {
             transactions: Vec::new(),
@@ -27,15 +28,15 @@ impl<VC: VoteCertificate> VoteEntry<VC> {
     }
 }
 
-pub struct VotePool<VC: VoteCertificate> {
+pub struct VotePool {
     max_entries_per_pubkey: usize,
-    pub(crate) votes: HashMap<VoteKey, VoteEntry<VC>>,
+    pub(crate) votes: HashMap<VoteKey, VoteEntry>,
     total_stake: Stake,
     prev_votes: HashMap<Pubkey, Vec<VoteKey>>,
     top_entry_stake: Stake,
 }
 
-impl<VC: VoteCertificate> VotePool<VC> {
+impl VotePool {
     pub fn new(max_entries_per_pubkey: usize) -> Self {
         Self {
             max_entries_per_pubkey,
@@ -51,7 +52,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         validator_key: &Pubkey,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        transaction: VC::VoteTransaction,
+        transaction: &VoteMessage,
         validator_stake: Stake,
     ) -> bool {
         // Check whether the validator_key already used the same vote_key or exceeded max_entries_per_pubkey
@@ -71,7 +72,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         prev_vote_keys.push(vote_key.clone());
 
         let vote_entry = self.votes.entry(vote_key).or_insert_with(VoteEntry::new);
-        vote_entry.transactions.push(transaction);
+        vote_entry.transactions.push(*transaction);
         vote_entry.total_stake_by_key += validator_stake;
 
         if inserted_first_time {
@@ -104,7 +105,7 @@ impl<VC: VoteCertificate> VotePool<VC> {
         &self,
         bank_hash: Option<Hash>,
         block_id: Option<Hash>,
-        output: &mut VC,
+        output: &mut VoteCertificate,
     ) -> Result<(), CertificateError> {
         if let Some(vote_entries) = self.votes.get(&VoteKey {
             bank_hash,
@@ -129,62 +130,54 @@ impl<VC: VoteCertificate> VotePool<VC> {
 #[cfg(test)]
 mod test {
     use {
-        super::{
-            super::{
-                transaction::AlpenglowVoteTransaction, vote_certificate::LegacyVoteCertificate,
-            },
-            *,
-        },
-        alpenglow_vote::{bls_message::CertificateMessage, vote::Vote},
+        super::*,
+        alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
         solana_bls_signatures::Signature as BLSSignature,
     };
 
     #[test]
     fn test_skip_vote_pool() {
-        test_skip_vote_pool_for_type::<LegacyVoteCertificate>();
-        test_skip_vote_pool_for_type::<CertificateMessage>();
-    }
-
-    fn test_skip_vote_pool_for_type<VC: VoteCertificate>() {
-        let mut vote_pool = VotePool::<VC>::new(1);
+        let mut vote_pool = VotePool::new(1);
         let vote = Vote::new_skip_vote(5);
-        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
+        let transaction = VoteMessage {
+            vote,
+            signature: BLSSignature::default(),
+            rank: 1,
+        };
         let my_pubkey = Pubkey::new_unique();
 
-        assert!(vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
+        assert!(vote_pool.add_vote(&my_pubkey, None, None, &transaction, 10));
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 10);
 
         // Adding the same key again should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, None, None, transaction.clone(), 10));
+        assert!(!vote_pool.add_vote(&my_pubkey, None, None, &transaction, 10));
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        assert!(vote_pool.add_vote(&new_pubkey, None, None, transaction.clone(), 60),);
+        assert!(vote_pool.add_vote(&new_pubkey, None, None, &transaction, 60),);
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_key(None, None), 70);
     }
 
     #[test]
     fn test_notarization_pool() {
-        test_notarization_pool_for_type::<LegacyVoteCertificate>();
-        test_notarization_pool_for_type::<CertificateMessage>();
-    }
-
-    fn test_notarization_pool_for_type<VC: VoteCertificate>() {
-        let mut vote_pool = VotePool::<VC>::new(1);
+        let mut vote_pool = VotePool::new(1);
         let my_pubkey = Pubkey::new_unique();
         let block_id = Hash::new_unique();
         let bank_hash = Hash::new_unique();
         let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
-        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
-
+        let transaction = VoteMessage {
+            vote,
+            signature: BLSSignature::default(),
+            rank: 1,
+        };
         assert!(vote_pool.add_vote(
             &my_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -198,7 +191,7 @@ mod test {
             &my_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -208,7 +201,7 @@ mod test {
             &my_pubkey,
             Some(Hash::new_unique()),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -219,7 +212,7 @@ mod test {
             &new_pubkey,
             Some(bank_hash),
             Some(block_id),
-            transaction.clone(),
+            &transaction,
             60
         ),);
         assert_eq!(vote_pool.total_stake(), 70);
@@ -231,15 +224,14 @@ mod test {
 
     #[test]
     fn test_notarization_fallback_pool() {
-        test_notarization_fallback_pool_for_type::<LegacyVoteCertificate>();
-        test_notarization_fallback_pool_for_type::<CertificateMessage>();
-    }
-
-    fn test_notarization_fallback_pool_for_type<VC: VoteCertificate>() {
         solana_logger::setup();
-        let mut vote_pool = VotePool::<VC>::new(3);
+        let mut vote_pool = VotePool::new(3);
         let vote = Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique());
-        let transaction = VC::VoteTransaction::new_for_test(BLSSignature::default(), vote, 1);
+        let transaction = VoteMessage {
+            vote,
+            signature: BLSSignature::default(),
+            rank: 1,
+        };
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();
@@ -251,7 +243,7 @@ mod test {
                 &my_pubkey,
                 Some(bank_hashes[i]),
                 Some(block_ids[i]),
-                transaction.clone(),
+                &transaction,
                 10
             ));
             assert_eq!(vote_pool.total_stake(), 10);
@@ -265,7 +257,7 @@ mod test {
             &my_pubkey,
             Some(bank_hashes[3]),
             Some(block_ids[3]),
-            transaction.clone(),
+            &transaction,
             10
         ));
         assert_eq!(vote_pool.total_stake(), 10);
@@ -281,7 +273,7 @@ mod test {
                 &new_pubkey,
                 Some(bank_hashes[i]),
                 Some(block_ids[i]),
-                transaction.clone(),
+                &transaction,
                 60
             ));
             assert_eq!(vote_pool.total_stake(), 70);
@@ -296,7 +288,7 @@ mod test {
             &new_pubkey,
             Some(bank_hashes[3]),
             Some(block_ids[3]),
-            transaction.clone(),
+            &transaction,
             60
         ));
         assert_eq!(vote_pool.total_stake(), 70);
@@ -310,7 +302,7 @@ mod test {
             &new_pubkey,
             Some(bank_hashes[0]),
             Some(block_ids[0]),
-            transaction.clone(),
+            &transaction,
             60
         ));
     }
