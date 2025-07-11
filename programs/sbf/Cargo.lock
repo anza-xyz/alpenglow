@@ -5713,6 +5713,7 @@ dependencies = [
  "chrono",
  "clap",
  "rpassword",
+ "serde_json",
  "solana-bls-signatures",
  "solana-clock",
  "solana-cluster-type",

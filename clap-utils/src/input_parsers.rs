@@ -15,7 +15,7 @@ use {
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_signature::Signature,
     solana_signer::Signer,
-    std::{rc::Rc, str::FromStr},
+    std::{fs, rc::Rc, str::FromStr},
 };
 
 // Sentinel value used to indicate to write to screen instead of file
@@ -110,8 +110,9 @@ pub fn bls_pubkeys_of(matches: &ArgMatches<'_>, name: &str) -> Option<Vec<BLSPub
         values
             .map(|value| {
                 BLSPubkey::from_str(value).unwrap_or_else(|_| {
-                    //TODO(wen): support reading BLS keypair files
-                    panic!("Failed to parse BLS public key from value: {}", value)
+                    let content = fs::read_to_string(value).unwrap();
+                    let unquoted: String = serde_json::from_str(&content).unwrap();
+                    BLSPubkey::from_str(&unquoted).unwrap()
                 })
             })
             .collect()
@@ -358,6 +359,16 @@ mod tests {
         assert_eq!(
             bls_pubkeys_of(&matches, "multiple"),
             Some(vec![bls_pubkey1, bls_pubkey2])
+        );
+
+        // Now test reading from a file
+        let outfile = tmp_file_path("test_bls_pubkeys_of.json", &solana_pubkey::new_rand());
+        let quoted = serde_json::to_string(&bls_pubkey1.to_string()).unwrap();
+        fs::write(&outfile, quoted).unwrap();
+        let matches = app().get_matches_from(vec!["test", "--multiple", &outfile]);
+        assert_eq!(
+            bls_pubkeys_of(&matches, "multiple"),
+            Some(vec![bls_pubkey1])
         );
     }
 
