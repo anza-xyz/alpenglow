@@ -5,9 +5,10 @@
 
 use {
     crate::{
-        alpenglow_consensus::{vote_certificate::LegacyVoteCertificate, CertificateId},
+        alpenglow_consensus::CertificateId,
         result::{Error, Result},
     },
+    alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
     std::{
@@ -20,7 +21,7 @@ use {
     },
 };
 
-pub(crate) type CertificateReceiver = Receiver<(CertificateId, LegacyVoteCertificate)>;
+pub(crate) type CertificateReceiver = Receiver<(CertificateId, CertificateMessage)>;
 pub struct CertificateService {
     t_cert_insert: JoinHandle<()>,
 }
@@ -74,8 +75,8 @@ impl CertificateService {
     }
 
     fn receive_new_certificates(
-        certificate_receiver: &Receiver<(CertificateId, LegacyVoteCertificate)>,
-    ) -> Result<Vec<(CertificateId, LegacyVoteCertificate)>> {
+        certificate_receiver: &Receiver<(CertificateId, CertificateMessage)>,
+    ) -> Result<Vec<(CertificateId, CertificateMessage)>> {
         const RECV_TIMEOUT: Duration = Duration::from_millis(200);
         Ok(
             std::iter::once(certificate_receiver.recv_timeout(RECV_TIMEOUT)?)
@@ -87,7 +88,7 @@ impl CertificateService {
     fn insert_certificate(
         blockstore: &Blockstore,
         cert_id: CertificateId,
-        vote_certificate: LegacyVoteCertificate,
+        vote_certificate: CertificateMessage,
     ) -> Result<()> {
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id, bank_hash) => blockstore
@@ -95,10 +96,10 @@ impl CertificateService {
                     slot,
                     block_id,
                     bank_hash,
-                    vote_certificate.transactions(),
+                    vote_certificate,
                 )?,
             CertificateId::Skip(slot) => {
-                blockstore.insert_new_skip_certificate(slot, vote_certificate.transactions())?
+                blockstore.insert_new_skip_certificate(slot, vote_certificate)?
             }
             CertificateId::Finalize(_)
             | CertificateId::FinalizeFast(_, _, _)

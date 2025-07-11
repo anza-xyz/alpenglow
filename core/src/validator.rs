@@ -34,7 +34,7 @@ use {
         system_monitor_service::{
             verify_net_stats_access, SystemMonitorService, SystemMonitorStatsReportConfig,
         },
-        tpu::{Tpu, TpuSockets, DEFAULT_TPU_COALESCE},
+        tpu::{Tpu, TpuSockets, DEFAULT_TPU_COALESCE, MAX_ALPENGLOW_PACKET_NUM},
         tvu::{Tvu, TvuConfig, TvuSockets},
     },
     anyhow::{anyhow, Context, Result},
@@ -958,7 +958,10 @@ impl Validator {
         );
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
-        let (alpenglow_vote_sender, alpenglow_vote_receiver) = unbounded();
+        // TODO(wen): Remove this later.
+        let (alpenglow_vote_sender, _) = unbounded();
+        let (bls_verified_message_sender, bls_verified_message_receiver) =
+            bounded(MAX_ALPENGLOW_PACKET_NUM);
 
         // block min prioritization fee cache should be readable by RPC, and writable by validator
         // (by both replay stage and banking stage)
@@ -1598,7 +1601,7 @@ impl Validator {
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
             alpenglow_vote_sender.clone(),
-            alpenglow_vote_receiver,
+            bls_verified_message_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 shred_version: node.info.shred_version(),
@@ -1690,6 +1693,7 @@ impl Validator {
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
             alpenglow_vote_sender,
+            bls_verified_message_sender,
             &connection_cache,
             turbine_quic_endpoint_sender,
             completed_block_sender,

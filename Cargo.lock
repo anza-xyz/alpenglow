@@ -8489,6 +8489,7 @@ name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
  "anyhow",
+ "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bitflags 2.9.0",
@@ -8653,6 +8654,7 @@ dependencies = [
  "rayon",
  "serial_test",
  "solana-accounts-db",
+ "solana-bls-signatures",
  "solana-build-alpenglow-vote",
  "solana-client",
  "solana-config-program",
