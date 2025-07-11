@@ -1,6 +1,11 @@
 use {
-    crate::consensus::{tower_vote_state::TowerVoteState, Stake},
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    crate::{
+        alpenglow_consensus::voting_loop::{
+            AlpenglowCommitmentAggregationData, AlpenglowCommitmentType,
+        },
+        consensus::{tower_vote_state::TowerVoteState, Stake},
+    },
+    crossbeam_channel::{select, unbounded, Receiver, RecvTimeoutError, Sender},
     solana_measure::measure::Measure,
     solana_metrics::datapoint_info,
     solana_rpc::rpc_subscriptions::RpcSubscriptions,
@@ -20,22 +25,6 @@ use {
         time::Duration,
     },
 };
-
-pub enum AlpenglowCommitmentType {
-    /// Our node has voted notarize for the slot
-    Notarize,
-    /// We have observed a finalization certificate for the slot
-    Finalized,
-}
-pub enum CommitmentAggregationData {
-    AlpenglowCommitmentAggregationData(AlpenglowCommitmentAggregationData),
-    TowerCommitmentAggregationData(TowerCommitmentAggregationData),
-}
-
-pub struct AlpenglowCommitmentAggregationData {
-    pub commitment_type: AlpenglowCommitmentType,
-    pub slot: Slot,
-}
 
 pub struct TowerCommitmentAggregationData {
     bank: Arc<Bank>,
@@ -83,13 +72,23 @@ impl AggregateCommitmentService {
         exit: Arc<AtomicBool>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
         subscriptions: Arc<RpcSubscriptions>,
-    ) -> (Sender<CommitmentAggregationData>, Self) {
+    ) -> (
+        Sender<TowerCommitmentAggregationData>,
+        Sender<AlpenglowCommitmentAggregationData>,
+        Self,
+    ) {
         let (sender, receiver): (
-            Sender<CommitmentAggregationData>,
-            Receiver<CommitmentAggregationData>,
+            Sender<TowerCommitmentAggregationData>,
+            Receiver<TowerCommitmentAggregationData>,
         ) = unbounded();
+        let (ag_sender, ag_receiver): (
+            Sender<AlpenglowCommitmentAggregationData>,
+            Receiver<AlpenglowCommitmentAggregationData>,
+        ) = unbounded();
+
         (
             sender,
+            ag_sender,
             Self {
                 t_commitment: Builder::new()
                     .name("solAggCommitSvc".to_string())
@@ -98,9 +97,13 @@ impl AggregateCommitmentService {
                             break;
                         }
 
-                        if let Err(RecvTimeoutError::Disconnected) =
-                            Self::run(&receiver, &block_commitment_cache, &subscriptions, &exit)
-                        {
+                        if let Err(RecvTimeoutError::Disconnected) = Self::run(
+                            &receiver,
+                            &ag_receiver,
+                            &block_commitment_cache,
+                            &subscriptions,
+                            &exit,
+                        ) {
                             break;
                         }
                     })
@@ -110,7 +113,8 @@ impl AggregateCommitmentService {
     }
 
     fn run(
-        receiver: &Receiver<CommitmentAggregationData>,
+        receiver: &Receiver<TowerCommitmentAggregationData>,
+        ag_receiver: &Receiver<AlpenglowCommitmentAggregationData>,
         block_commitment_cache: &RwLock<BlockCommitmentCache>,
         subscriptions: &Arc<RpcSubscriptions>,
         exit: &AtomicBool,
@@ -120,28 +124,32 @@ impl AggregateCommitmentService {
                 return Ok(());
             }
 
-            let aggregation_data = receiver.recv_timeout(Duration::from_secs(1))?;
-            let aggregation_data = receiver.try_iter().last().unwrap_or(aggregation_data);
-
             let mut aggregate_commitment_time = Measure::start("aggregate-commitment-ms");
-            let update_commitment_slots = {
-                match aggregation_data {
-                    CommitmentAggregationData::TowerCommitmentAggregationData(data) => {
-                        let ancestors = data.bank.status_cache_ancestors();
-                        if ancestors.is_empty() {
-                            continue;
-                        }
+            let update_commitment_slots = select! {
+                recv(receiver) -> result => {
+                    let aggregation_data = result?;
+                    let data = receiver.try_iter().last().unwrap_or(aggregation_data);
 
-                        Self::update_commitment_cache(block_commitment_cache, data, ancestors)
+                    let ancestors = data.bank.status_cache_ancestors();
+                    if ancestors.is_empty() {
+                        continue;
                     }
-                    CommitmentAggregationData::AlpenglowCommitmentAggregationData(data) => {
-                        Self::alpenglow_update_commitment_cache(
-                            block_commitment_cache,
-                            data.commitment_type,
-                            data.slot,
-                        )
-                    }
-                }
+
+                    Self::update_commitment_cache(block_commitment_cache, data, ancestors)
+                },
+                recv(ag_receiver) -> result => {
+                    let ag_data = result?;
+                    let data = ag_receiver.try_iter().last().unwrap_or(ag_data);
+
+                    Self::alpenglow_update_commitment_cache(
+                        block_commitment_cache,
+                        data.commitment_type,
+                        data.slot,
+                    )
+                },
+                default(Duration::from_secs(1)) => {
+                    continue;
+                },
             };
             aggregate_commitment_time.stop();
 

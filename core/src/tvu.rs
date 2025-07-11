@@ -4,9 +4,8 @@
 use {
     crate::{
         alpenglow_consensus::{
-            block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
-            vote_history::VoteHistory,
-            vote_history_storage::VoteHistoryStorage,
+            block_creation_loop::ReplayHighestFrozen, vote_history::VoteHistory,
+            vote_history_storage::VoteHistoryStorage, voting_loop::LeaderWindowNotifier,
         },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{

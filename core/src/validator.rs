@@ -6,11 +6,10 @@ use {
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
         alpenglow_consensus::{
-            block_creation_loop::{
-                self, BlockCreationLoopConfig, LeaderWindowNotifier, ReplayHighestFrozen,
-            },
+            block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
             vote_history::{VoteHistory, VoteHistoryError},
             vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+            voting_loop::LeaderWindowNotifier,
         },
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,

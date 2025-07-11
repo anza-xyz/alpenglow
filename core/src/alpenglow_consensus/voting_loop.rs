@@ -2,7 +2,6 @@
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
     super::{
-        block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
         certificate_pool::{self, AddVoteError},
         parent_ready_tracker::BlockProductionParent,
         vote_history_storage::VoteHistoryStorage,
@@ -14,10 +13,7 @@ use {
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
-        commitment_service::{
-            AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
-        },
-        replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
+        replay_stage::ReplayStage,
         voting_service::VoteOp,
     },
     alpenglow_vote::{
@@ -55,7 +51,7 @@ use {
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, RwLock,
+            Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -64,6 +60,57 @@ use {
 
 /// Banks that have completed replay, but are yet to be voted on
 type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
+
+/// Context for the block creation loop to start a leader window
+#[derive(Copy, Clone, Debug)]
+pub struct LeaderWindowInfo {
+    pub start_slot: Slot,
+    pub end_slot: Slot,
+    pub parent_block: Block,
+    pub skip_timer: Instant,
+}
+
+/// Communication with the block creation loop to notify leader window
+#[derive(Default)]
+pub struct LeaderWindowNotifier {
+    pub window_info: Mutex<Option<LeaderWindowInfo>>,
+    pub window_notification: Condvar,
+}
+
+// TODO(ashwin): stuffing this here for now will separate once we move to solana-votor
+pub enum AlpenglowCommitmentType {
+    /// Our node has voted notarize for the slot
+    Notarize,
+    /// We have observed a finalization certificate for the slot
+    Finalized,
+}
+
+pub struct AlpenglowCommitmentAggregationData {
+    pub commitment_type: AlpenglowCommitmentType,
+    pub slot: Slot,
+}
+
+// Implement a destructor for the VotingLoop thread to signal it exited
+// even on panics
+pub(crate) struct Finalizer {
+    exit_sender: Arc<AtomicBool>,
+}
+
+impl Finalizer {
+    pub(crate) fn new(exit_sender: Arc<AtomicBool>) -> Self {
+        Finalizer { exit_sender }
+    }
+}
+
+// TODO(ashwin): This will be removed in PR #254
+const MAX_VOTE_SIGNATURES: usize = 200;
+
+// Implement a destructor for Finalizer.
+impl Drop for Finalizer {
+    fn drop(&mut self) {
+        self.exit_sender.clone().store(true, Ordering::Relaxed);
+    }
+}
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
@@ -86,7 +133,7 @@ pub struct VotingLoopConfig {
     // Senders / Notifiers
     pub accounts_background_request_sender: AbsRequestSender,
     pub voting_sender: Sender<VoteOp>,
-    pub commitment_sender: Sender<CommitmentAggregationData>,
+    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
@@ -107,7 +154,7 @@ struct VotingContext {
     derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     has_new_vote_been_rooted: bool,
     voting_sender: Sender<VoteOp>,
-    commitment_sender: Sender<CommitmentAggregationData>,
+    commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     wait_to_vote_slot: Option<Slot>,
     voted_signatures: Vec<Signature>,
 }
@@ -1049,7 +1096,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool,
-        commitment_sender: &Sender<CommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
         timeout: Duration,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
@@ -1120,7 +1167,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
-        commitment_sender: &Sender<CommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
             return Ok(());
@@ -1137,16 +1184,12 @@ impl VotingLoop {
     fn alpenglow_update_commitment_cache(
         commitment_type: AlpenglowCommitmentType,
         slot: Slot,
-        commitment_sender: &Sender<CommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) {
-        if let Err(e) = commitment_sender.send(
-            CommitmentAggregationData::AlpenglowCommitmentAggregationData(
-                AlpenglowCommitmentAggregationData {
-                    commitment_type,
-                    slot,
-                },
-            ),
-        ) {
+        if let Err(e) = commitment_sender.send(AlpenglowCommitmentAggregationData {
+            commitment_type,
+            slot,
+        }) {
             trace!("commitment_sender failed: {:?}", e);
         }
     }
