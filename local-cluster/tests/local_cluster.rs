@@ -1,6 +1,9 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{
+        bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        vote::Vote,
+    },
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -11,6 +14,7 @@ use {
     solana_accounts_db::{
         hardened_unpack::open_genesis_config, utils::create_accounts_run_and_snapshot_dirs,
     },
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
     solana_client::connection_cache::ConnectionCache,
     solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
@@ -83,7 +87,6 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
-    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -6232,51 +6235,8 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
-fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
-    let discriminant = if vote.is_notarization() {
-        0
-    } else if vote.is_finalize() {
-        1
-    } else if vote.is_skip() {
-        2
-    } else if vote.is_notarize_fallback() {
-        3
-    } else if vote.is_skip_fallback() {
-        4
-    } else {
-        panic!("Invalid vote type: {:?}", vote)
-    };
-
-    let slot = vote.slot();
-
-    (slot, discriminant)
-}
-
-fn copied_vote_txn(
-    vote_txn: &Transaction,
-    signer_node_keypair: &Keypair,
-    signer_vote_keypair: &Keypair,
-) -> Transaction {
-    let (_, parsed_vote, ..) = vote_parser::parse_alpenglow_vote_transaction(vote_txn).unwrap();
-
-    let signer_node_keypair = signer_node_keypair.insecure_clone();
-    let signer_vote_keypair = signer_vote_keypair.insecure_clone();
-
-    let copied_vote_ixn = parsed_vote
-        .as_alpenglow_transaction_ref()
-        .unwrap()
-        .to_vote_instruction(signer_vote_keypair.pubkey(), signer_node_keypair.pubkey());
-
-    Transaction::new_signed_with_payer(
-        &[copied_vote_ixn],
-        Some(&signer_node_keypair.pubkey()),
-        &[signer_node_keypair],
-        vote_txn.message.recent_blockhash,
-    )
-}
-
 fn broadcast_vote(
-    txn: &Transaction,
+    bls_message: BLSMessage,
     tpu_socket_addrs: &[std::net::SocketAddr],
     additional_listeners: Option<&Vec<std::net::SocketAddr>>,
     connection_cache: Arc<ConnectionCache>,
@@ -6285,9 +6245,8 @@ fn broadcast_vote(
         .iter()
         .chain(additional_listeners.unwrap_or(&vec![]).iter())
     {
-        let buf = bincode::serialize(&txn).unwrap();
+        let buf = bincode::serialize(&bls_message).unwrap();
         let client = connection_cache.get_connection(tpu_socket_addr);
-
         client.send_data_async(buf).unwrap_or_else(|_| {
             panic!("Failed to broadcast vote to {}", tpu_socket_addr);
         });
@@ -6376,59 +6335,40 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
     assert_eq!(cluster.validators.len(), num_nodes);
 
-    let vote_pubkeys = validator_keys
-        .iter()
-        .enumerate()
-        .filter_map(|(index, keypair)| {
-            cluster
-                .validators
-                .get(&keypair.pubkey())
-                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
-        })
-        .collect::<HashMap<_, _>>();
-
-    assert_eq!(vote_pubkeys.len(), num_nodes);
-
     // Track Node A's votes and when the test can conclude
-    let node_a_filtered_votes = Arc::new(Mutex::new(HashMap::new()));
     let mut post_experiment_votes = HashMap::new();
     let mut post_experiment_roots = HashSet::new();
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener = std::thread::spawn({
         let mut buf = [0_u8; 65_535];
-        let node_a_filtered_votes = node_a_filtered_votes.clone();
         let mut check_for_roots = false;
+        let mut slots_with_skip = HashSet::new();
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
-            let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
+            let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+            let BLSMessage::Vote(vote_message) = bls_message else {
+                continue;
+            };
+            let vote = vote_message.vote;
 
-            let (vote_pubkey, parsed_vote, ..) =
-                vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
-
-            let node_name = vote_pubkeys[&vote_pubkey];
-            let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
+            // Since A has 60% of the stake, it will be node 0, and B will be node 1
+            let node_index = vote_message.rank;
 
             // Once we've received a vote from node B at slot 31, we can start the experiment.
-            if vote.slot() == 31 && node_name == 1 {
+            if vote.slot() == 31 && node_index == 1 {
                 node_a_turbine_disabled.store(true, Ordering::Relaxed);
             }
 
-            // Gather all votes issued by node A on slot >= 32
-            if vote.slot() >= 32 && node_name == 0 {
-                let vote_tuple = _vote_to_tuple(vote);
+            if vote.slot() >= 32 && node_index == 0 {
+                if vote.is_skip() {
+                    slots_with_skip.insert(vote.slot());
+                }
 
-                let mut cur_filtered_votes = node_a_filtered_votes.lock().unwrap();
-                let cur_filtered_votes = cur_filtered_votes
-                    .entry(vote_tuple.0)
-                    .or_insert(HashSet::new());
-                cur_filtered_votes.insert(vote_tuple.1);
-
-                if !check_for_roots && cur_filtered_votes.len() == 2 {
+                if !check_for_roots && vote.slot() == 32 && vote.is_notarize_fallback() {
                     check_for_roots = true;
-                    assert!(cur_filtered_votes.contains(&2)); // skip on slot 32
-                    assert!(cur_filtered_votes.contains(&3)); // notar fallback on slot 32
+                    assert!(slots_with_skip.contains(&32)); // skip on slot 32
                 }
             }
 
@@ -6440,7 +6380,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                 if vote.is_finalize() {
                     let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
 
-                    value.push(node_name);
+                    value.push(node_index);
 
                     if value.len() == 2 {
                         post_experiment_roots.insert(vote.slot());
@@ -6608,11 +6548,9 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     // Exit nodes B and D to control their voting behavior
     let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
-    let node_b_keypair = node_b_info.info.keypair.clone();
     let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
 
     let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
-    let node_d_keypair = node_d_info.info.keypair.clone();
     let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
     // Vote listener state
@@ -6622,7 +6560,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>>,
         double_notar_fallback_slots: Vec<Slot>,
         check_for_roots: bool,
-        post_experiment_votes: HashMap<Slot, Vec<usize>>,
+        post_experiment_votes: HashMap<Slot, Vec<u16>>,
         post_experiment_roots: HashSet<Slot>,
     }
 
@@ -6639,53 +6577,60 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             }
         }
 
+        fn sign_and_construct_vote_message(
+            &self,
+            vote: Vote,
+            keypair: &Keypair,
+            rank: u16,
+        ) -> BLSMessage {
+            let bls_keypair =
+                BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+            let signature: BLSSignature = bls_keypair
+                .sign(bincode::serialize(&vote).unwrap().as_slice())
+                .into();
+            BLSMessage::new_vote(vote, signature, rank)
+        }
+
         fn handle_node_a_vote(
             &self,
-            vote_txn: &Transaction,
-            vote: &Vote,
+            vote_message: &VoteMessage,
             node_b_keypair: &Keypair,
-            node_b_vote_keypair: &Keypair,
             node_d_keypair: &Keypair,
-            node_d_vote_keypair: &Keypair,
             tpu_socket_addrs: &[std::net::SocketAddr],
             connection_cache: Arc<ConnectionCache>,
         ) {
             // Create vote for Node B (potentially equivocated)
-            let vote_txn_b = if self.a_equivocates && vote.is_notarization() {
+            let vote = &vote_message.vote;
+            let vote_b = if self.a_equivocates && vote.is_notarization() {
                 let new_block_id = Hash::new_unique();
                 let new_bank_hash = Hash::new_unique();
-                let equivocated_notar_vote =
-                    Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
-                        .to_vote_instruction(node_b_vote_keypair.pubkey(), node_b_keypair.pubkey());
-                Transaction::new_signed_with_payer(
-                    &[equivocated_notar_vote],
-                    Some(&node_b_keypair.pubkey()),
-                    &[node_b_keypair.insecure_clone()],
-                    vote_txn.message.recent_blockhash,
-                )
+                Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
             } else {
-                copied_vote_txn(
-                    vote_txn,
-                    &node_b_keypair.insecure_clone(),
-                    &node_b_vote_keypair.insecure_clone(),
-                )
+                *vote
             };
 
             broadcast_vote(
-                &vote_txn_b,
+                self.sign_and_construct_vote_message(
+                    vote_b,
+                    node_b_keypair,
+                    1, // Node B's rank is 1
+                ),
                 tpu_socket_addrs,
                 None,
                 connection_cache.clone(),
             );
 
             // Create vote for Node D (always copies Node A)
-            let vote_txn_d = copied_vote_txn(
-                vote_txn,
-                &node_d_keypair.insecure_clone(),
-                &node_d_vote_keypair.insecure_clone(),
+            broadcast_vote(
+                self.sign_and_construct_vote_message(
+                    *vote,
+                    node_d_keypair,
+                    3, // Node D's rank is 3
+                ),
+                tpu_socket_addrs,
+                None,
+                connection_cache,
             );
-
-            broadcast_vote(&vote_txn_d, tpu_socket_addrs, None, connection_cache);
         }
 
         fn handle_node_c_vote(
@@ -6752,17 +6697,18 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             false
         }
 
-        fn handle_finalize_vote(&mut self, vote: &Vote, node_name: usize) -> bool {
+        fn handle_finalize_vote(&mut self, vote_message: &VoteMessage) -> bool {
             if !self.check_for_roots {
                 return false;
             }
 
-            let slot_votes = self.post_experiment_votes.entry(vote.slot()).or_default();
-            slot_votes.push(node_name);
+            let slot = vote_message.vote.slot();
+            let slot_votes = self.post_experiment_votes.entry(slot).or_default();
+            slot_votes.push(vote_message.rank);
 
             // We expect votes from 2 nodes (A and C) since B and D are copy-voting
             if slot_votes.len() == 2 {
-                self.post_experiment_roots.insert(vote.slot());
+                self.post_experiment_roots.insert(slot);
 
                 // End test after 10 new roots
                 if self.post_experiment_roots.len() >= 10 {
@@ -6782,23 +6728,18 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         move || {
             loop {
                 let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
-                let vote_txn = bincode::deserialize::<Transaction>(&buf[0..n_bytes]).unwrap();
+                let BLSMessage::Vote(vote_message) =
+                    bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap()
+                else {
+                    continue;
+                };
 
-                let (vote_pubkey, parsed_vote, ..) =
-                    vote_parser::parse_alpenglow_vote_transaction(&vote_txn).unwrap();
-
-                let node_name = vote_pubkeys[&vote_pubkey];
-                let vote = parsed_vote.as_alpenglow_transaction_ref().unwrap();
-
-                match node_name {
+                match vote_message.rank {
                     0 => {
                         // Node A: Handle vote broadcasting to B and D
                         state.handle_node_a_vote(
-                            &vote_txn,
-                            vote,
-                            &node_b_keypair,
+                            &vote_message,
                             &node_b_vote_keypair,
-                            &node_d_keypair,
                             &node_d_vote_keypair,
                             &tpu_socket_addrs,
                             cluster.connection_cache.clone(),
@@ -6806,13 +6747,13 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     }
                     2 => {
                         // Node C: Handle experiment state transitions
-                        state.handle_node_c_vote(vote, &node_c_turbine_disabled);
+                        state.handle_node_c_vote(&vote_message.vote, &node_c_turbine_disabled);
                     }
                     _ => {}
                 }
 
                 // Check for finalization votes to determine test completion
-                if vote.is_finalize() && state.handle_finalize_vote(vote, node_name) {
+                if vote_message.vote.is_finalize() && state.handle_finalize_vote(&vote_message) {
                     break;
                 }
             }

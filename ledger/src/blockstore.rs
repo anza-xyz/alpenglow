@@ -22,6 +22,7 @@ use {
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
     },
+    alpenglow_vote::bls_message::CertificateMessage,
     assert_matches::debug_assert_matches,
     bincode::{deserialize, serialize},
     crossbeam_channel::{bounded, Receiver, Sender, TrySendError},
@@ -4034,7 +4035,7 @@ impl Blockstore {
         slot: Slot,
         block_id: Hash,
         bank_hash: Hash,
-        certificate: Vec<VersionedTransaction>,
+        certificate: CertificateMessage,
     ) -> Result<()> {
         let mut certificates = self
             .slot_certificates(slot)?
@@ -4048,7 +4049,7 @@ impl Blockstore {
     pub fn insert_new_skip_certificate(
         &self,
         slot: Slot,
-        certificate: Vec<VersionedTransaction>,
+        certificate: CertificateMessage,
     ) -> Result<()> {
         let mut certificates = self
             .slot_certificates(slot)?
