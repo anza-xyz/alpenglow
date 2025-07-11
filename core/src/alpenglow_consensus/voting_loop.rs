@@ -1,7 +1,7 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
-    crate::{replay_stage::ReplayStage, voting_service::VoteOp},
+    crate::voting_service::VoteOp,
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
@@ -18,7 +18,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_rpc::{
-        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
+        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
@@ -30,7 +30,6 @@ use {
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
-        timing::timestamp,
         transaction::Transaction,
     },
     solana_votor::{
@@ -41,6 +40,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
+        root_utils::maybe_set_root,
         skip_timeout,
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
@@ -181,6 +181,30 @@ impl GenerateVoteTxResult {
     pub(crate) fn is_hot_spare(&self) -> bool {
         matches!(self, Self::HotSpare)
     }
+}
+
+pub fn log_leader_change(
+    my_pubkey: &Pubkey,
+    bank_slot: Slot,
+    current_leader: &mut Option<Pubkey>,
+    new_leader: &Pubkey,
+) {
+    if let Some(ref current_leader) = current_leader {
+        if current_leader != new_leader {
+            let msg = if current_leader == my_pubkey {
+                ". I am no longer the leader"
+            } else if new_leader == my_pubkey {
+                ". I am now the leader"
+            } else {
+                ""
+            };
+            info!(
+                "LEADER CHANGE at slot: {} leader: {}{}",
+                bank_slot, new_leader, msg
+            );
+        }
+    }
+    current_leader.replace(new_leader.to_owned());
 }
 
 pub struct VotingLoop {
@@ -383,7 +407,7 @@ impl VotingLoop {
                 };
             }
 
-            ReplayStage::log_leader_change(
+            log_leader_change(
                 &my_pubkey,
                 current_slot,
                 &mut current_leader,
@@ -531,93 +555,26 @@ impl VotingLoop {
             }
 
             // Set new root
-            Self::maybe_set_root(
+            maybe_set_root(
                 leader_end_slot,
                 &mut cert_pool,
                 &mut pending_blocks,
                 &accounts_background_request_sender,
                 &bank_notification_sender,
                 &drop_bank_sender,
-                &mut shared_context,
-                &mut voting_context,
+                &shared_context.blockstore,
+                &shared_context.leader_schedule_cache,
+                &shared_context.bank_forks,
+                &shared_context.rpc_subscriptions,
+                &shared_context.my_pubkey,
+                &mut voting_context.vote_history,
+                &mut voting_context.has_new_vote_been_rooted,
+                &mut voting_context.voted_signatures,
             );
 
             // TODO(ashwin): If we were the leader for `current_slot` and the bank has not completed,
             // we can abandon the bank now
         }
-    }
-
-    /// Checks if any slots between `vote_history`'s current root
-    /// and `slot` have received a finalization certificate and are frozen
-    ///
-    /// If so, set the root as the highest slot that fits these conditions
-    /// and return the root
-    fn maybe_set_root(
-        slot: Slot,
-        cert_pool: &mut CertificatePool,
-        pending_blocks: &mut PendingBlocks,
-        accounts_background_request_sender: &AbsRequestSender,
-        bank_notification_sender: &Option<BankNotificationSenderConfig>,
-        drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-        ctx: &mut SharedContext,
-        vctx: &mut VotingContext,
-    ) -> Option<Slot> {
-        let old_root = vctx.vote_history.root();
-        info!(
-            "{}: Checking for finalization certificates between {old_root} and {slot}",
-            ctx.my_pubkey
-        );
-        let new_root = (old_root + 1..=slot).rev().find(|slot| {
-            cert_pool.is_finalized(*slot) && ctx.bank_forks.read().unwrap().is_frozen(*slot)
-        })?;
-        trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
-        vctx.vote_history.set_root(new_root);
-        cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
-        *pending_blocks = pending_blocks.split_off(&new_root);
-        if let Err(e) = ReplayStage::check_and_handle_new_root(
-            &ctx.my_pubkey,
-            slot,
-            new_root,
-            ctx.bank_forks.as_ref(),
-            None,
-            ctx.blockstore.as_ref(),
-            &ctx.leader_schedule_cache,
-            accounts_background_request_sender,
-            &ctx.rpc_subscriptions,
-            Some(new_root),
-            bank_notification_sender,
-            &mut vctx.has_new_vote_been_rooted,
-            &mut vctx.voted_signatures,
-            drop_bank_sender,
-            None,
-        ) {
-            error!("Unable to set root: {e:?}");
-            return None;
-        }
-
-        // Distinguish between duplicate versions of same slot
-        let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
-        if let Err(e) =
-            ctx.blockstore
-                .insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
-        {
-            error!(
-                "failed to record optimistic slot in blockstore: slot={}: {:?}",
-                new_root, &e
-            );
-        }
-        // It is critical to send the OC notification in order to keep compatibility with
-        // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
-        // in order to perform cleanup. In the future we will look to deprecate OC and remove
-        // these code paths.
-        if let Some(config) = bank_notification_sender {
-            config
-                .sender
-                .send(BankNotification::OptimisticallyConfirmed(new_root))
-                .unwrap();
-        }
-
-        Some(new_root)
     }
 
     /// Attempts to create and send a skip vote for all unvoted slots in `[start, end]`

@@ -7,6 +7,7 @@ use {
 
 pub mod certificate_pool;
 pub mod commitment;
+pub mod root_utils;
 pub mod vote_history;
 pub mod vote_history_storage;
 

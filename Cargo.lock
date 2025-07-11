@@ -11187,6 +11187,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-pubkey",
+ "solana-rpc",
  "solana-runtime",
  "solana-sdk",
  "solana-vote",

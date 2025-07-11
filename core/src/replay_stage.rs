@@ -4,7 +4,8 @@ use {
         alpenglow_consensus::{
             block_creation_loop::ReplayHighestFrozen,
             voting_loop::{
-                GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop, VotingLoopConfig,
+                log_leader_change, GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop,
+                VotingLoopConfig,
             },
         },
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
@@ -88,7 +89,8 @@ use {
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage, CertificateId,
+        root_utils::set_bank_forks_root, vote_history::VoteHistory,
+        vote_history_storage::VoteHistoryStorage, CertificateId,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -1100,7 +1102,7 @@ impl ReplayStage {
                         if let Some(votable_leader) =
                             leader_schedule_cache.slot_leader_at(vote_bank.slot(), Some(vote_bank))
                         {
-                            Self::log_leader_change(
+                            log_leader_change(
                                 &my_pubkey,
                                 vote_bank.slot(),
                                 &mut current_leader,
@@ -1315,7 +1317,7 @@ impl ReplayStage {
 
                         let poh_bank = poh_recorder.read().unwrap().bank();
                         if let Some(bank) = poh_bank {
-                            Self::log_leader_change(
+                            log_leader_change(
                                 &my_pubkey,
                                 bank.slot(),
                                 &mut current_leader,
@@ -2120,30 +2122,6 @@ impl ReplayStage {
         }
     }
 
-    pub(crate) fn log_leader_change(
-        my_pubkey: &Pubkey,
-        bank_slot: Slot,
-        current_leader: &mut Option<Pubkey>,
-        new_leader: &Pubkey,
-    ) {
-        if let Some(ref current_leader) = current_leader {
-            if current_leader != new_leader {
-                let msg = if current_leader == my_pubkey {
-                    ". I am no longer the leader"
-                } else if new_leader == my_pubkey {
-                    ". I am now the leader"
-                } else {
-                    ""
-                };
-                info!(
-                    "LEADER CHANGE at slot: {} leader: {}{}",
-                    bank_slot, new_leader, msg
-                );
-            }
-        }
-        current_leader.replace(new_leader.to_owned());
-    }
-
     fn check_propagation_for_start_leader(
         poh_slot: Slot,
         parent_slot: Slot,
@@ -2700,7 +2678,7 @@ impl ReplayStage {
                 bank.parent_slot(),
                 new_root,
                 bank_forks,
-                Some(progress),
+                progress,
                 blockstore,
                 leader_schedule_cache,
                 accounts_background_request_sender,
@@ -2710,7 +2688,7 @@ impl ReplayStage {
                 has_new_vote_been_rooted,
                 vote_signatures,
                 drop_bank_sender,
-                Some(tbft_structs),
+                tbft_structs,
             )?;
         }
 
@@ -4326,12 +4304,12 @@ impl ReplayStage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_and_handle_new_root(
+    fn check_and_handle_new_root(
         my_pubkey: &Pubkey,
         parent_slot: Slot,
         new_root: Slot,
         bank_forks: &RwLock<BankForks>,
-        progress: Option<&mut ProgressMap>,
+        progress: &mut ProgressMap,
         blockstore: &Blockstore,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         accounts_background_request_sender: &AbsRequestSender,
@@ -4341,7 +4319,7 @@ impl ReplayStage {
         has_new_vote_been_rooted: &mut bool,
         voted_signatures: &mut Vec<Signature>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-        tbft_structs: Option<&mut TowerBFTStructures>,
+        tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
         // get the root bank before squash
         let root_bank = bank_forks
@@ -4405,63 +4383,43 @@ impl ReplayStage {
     pub fn handle_new_root(
         new_root: Slot,
         bank_forks: &RwLock<BankForks>,
-        progress: Option<&mut ProgressMap>,
+        progress: &mut ProgressMap,
         accounts_background_request_sender: &AbsRequestSender,
         highest_super_majority_root: Option<Slot>,
         has_new_vote_been_rooted: &mut bool,
         voted_signatures: &mut Vec<Signature>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-        tbft_structs: Option<&mut TowerBFTStructures>,
+        tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
-        bank_forks.read().unwrap().prune_program_cache(new_root);
-        let removed_banks = bank_forks.write().unwrap().set_root(
+        set_bank_forks_root(
             new_root,
+            bank_forks,
             accounts_background_request_sender,
             highest_super_majority_root,
+            has_new_vote_been_rooted,
+            voted_signatures,
+            drop_bank_sender,
         )?;
-
-        drop_bank_sender
-            .send(removed_banks)
-            .unwrap_or_else(|err| warn!("bank drop failed: {:?}", err));
-
-        // Dropping the bank_forks write lock and reacquiring as a read lock is
-        // safe because updates to bank_forks are only made by a single thread.
         let r_bank_forks = bank_forks.read().unwrap();
-        let new_root_bank = &r_bank_forks[new_root];
-        if !*has_new_vote_been_rooted {
-            for signature in voted_signatures.iter() {
-                if new_root_bank.get_signature_status(signature).is_some() {
-                    *has_new_vote_been_rooted = true;
-                    break;
-                }
-            }
-            if *has_new_vote_been_rooted {
-                std::mem::take(voted_signatures);
-            }
-        }
-        if let Some(progress) = progress {
-            progress.handle_new_root(&r_bank_forks);
-        }
-        if let Some(TowerBFTStructures {
+        progress.handle_new_root(&r_bank_forks);
+        let TowerBFTStructures {
             heaviest_subtree_fork_choice,
             duplicate_slots_tracker,
             duplicate_confirmed_slots,
             unfrozen_gossip_verified_vote_hashes,
             epoch_slots_frozen_slots,
             ..
-        }) = tbft_structs
-        {
-            heaviest_subtree_fork_choice.set_tree_root((new_root, r_bank_forks.root_bank().hash()));
-            *duplicate_slots_tracker = duplicate_slots_tracker.split_off(&new_root);
-            // duplicate_slots_tracker now only contains entries >= `new_root`
+        } = tbft_structs;
+        heaviest_subtree_fork_choice.set_tree_root((new_root, r_bank_forks.root_bank().hash()));
+        *duplicate_slots_tracker = duplicate_slots_tracker.split_off(&new_root);
+        // duplicate_slots_tracker now only contains entries >= `new_root`
 
-            *duplicate_confirmed_slots = duplicate_confirmed_slots.split_off(&new_root);
-            // gossip_confirmed_slots now only contains entries >= `new_root`
+        *duplicate_confirmed_slots = duplicate_confirmed_slots.split_off(&new_root);
+        // gossip_confirmed_slots now only contains entries >= `new_root`
 
-            unfrozen_gossip_verified_vote_hashes.set_root(new_root);
-            *epoch_slots_frozen_slots = epoch_slots_frozen_slots.split_off(&new_root);
-            // epoch_slots_frozen_slots now only contains entries >= `new_root`
-        }
+        unfrozen_gossip_verified_vote_hashes.set_root(new_root);
+        *epoch_slots_frozen_slots = epoch_slots_frozen_slots.split_off(&new_root);
+        // epoch_slots_frozen_slots now only contains entries >= `new_root`
         Ok(())
     }
 
@@ -5045,13 +5003,13 @@ pub(crate) mod tests {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            Some(&mut progress),
+            &mut progress,
             &AbsRequestSender::default(),
             None,
             &mut true,
             &mut Vec::new(),
             &drop_bank_sender,
-            Some(&mut tbft_structs),
+            &mut tbft_structs,
         )
         .unwrap();
         assert_eq!(bank_forks.read().unwrap().root(), root);
@@ -5134,13 +5092,13 @@ pub(crate) mod tests {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            Some(&mut progress),
+            &mut progress,
             &AbsRequestSender::default(),
             Some(confirmed_root),
             &mut true,
             &mut Vec::new(),
             &drop_bank_sender,
-            Some(&mut tbft_structs),
+            &mut tbft_structs,
         )
         .unwrap();
         assert_eq!(bank_forks.read().unwrap().root(), root);

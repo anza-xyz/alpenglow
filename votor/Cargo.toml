@@ -56,6 +56,7 @@ solana-logger = { workspace = true }
 solana-measure = { workspace = true }
 solana-metrics = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-rpc = { workspace = true }
 solana-runtime = { workspace = true }
 solana-sdk = { workspace = true }
 solana-vote = { workspace = true }
