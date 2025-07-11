@@ -1,11 +1,7 @@
 //! The `repair_service` module implements the tools necessary to generate a thread which
 //! regularly finds missing shreds in the ledger and sends repair requests for those shreds
-#[cfg(test)]
 use {
-    crate::repair::duplicate_repair_status::DuplicateSlotRepairStatus,
-    solana_sdk::{clock::DEFAULT_MS_PER_SLOT, signer::keypair::Keypair},
-};
-use {
+    super::standard_repair_handler::StandardRepairHandler,
     crate::{
         cluster_info_vote_listener::VerifiedVoteReceiver,
         cluster_slots_service::cluster_slots::ClusterSlots,
@@ -54,6 +50,11 @@ use {
         time::{Duration, Instant},
     },
     tokio::sync::mpsc::Sender as AsyncSender,
+};
+#[cfg(test)]
+use {
+    crate::repair::duplicate_repair_status::DuplicateSlotRepairStatus,
+    solana_sdk::clock::DEFAULT_MS_PER_SLOT, solana_sdk::signature::Keypair,
 };
 
 // Time to defer repair requests to allow for turbine propagation
@@ -451,7 +452,7 @@ impl RepairService {
                 .name("solRepairSvc".to_string())
                 .spawn(move || {
                     Self::run(
-                        &blockstore,
+                        blockstore,
                         &exit,
                         &repair_socket,
                         repair_service_channels.repair_channels,
@@ -748,7 +749,7 @@ impl RepairService {
     }
 
     fn run(
-        blockstore: &Blockstore,
+        blockstore: Arc<Blockstore>,
         exit: &AtomicBool,
         repair_socket: &UdpSocket,
         repair_channels: RepairChannels,
@@ -760,11 +761,14 @@ impl RepairService {
         let mut repair_tracker = RepairTracker {
             root_bank_cache,
             repair_weight: RepairWeight::new(root_bank_slot),
-            serve_repair: ServeRepair::new(
-                repair_info.cluster_info.clone(),
-                repair_info.bank_forks.clone(),
-                repair_info.repair_whitelist.clone(),
-            ),
+            serve_repair: {
+                ServeRepair::new(
+                    repair_info.cluster_info.clone(),
+                    repair_info.bank_forks.clone(),
+                    repair_info.repair_whitelist.clone(),
+                    Box::new(StandardRepairHandler::new(blockstore.clone())),
+                )
+            },
             repair_metrics: RepairMetrics::default(),
             peers_cache: LruCache::new(REPAIR_PEERS_CACHE_CAPACITY),
             popular_pruned_forks_requests: HashSet::new(),
@@ -773,7 +777,7 @@ impl RepairService {
 
         while !exit.load(Ordering::Relaxed) {
             Self::run_repair_iteration(
-                blockstore,
+                blockstore.as_ref(),
                 &repair_channels,
                 &repair_info,
                 &mut repair_tracker,
@@ -1646,15 +1650,18 @@ mod test {
         let bank = Bank::new_for_tests(&genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank);
         let ledger_path = get_tmp_ledger_path_auto_delete!();
-        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+        let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
         let cluster_slots = ClusterSlots::default();
         let cluster_info = Arc::new(new_test_cluster_info());
         let identity_keypair = cluster_info.keypair().clone();
-        let serve_repair = ServeRepair::new(
-            cluster_info,
-            bank_forks,
-            Arc::new(RwLock::new(HashSet::default())),
-        );
+        let serve_repair = {
+            ServeRepair::new(
+                cluster_info,
+                bank_forks,
+                Arc::new(RwLock::new(HashSet::default())),
+                Box::new(StandardRepairHandler::new(blockstore.clone())),
+            )
+        };
         let mut duplicate_slot_repair_statuses = HashMap::new();
         let dead_slot = 9;
         let receive_socket = &bind_to_unspecified().unwrap();
@@ -1749,11 +1756,16 @@ mod test {
             bind_to_unspecified().unwrap().local_addr().unwrap(),
         ));
         let cluster_info = Arc::new(new_test_cluster_info());
-        let serve_repair = ServeRepair::new(
-            cluster_info.clone(),
-            bank_forks,
-            Arc::new(RwLock::new(HashSet::default())),
-        );
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
+        let serve_repair = {
+            ServeRepair::new(
+                cluster_info.clone(),
+                bank_forks,
+                Arc::new(RwLock::new(HashSet::default())),
+                Box::new(StandardRepairHandler::new(blockstore)),
+            )
+        };
         let valid_repair_peer = Node::new_localhost().info;
 
         // Signal that this peer has confirmed the dead slot, and is thus
