@@ -2,8 +2,10 @@
 use {
     crate::{
         alpenglow_consensus::{
-            block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
-            voting_loop::{GenerateVoteTxResult, VotingLoop, VotingLoopConfig},
+            block_creation_loop::ReplayHighestFrozen,
+            voting_loop::{
+                GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop, VotingLoopConfig,
+            },
         },
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
@@ -11,9 +13,7 @@ use {
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
-        commitment_service::{
-            AggregateCommitmentService, CommitmentAggregationData, TowerCommitmentAggregationData,
-        },
+        commitment_service::{AggregateCommitmentService, TowerCommitmentAggregationData},
         consensus::{
             fork_choice::{select_vote_and_reset_forks, ForkChoice, SelectVoteAndResetForkResult},
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
@@ -622,11 +622,12 @@ impl ReplayStage {
         trace!("replay stage");
 
         // Start the replay stage loop
-        let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
-            exit.clone(),
-            block_commitment_cache.clone(),
-            rpc_subscriptions.clone(),
-        );
+        let (lockouts_sender, commitment_sender, commitment_service) =
+            AggregateCommitmentService::new(
+                exit.clone(),
+                block_commitment_cache.clone(),
+                rpc_subscriptions.clone(),
+            );
 
         // Alpenglow specific objects
         let mut first_alpenglow_slot = bank_forks
@@ -676,7 +677,7 @@ impl ReplayStage {
                 rpc_subscriptions: rpc_subscriptions.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
                 voting_sender: voting_sender.clone(),
-                commitment_sender: lockouts_sender.clone(),
+                commitment_sender,
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
                 leader_window_notifier,
@@ -2650,7 +2651,7 @@ impl ReplayStage {
         authorized_voter_keypairs: &[Arc<Keypair>],
         blockstore: &Blockstore,
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
-        lockouts_sender: &Sender<CommitmentAggregationData>,
+        lockouts_sender: &Sender<TowerCommitmentAggregationData>,
         accounts_background_request_sender: &AbsRequestSender,
         rpc_subscriptions: &Arc<RpcSubscriptions>,
         block_commitment_cache: &Arc<RwLock<BlockCommitmentCache>>,
@@ -3102,13 +3103,14 @@ impl ReplayStage {
         root: Slot,
         total_stake: Stake,
         node_vote_state: (Pubkey, TowerVoteState),
-        lockouts_sender: &Sender<CommitmentAggregationData>,
+        lockouts_sender: &Sender<TowerCommitmentAggregationData>,
     ) {
-        if let Err(e) =
-            lockouts_sender.send(CommitmentAggregationData::TowerCommitmentAggregationData(
-                TowerCommitmentAggregationData::new(bank, root, total_stake, node_vote_state),
-            ))
-        {
+        if let Err(e) = lockouts_sender.send(TowerCommitmentAggregationData::new(
+            bank,
+            root,
+            total_stake,
+            node_vote_state,
+        )) {
             trace!("lockouts_sender failed: {:?}", e);
         }
     }
@@ -5550,7 +5552,7 @@ pub(crate) mod tests {
             block_commitment_cache.clone(),
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
         ));
-        let (lockouts_sender, _) = AggregateCommitmentService::new(
+        let (lockouts_sender, _, _) = AggregateCommitmentService::new(
             exit,
             block_commitment_cache.clone(),
             rpc_subscriptions,

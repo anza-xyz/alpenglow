@@ -5,8 +5,9 @@ use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        alpenglow_consensus::block_creation_loop::{
-            self, BlockCreationLoopConfig, LeaderWindowNotifier, ReplayHighestFrozen,
+        alpenglow_consensus::{
+            block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
+            voting_loop::LeaderWindowNotifier,
         },
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,

@@ -3,7 +3,9 @@
 
 use {
     crate::{
-        alpenglow_consensus::block_creation_loop::{LeaderWindowNotifier, ReplayHighestFrozen},
+        alpenglow_consensus::{
+            block_creation_loop::ReplayHighestFrozen, voting_loop::LeaderWindowNotifier,
+        },
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,

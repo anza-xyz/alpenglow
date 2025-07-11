@@ -9,6 +9,7 @@ use {
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
+    solana_votor::commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentType},
     std::{
         cmp::max,
         collections::HashMap,
@@ -20,22 +21,6 @@ use {
         time::Duration,
     },
 };
-
-pub enum AlpenglowCommitmentType {
-    /// Our node has voted notarize for the slot
-    Notarize,
-    /// We have observed a finalization certificate for the slot
-    Finalized,
-}
-pub enum CommitmentAggregationData {
-    AlpenglowCommitmentAggregationData(AlpenglowCommitmentAggregationData),
-    TowerCommitmentAggregationData(TowerCommitmentAggregationData),
-}
-
-pub struct AlpenglowCommitmentAggregationData {
-    pub commitment_type: AlpenglowCommitmentType,
-    pub slot: Slot,
-}
 
 pub struct TowerCommitmentAggregationData {
     bank: Arc<Bank>,
@@ -83,13 +68,23 @@ impl AggregateCommitmentService {
         exit: Arc<AtomicBool>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
         subscriptions: Arc<RpcSubscriptions>,
-    ) -> (Sender<CommitmentAggregationData>, Self) {
+    ) -> (
+        Sender<TowerCommitmentAggregationData>,
+        Sender<AlpenglowCommitmentAggregationData>,
+        Self,
+    ) {
         let (sender, receiver): (
-            Sender<CommitmentAggregationData>,
-            Receiver<CommitmentAggregationData>,
+            Sender<TowerCommitmentAggregationData>,
+            Receiver<TowerCommitmentAggregationData>,
         ) = unbounded();
+        let (ag_sender, ag_receiver): (
+            Sender<AlpenglowCommitmentAggregationData>,
+            Receiver<AlpenglowCommitmentAggregationData>,
+        ) = unbounded();
+
         (
             sender,
+            ag_sender,
             Self {
                 t_commitment: Builder::new()
                     .name("solAggCommitSvc".to_string())
@@ -98,9 +93,14 @@ impl AggregateCommitmentService {
                             break;
                         }
 
-                        if let Err(RecvTimeoutError::Disconnected) =
-                            Self::run(&receiver, &block_commitment_cache, &subscriptions, &exit)
-                        {
+                        if let Err(RecvTimeoutError::Disconnected) = Self::run(
+                            &receiver,
+                            &ag_receiver,
+                            &block_commitment_cache,
+                            &subscriptions,
+                            &exit,
+                        ) {
+                            info!("#ASH: disconnecting");
                             break;
                         }
                     })
@@ -110,7 +110,8 @@ impl AggregateCommitmentService {
     }
 
     fn run(
-        receiver: &Receiver<CommitmentAggregationData>,
+        receiver: &Receiver<TowerCommitmentAggregationData>,
+        ag_receiver: &Receiver<AlpenglowCommitmentAggregationData>,
         block_commitment_cache: &RwLock<BlockCommitmentCache>,
         subscriptions: &Arc<RpcSubscriptions>,
         exit: &AtomicBool,
@@ -120,29 +121,33 @@ impl AggregateCommitmentService {
                 return Ok(());
             }
 
-            let aggregation_data = receiver.recv_timeout(Duration::from_secs(1))?;
-            let aggregation_data = receiver.try_iter().last().unwrap_or(aggregation_data);
-
             let mut aggregate_commitment_time = Measure::start("aggregate-commitment-ms");
-            let update_commitment_slots = {
-                match aggregation_data {
-                    CommitmentAggregationData::TowerCommitmentAggregationData(data) => {
-                        let ancestors = data.bank.status_cache_ancestors();
-                        if ancestors.is_empty() {
-                            continue;
-                        }
+            let tower_result = receiver.recv_timeout(Duration::from_millis(500));
+            let ag_result = ag_receiver.recv_timeout(Duration::from_millis(500));
 
-                        Self::update_commitment_cache(block_commitment_cache, data, ancestors)
+            let commitment_slots = match (tower_result, ag_result) {
+                (Ok(aggregation_data), _) => {
+                    let data = receiver.try_iter().last().unwrap_or(aggregation_data);
+                    let ancestors = data.bank.status_cache_ancestors();
+                    if ancestors.is_empty() {
+                        continue;
                     }
-                    CommitmentAggregationData::AlpenglowCommitmentAggregationData(data) => {
-                        Self::alpenglow_update_commitment_cache(
-                            block_commitment_cache,
-                            data.commitment_type,
-                            data.slot,
-                        )
-                    }
+                    Self::update_commitment_cache(block_commitment_cache, data, ancestors)
                 }
+                (_, Ok(aggregation_data)) => {
+                    let data = ag_receiver.try_iter().last().unwrap_or(aggregation_data);
+                    Self::alpenglow_update_commitment_cache(
+                        block_commitment_cache,
+                        data.commitment_type,
+                        data.slot,
+                    )
+                }
+                (Err(RecvTimeoutError::Disconnected), Err(RecvTimeoutError::Disconnected)) => {
+                    return Err(RecvTimeoutError::Disconnected)
+                }
+                _ => continue,
             };
+
             aggregate_commitment_time.stop();
 
             datapoint_info!(
@@ -154,19 +159,19 @@ impl AggregateCommitmentService {
                 ),
                 (
                     "highest-super-majority-root",
-                    update_commitment_slots.highest_super_majority_root as i64,
+                    commitment_slots.highest_super_majority_root as i64,
                     i64
                 ),
                 (
                     "highest-confirmed-slot",
-                    update_commitment_slots.highest_confirmed_slot as i64,
+                    commitment_slots.highest_confirmed_slot as i64,
                     i64
                 ),
             );
             // Triggers rpc_subscription notifications as soon as new commitment data is available,
             // sending just the commitment cache slot information that the notifications thread
             // needs
-            subscriptions.notify_subscribers(update_commitment_slots);
+            subscriptions.notify_subscribers(commitment_slots);
         }
     }
 

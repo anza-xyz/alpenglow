@@ -3,6 +3,7 @@
 //! within the block timeouts. Responsible for inserting empty banks for
 //! banking stage to fill, and clearing banks once the timeout has been reached.
 use {
+    super::voting_loop::{LeaderWindowInfo, LeaderWindowNotifier},
     crate::{
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
@@ -20,7 +21,7 @@ use {
         bank_forks::BankForks,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
-    solana_votor::{block_timeout, Block},
+    solana_votor::block_timeout,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -73,20 +74,6 @@ struct LeaderContext {
 pub struct ReplayHighestFrozen {
     pub highest_frozen_slot: Mutex<Slot>,
     pub freeze_notification: Condvar,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct LeaderWindowInfo {
-    pub start_slot: Slot,
-    pub end_slot: Slot,
-    pub parent_block: Block,
-    pub skip_timer: Instant,
-}
-
-#[derive(Default)]
-pub struct LeaderWindowNotifier {
-    pub window_info: Mutex<Option<LeaderWindowInfo>>,
-    pub window_notification: Condvar,
 }
 
 #[derive(Debug, Error)]
