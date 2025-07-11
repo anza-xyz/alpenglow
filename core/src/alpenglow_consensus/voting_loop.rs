@@ -11,7 +11,6 @@ use {
     crate::{
         alpenglow_consensus::{
             certificate_pool::CertificatePool,
-            vote_certificate::{LegacyVoteCertificate, VoteCertificate},
             vote_history::VoteHistory,
             vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         },
@@ -21,8 +20,12 @@ use {
         replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
         voting_service::VoteOp,
     },
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        vote::Vote,
+    },
     crossbeam_channel::{RecvTimeoutError, Sender},
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver},
@@ -39,17 +42,17 @@ use {
     solana_runtime::{
         accounts_background_service::AbsRequestSender, bank::Bank, bank_forks::BankForks,
         installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
-        vote_sender_types::AlpenglowVoteReceiver as VoteReceiver,
+        vote_sender_types::BLSVerifiedMessageReceiver as VoteReceiver,
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
-        transaction::{Transaction, VersionedTransaction},
+        transaction::Transaction,
     },
     std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
@@ -87,7 +90,7 @@ pub struct VotingLoopConfig {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
-    pub certificate_sender: Sender<(CertificateId, LegacyVoteCertificate)>,
+    pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 
     // Receivers
     pub(crate) completed_block_receiver: CompletedBlockReceiver,
@@ -100,6 +103,8 @@ struct VotingContext {
     vote_account_pubkey: Pubkey,
     identity_keypair: Arc<Keypair>,
     authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
+    // The BLS keypair should always change with authorized_voter_keypairs.
+    derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     has_new_vote_been_rooted: bool,
     voting_sender: Sender<VoteOp>,
     commitment_sender: Sender<CommitmentAggregationData>,
@@ -117,6 +122,7 @@ struct SharedContext {
     my_pubkey: Pubkey,
 }
 
+#[derive(Debug)]
 pub(crate) enum GenerateVoteTxResult {
     // non voting validator, not eligible for refresh
     // until authorized keypair is overriden
@@ -126,7 +132,12 @@ pub(crate) enum GenerateVoteTxResult {
     HotSpare,
     // failed generation, eligible for refresh
     Failed,
+    // no rank found.
+    NoRankFound,
+    // Generated a vote transaction
     Tx(Transaction),
+    // Generated a BLS message
+    BLSMessage(BLSMessage),
 }
 
 impl GenerateVoteTxResult {
@@ -240,6 +251,7 @@ impl VotingLoop {
             vote_account_pubkey: vote_account,
             identity_keypair: identity_keypair.clone(),
             authorized_voter_keypairs,
+            derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted,
             voting_sender,
             commitment_sender,
@@ -509,7 +521,7 @@ impl VotingLoop {
     /// and return the root
     fn maybe_set_root(
         slot: Slot,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         pending_blocks: &mut PendingBlocks,
         accounts_background_request_sender: &AbsRequestSender,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
@@ -581,7 +593,7 @@ impl VotingLoop {
         start: Slot,
         end: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let bank = root_bank_cache.root_bank();
@@ -593,7 +605,9 @@ impl VotingLoop {
                     bank.slot()
                 );
                 let vote = Vote::new_skip_vote(slot);
-                Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context);
+                if !Self::send_vote(vote, false, bank.as_ref(), cert_pool, voting_context) {
+                    warn!("send_vote failed for {:?}", vote);
+                }
             }
         }
     }
@@ -608,7 +622,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if voting_context.vote_history.its_over(slot) {
@@ -632,8 +646,7 @@ impl VotingLoop {
             bank.slot()
         );
         let vote = Vote::new_finalization_vote(slot);
-        Self::send_vote(vote, false, bank, cert_pool, voting_context);
-        true
+        Self::send_vote(vote, false, bank, cert_pool, voting_context)
     }
 
     /// Check if the stored certificates and block id allow us to vote notarize for `bank` at this time.
@@ -646,7 +659,7 @@ impl VotingLoop {
     fn try_notar(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -702,7 +715,7 @@ impl VotingLoop {
     fn vote_notarize(
         my_pubkey: &Pubkey,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         debug_assert!(bank.is_frozen());
@@ -715,7 +728,9 @@ impl VotingLoop {
 
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
-        Self::send_vote(vote, false, bank, cert_pool, voting_context);
+        if !Self::send_vote(vote, false, bank, cert_pool, voting_context) {
+            return false;
+        }
 
         Self::alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
@@ -733,7 +748,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
@@ -751,13 +766,15 @@ impl VotingLoop {
         for (block_id, bank_hash) in blocks.into_iter() {
             info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
             let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
-            Self::send_vote(
+            if !Self::send_vote(
                 vote,
                 false,
                 root_bank_cache.root_bank().as_ref(),
                 cert_pool,
                 voting_context,
-            );
+            ) {
+                warn!("send_vote failed for {:?}", vote);
+            }
         }
         true
     }
@@ -770,7 +787,7 @@ impl VotingLoop {
         slot: Slot,
         leader_end_slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
         if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
@@ -792,8 +809,7 @@ impl VotingLoop {
             root_bank_cache.root_bank().as_ref(),
             cert_pool,
             voting_context,
-        );
-        true
+        )
     }
 
     /// Refresh the highest recent finalization certificate
@@ -802,7 +818,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         slot: Slot,
         root_bank_cache: &mut RootBankCache,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let highest_finalization_slot = cert_pool
@@ -815,13 +831,15 @@ impl VotingLoop {
         for s in highest_finalization_slot..=slot {
             for vote in voting_context.vote_history.votes_cast(s) {
                 info!("{my_pubkey}: Refreshing vote {vote:?}");
-                Self::send_vote(
+                if !Self::send_vote(
                     vote,
                     true,
                     root_bank_cache.root_bank().as_ref(),
                     cert_pool,
                     voting_context,
-                );
+                ) {
+                    warn!("send_vote failed for {:?}", vote);
+                }
             }
         }
     }
@@ -841,9 +859,9 @@ impl VotingLoop {
         vote: Vote,
         is_refresh: bool,
         bank: &Bank,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         context: &mut VotingContext,
-    ) {
+    ) -> bool {
         // Update and save the vote history
         if !is_refresh {
             context.vote_history.add_vote(vote);
@@ -854,21 +872,20 @@ impl VotingLoop {
         generate_time.stop();
         // TODO(ashwin): add metrics struct here and throughout the whole file
         // replay_timing.generate_vote_us += generate_time.as_us();
-        let GenerateVoteTxResult::Tx(vote_tx) = vote_tx_result else {
-            return;
+        let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
+            warn!("Unable to vote, vote_tx_result {:?}", vote_tx_result);
+            return false;
         };
 
-        if let Err(e) = Self::add_vote_and_maybe_update_commitment(
+        if let Err(e) = Self::add_message_and_maybe_update_commitment(
             &context.identity_keypair.pubkey(),
-            &vote,
-            &context.vote_account_pubkey,
-            vote_tx.clone().into(),
+            &bls_message,
             cert_pool,
             &context.commitment_sender,
         ) {
             if !is_refresh {
                 warn!("Unable to push our own vote into the pool {}", e);
-                return;
+                return false;
             }
         };
 
@@ -883,12 +900,34 @@ impl VotingLoop {
         // Send the vote over the wire
         context
             .voting_sender
-            .send(VoteOp::PushAlpenglowVote {
-                tx: vote_tx,
-                slot: bank.slot(),
+            .send(VoteOp::PushAlpenglowBLSMessage {
+                bls_message,
+                slot: vote.slot(),
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
             })
             .unwrap_or_else(|err| warn!("Error: {:?}", err));
+        true
+    }
+
+    fn get_bls_keypair(
+        context: &mut VotingContext,
+        authorized_voter_keypair: &Arc<Keypair>,
+    ) -> Result<Arc<BLSKeypair>, BlsError> {
+        let pubkey = authorized_voter_keypair.pubkey();
+        if let Some(existing) = context.derived_bls_keypairs.get(&pubkey) {
+            return Ok(existing.clone());
+        }
+
+        let bls_keypair = Arc::new(BLSKeypair::derive_from_signer(
+            authorized_voter_keypair,
+            BLS_KEYPAIR_DERIVE_SEED,
+        )?);
+
+        context
+            .derived_bls_keypairs
+            .insert(pubkey, bls_keypair.clone());
+
+        Ok(bls_keypair)
     }
 
     fn generate_vote_tx(
@@ -897,78 +936,85 @@ impl VotingLoop {
         context: &mut VotingContext,
     ) -> GenerateVoteTxResult {
         let vote_account_pubkey = context.vote_account_pubkey;
-        let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
-        if !bank.is_startup_verification_complete() {
-            info!("startup verification incomplete, so unable to vote");
-            return GenerateVoteTxResult::Failed;
-        }
-
-        if authorized_voter_keypairs.is_empty() {
-            return GenerateVoteTxResult::NonVoting;
-        }
-        if let Some(slot) = context.wait_to_vote_slot {
-            if vote.slot() < slot {
+        let authorized_voter_keypair;
+        let bls_pubkey_in_vote_account;
+        {
+            let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
+            if !bank.is_startup_verification_complete() {
+                info!("startup verification incomplete, so unable to vote");
                 return GenerateVoteTxResult::Failed;
             }
-        }
-        let vote_account = match bank.get_vote_account(&context.vote_account_pubkey) {
-            None => {
+            if authorized_voter_keypairs.is_empty() {
+                return GenerateVoteTxResult::NonVoting;
+            }
+            if let Some(slot) = context.wait_to_vote_slot {
+                if vote.slot() < slot {
+                    return GenerateVoteTxResult::Failed;
+                }
+            }
+            let Some(vote_account) = bank.get_vote_account(&context.vote_account_pubkey) else {
                 warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
                 return GenerateVoteTxResult::Failed;
-            }
-            Some(vote_account) => vote_account,
-        };
-        let vote_state = match vote_account.alpenglow_vote_state() {
-            None => {
+            };
+            let Some(vote_state) = vote_account.alpenglow_vote_state() else {
                 warn!(
                     "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
                 );
                 return GenerateVoteTxResult::Failed;
+            };
+            if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
+                info!(
+                    "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
+                    vote_state.node_pubkey(),
+                    context.identity_keypair.pubkey()
+                );
+                return GenerateVoteTxResult::HotSpare;
             }
-            Some(vote_state) => vote_state,
-        };
-        if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
-            info!(
-                "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
-                vote_state.node_pubkey(),
-                context.identity_keypair.pubkey()
-            );
-            return GenerateVoteTxResult::HotSpare;
-        }
+            bls_pubkey_in_vote_account = match vote_account.bls_pubkey() {
+                None => {
+                    panic!(
+                        "No BLS pubkey in vote account {}",
+                        context.identity_keypair.pubkey()
+                    );
+                }
+                Some(key) => *key,
+            };
 
-        let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
-            warn!(
-                "Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
-                bank.epoch()
-            );
-            return GenerateVoteTxResult::Failed;
-        };
+            let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch())
+            else {
+                warn!("Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
+                    bank.epoch()
+                );
+                return GenerateVoteTxResult::Failed;
+            };
 
-        let authorized_voter_keypair = match authorized_voter_keypairs
-            .iter()
-            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
-        {
-            None => {
+            let Some(keypair) = authorized_voter_keypairs
+                .iter()
+                .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
+            else {
                 warn!(
                     "The authorized keypair {authorized_voter_pubkey} for vote account \
                      {vote_account_pubkey} is not available.  Unable to vote"
                 );
                 return GenerateVoteTxResult::NonVoting;
-            }
-            Some(authorized_voter_keypair) => authorized_voter_keypair,
-        };
+            };
 
-        let vote_ix =
-            vote.to_vote_instruction(vote_account_pubkey, authorized_voter_keypair.pubkey());
-        let vote_tx = Transaction::new_signed_with_payer(
-            &[vote_ix],
-            Some(&context.identity_keypair.pubkey()),
-            &[&context.identity_keypair, authorized_voter_keypair],
-            bank.last_blockhash(),
-        );
+            authorized_voter_keypair = keypair.clone();
+        }
 
+        let bls_keypair = Self::get_bls_keypair(context, &authorized_voter_keypair)
+            .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
+        let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
+        if my_bls_pubkey != bls_pubkey_in_vote_account {
+            panic!(
+                "Vote account bls_pubkey mismatch: {:?} (expected: {:?}).  Unable to vote",
+                bls_pubkey_in_vote_account, my_bls_pubkey
+            );
+        }
+        let vote_serialized = bincode::serialize(&vote).unwrap();
+        let signature = authorized_voter_keypair.sign_message(&vote_serialized);
         if !context.has_new_vote_been_rooted {
-            context.voted_signatures.push(vote_tx.signatures[0]);
+            context.voted_signatures.push(signature);
             if context.voted_signatures.len() > MAX_VOTE_SIGNATURES {
                 context.voted_signatures.remove(0);
             }
@@ -976,7 +1022,24 @@ impl VotingLoop {
             context.voted_signatures.clear();
         }
 
-        GenerateVoteTxResult::Tx(vote_tx)
+        let Some(epoch_stakes) = bank.epoch_stakes(bank.epoch()) else {
+            panic!(
+                "The bank {} doesn't have its own epoch_stakes for {}",
+                bank.slot(),
+                bank.epoch()
+            );
+        };
+        let Some(my_rank) = epoch_stakes
+            .bls_pubkey_to_rank_map()
+            .get_rank(&my_bls_pubkey)
+        else {
+            return GenerateVoteTxResult::NoRankFound;
+        };
+        GenerateVoteTxResult::BLSMessage(BLSMessage::Vote(VoteMessage {
+            vote: *vote,
+            signature: bls_keypair.sign(&vote_serialized).into(),
+            rank: *my_rank,
+        }))
     }
 
     /// Ingest votes from all to all, tpu, and gossip into the certificate pool
@@ -985,29 +1048,27 @@ impl VotingLoop {
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
-        cert_pool: &mut CertificatePool<LegacyVoteCertificate>,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
         timeout: Duration,
     ) -> Result<(), AddVoteError> {
-        let add_to_cert_pool =
-            |(vote, vote_account_pubkey, tx): (Vote, Pubkey, VersionedTransaction)| {
-                match Self::add_vote_and_maybe_update_commitment(
-                    my_pubkey,
-                    &vote,
-                    &vote_account_pubkey,
-                    tx,
-                    cert_pool,
-                    commitment_sender,
-                ) {
-                    err @ Err(AddVoteError::CertificateSenderError) => err,
-                    Err(e) => {
-                        // TODO(ashwin): increment metrics on non duplicate failures
-                        trace!("{my_pubkey}: unable to push vote into the pool {}", e);
-                        Ok(())
-                    }
-                    Ok(()) => Ok(()),
+        let add_to_cert_pool = |bls_message: BLSMessage| {
+            trace!("{my_pubkey}: ingesting BLS Message: {bls_message:?}");
+            Self::add_message_and_maybe_update_commitment(
+                my_pubkey,
+                &bls_message,
+                cert_pool,
+                commitment_sender,
+            )
+            .or_else(|e| match e {
+                AddVoteError::CertificateSenderError => Err(e),
+                e => {
+                    // TODO(ashwin): increment metrics on non duplicate failures
+                    trace!("{my_pubkey}: unable to push vote into the pool {}", e);
+                    Ok(())
                 }
-            };
+            })
+        };
 
         let Ok(first) = vote_receiver.recv_timeout(timeout) else {
             // Either timeout or sender disconnected, return so we can check exit
@@ -1055,15 +1116,13 @@ impl VotingLoop {
     }
 
     /// Adds a vote to the certificate pool and updates the commitment cache if necessary
-    fn add_vote_and_maybe_update_commitment<VC: VoteCertificate>(
+    fn add_message_and_maybe_update_commitment(
         my_pubkey: &Pubkey,
-        vote: &Vote,
-        vote_account_pubkey: &Pubkey,
-        tx: VC::VoteTransaction,
-        cert_pool: &mut CertificatePool<VC>,
+        message: &BLSMessage,
+        cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
-        let Some(new_finalized_slot) = cert_pool.add_vote(vote, tx, vote_account_pubkey)? else {
+        let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
