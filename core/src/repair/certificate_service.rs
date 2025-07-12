@@ -4,13 +4,11 @@
 //! - TODO: Repair of missing critical certificates to enable progress
 
 use {
-    crate::{
-        alpenglow_consensus::CertificateId,
-        result::{Error, Result},
-    },
+    crate::result::{Error, Result},
     alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
+    solana_votor::CertificateId,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
