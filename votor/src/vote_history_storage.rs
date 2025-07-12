@@ -1,5 +1,9 @@
+#[cfg(feature = "frozen-abi")]
+use solana_frozen_abi_macro::{frozen_abi, AbiExample};
 use {
     super::vote_history::*,
+    log::trace,
+    serde::{Deserialize, Serialize},
     solana_sdk::{
         pubkey::Pubkey,
         signature::{Signature, Signer},

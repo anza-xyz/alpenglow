@@ -1,5 +1,5 @@
 use {
-    crate::alpenglow_consensus::CertificateId,
+    crate::CertificateId,
     alpenglow_vote::{
         bls_message::{CertificateMessage, VoteMessage},
         certificate::{Certificate, CertificateType},
@@ -52,6 +52,7 @@ impl VoteCertificate {
         })
     }
 
+    #[allow(dead_code)]
     pub fn vote_count(&self) -> usize {
         self.0.bitmap.count_ones()
     }
@@ -101,6 +102,7 @@ impl VoteCertificate {
 
 /// Given a bit vector and a list of validator BLS pubkeys, generate an
 /// aggregate BLS pubkey.
+#[allow(dead_code)]
 pub fn aggregate_pubkey(
     bitmap: &BitVec<u8, Lsb0>,
     bls_pubkey_to_rank_map: &BLSPubkeyToRankMap,

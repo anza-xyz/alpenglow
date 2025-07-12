@@ -1,15 +1,16 @@
 use {
-    super::{
+    crate::{
         certificate_limits_and_vote_types,
-        parent_ready_tracker::ParentReadyTracker,
-        vote_certificate::{CertificateError, VoteCertificate},
+        certificate_pool::{
+            parent_ready_tracker::ParentReadyTracker,
+            vote_certificate::{CertificateError, VoteCertificate},
+            vote_pool::{VoteKey, VotePool},
+        },
+        conflicting_types,
         vote_history::VoteHistory,
-        vote_pool::{VoteKey, VotePool},
-        vote_to_certificate_ids, Stake,
-    },
-    crate::alpenglow_consensus::{
-        conflicting_types, CertificateId, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        vote_to_certificate_ids, CertificateId, Stake, VoteType,
+        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
@@ -18,6 +19,7 @@ use {
         vote::Vote,
     },
     crossbeam_channel::Sender,
+    log::{error, trace},
     solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
@@ -32,6 +34,10 @@ use {
     },
     thiserror::Error,
 };
+
+pub mod parent_ready_tracker;
+mod vote_certificate;
+mod vote_pool;
 
 impl VoteType {
     pub fn get_type(vote: &Vote) -> VoteType {
@@ -83,7 +89,7 @@ pub struct CertificatePool {
     /// Tracks slots which have reached the parent ready condition:
     /// - They have a potential parent block with a NotarizeFallback certificate
     /// - All slots from the parent have a Skip certificate
-    pub(crate) parent_ready_tracker: ParentReadyTracker,
+    pub parent_ready_tracker: ParentReadyTracker,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
@@ -351,7 +357,7 @@ impl CertificatePool {
             return Err(AddVoteError::UnrootedSlot);
         }
         // We only allow votes
-        if slot > self.root + MAX_SLOT_AGE {
+        if slot > self.root.saturating_add(MAX_SLOT_AGE) {
             return Err(AddVoteError::SlotInFuture);
         }
         let vote_type = VoteType::get_type(vote);
@@ -432,7 +438,7 @@ impl CertificatePool {
             .unwrap_or(0)
     }
 
-    pub(crate) fn highest_finalized_slot(&self) -> Slot {
+    pub fn highest_finalized_slot(&self) -> Slot {
         self.completed_certificates
             .iter()
             .filter_map(|(cert_id, _)| match cert_id {
@@ -570,13 +576,14 @@ impl CertificatePool {
         let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
             return false;
         };
-        let voted_stake = notarize_pool.total_stake()
-            + self
-                .vote_pools
+        let voted_stake = notarize_pool.total_stake().saturating_add(
+            self.vote_pools
                 .get(&(slot, VoteType::Skip))
-                .map_or(0, |pool| pool.total_stake());
+                .map_or(0, |pool| pool.total_stake()),
+        );
         let top_notarized_stake = notarize_pool.top_entry_stake();
-        (voted_stake - top_notarized_stake) as f64 / total_stake as f64 >= SAFE_TO_SKIP_THRESHOLD
+        (voted_stake.saturating_sub(top_notarized_stake)) as f64 / total_stake as f64
+            >= SAFE_TO_SKIP_THRESHOLD
     }
 
     #[cfg(test)]
@@ -601,10 +608,10 @@ impl CertificatePool {
             // handles cases where we are entering the alpenglow epoch, where the first
             // slot in the epoch will pass my_leader_slot == parent_slot
             my_leader_slot != first_alpenglow_slot &&
-            my_leader_slot != parent_slot + 1;
+            my_leader_slot != parent_slot.saturating_add(1);
 
         if needs_skip_certificate {
-            let begin_skip_slot = first_alpenglow_slot.max(parent_slot + 1);
+            let begin_skip_slot = first_alpenglow_slot.max(parent_slot.saturating_add(1));
             for slot in begin_skip_slot..my_leader_slot {
                 if !self.skip_certified(slot) {
                     error!(
@@ -645,7 +652,7 @@ impl CertificatePool {
     }
 }
 
-pub(crate) fn load_from_blockstore(
+pub fn load_from_blockstore(
     my_pubkey: &Pubkey,
     root_bank: &Bank,
     blockstore: &Blockstore,
@@ -1084,7 +1091,7 @@ mod tests {
         assert_eq!(pool.highest_skip_slot(), 15);
 
         for i in 0..validator_keypairs.len() {
-            let slot = i as u64 + 16;
+            let slot = (i as u64).saturating_add(16);
             let vote = Vote::new_skip_vote(slot);
             // These should not extend the skip range
             assert!(pool
@@ -1437,7 +1444,7 @@ mod tests {
                     slot,
                 );
             }
-            slot += 4;
+            slot = slot.saturating_add(4);
         }
     }
 
