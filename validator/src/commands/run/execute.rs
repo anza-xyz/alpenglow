@@ -23,7 +23,6 @@ use {
     },
     solana_clap_utils::input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of, values_of},
     solana_core::{
-        alpenglow_consensus::vote_history_storage,
         banking_trace::DISABLED_BAKING_TRACE_DIR,
         consensus::tower_storage,
         system_monitor_service::SystemMonitorService,
@@ -68,6 +67,7 @@ use {
     solana_send_transaction_service::send_transaction_service,
     solana_streamer::{quic::QuicServerParams, socket::SocketAddrSpace},
     solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
+    solana_votor::vote_history_storage,
     std::{
         collections::HashSet,
         fs::{self, File},

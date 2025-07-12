@@ -13,8 +13,11 @@
 //! a block with parent `b` in slot `s` will have their block finalized.
 
 use {
-    super::Block, crate::alpenglow_consensus::MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-    solana_pubkey::Pubkey, solana_sdk::clock::Slot, std::collections::HashMap,
+    crate::{Block, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
+    log::trace,
+    solana_pubkey::Pubkey,
+    solana_sdk::clock::Slot,
+    std::collections::HashMap,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -66,7 +69,7 @@ impl ParentReadyTracker {
             },
         );
         slot_statuses.insert(
-            root_slot + 1,
+            root_slot.saturating_add(1),
             ParentReadyStatus {
                 skip: false,
                 notar_fallbacks: vec![],
@@ -77,7 +80,7 @@ impl ParentReadyTracker {
             my_pubkey,
             slot_statuses,
             root: root_slot,
-            highest_with_parent_ready: root_slot + 1,
+            highest_with_parent_ready: root_slot.saturating_add(1),
         }
     }
 
@@ -99,7 +102,7 @@ impl ParentReadyTracker {
         assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE);
 
         // Add this block as valid parent to skip connected future blocks
-        for s in slot + 1.. {
+        for s in slot.saturating_add(1).. {
             trace!(
                 "{}: Adding new parent ready for {s} parent {block:?}",
                 self.my_pubkey
@@ -127,7 +130,7 @@ impl ParentReadyTracker {
 
         // Get newly connected future slots
         let mut future_slots = vec![];
-        for s in slot + 1.. {
+        for s in slot.saturating_add(1).. {
             future_slots.push(s);
             if !self.slot_statuses.get(&s).is_some_and(|ss| ss.skip) {
                 break;
@@ -136,7 +139,7 @@ impl ParentReadyTracker {
 
         // Find possible parents using the previous slot
         let mut potential_parents = vec![];
-        let Some(status) = self.slot_statuses.get(&(slot - 1)) else {
+        let Some(status) = self.slot_statuses.get(&(slot.saturating_sub(1))) else {
             return;
         };
         for nf in &status.notar_fallbacks {

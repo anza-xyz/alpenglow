@@ -68,8 +68,8 @@ pub const AG_DEBUG_LOG_FILTER: &str = "error,solana_core::replay_stage=info,\
         solana_poh::poh_recorder=trace,solana_poh::poh_service=trace,\
         solana_core::alpenglow_consensus::voting_loop=trace,\
         solana_core::alpenglow_consensus::block_creation_loop=trace,\
-        solana_core::alpenglow_consensus::certificate_pool=trace,\
-        solana_core::alpenglow_consensus::parent_ready_tracker=trace,\
+        solana_votor::certificate_pool=trace,\
+        solana_votor::parent_ready_tracker=trace,\
         solana_core::validator=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
