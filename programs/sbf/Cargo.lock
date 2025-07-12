@@ -9417,7 +9417,7 @@ dependencies = [
  "serde_derive",
  "solana-accounts-db",
  "solana-bloom",
- "solana-bls",
+ "solana-bls-signatures",
  "solana-entry",
  "solana-ledger",
  "solana-logger",
