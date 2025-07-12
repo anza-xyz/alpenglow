@@ -15,10 +15,10 @@ const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats e
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
 #[derive(Debug)]
 pub(crate) struct BLSSigVerifierStats {
-    pub sent: i64,
-    pub sent_failed: i64,
-    pub received: i64,
-    pub received_malformed: i64,
+    pub sent: u64,
+    pub sent_failed: u64,
+    pub received: u64,
+    pub received_malformed: u64,
     pub last_stats_logged: Instant,
 }
 
@@ -98,10 +98,14 @@ impl BLSSigVerifier {
         }
         datapoint_info!(
             "bls_sig_verifier_stats",
-            ("sent", self.stats.sent, i64),
-            ("sent_failed", self.stats.sent_failed, i64),
-            ("received", self.stats.received, i64),
-            ("received_malformed", self.stats.received_malformed, i64),
+            ("sent", self.stats.sent as i64, i64),
+            ("sent_failed", self.stats.sent_failed as i64, i64),
+            ("received", self.stats.received as i64, i64),
+            (
+                "received_malformed",
+                self.stats.received_malformed as i64,
+                i64
+            ),
         );
         self.stats = BLSSigVerifierStats::new();
     }
