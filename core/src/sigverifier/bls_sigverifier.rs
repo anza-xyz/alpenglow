@@ -146,7 +146,11 @@ impl BLSSigVerifier {
             "bls_sig_verifier_stats",
             ("sent", self.stats.sent as i64, i64),
             ("sent_failed", self.stats.sent_failed as i64, i64),
-            ("verified_votes_sent", self.stats.verified_votes_sent as i64, i64),
+            (
+                "verified_votes_sent",
+                self.stats.verified_votes_sent as i64,
+                i64
+            ),
             (
                 "verified_votes_sent_failed",
                 self.stats.verified_votes_sent_failed as i64,
