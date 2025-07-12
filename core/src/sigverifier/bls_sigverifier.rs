@@ -98,10 +98,14 @@ impl BLSSigVerifier {
         }
         datapoint_info!(
             "bls_sig_verifier_stats",
-            ("sent", self.stats.sent, u64),
-            ("sent_failed", self.stats.sent_failed, u64),
-            ("received", self.stats.received, u64),
-            ("received_malformed", self.stats.received_malformed, u64),
+            ("sent", self.stats.sent as i64, i64),
+            ("sent_failed", self.stats.sent_failed as i64, i64),
+            ("received", self.stats.received as i64, i64),
+            (
+                "received_malformed",
+                self.stats.received_malformed as i64,
+                i64
+            ),
         );
         self.stats = BLSSigVerifierStats::new();
     }
