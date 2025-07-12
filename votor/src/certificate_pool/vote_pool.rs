@@ -1,6 +1,8 @@
 use {
-    super::Stake,
-    crate::alpenglow_consensus::vote_certificate::{CertificateError, VoteCertificate},
+    crate::{
+        certificate_pool::vote_certificate::{CertificateError, VoteCertificate},
+        Stake,
+    },
     alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
@@ -73,10 +75,12 @@ impl VotePool {
 
         let vote_entry = self.votes.entry(vote_key).or_insert_with(VoteEntry::new);
         vote_entry.transactions.push(*transaction);
-        vote_entry.total_stake_by_key += validator_stake;
+        vote_entry.total_stake_by_key = vote_entry
+            .total_stake_by_key
+            .saturating_add(validator_stake);
 
         if inserted_first_time {
-            self.total_stake += validator_stake;
+            self.total_stake = self.total_stake.saturating_add(validator_stake);
         }
         if vote_entry.total_stake_by_key > self.top_entry_stake {
             self.top_entry_stake = vote_entry.total_stake_by_key;
