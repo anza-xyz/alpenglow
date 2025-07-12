@@ -2,11 +2,19 @@
 //! This is just a placeholder for now, until we have a real implementation.
 
 use {
-    crate::sigverify_stage::{SigVerifier, SigVerifyServiceError},
+    crate::{
+        cluster_info_vote_listener::VerifiedVoteSender,
+        sigverify_stage::{SigVerifier, SigVerifyServiceError},
+    },
     alpenglow_vote::bls_message::BLSMessage,
     crossbeam_channel::{Sender, TrySendError},
+    solana_pubkey::Pubkey,
+    solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
-    std::time::{Duration, Instant},
+    std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    },
 };
 
 const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats every second
@@ -17,6 +25,8 @@ const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats e
 pub(crate) struct BLSSigVerifierStats {
     pub sent: u64,
     pub sent_failed: u64,
+    pub verified_votes_sent: u64,
+    pub verified_votes_sent_failed: u64,
     pub received: u64,
     pub received_malformed: u64,
     pub last_stats_logged: Instant,
@@ -27,6 +37,8 @@ impl BLSSigVerifierStats {
         Self {
             sent: 0,
             sent_failed: 0,
+            verified_votes_sent: 0,
+            verified_votes_sent_failed: 0,
             received: 0,
             received_malformed: 0,
             last_stats_logged: Instant::now(),
@@ -36,14 +48,33 @@ impl BLSSigVerifierStats {
     pub fn accumulate(&mut self, other: BLSSigVerifierStats) {
         self.sent += other.sent;
         self.sent_failed += other.sent_failed;
+        self.verified_votes_sent += other.verified_votes_sent;
+        self.verified_votes_sent_failed += other.verified_votes_sent_failed;
         self.received += other.received;
         self.received_malformed += other.received_malformed;
     }
 }
 
 pub struct BLSSigVerifier {
-    sender: Sender<BLSMessage>,
+    verified_votes_sender: VerifiedVoteSender,
+    message_sender: Sender<BLSMessage>,
     stats: BLSSigVerifierStats,
+}
+
+impl BLSSigVerifier {
+    fn send_verified_votes(&mut self, verified_votes: HashMap<Pubkey, Vec<Slot>>) {
+        for (pubkey, slots) in verified_votes {
+            match self.verified_votes_sender.try_send((pubkey, slots)) {
+                Ok(()) => {
+                    self.stats.verified_votes_sent += 1;
+                }
+                Err(e) => {
+                    trace!("Failed to send verified vote: {}", e);
+                    self.stats.verified_votes_sent_failed += 1;
+                }
+            }
+        }
+    }
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -59,6 +90,7 @@ impl SigVerifier for BLSSigVerifier {
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         // TODO(wen): just a placeholder without any batching.
         let mut stats = BLSSigVerifierStats::new();
+        let mut verified_votes: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
 
         for packet in packet_batches.iter().flatten() {
             stats.received += 1;
@@ -72,7 +104,20 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            match self.sender.try_send(message) {
+            if let BLSMessage::Vote(vote_message) = &message {
+                let vote = &vote_message.vote;
+                let slot = vote.slot();
+                if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
+                    let cur_slots: &mut Vec<Slot> =
+                        verified_votes.entry(Pubkey::default()).or_default();
+                    if !cur_slots.contains(&slot) {
+                        cur_slots.push(slot);
+                    }
+                }
+            }
+
+            // Now send the BLS message to certificate pool.
+            match self.message_sender.try_send(message) {
                 Ok(()) => stats.sent += 1,
                 Err(TrySendError::Full(_)) => {
                     stats.sent_failed += 1;
@@ -82,6 +127,7 @@ impl SigVerifier for BLSSigVerifier {
                 }
             }
         }
+        self.send_verified_votes(verified_votes);
         self.stats.accumulate(stats);
         // We don't need lock on stats for now because stats are read and written in a single thread.
         self.maybe_report_stats();
@@ -100,15 +146,25 @@ impl BLSSigVerifier {
             "bls_sig_verifier_stats",
             ("sent", self.stats.sent, u64),
             ("sent_failed", self.stats.sent_failed, u64),
+            ("verified_votes_sent", self.stats.verified_votes_sent, u64),
+            (
+                "verified_votes_sent_failed",
+                self.stats.verified_votes_sent_failed,
+                u64
+            ),
             ("received", self.stats.received, u64),
             ("received_malformed", self.stats.received_malformed, u64),
         );
         self.stats = BLSSigVerifierStats::new();
     }
 
-    pub fn new(sender: Sender<BLSMessage>) -> Self {
+    pub fn new(
+        verified_votes_sender: VerifiedVoteSender,
+        message_sender: Sender<BLSMessage>,
+    ) -> Self {
         Self {
-            sender,
+            verified_votes_sender,
+            message_sender,
             stats: BLSSigVerifierStats::new(),
         }
     }
@@ -177,7 +233,8 @@ mod tests {
     #[test]
     fn test_blssigverifier_send_packets() {
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let mut verifier = BLSSigVerifier::new(sender);
+        let (verified_vote_sender, verfied_vote_receiver) = crossbeam_channel::unbounded();
+        let mut verifier = BLSSigVerifier::new(verified_vote_sender, sender);
 
         let mut bitmap = BitVec::<u8, Lsb0>::repeat(false, 8);
         bitmap.set(3, true);
@@ -204,6 +261,8 @@ mod tests {
         assert_eq!(stats.sent, 2);
         assert_eq!(stats.received, 2);
         assert_eq!(stats.received_malformed, 0);
+        let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
+        assert_eq!(received_verified_votes, (Pubkey::default(), vec![5]));
 
         let messages = vec![BLSMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()),
@@ -215,11 +274,13 @@ mod tests {
         assert_eq!(stats.sent, 3);
         assert_eq!(stats.received, 3);
         assert_eq!(stats.received_malformed, 0);
+        let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
+        assert_eq!(received_verified_votes, (Pubkey::default(), vec![6]));
 
         // Pretend 10 seconds have passed, make sure stats are reset
         verifier.set_last_stats_logged(Instant::now() - STATS_INTERVAL_DURATION);
         let messages = vec![BLSMessage::Vote(VoteMessage {
-            vote: Vote::new_finalization_vote(7),
+            vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()),
             signature: Signature::default(),
             rank: 2,
         })];
@@ -229,12 +290,15 @@ mod tests {
         assert_eq!(stats.sent, 0);
         assert_eq!(stats.received, 0);
         assert_eq!(stats.received_malformed, 0);
+        let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
+        assert_eq!(received_verified_votes, (Pubkey::default(), vec![7]));
     }
 
     #[test]
     fn test_blssigverifier_send_packets_malformed() {
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let mut verifier = BLSSigVerifier::new(sender);
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let mut verifier = BLSSigVerifier::new(verified_vote_sender, sender);
 
         let packets = vec![Packet::default()];
         let packet_batches = vec![PacketBatch::new(packets)];
@@ -252,7 +316,8 @@ mod tests {
     fn test_blssigverifier_send_packets_channel_full() {
         solana_logger::setup();
         let (sender, receiver) = crossbeam_channel::bounded(1);
-        let mut verifier = BLSSigVerifier::new(sender);
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let mut verifier = BLSSigVerifier::new(verified_vote_sender, sender);
         let messages = vec![
             BLSMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
@@ -281,7 +346,8 @@ mod tests {
     #[test]
     fn test_blssigverifier_send_packets_receiver_closed() {
         let (sender, receiver) = crossbeam_channel::bounded(1);
-        let mut verifier = BLSSigVerifier::new(sender);
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let mut verifier = BLSSigVerifier::new(verified_vote_sender, sender);
         // Close the receiver, should get panic on next send
         drop(receiver);
         let messages = vec![BLSMessage::Vote(VoteMessage {
