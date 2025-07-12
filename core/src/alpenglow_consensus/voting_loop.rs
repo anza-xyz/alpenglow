@@ -1,19 +1,8 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
-    super::{
-        block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
-        certificate_pool::{self, AddVoteError},
-        parent_ready_tracker::BlockProductionParent,
-        vote_history_storage::VoteHistoryStorage,
-        Block, CertificateId,
-    },
+    super::block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
     crate::{
-        alpenglow_consensus::{
-            certificate_pool::CertificatePool,
-            vote_history::VoteHistory,
-            vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
-        },
         commitment_service::{
             AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
         },
@@ -50,6 +39,15 @@ use {
         signature::{Keypair, Signature, Signer},
         timing::timestamp,
         transaction::Transaction,
+    },
+    solana_votor::{
+        certificate_pool::{
+            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
+        },
+        skip_timeout,
+        vote_history::VoteHistory,
+        vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
+        Block, CertificateId,
     },
     std::{
         collections::{BTreeMap, HashMap},
@@ -313,7 +311,7 @@ impl VotingLoop {
             // Create a timer for the leader window
             let skip_timer = Instant::now();
             let timeouts: Vec<_> = (0..(NUM_CONSECUTIVE_LEADER_SLOTS as usize))
-                .map(crate::alpenglow_consensus::skip_timeout)
+                .map(skip_timeout)
                 .collect();
 
             if is_leader {
