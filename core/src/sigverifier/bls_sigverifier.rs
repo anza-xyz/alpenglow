@@ -278,7 +278,6 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let stakes_vec = (0..validator_keypairs.len())
-            .into_iter()
             .map(|i| 1_000 - i as u64)
             .collect::<Vec<_>>();
         let genesis = create_genesis_config_with_alpenglow_vote_accounts_no_program(
