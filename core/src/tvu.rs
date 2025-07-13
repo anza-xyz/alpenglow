@@ -297,6 +297,7 @@ impl Tvu {
         let (cost_update_sender, cost_update_receiver) = unbounded();
         let (drop_bank_sender, drop_bank_receiver) = unbounded();
         let (voting_sender, voting_receiver) = unbounded();
+        let (bls_sender, bls_receiver) = unbounded();
 
         let replay_senders = ReplaySenders {
             rpc_subscriptions: rpc_subscriptions.clone(),
@@ -312,6 +313,7 @@ impl Tvu {
             cluster_slots_update_sender,
             cost_update_sender,
             voting_sender,
+            bls_sender,
             drop_bank_sender,
             block_metadata_notifier,
             dumped_slots_sender,
@@ -360,6 +362,7 @@ impl Tvu {
 
         let voting_service = VotingService::new(
             voting_receiver,
+            bls_receiver,
             cluster_info.clone(),
             poh_recorder.clone(),
             tower_storage,

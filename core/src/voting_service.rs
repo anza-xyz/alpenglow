@@ -1,12 +1,13 @@
 use {
     crate::{
+        alpenglow_consensus::voting_loop::BLSOp,
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
     },
     alpenglow_vote::bls_message::BLSMessage,
     bincode::serialize,
-    crossbeam_channel::Receiver,
+    crossbeam_channel::{select, Receiver},
     solana_client::connection_cache::ConnectionCache,
     solana_connection_cache::client_connection::ClientConnection,
     solana_gossip::cluster_info::ClusterInfo,
@@ -18,7 +19,7 @@ use {
         transaction::Transaction,
         transport::TransportError,
     },
-    solana_votor::vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
+    solana_votor::vote_history_storage::VoteHistoryStorage,
     std::{
         net::SocketAddr,
         sync::{Arc, RwLock},
@@ -36,17 +37,6 @@ pub enum VoteOp {
         tx: Transaction,
         tower_slots: Vec<Slot>,
         saved_tower: SavedTowerVersions,
-    },
-    //TODO(wen): remove PushAlpenglowVote when BLS all to all is submmitted.
-    PushAlpenglowVote {
-        tx: Transaction,
-        slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
-    },
-    PushAlpenglowBLSMessage {
-        bls_message: BLSMessage,
-        slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
     },
     RefreshVote {
         tx: Transaction,
@@ -103,6 +93,7 @@ pub struct VotingService {
 impl VotingService {
     pub fn new(
         vote_receiver: Receiver<VoteOp>,
+        bls_receiver: Receiver<BLSOp>,
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: Arc<RwLock<PohRecorder>>,
         tower_storage: Arc<dyn TowerStorage>,
@@ -122,17 +113,47 @@ impl VotingService {
                     false,
                 );
 
-                for vote_op in vote_receiver.iter() {
-                    Self::handle_vote(
-                        &cluster_info,
-                        &poh_recorder,
-                        tower_storage.as_ref(),
-                        vote_history_storage.as_ref(),
-                        vote_op,
-                        connection_cache.clone(),
-                        additional_listeners.as_ref(),
-                        &mut staked_validators_cache,
-                    );
+                let mut vote_receiver_disconnected = false;
+                let mut bls_receiver_disconnected = false;
+                loop {
+                    if vote_receiver_disconnected && bls_receiver_disconnected {
+                        break;
+                    }
+                    select! {
+                        recv(vote_receiver) -> vote_op => {
+                            match vote_op {
+                                Ok(vote_op) => {
+                                    Self::handle_vote(
+                                        &cluster_info,
+                                        &poh_recorder,
+                                        tower_storage.as_ref(),
+                                        vote_op,
+                                        connection_cache.clone(),
+                                    );
+                                }
+                                Err(_) => {
+                                    vote_receiver_disconnected = true;
+                                }
+                            }
+                        }
+                        recv(bls_receiver) -> bls_op => {
+                            match bls_op {
+                                Ok(bls_op) => {
+                                    Self::handle_bls_vote(
+                                        &cluster_info,
+                                        vote_history_storage.as_ref(),
+                                        bls_op,
+                                        connection_cache.clone(),
+                                        additional_listeners.as_ref(),
+                                        &mut staked_validators_cache,
+                                    );
+                                }
+                                Err(_) => {
+                                    bls_receiver_disconnected = true;
+                                }
+                            }
+                        }
+                    }
                 }
             })
             .unwrap();
@@ -177,39 +198,6 @@ impl VotingService {
         }
     }
 
-    // TODO(wen): broadcast_alpenglow_vote should be removed when all Alpenglow
-    // votes are sent through BLS messages.
-    fn broadcast_alpenglow_vote(
-        slot: Slot,
-        cluster_info: &ClusterInfo,
-        tx: &Transaction,
-        connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
-        staked_validators_cache: &mut StakedValidatorsCache,
-    ) {
-        let (staked_validator_tpu_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot_with_tpu_vote_ports(slot, cluster_info, Instant::now());
-
-        if staked_validator_tpu_sockets.is_empty() {
-            let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
-        } else {
-            let sockets = additional_listeners
-                .map(|v| v.as_slice())
-                .unwrap_or(&[])
-                .iter()
-                .chain(staked_validator_tpu_sockets.iter());
-
-            for tpu_vote_socket in sockets {
-                let _ = send_vote_transaction(
-                    cluster_info,
-                    tx,
-                    Some(*tpu_vote_socket),
-                    &connection_cache,
-                );
-            }
-        }
-    }
-
     fn broadcast_alpenglow_message(
         slot: Slot,
         cluster_info: &ClusterInfo,
@@ -247,60 +235,16 @@ impl VotingService {
         }
     }
 
-    pub fn handle_vote(
+    pub fn handle_bls_vote(
         cluster_info: &ClusterInfo,
-        poh_recorder: &RwLock<PohRecorder>,
-        tower_storage: &dyn TowerStorage,
         vote_history_storage: &dyn VoteHistoryStorage,
-        vote_op: VoteOp,
+        bls_op: BLSOp,
         connection_cache: Arc<ConnectionCache>,
         additional_listeners: Option<&Vec<SocketAddr>>,
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
-        match vote_op {
-            VoteOp::PushVote {
-                tx,
-                tower_slots,
-                saved_tower,
-            } => {
-                let mut measure = Measure::start("tower storage save");
-                if let Err(err) = tower_storage.store(&saved_tower) {
-                    error!("Unable to save tower to storage: {:?}", err);
-                    std::process::exit(1);
-                }
-                measure.stop();
-                trace!("{measure}");
-
-                Self::broadcast_tower_vote(cluster_info, poh_recorder, &tx, &connection_cache);
-
-                cluster_info.push_vote(&tower_slots, tx);
-            }
-            VoteOp::PushAlpenglowVote {
-                tx,
-                slot,
-                saved_vote_history,
-            } => {
-                let mut measure = Measure::start("alpenglow vote history save");
-                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
-                    std::process::exit(1);
-                }
-                measure.stop();
-                trace!("{measure}");
-
-                Self::broadcast_alpenglow_vote(
-                    slot,
-                    cluster_info,
-                    &tx,
-                    connection_cache,
-                    additional_listeners,
-                    staked_validators_cache,
-                );
-
-                // TODO: Test that no important votes are overwritten
-                cluster_info.push_alpenglow_vote(tx);
-            }
-            VoteOp::PushAlpenglowBLSMessage {
+        match bls_op {
+            BLSOp::PushVote {
                 bls_message,
                 slot,
                 saved_vote_history,
@@ -321,6 +265,34 @@ impl VotingService {
                     additional_listeners,
                     staked_validators_cache,
                 );
+            }
+        }
+    }
+
+    pub fn handle_vote(
+        cluster_info: &ClusterInfo,
+        poh_recorder: &RwLock<PohRecorder>,
+        tower_storage: &dyn TowerStorage,
+        vote_op: VoteOp,
+        connection_cache: Arc<ConnectionCache>,
+    ) {
+        match vote_op {
+            VoteOp::PushVote {
+                tx,
+                tower_slots,
+                saved_tower,
+            } => {
+                let mut measure = Measure::start("tower storage save");
+                if let Err(err) = tower_storage.store(&saved_tower) {
+                    error!("Unable to save tower to storage: {:?}", err);
+                    std::process::exit(1);
+                }
+                measure.stop();
+                trace!("{measure}");
+
+                Self::broadcast_tower_vote(cluster_info, poh_recorder, &tx, &connection_cache);
+
+                cluster_info.push_vote(&tower_slots, tx);
             }
             VoteOp::RefreshVote {
                 tx,
@@ -369,7 +341,9 @@ mod tests {
             recvmmsg::recv_mmsg,
             socket::SocketAddrSpace,
         },
-        solana_votor::vote_history_storage::{NullVoteHistoryStorage, SavedVoteHistory},
+        solana_votor::vote_history_storage::{
+            NullVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
+        },
         std::{
             net::SocketAddr,
             sync::{atomic::AtomicBool, Arc, RwLock},
@@ -378,6 +352,7 @@ mod tests {
 
     fn create_voting_service(
         vote_receiver: Receiver<VoteOp>,
+        bls_receiver: Receiver<BLSOp>,
         listener: SocketAddr,
     ) -> VotingService {
         // Create 10 node validatorvotekeypairs vec
@@ -417,6 +392,7 @@ mod tests {
 
         VotingService::new(
             vote_receiver,
+            bls_receiver,
             Arc::new(cluster_info),
             Arc::new(RwLock::new(poh_recorder)),
             Arc::new(NullTowerStorage::default()),
@@ -431,7 +407,8 @@ mod tests {
     #[test]
     fn test_send_bls_message() {
         solana_logger::setup();
-        let (vote_sender, vote_receiver) = crossbeam_channel::unbounded();
+        let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
+        let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
         // Create listener thread on a random port we allocated and return SocketAddr to create VotingService
 
         // Bind to a random UDP port
@@ -439,7 +416,7 @@ mod tests {
         let listener_addr = socket.local_addr().unwrap();
 
         // Create VotingService with the listener address
-        let _ = create_voting_service(vote_receiver, listener_addr);
+        let _ = create_voting_service(vote_receiver, bls_receiver, listener_addr);
 
         // Send a BLS message via the VotingService
         let bls_message = BLSMessage::Vote(VoteMessage {
@@ -448,8 +425,8 @@ mod tests {
             rank: 1,
         });
         let saved_vote_history = SavedVoteHistoryVersions::Current(SavedVoteHistory::default());
-        assert!(vote_sender
-            .send(VoteOp::PushAlpenglowBLSMessage {
+        assert!(bls_sender
+            .send(BLSOp::PushVote {
                 bls_message: bls_message.clone(),
                 slot: 5,
                 saved_vote_history,

@@ -4,7 +4,7 @@ use {
         alpenglow_consensus::{
             block_creation_loop::ReplayHighestFrozen,
             voting_loop::{
-                log_leader_change, GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop,
+                log_leader_change, BLSOp, GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop,
                 VotingLoopConfig,
             },
         },
@@ -296,6 +296,7 @@ pub struct ReplaySenders {
     pub cluster_slots_update_sender: Sender<Vec<u64>>,
     pub cost_update_sender: Sender<CostUpdate>,
     pub voting_sender: Sender<VoteOp>,
+    pub bls_sender: Sender<BLSOp>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
@@ -602,6 +603,7 @@ impl ReplayStage {
             cluster_slots_update_sender,
             cost_update_sender,
             voting_sender,
+            bls_sender,
             drop_bank_sender,
             block_metadata_notifier,
             dumped_slots_sender,
@@ -678,7 +680,7 @@ impl ReplayStage {
                 leader_schedule_cache: leader_schedule_cache.clone(),
                 rpc_subscriptions: rpc_subscriptions.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
-                voting_sender: voting_sender.clone(),
+                bls_sender,
                 commitment_sender: commitment_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
@@ -4616,7 +4618,6 @@ pub(crate) mod tests {
                 ThresholdDecision, Tower, VOTE_THRESHOLD_DEPTH,
             },
             replay_stage::ReplayStage,
-            staked_validators_cache::StakedValidatorsCache,
             vote_simulator::{self, VoteSimulator},
         },
         blockstore_processor::{
@@ -4659,7 +4660,6 @@ pub(crate) mod tests {
         solana_transaction_status::VersionedTransactionWithStatusMeta,
         solana_vote::vote_transaction,
         solana_vote_program::vote_state::{self, TowerSync, VoteStateVersions},
-        solana_votor::vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         std::{
             fs::remove_dir_all,
             iter,
@@ -7925,7 +7925,6 @@ pub(crate) mod tests {
             ..
         } = replay_blockstore_components(None, 10, None::<GenerateVotes>);
         let tower_storage = NullTowerStorage::default();
-        let vote_history_storage: NullVoteHistoryStorage = NullVoteHistoryStorage::default();
 
         let VoteSimulator {
             mut validator_keypairs,
@@ -8012,23 +8011,12 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            connection_cache.protocol(),
-            Duration::from_secs(5),
-            5,
-            false,
-        );
-
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
             &tower_storage,
-            &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
-            None,
-            &mut staked_validators_cache,
         );
 
         let mut cursor = Cursor::default();
@@ -8128,23 +8116,12 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            connection_cache.protocol(),
-            Duration::from_secs(5),
-            5,
-            false,
-        );
-
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
             &tower_storage,
-            &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
-            None,
-            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(&mut cursor);
@@ -8267,23 +8244,12 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            connection_cache.protocol(),
-            Duration::from_secs(5),
-            5,
-            false,
-        );
-
         crate::voting_service::VotingService::handle_vote(
             &cluster_info,
             &poh_recorder,
             &tower_storage,
-            &vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
-            None,
-            &mut staked_validators_cache,
         );
 
         assert!(last_vote_refresh_time.last_refresh_time > clone_refresh_time);
@@ -8386,7 +8352,6 @@ pub(crate) mod tests {
         cluster_info: &ClusterInfo,
         poh_recorder: &RwLock<PohRecorder>,
         tower_storage: &dyn TowerStorage,
-        vote_history_storage: &dyn VoteHistoryStorage,
         make_it_landing: bool,
         cursor: &mut Cursor,
         bank_forks: Arc<RwLock<BankForks>>,
@@ -8422,23 +8387,12 @@ pub(crate) mod tests {
             )
         };
 
-        let mut staked_validators_cache = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            connection_cache.protocol(),
-            Duration::from_secs(5),
-            5,
-            false,
-        );
-
         crate::voting_service::VotingService::handle_vote(
             cluster_info,
             poh_recorder,
             tower_storage,
-            vote_history_storage,
             vote_info,
             Arc::new(connection_cache),
-            None,
-            &mut staked_validators_cache,
         );
 
         let votes = cluster_info.get_votes(cursor);
@@ -8489,7 +8443,6 @@ pub(crate) mod tests {
             ..
         } = replay_blockstore_components(None, 10, None::<GenerateVotes>);
         let tower_storage = NullTowerStorage::default();
-        let vote_history_storage = NullVoteHistoryStorage::default();
 
         let VoteSimulator {
             mut validator_keypairs,
@@ -8550,7 +8503,6 @@ pub(crate) mod tests {
             &cluster_info,
             &poh_recorder,
             &tower_storage,
-            &vote_history_storage,
             true,
             &mut cursor,
             bank_forks.clone(),
@@ -8569,7 +8521,6 @@ pub(crate) mod tests {
             &cluster_info,
             &poh_recorder,
             &tower_storage,
-            &vote_history_storage,
             false,
             &mut cursor,
             bank_forks.clone(),

@@ -1,7 +1,6 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
-    crate::voting_service::VoteOp,
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
@@ -98,6 +97,14 @@ impl Drop for Finalizer {
     }
 }
 
+pub enum BLSOp {
+    PushVote {
+        bls_message: BLSMessage,
+        slot: Slot,
+        saved_vote_history: SavedVoteHistoryVersions,
+    },
+}
+
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
     pub exit: Arc<AtomicBool>,
@@ -118,7 +125,7 @@ pub struct VotingLoopConfig {
 
     // Senders / Notifiers
     pub accounts_background_request_sender: AbsRequestSender,
-    pub voting_sender: Sender<VoteOp>,
+    pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
@@ -139,7 +146,7 @@ struct VotingContext {
     // The BLS keypair should always change with authorized_voter_keypairs.
     derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     has_new_vote_been_rooted: bool,
-    voting_sender: Sender<VoteOp>,
+    bls_sender: Sender<BLSOp>,
     commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     wait_to_vote_slot: Option<Slot>,
     voted_signatures: Vec<Signature>,
@@ -240,7 +247,7 @@ impl VotingLoop {
             leader_schedule_cache,
             rpc_subscriptions,
             accounts_background_request_sender,
-            voting_sender,
+            bls_sender,
             commitment_sender,
             drop_bank_sender,
             bank_notification_sender,
@@ -310,7 +317,7 @@ impl VotingLoop {
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted,
-            voting_sender,
+            bls_sender,
             commitment_sender,
             wait_to_vote_slot,
             voted_signatures: vec![],
@@ -889,8 +896,8 @@ impl VotingLoop {
 
         // Send the vote over the wire
         context
-            .voting_sender
-            .send(VoteOp::PushAlpenglowBLSMessage {
+            .bls_sender
+            .send(BLSOp::PushVote {
                 bls_message,
                 slot: vote.slot(),
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
