@@ -5,9 +5,8 @@ use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        alpenglow_consensus::{
-            block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
-            voting_loop::LeaderWindowNotifier,
+        alpenglow_consensus::block_creation_loop::{
+            self, BlockCreationLoopConfig, ReplayHighestFrozen,
         },
         banking_trace::{self, BankingTracer, TraceError},
         cluster_info_vote_listener::VoteTracker,
@@ -138,6 +137,7 @@ use {
     solana_votor::{
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+        voting_loop::LeaderWindowNotifier,
     },
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{

@@ -1,6 +1,5 @@
 use {
     crate::{
-        alpenglow_consensus::voting_loop::BLSOp,
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
@@ -19,7 +18,7 @@ use {
         transaction::Transaction,
         transport::TransportError,
     },
-    solana_votor::vote_history_storage::VoteHistoryStorage,
+    solana_votor::{vote_history_storage::VoteHistoryStorage, voting_loop::BLSOp},
     std::{
         net::SocketAddr,
         sync::{Arc, RwLock},

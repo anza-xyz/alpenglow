@@ -3,7 +3,6 @@
 //! within the block timeouts. Responsible for inserting empty banks for
 //! banking stage to fill, and clearing banks once the timeout has been reached.
 use {
-    super::voting_loop::{LeaderWindowInfo, LeaderWindowNotifier},
     crate::{
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
@@ -21,7 +20,10 @@ use {
         bank_forks::BankForks,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
-    solana_votor::block_timeout,
+    solana_votor::{
+        block_timeout,
+        voting_loop::{LeaderWindowInfo, LeaderWindowNotifier},
+    },
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

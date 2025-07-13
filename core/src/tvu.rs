@@ -3,9 +3,7 @@
 
 use {
     crate::{
-        alpenglow_consensus::{
-            block_creation_loop::ReplayHighestFrozen, voting_loop::LeaderWindowNotifier,
-        },
+        alpenglow_consensus::block_creation_loop::ReplayHighestFrozen,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
@@ -53,7 +51,10 @@ use {
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
-    solana_votor::{vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage},
+    solana_votor::{
+        vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage,
+        voting_loop::LeaderWindowNotifier,
+    },
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},

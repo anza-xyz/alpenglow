@@ -1,6 +1,5 @@
 use {
     crossbeam_channel::{Sender, TrySendError},
-    log::{error, info},
     solana_sdk::clock::Slot,
 };
 

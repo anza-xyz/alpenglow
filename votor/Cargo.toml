@@ -51,6 +51,7 @@ solana-frozen-abi = { workspace = true, optional = true, features = [
 solana-frozen-abi-macro = { workspace = true, optional = true, features = [
     "frozen-abi",
 ] }
+solana-gossip = { workspace = true }
 solana-ledger = { workspace = true }
 solana-logger = { workspace = true }
 solana-measure = { workspace = true }

@@ -1,6 +1,20 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
+    crate::{
+        certificate_pool::{
+            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
+        },
+        commitment::{
+            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
+            AlpenglowCommitmentType,
+        },
+        root_utils::maybe_set_root,
+        skip_timeout,
+        vote_history::VoteHistory,
+        vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
+        Block, CertificateId,
+    },
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
@@ -31,20 +45,6 @@ use {
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
     },
-    solana_votor::{
-        certificate_pool::{
-            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
-        },
-        commitment::{
-            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
-            AlpenglowCommitmentType,
-        },
-        root_utils::maybe_set_root,
-        skip_timeout,
-        vote_history::VoteHistory,
-        vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
-        Block, CertificateId,
-    },
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
@@ -57,7 +57,7 @@ use {
 };
 
 /// Banks that have completed replay, but are yet to be voted on
-type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
+pub(crate) type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
 
 /// Context for the block creation loop to start a leader window
 #[derive(Copy, Clone, Debug)]
@@ -133,7 +133,7 @@ pub struct VotingLoopConfig {
     pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 
     // Receivers
-    pub(crate) completed_block_receiver: CompletedBlockReceiver,
+    pub completed_block_receiver: CompletedBlockReceiver,
     pub vote_receiver: VoteReceiver,
 }
 
@@ -163,7 +163,7 @@ struct SharedContext {
 }
 
 #[derive(Debug)]
-pub(crate) enum GenerateVoteTxResult {
+pub enum GenerateVoteTxResult {
     // non voting validator, not eligible for refresh
     // until authorized keypair is overriden
     NonVoting,
@@ -181,11 +181,11 @@ pub(crate) enum GenerateVoteTxResult {
 }
 
 impl GenerateVoteTxResult {
-    pub(crate) fn is_non_voting(&self) -> bool {
+    pub fn is_non_voting(&self) -> bool {
         matches!(self, Self::NonVoting)
     }
 
-    pub(crate) fn is_hot_spare(&self) -> bool {
+    pub fn is_hot_spare(&self) -> bool {
         matches!(self, Self::HotSpare)
     }
 }
@@ -294,7 +294,7 @@ impl VotingLoop {
                     "{my_pubkey}: Mismatch bank forks root {bank_forks_slot} vs vote history root {vote_history_slot}"
                 );
             }
-            let slot = bank_forks_slot + 1;
+            let slot = bank_forks_slot.saturating_add(1);
             info!(
                 "{my_pubkey}: Starting voting loop from {slot}: root {}",
                 root_bank_cache.root_bank().slot()
@@ -558,7 +558,7 @@ impl VotingLoop {
                     &mut cert_pool,
                     &mut voting_context,
                 );
-                current_slot += 1;
+                current_slot = current_slot.saturating_add(1);
             }
 
             // Set new root
@@ -688,7 +688,7 @@ impl VotingLoop {
                 return false;
             }
         } else {
-            if parent_slot + 1 != slot {
+            if parent_slot.saturating_add(1) != slot {
                 // Non consecutive
                 return false;
             }

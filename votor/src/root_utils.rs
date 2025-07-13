@@ -1,7 +1,8 @@
 use {
-    crate::{certificate_pool::CertificatePool, vote_history::VoteHistory},
+    crate::{
+        certificate_pool::CertificatePool, vote_history::VoteHistory, voting_loop::PendingBlocks,
+    },
     crossbeam_channel::Sender,
-    log::{error, info, trace, warn},
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_rpc::{
         optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
@@ -13,14 +14,8 @@ use {
         installed_scheduler_pool::BankWithScheduler,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature, timing::timestamp},
-    std::{
-        collections::BTreeMap,
-        sync::{Arc, RwLock},
-    },
+    std::sync::{Arc, RwLock},
 };
-
-/// Banks that have completed replay, but are yet to be voted on
-type PendingBlocks = BTreeMap<Slot, Arc<solana_runtime::bank::Bank>>;
 
 /// Checks if any slots between `vote_history`'s current root
 /// and `slot` have received a finalization certificate and are frozen

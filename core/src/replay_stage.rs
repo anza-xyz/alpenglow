@@ -1,13 +1,7 @@
 //! The `replay_stage` replays transactions broadcast by the leader.
 use {
     crate::{
-        alpenglow_consensus::{
-            block_creation_loop::ReplayHighestFrozen,
-            voting_loop::{
-                log_leader_change, BLSOp, GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop,
-                VotingLoopConfig,
-            },
-        },
+        alpenglow_consensus::block_creation_loop::ReplayHighestFrozen,
         banking_stage::update_bank_forks_and_poh_recorder_for_new_tpu_bank,
         banking_trace::BankingTracer,
         cluster_info_vote_listener::{
@@ -89,7 +83,13 @@ use {
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        root_utils, vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage,
+        root_utils,
+        vote_history::VoteHistory,
+        vote_history_storage::VoteHistoryStorage,
+        voting_loop::{
+            log_leader_change, BLSOp, GenerateVoteTxResult, LeaderWindowNotifier, VotingLoop,
+            VotingLoopConfig,
+        },
         CertificateId,
     },
     std::{
