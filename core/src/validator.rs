@@ -5,10 +5,8 @@ use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        alpenglow_consensus::block_creation_loop::{
-            self, BlockCreationLoopConfig, ReplayHighestFrozen,
-        },
         banking_trace::{self, BankingTracer, TraceError},
+        block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
         consensus::{
@@ -1364,7 +1362,6 @@ impl Validator {
         let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
-            wait_for_vote_to_start_leader,
             track_transaction_indexes: transaction_status_sender.is_some(),
             bank_forks: bank_forks.clone(),
             blockstore: blockstore.clone(),
