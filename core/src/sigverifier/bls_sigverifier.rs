@@ -287,7 +287,10 @@ mod tests {
         );
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
-        (validator_keypairs, BLSSigVerifier::new(bank_forks, verified_vote_sender, message_sender))
+        (
+            validator_keypairs,
+            BLSSigVerifier::new(bank_forks, verified_vote_sender, message_sender),
+        )
     }
 
     fn test_bls_message_transmission(
@@ -328,7 +331,8 @@ mod tests {
         let (verified_vote_sender, verfied_vote_receiver) = crossbeam_channel::unbounded();
         // Create bank forks and epoch stakes
 
-        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+        let (validator_keypairs, mut verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
 
         let mut bitmap = BitVec::<u8, Lsb0>::repeat(false, 8);
         bitmap.set(3, true);
@@ -357,7 +361,10 @@ mod tests {
         assert_eq!(stats.received, 2);
         assert_eq!(stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
-        assert_eq!(received_verified_votes, (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![5]));
+        assert_eq!(
+            received_verified_votes,
+            (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![5])
+        );
 
         let vote_rank: usize = 3;
         let messages = vec![BLSMessage::Vote(VoteMessage {
@@ -371,7 +378,10 @@ mod tests {
         assert_eq!(stats.received, 3);
         assert_eq!(stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
-        assert_eq!(received_verified_votes, (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![6]));
+        assert_eq!(
+            received_verified_votes,
+            (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![6])
+        );
 
         // Pretend 10 seconds have passed, make sure stats are reset
         verifier.set_last_stats_logged(Instant::now() - STATS_INTERVAL_DURATION);
@@ -388,7 +398,10 @@ mod tests {
         assert_eq!(stats.received, 0);
         assert_eq!(stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
-        assert_eq!(received_verified_votes, (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![7]));
+        assert_eq!(
+            received_verified_votes,
+            (validator_keypairs[vote_rank].vote_keypair.pubkey(), vec![7])
+        );
     }
 
     #[test]
