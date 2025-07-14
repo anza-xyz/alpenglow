@@ -20,7 +20,10 @@ use {
     log::*,
     solana_account::AccountSharedData,
     solana_accounts_db::utils::create_accounts_run_and_snapshot_dirs,
-    solana_clock::{self as clock, DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT, Slot},
+    solana_clock::{
+        self as clock, DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT, NUM_CONSECUTIVE_LEADER_SLOTS,
+        Slot,
+    },
     solana_core::{
         consensus::{SWITCH_FORK_THRESHOLD, Tower, tower_storage::FileTowerStorage},
         snapshot_packager_service::SnapshotPackagerService,
@@ -292,6 +295,7 @@ pub fn create_custom_leader_schedule(
 ) -> LeaderSchedule {
     let mut leader_schedule = vec![];
     for (leader, num_slots) in slot_leader_to_slots {
+        assert!(num_slots % (NUM_CONSECUTIVE_LEADER_SLOTS as usize) == 0);
         for _ in 0..num_slots {
             leader_schedule.push(leader)
         }

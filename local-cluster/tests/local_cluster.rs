@@ -17,7 +17,8 @@ use {
     solana_accounts_db::utils::create_accounts_run_and_snapshot_dirs,
     solana_client_traits::AsyncClient,
     solana_clock::{
-        self as clock, DEFAULT_SLOTS_PER_EPOCH, DEFAULT_TICKS_PER_SLOT, MAX_PROCESSING_AGE, Slot,
+        self as clock, DEFAULT_SLOTS_PER_EPOCH, DEFAULT_TICKS_PER_SLOT, MAX_PROCESSING_AGE,
+        NUM_CONSECUTIVE_LEADER_SLOTS, Slot,
     },
     solana_cluster_type::ClusterType,
     solana_commitment_config::CommitmentConfig,
@@ -3371,7 +3372,10 @@ fn do_test_lockout_violation_with_or_without_tower(with_tower: bool) {
     // Don't give validator A any slots because it's going to be deleting its ledger, so it may create
     // versions of slots it's already created, but on a different fork.
     let validator_to_slots = vec![
-        (validator_b, validator_b_last_leader_slot as usize + 1),
+        (
+            validator_b,
+            (validator_b_last_leader_slot + NUM_CONSECUTIVE_LEADER_SLOTS) as usize,
+        ),
         (validator_c, DEFAULT_SLOTS_PER_EPOCH as usize),
     ];
     // Trick C into not producing any blocks during this time, in case its leader slots come up before we can
@@ -4811,7 +4815,7 @@ fn test_duplicate_with_pruned_ancestor() {
     let observer_stake = DEFAULT_NODE_STAKE;
 
     let slots_per_epoch = 2048;
-    let fork_slot: u64 = 10;
+    let fork_slot: u64 = 12;
     let fork_length: u64 = 20;
     let majority_fork_buffer = 5;
 
@@ -5590,8 +5594,8 @@ fn test_duplicate_shreds_switch_failure() {
     );
 
     let validator_to_slots = vec![
-        (duplicate_leader_validator, 50),
-        (target_switch_fork_validator, 5),
+        (duplicate_leader_validator, 52),
+        (target_switch_fork_validator, 8),
         // The ideal sequence of events for the `duplicate_fork_validator1_pubkey` validator would go:
         // 1. Vote for duplicate block `D`
         // 2. See `D` is duplicate, remove from fork choice and reset to ancestor `A`, potentially generating a fork off that ancestor
@@ -5941,7 +5945,7 @@ fn test_invalid_forks_persisted_on_restart() {
     let target_pubkey = target_leader.id;
     // Need majority validator to make the dup_slot
     let validator_to_slots = vec![
-        (majority_leader, dup_slot as usize + 5),
+        (majority_leader, dup_slot as usize + 6),
         (target_leader, DEFAULT_SLOTS_PER_EPOCH as usize),
     ];
     let leader_schedule = create_custom_leader_schedule(validator_to_slots.into_iter());
