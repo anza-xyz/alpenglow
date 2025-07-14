@@ -8613,6 +8613,7 @@ dependencies = [
  "solana-bls-signatures",
  "solana-build-alpenglow-vote",
  "solana-client",
+ "solana-clock",
  "solana-config-program",
  "solana-connection-cache",
  "solana-core",
