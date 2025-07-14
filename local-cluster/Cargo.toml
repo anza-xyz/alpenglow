@@ -21,6 +21,7 @@ solana-accounts-db = { workspace = true }
 solana-bls-signatures = { workspace = true }
 solana-build-alpenglow-vote = { workspace = true }
 solana-client = { workspace = true }
+solana-clock = { workspace = true }
 solana-config-program = { workspace = true }
 solana-connection-cache = { workspace = true }
 solana-core = { workspace = true }
