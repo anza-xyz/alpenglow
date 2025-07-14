@@ -16,6 +16,7 @@ use {
     },
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
     solana_client::connection_cache::ConnectionCache,
+    solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
     solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
         consensus::{
@@ -3386,7 +3387,7 @@ fn do_test_lockout_violation_with_or_without_tower(with_tower: bool) {
     let validator_to_slots = vec![
         (
             validator_b_pubkey,
-            validator_b_last_leader_slot as usize + 1,
+            (validator_b_last_leader_slot + NUM_CONSECUTIVE_LEADER_SLOTS) as usize,
         ),
         (validator_c_pubkey, DEFAULT_SLOTS_PER_EPOCH as usize),
     ];
@@ -4854,7 +4855,7 @@ fn test_duplicate_with_pruned_ancestor() {
     let observer_stake = DEFAULT_NODE_STAKE;
 
     let slots_per_epoch = 2048;
-    let fork_slot: u64 = 10;
+    let fork_slot: u64 = 12;
     let fork_length: u64 = 20;
     let majority_fork_buffer = 5;
 
@@ -5646,8 +5647,8 @@ fn test_duplicate_shreds_switch_failure() {
     );
 
     let validator_to_slots = vec![
-        (duplicate_leader_validator_pubkey, 50),
-        (target_switch_fork_validator_pubkey, 5),
+        (duplicate_leader_validator_pubkey, 52),
+        (target_switch_fork_validator_pubkey, 8),
         // The ideal sequence of events for the `duplicate_fork_validator1_pubkey` validator would go:
         // 1. Vote for duplicate block `D`
         // 2. See `D` is duplicate, remove from fork choice and reset to ancestor `A`, potentially generating a fork off that ancestor
@@ -5977,7 +5978,7 @@ fn test_invalid_forks_persisted_on_restart() {
     let (target_pubkey, majority_pubkey) = (validators[0], validators[1]);
     // Need majority validator to make the dup_slot
     let validator_to_slots = vec![
-        (majority_pubkey, dup_slot as usize + 5),
+        (majority_pubkey, dup_slot as usize + 6),
         (target_pubkey, DEFAULT_SLOTS_PER_EPOCH as usize),
     ];
     let leader_schedule = create_custom_leader_schedule(validator_to_slots.into_iter());
@@ -6168,7 +6169,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     let node_stakes = vec![node_a_stake, node_b_stake];
     let num_nodes = node_stakes.len();
 
-    // Create leader schedule with A and B as leader 70/30
+    // Create leader schedule with A and B as leader 72/28
     let (leader_schedule, validator_keys) =
         create_custom_leader_schedule_with_random_keys(&[72, 28]);
 
@@ -6478,7 +6479,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[4, 0, 0, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),

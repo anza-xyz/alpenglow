@@ -18,6 +18,7 @@ use {
     },
     log::*,
     solana_accounts_db::utils::create_accounts_run_and_snapshot_dirs,
+    solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
     solana_core::{
         consensus::{tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD},
         validator::{is_snapshot_config_valid, ValidatorConfig},
@@ -334,7 +335,16 @@ pub fn create_custom_leader_schedule(
     validator_key_to_slots: impl Iterator<Item = (Pubkey, usize)>,
 ) -> LeaderSchedule {
     let leader_schedule: Vec<_> = validator_key_to_slots
-        .flat_map(|(pubkey, num_slots)| std::iter::repeat(pubkey).take(num_slots))
+        .flat_map(|(pubkey, num_slots)| {
+            // Ensure that the number of slots is a multiple of NUM_CONSECUTIVE_LEADER_SLOTS
+            // Because we only check leadership every NUM_CONSECUTIVE_LEADER_SLOTS slots, for
+            // example, you can have [(pubkey_A, 70), (pubkey_B, 30)], A will happily produce
+            // block 70 and 71 because it is the leader for block 68, but when B gets the shred
+            // it check leadership for block 70 and 71, it will see that it is the leader, so the
+            // shreds from A will be ignored.
+            assert!(num_slots % (NUM_CONSECUTIVE_LEADER_SLOTS as usize) == 0);
+            std::iter::repeat(pubkey).take(num_slots)
+        })
         .collect();
 
     info!("leader_schedule: {}", leader_schedule.len());
