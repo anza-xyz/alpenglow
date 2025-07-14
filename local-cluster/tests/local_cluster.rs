@@ -6159,7 +6159,7 @@ fn test_restart_node_alpenglow() {
 fn test_alpenglow_imbalanced_stakes_catchup() {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     // Create node stakes
-    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+    let slots_per_epoch = 512;
 
     let total_stake = 2 * DEFAULT_NODE_STAKE;
     let tenth_stake = total_stake / 10;
@@ -6201,6 +6201,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
         ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        skip_warmup_slots: true,
         ..ClusterConfig::default()
     };
 
