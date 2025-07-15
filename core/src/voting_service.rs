@@ -113,12 +113,7 @@ impl VotingService {
                     false,
                 );
 
-                let mut vote_receiver_disconnected = false;
-                let mut bls_receiver_disconnected = false;
                 loop {
-                    if vote_receiver_disconnected && bls_receiver_disconnected {
-                        break;
-                    }
                     select! {
                         recv(vote_receiver) -> vote_op => {
                             match vote_op {
@@ -132,7 +127,7 @@ impl VotingService {
                                     );
                                 }
                                 Err(_) => {
-                                    vote_receiver_disconnected = true;
+                                    break;
                                 }
                             }
                         }
@@ -149,7 +144,7 @@ impl VotingService {
                                     );
                                 }
                                 Err(_) => {
-                                    bls_receiver_disconnected = true;
+                                    break;
                                 }
                             }
                         }

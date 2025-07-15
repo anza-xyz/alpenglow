@@ -680,7 +680,7 @@ impl ReplayStage {
                 leader_schedule_cache: leader_schedule_cache.clone(),
                 rpc_subscriptions: rpc_subscriptions.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
-                bls_sender,
+                bls_sender: bls_sender.clone(),
                 commitment_sender: commitment_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
@@ -696,8 +696,10 @@ impl ReplayStage {
 
         let run_replay = move || {
             // TODO(ashwin): Once we have the proper migration, we don't need this as the voting loop will be created
-            // but not running. This is a hack so that the sender is not dropped.
+            // but not running. This is a hack so that the senders are not dropped
+            let _ = &bls_sender;
             let _ = &commitment_sender;
+
             let verify_recyclers = VerifyRecyclers::default();
             let _exit = Finalizer::new(exit.clone());
             let mut identity_keypair = cluster_info.keypair().clone();
