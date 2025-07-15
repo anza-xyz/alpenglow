@@ -1,4 +1,8 @@
-use {crossbeam_channel::Sender, log::trace, solana_sdk::clock::Slot};
+use {
+    crossbeam_channel::{Sender, TrySendError},
+    log::{error, info},
+    solana_sdk::clock::Slot,
+};
 
 pub enum AlpenglowCommitmentType {
     /// Our node has voted notarize for the slot
@@ -16,11 +20,18 @@ pub fn alpenglow_update_commitment_cache(
     commitment_type: AlpenglowCommitmentType,
     slot: Slot,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) {
-    if let Err(e) = commitment_sender.send(AlpenglowCommitmentAggregationData {
+) -> bool {
+    match commitment_sender.try_send(AlpenglowCommitmentAggregationData {
         commitment_type,
         slot,
     }) {
-        trace!("commitment_sender failed: {:?}", e);
+        Err(TrySendError::Disconnected(_)) => {
+            info!("commitment_sender has disconnected");
+            // TODO(ashwin): Use return type to exit voting loop
+            return false;
+        }
+        Err(TrySendError::Full(_)) => error!("commitment_sender is backed up, something is wrong"),
+        Ok(_) => (),
     }
+    true
 }

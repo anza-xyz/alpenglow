@@ -1,6 +1,6 @@
 use {
     crate::consensus::{tower_vote_state::TowerVoteState, Stake},
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender},
     solana_measure::measure::Measure,
     solana_metrics::datapoint_info,
     solana_rpc::rpc_subscriptions::RpcSubscriptions,
@@ -77,10 +77,11 @@ impl AggregateCommitmentService {
             Sender<TowerCommitmentAggregationData>,
             Receiver<TowerCommitmentAggregationData>,
         ) = unbounded();
+        // This channel should not grow unbounded, cap at 1000 messages for now
         let (ag_sender, ag_receiver): (
             Sender<AlpenglowCommitmentAggregationData>,
             Receiver<AlpenglowCommitmentAggregationData>,
-        ) = unbounded();
+        ) = bounded(1000);
 
         (
             sender,
@@ -100,7 +101,6 @@ impl AggregateCommitmentService {
                             &subscriptions,
                             &exit,
                         ) {
-                            info!("#ASH: disconnecting");
                             break;
                         }
                     })
