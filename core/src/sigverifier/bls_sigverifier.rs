@@ -23,6 +23,7 @@ use {
 };
 
 const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats every second
+const EPOCH_STAKES_QUERY_INTERVAL: Duration = Duration::from_secs(60); // Query epoch stakes every 60 seconds
 
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
@@ -77,6 +78,7 @@ pub struct BLSSigVerifier {
     root_epoch: Epoch,
     epoch_schedule: EpochSchedule,
     epoch_stakes_map: Arc<HashMap<Epoch, EpochStakes>>,
+    epoch_stakes_queried: Instant,
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -214,18 +216,27 @@ impl BLSSigVerifier {
             epoch_schedule: EpochSchedule::default(),
             epoch_stakes_map: Arc::new(HashMap::new()),
             root_epoch: Epoch::default(),
+            epoch_stakes_queried: Instant::now() - EPOCH_STAKES_QUERY_INTERVAL,
         };
         verifier.update_epoch_stakes_map();
         verifier
     }
 
+    // TODO(wen): We should maybe create a epoch stakes service so all these objects
+    // only needing epoch stakes don't need to worry about bank_forks and banks.
     fn update_epoch_stakes_map(&mut self) {
+        if self.epoch_stakes_queried.elapsed() < EPOCH_STAKES_QUERY_INTERVAL {
+            return;
+        }
+        self.epoch_stakes_queried = Instant::now();
         let root_bank = self.bank_forks.read().unwrap().root_bank();
+        if self.epoch_stakes_map.is_empty() {
+            self.epoch_schedule = root_bank.epoch_schedule().clone();
+        }
         let epoch = root_bank.epoch();
         if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
             self.epoch_stakes_map = Arc::new(root_bank.epoch_stakes_map().clone());
             self.root_epoch = epoch;
-            self.epoch_schedule = root_bank.epoch_schedule().clone();
         }
     }
 
