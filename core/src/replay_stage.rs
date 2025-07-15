@@ -89,8 +89,8 @@ use {
     solana_timings::ExecuteTimings,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        root_utils::set_bank_forks_root, vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage, CertificateId,
+        root_utils, vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage,
+        CertificateId,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -4304,6 +4304,9 @@ impl ReplayStage {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// A wrapper around `root_utils::check_and_handle_new_root` which:
+    /// - calls into `root_utils::set_bank_forks_root`
+    /// - Executes `set_progress_and_tower_bft_root` to cleanup tower bft structs and the progress map
     fn check_and_handle_new_root(
         my_pubkey: &Pubkey,
         parent_slot: Slot,
@@ -4321,65 +4324,58 @@ impl ReplayStage {
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
-        // get the root bank before squash
-        let root_bank = bank_forks
-            .read()
-            .unwrap()
-            .get(new_root)
-            .expect("Root bank doesn't exist");
-        let mut rooted_banks = root_bank.parents();
-        let oldest_parent = rooted_banks.last().map(|last| last.parent_slot());
-        rooted_banks.push(root_bank.clone());
-        let rooted_slots: Vec<_> = rooted_banks.iter().map(|bank| bank.slot()).collect();
-        // The following differs from rooted_slots by including the parent slot of the oldest parent bank.
-        let rooted_slots_with_parents = bank_notification_sender
-            .as_ref()
-            .is_some_and(|sender| sender.should_send_parents)
-            .then(|| {
-                let mut new_chain = rooted_slots.clone();
-                new_chain.push(oldest_parent.unwrap_or(parent_slot));
-                new_chain
-            });
-
-        // Call leader schedule_cache.set_root() before blockstore.set_root() because
-        // bank_forks.root is consumed by repair_service to update gossip, so we don't want to
-        // get shreds for repair on gossip before we update leader schedule, otherwise they may
-        // get dropped.
-        leader_schedule_cache.set_root(rooted_banks.last().unwrap());
-        blockstore
-            .set_roots(rooted_slots.iter())
-            .expect("Ledger set roots failed");
-        Self::handle_new_root(
+        root_utils::check_and_handle_new_root(
+            parent_slot,
             new_root,
-            bank_forks,
-            progress,
             accounts_background_request_sender,
             highest_super_majority_root,
+            bank_notification_sender,
+            drop_bank_sender,
+            blockstore,
+            leader_schedule_cache,
+            bank_forks,
+            rpc_subscriptions,
+            my_pubkey,
             has_new_vote_been_rooted,
             voted_signatures,
-            drop_bank_sender,
-            tbft_structs,
-        )?;
-        blockstore.slots_stats.mark_rooted(new_root);
-        rpc_subscriptions.notify_roots(rooted_slots);
-        if let Some(sender) = bank_notification_sender {
-            sender
-                .sender
-                .send(BankNotification::NewRootBank(root_bank))
-                .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
+            move |bank_forks| {
+                Self::set_progress_and_tower_bft_root(new_root, bank_forks, progress, tbft_structs)
+            },
+        )
+    }
 
-            if let Some(new_chain) = rooted_slots_with_parents {
-                sender
-                    .sender
-                    .send(BankNotification::NewRootedChain(new_chain))
-                    .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
-            }
-        }
-        info!("{} new root {}", my_pubkey, new_root);
-        Ok(())
+    // To avoid code duplication and keep compatibility with alpenglow, we add this
+    // extra callback in the rooting path. This happens immediately after setting the bank forks root
+    fn set_progress_and_tower_bft_root(
+        new_root: Slot,
+        bank_forks: &BankForks,
+        progress: &mut ProgressMap,
+        tbft_structs: &mut TowerBFTStructures,
+    ) {
+        progress.handle_new_root(bank_forks);
+        let TowerBFTStructures {
+            heaviest_subtree_fork_choice,
+            duplicate_slots_tracker,
+            duplicate_confirmed_slots,
+            unfrozen_gossip_verified_vote_hashes,
+            epoch_slots_frozen_slots,
+            ..
+        } = tbft_structs;
+        heaviest_subtree_fork_choice.set_tree_root((new_root, bank_forks.root_bank().hash()));
+        *duplicate_slots_tracker = duplicate_slots_tracker.split_off(&new_root);
+        // duplicate_slots_tracker now only contains entries >= `new_root`
+
+        *duplicate_confirmed_slots = duplicate_confirmed_slots.split_off(&new_root);
+        // gossip_confirmed_slots now only contains entries >= `new_root`
+
+        unfrozen_gossip_verified_vote_hashes.set_root(new_root);
+        *epoch_slots_frozen_slots = epoch_slots_frozen_slots.split_off(&new_root);
+        // epoch_slots_frozen_slots now only contains entries >= `new_root`
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// A wrapper around `root_utils::set_bank_forks_root` which additionally:
+    /// - Executes `set_progress_and_tower_bft_root` to cleanup tower bft structs and the progress map
     pub fn handle_new_root(
         new_root: Slot,
         bank_forks: &RwLock<BankForks>,
@@ -4391,7 +4387,7 @@ impl ReplayStage {
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
-        set_bank_forks_root(
+        root_utils::set_bank_forks_root(
             new_root,
             bank_forks,
             accounts_background_request_sender,
@@ -4399,27 +4395,10 @@ impl ReplayStage {
             has_new_vote_been_rooted,
             voted_signatures,
             drop_bank_sender,
+            move |bank_forks| {
+                Self::set_progress_and_tower_bft_root(new_root, bank_forks, progress, tbft_structs)
+            },
         )?;
-        let r_bank_forks = bank_forks.read().unwrap();
-        progress.handle_new_root(&r_bank_forks);
-        let TowerBFTStructures {
-            heaviest_subtree_fork_choice,
-            duplicate_slots_tracker,
-            duplicate_confirmed_slots,
-            unfrozen_gossip_verified_vote_hashes,
-            epoch_slots_frozen_slots,
-            ..
-        } = tbft_structs;
-        heaviest_subtree_fork_choice.set_tree_root((new_root, r_bank_forks.root_bank().hash()));
-        *duplicate_slots_tracker = duplicate_slots_tracker.split_off(&new_root);
-        // duplicate_slots_tracker now only contains entries >= `new_root`
-
-        *duplicate_confirmed_slots = duplicate_confirmed_slots.split_off(&new_root);
-        // gossip_confirmed_slots now only contains entries >= `new_root`
-
-        unfrozen_gossip_verified_vote_hashes.set_root(new_root);
-        *epoch_slots_frozen_slots = epoch_slots_frozen_slots.split_off(&new_root);
-        // epoch_slots_frozen_slots now only contains entries >= `new_root`
         Ok(())
     }
 

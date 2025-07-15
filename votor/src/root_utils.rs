@@ -70,6 +70,7 @@ pub fn maybe_set_root(
         my_pubkey,
         has_new_vote_been_rooted,
         voted_signatures,
+        |_| {},
     ) {
         error!("Unable to set root: {e:?}");
         return None;
@@ -99,24 +100,34 @@ pub fn maybe_set_root(
     Some(new_root)
 }
 
-/// Sets the new root, this should be kept one-to-one with
-/// ReplayStage::check_and_handle_new_root
+/// Sets the new root, additionally performs the callback after setting the bank forks root
+/// During this transition period where both replay stage and voting loop can root depending on the feature flag we
+/// have a callback that cleans up progress map and other tower bft structures. Then the callgraph is
+///
+/// ReplayStage::check_and_handle_new_root -> root_utils::check_and_handle_new_root(callback)
+///                                                             |
+///                                                             v
+/// ReplayStage::handle_new_root           -> root_utils::set_bank_forks_root(callback) -> callback()
 #[allow(clippy::too_many_arguments)]
-pub fn check_and_handle_new_root(
+pub fn check_and_handle_new_root<CB>(
     parent_slot: Slot,
     new_root: Slot,
     accounts_background_request_sender: &AbsRequestSender,
     highest_super_majority_root: Option<Slot>,
     bank_notification_sender: &Option<BankNotificationSenderConfig>,
     drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-    blockstore: &Arc<Blockstore>,
+    blockstore: &Blockstore,
     leader_schedule_cache: &Arc<LeaderScheduleCache>,
-    bank_forks: &Arc<RwLock<BankForks>>,
+    bank_forks: &RwLock<BankForks>,
     rpc_subscriptions: &Arc<RpcSubscriptions>,
     my_pubkey: &Pubkey,
     has_new_vote_been_rooted: &mut bool,
     voted_signatures: &mut Vec<Signature>,
-) -> Result<(), SetRootError> {
+    callback: CB,
+) -> Result<(), SetRootError>
+where
+    CB: FnOnce(&BankForks),
+{
     // get the root bank before squash
     let root_bank = bank_forks
         .read()
@@ -153,6 +164,7 @@ pub fn check_and_handle_new_root(
         has_new_vote_been_rooted,
         voted_signatures,
         drop_bank_sender,
+        callback,
     )?;
     blockstore.slots_stats.mark_rooted(new_root);
     rpc_subscriptions.notify_roots(rooted_slots);
@@ -176,7 +188,8 @@ pub fn check_and_handle_new_root(
 /// Sets the bank forks root:
 /// - Prune the program cache
 /// - Prune bank forks and drop the removed banks
-pub fn set_bank_forks_root(
+/// - Calls the callback for use in replay stage and tests
+pub fn set_bank_forks_root<CB>(
     new_root: Slot,
     bank_forks: &RwLock<BankForks>,
     accounts_background_request_sender: &AbsRequestSender,
@@ -184,7 +197,11 @@ pub fn set_bank_forks_root(
     has_new_vote_been_rooted: &mut bool,
     voted_signatures: &mut Vec<Signature>,
     drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-) -> Result<(), SetRootError> {
+    callback: CB,
+) -> Result<(), SetRootError>
+where
+    CB: FnOnce(&BankForks),
+{
     bank_forks.read().unwrap().prune_program_cache(new_root);
     let removed_banks = bank_forks.write().unwrap().set_root(
         new_root,
@@ -212,5 +229,6 @@ pub fn set_bank_forks_root(
             std::mem::take(voted_signatures);
         }
     }
+    callback(&r_bank_forks);
     Ok(())
 }
