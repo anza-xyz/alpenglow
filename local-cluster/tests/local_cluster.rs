@@ -6159,7 +6159,7 @@ fn test_restart_node_alpenglow() {
 fn test_alpenglow_imbalanced_stakes_catchup() {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     // Create node stakes
-    let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+    let slots_per_epoch = 512;
 
     let total_stake = 2 * DEFAULT_NODE_STAKE;
     let tenth_stake = total_stake / 10;
@@ -6177,8 +6177,13 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         leader_schedule: Arc::new(leader_schedule),
     };
 
+    // Create our UDP socket to listen to votes
+    let vote_listener_addr = solana_net_utils::bind_to_localhost().unwrap();
+
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener_addr.local_addr().unwrap()]);
 
     // Collect node pubkeys
     let node_pubkeys = validator_keys
@@ -6201,6 +6206,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
         ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        skip_warmup_slots: true,
         ..ClusterConfig::default()
     };
 
@@ -6229,10 +6235,11 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     cluster.restart_node(&node_pubkeys[1], b_info, SocketAddrSpace::Unspecified);
 
     // Ensure all nodes are voting
-    cluster.check_for_new_processed(
+    cluster.check_for_new_notarized_votes(
         16,
         "test_alpenglow_imbalanced_stakes_catchup",
         SocketAddrSpace::Unspecified,
+        vote_listener_addr,
     );
 }
 
