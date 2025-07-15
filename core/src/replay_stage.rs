@@ -677,7 +677,7 @@ impl ReplayStage {
                 rpc_subscriptions: rpc_subscriptions.clone(),
                 accounts_background_request_sender: accounts_background_request_sender.clone(),
                 voting_sender: voting_sender.clone(),
-                commitment_sender,
+                commitment_sender: commitment_sender.clone(),
                 drop_bank_sender: drop_bank_sender.clone(),
                 bank_notification_sender: bank_notification_sender.clone(),
                 leader_window_notifier,
@@ -691,6 +691,9 @@ impl ReplayStage {
         };
 
         let run_replay = move || {
+            // TODO(ashwin): Once we have the proper migration, we don't need this as the voting loop will be created
+            // but not running. This is a hack so that the sender is not dropped.
+            let _ = &commitment_sender;
             let verify_recyclers = VerifyRecyclers::default();
             let _exit = Finalizer::new(exit.clone());
             let mut identity_keypair = cluster_info.keypair().clone();
@@ -5552,7 +5555,7 @@ pub(crate) mod tests {
             block_commitment_cache.clone(),
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
         ));
-        let (lockouts_sender, _, _) = AggregateCommitmentService::new(
+        let (lockouts_sender, _commitment_sender, _) = AggregateCommitmentService::new(
             exit,
             block_commitment_cache.clone(),
             rpc_subscriptions,

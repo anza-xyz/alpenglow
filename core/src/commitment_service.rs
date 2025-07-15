@@ -1,6 +1,6 @@
 use {
     crate::consensus::{tower_vote_state::TowerVoteState, Stake},
-    crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{bounded, select, unbounded, Receiver, RecvTimeoutError, Sender},
     solana_measure::measure::Measure,
     solana_metrics::datapoint_info,
     solana_rpc::rpc_subscriptions::RpcSubscriptions,
@@ -122,32 +122,27 @@ impl AggregateCommitmentService {
             }
 
             let mut aggregate_commitment_time = Measure::start("aggregate-commitment-ms");
-            let tower_result = receiver.recv_timeout(Duration::from_millis(500));
-            let ag_result = ag_receiver.recv_timeout(Duration::from_millis(500));
-
-            let commitment_slots = match (tower_result, ag_result) {
-                (Ok(aggregation_data), _) => {
-                    let data = receiver.try_iter().last().unwrap_or(aggregation_data);
+            let commitment_slots = select! {
+                recv(receiver) -> msg => {
+                    let data = msg?;
+                    let data = receiver.try_iter().last().unwrap_or(data);
                     let ancestors = data.bank.status_cache_ancestors();
                     if ancestors.is_empty() {
                         continue;
                     }
                     Self::update_commitment_cache(block_commitment_cache, data, ancestors)
                 }
-                (_, Ok(aggregation_data)) => {
-                    let data = ag_receiver.try_iter().last().unwrap_or(aggregation_data);
+                recv(ag_receiver) -> msg => {
+                    let data = msg?;
+                    let data = ag_receiver.try_iter().last().unwrap_or(data);
                     Self::alpenglow_update_commitment_cache(
                         block_commitment_cache,
                         data.commitment_type,
                         data.slot,
                     )
                 }
-                (Err(RecvTimeoutError::Disconnected), Err(RecvTimeoutError::Disconnected)) => {
-                    return Err(RecvTimeoutError::Disconnected)
-                }
-                _ => continue,
+                default(Duration::from_secs(1)) => continue
             };
-
             aggregate_commitment_time.stop();
 
             datapoint_info!(
