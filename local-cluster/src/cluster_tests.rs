@@ -5,6 +5,7 @@
 use log::*;
 use {
     crate::{cluster::QuicTpuClient, local_cluster::LocalCluster},
+    alpenglow_vote::bls_message::BLSMessage,
     rand::{thread_rng, Rng},
     rayon::{prelude::*, ThreadPool},
     solana_client::connection_cache::ConnectionCache,
@@ -44,7 +45,7 @@ use {
     solana_vote_program::vote_state::TowerSync,
     std::{
         collections::{HashMap, HashSet, VecDeque},
-        net::{SocketAddr, TcpListener},
+        net::{SocketAddr, TcpListener, UdpSocket},
         path::Path,
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -532,6 +533,90 @@ pub fn check_no_new_roots(
             roots[i]
         );
     }
+}
+
+pub fn check_for_new_notarized_votes(
+    num_new_votes: usize,
+    contact_infos: &[ContactInfo],
+    connection_cache: &Arc<ConnectionCache>,
+    test_name: &str,
+    vote_listener: UdpSocket,
+) {
+    let loop_start = Instant::now();
+    let loop_timeout = Duration::from_secs(180);
+    // First get the current max root.
+    let Some(current_root) = contact_infos
+        .iter()
+        .map(|ingress_node| {
+            let client = new_tpu_quic_client(ingress_node, connection_cache.clone()).unwrap();
+            let root_slot = client
+                .rpc_client()
+                .get_slot_with_commitment(CommitmentConfig::processed())
+                .unwrap_or(0);
+            root_slot
+        })
+        .max()
+    else {
+        panic!("No nodes found to get current root");
+    };
+
+    // Clone data for thread
+    let contact_infos_owned: Vec<ContactInfo> = contact_infos.to_vec();
+    let test_name_owned = test_name.to_string();
+
+    // Now start vote listener and wait for new notarized votes.
+    let vote_listener = std::thread::spawn({
+        let mut buf = [0_u8; 65_535];
+        let mut num_new_notarized_votes = contact_infos_owned.iter().map(|_| 0).collect::<Vec<_>>();
+        let mut last_notarized = contact_infos_owned
+            .iter()
+            .map(|_| current_root)
+            .collect::<Vec<_>>();
+        let mut last_print = Instant::now();
+        let mut done = false;
+
+        move || {
+            while !done {
+                assert!(loop_start.elapsed() < loop_timeout);
+                let n_bytes = vote_listener
+                    .recv_from(&mut buf)
+                    .expect("Failed to receive vote message")
+                    .0;
+                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+                let BLSMessage::Vote(vote_message) = bls_message else {
+                    continue;
+                };
+                let vote = vote_message.vote;
+                if !vote.is_notarization() {
+                    continue;
+                }
+                let rank = vote_message.rank;
+                if rank >= contact_infos_owned.len() as u16 {
+                    warn!(
+                        "Received vote with rank {} which is greater than number of nodes {}",
+                        rank,
+                        contact_infos_owned.len()
+                    );
+                    continue;
+                }
+                let slot = vote.slot();
+                if slot <= last_notarized[rank as usize] {
+                    continue;
+                }
+                last_notarized[rank as usize] = slot;
+                num_new_notarized_votes[rank as usize] += 1;
+                done = num_new_notarized_votes.iter().all(|&x| x > num_new_votes);
+                if done || last_print.elapsed().as_secs() > 3 {
+                    info!(
+                        "{} waiting for {} new notarized votes.. observed: {:?}",
+                        test_name_owned, num_new_votes, num_new_notarized_votes
+                    );
+                    last_print = Instant::now();
+                }
+            }
+        }
+    });
+    vote_listener.join().expect("Vote listener thread panicked");
 }
 
 fn poll_all_nodes_for_signature(
