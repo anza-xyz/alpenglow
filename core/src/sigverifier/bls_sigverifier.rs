@@ -37,7 +37,6 @@ pub(crate) struct BLSSigVerifierStats {
     pub received_malformed: u64,
     pub received_no_epoch_stakes: u64,
     pub received_votes: u64,
-    pub received_votes_epoch_aggregated: i64,
     pub last_stats_logged: Instant,
 }
 
@@ -52,7 +51,6 @@ impl BLSSigVerifierStats {
             received_malformed: 0,
             received_no_epoch_stakes: 0,
             received_votes: 0,
-            received_votes_epoch_aggregated: 0,
             last_stats_logged: Instant::now(),
         }
     }
@@ -66,7 +64,6 @@ impl BLSSigVerifierStats {
         self.received_malformed += other.received_malformed;
         self.received_no_epoch_stakes += other.received_no_epoch_stakes;
         self.received_votes += other.received_votes;
-        self.received_votes_epoch_aggregated += other.received_votes_epoch_aggregated;
     }
 }
 
@@ -125,7 +122,6 @@ impl SigVerifier for BLSSigVerifier {
             if let BLSMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
                 stats.received_votes += 1;
-                stats.received_votes_epoch_aggregated += (epoch - self.root_epoch) as i64;
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
                     let Some((pubkey, _)) = rank_to_pubkey_map.get_pubkey(vote_message.rank.into())
                     else {
@@ -165,13 +161,7 @@ impl BLSSigVerifier {
         if time_since_last_log < STATS_INTERVAL_DURATION {
             return;
         }
-        if self.stats.received_votes > 0
-            && (self.stats.received_votes_epoch_aggregated as f64
-                / self.stats.received_votes as f64)
-                > 1.0
-        {
-            self.update_epoch_stakes_map();
-        }
+        self.update_epoch_stakes_map();
         datapoint_info!(
             "bls_sig_verifier_stats",
             ("sent", self.stats.sent as i64, i64),
@@ -187,18 +177,17 @@ impl BLSSigVerifier {
                 i64
             ),
             ("received", self.stats.received as i64, i64),
+            ("received_votes", self.stats.received_votes as i64, i64),
             (
-                "verified_votes_sent",
-                self.stats.verified_votes_sent as i64,
+                "received_no_epoch_stakes",
+                self.stats.received_no_epoch_stakes as i64,
                 i64
             ),
             (
-                "verified_votes_sent_failed",
-                self.stats.verified_votes_sent_failed,
-                u64
+                "received_malformed",
+                self.stats.received_malformed as i64,
+                i64
             ),
-            ("received", self.stats.received, u64),
-            ("received_malformed", self.stats.received_malformed, u64),
         );
         self.stats = BLSSigVerifierStats::new();
     }
