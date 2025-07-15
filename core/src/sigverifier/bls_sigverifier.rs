@@ -6,10 +6,6 @@ use {
         cluster_info_vote_listener::VerifiedVoteSender,
         sigverify_stage::{SigVerifier, SigVerifyServiceError},
     },
-    crate::{
-        cluster_info_vote_listener::VerifiedVoteSender,
-        sigverify_stage::{SigVerifier, SigVerifyServiceError},
-    },
     alpenglow_vote::bls_message::BLSMessage,
     crossbeam_channel::{Sender, TrySendError},
     solana_pubkey::Pubkey,
