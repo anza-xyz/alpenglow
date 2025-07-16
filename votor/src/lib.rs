@@ -176,6 +176,8 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 
+pub const STANDSTILL_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Alpenglow block constants
 /// The amount of time a leader has to build their block
 pub const BLOCKTIME: Duration = Duration::from_millis(400);

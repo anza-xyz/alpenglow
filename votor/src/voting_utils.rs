@@ -281,6 +281,8 @@ pub fn send_vote(
 }
 
 /// Adds a vote to the certificate pool and updates the commitment cache if necessary
+///
+/// If a new finalization slot was recognized, returns the slot
 pub fn add_message_and_maybe_update_commitment(
     my_pubkey: &Pubkey,
     my_vote_pubkey: &Pubkey,
@@ -288,11 +290,11 @@ pub fn add_message_and_maybe_update_commitment(
     cert_pool: &mut CertificatePool,
     votor_events: &mut Vec<VotorEvent>,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) -> Result<(), AddVoteError> {
+) -> Result<Option<Slot>, AddVoteError> {
     let Some(new_finalized_slot) =
         cert_pool.add_transaction(my_vote_pubkey, message, votor_events)?
     else {
-        return Ok(());
+        return Ok(None);
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
     alpenglow_update_commitment_cache(
@@ -300,5 +302,5 @@ pub fn add_message_and_maybe_update_commitment(
         new_finalized_slot,
         commitment_sender,
     );
-    Ok(())
+    Ok(Some(new_finalized_slot))
 }

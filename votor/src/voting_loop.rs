@@ -813,6 +813,7 @@ impl VotingLoop {
                 &mut vec![],
                 commitment_sender,
             )
+            .map(|_| ()) // Convert Option<Slot> to ()
             .or_else(|e| match e {
                 AddVoteError::CertificateSenderError => Err(e),
                 e => {

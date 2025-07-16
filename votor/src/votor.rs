@@ -7,7 +7,7 @@ use {
         vote_history_storage::VoteHistoryStorage,
         voting_loop::LeaderWindowNotifier,
         voting_utils::{self, BLSOp, VotingContext},
-        CertificateId,
+        CertificateId, STANDSTILL_TIMEOUT,
     },
     alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender},
@@ -30,7 +30,7 @@ use {
             Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
-        time::Duration,
+        time::{Duration, Instant},
     },
 };
 
@@ -225,10 +225,19 @@ impl Votor {
         // Wait until migration has completed
         Self::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
 
+        // Standstill tracking
+        let mut standstill_timer = Instant::now();
+        let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
+
         // Ingest votes into certificate pool and notify voting loop of new events
         loop {
             if ctx.exit.load(Ordering::Relaxed) {
                 return;
+            }
+
+            if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
+                events.push(VotorEvent::Standstill(highest_finalized_slot));
+                standstill_timer = Instant::now();
             }
 
             if events
@@ -268,7 +277,13 @@ impl Votor {
                     &mut events,
                     &ctx.commitment_sender,
                 ) {
-                    Ok(events) => events,
+                    Ok(Some(finalized_slot)) => {
+                        // Reset standstill timer
+                        debug_assert!(finalized_slot > highest_finalized_slot);
+                        highest_finalized_slot = finalized_slot;
+                        standstill_timer = Instant::now();
+                    }
+                    Ok(_) => (),
                     Err(AddVoteError::CertificateSenderError) => {
                         // Shutdown
                         info!(
