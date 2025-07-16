@@ -692,7 +692,7 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
-        let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
+        let blocks = cert_pool.safe_to_notar(&voting_context.vote_account_pubkey, slot);
         if blocks.is_empty() {
             return false;
         }
@@ -731,7 +731,7 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
-        if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
+        if !cert_pool.safe_to_skip(&voting_context.vote_account_pubkey, slot) {
             return false;
         }
         Self::try_skip_window(
