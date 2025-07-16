@@ -18,7 +18,7 @@ use {
         transaction::Transaction,
         transport::TransportError,
     },
-    solana_votor::{vote_history_storage::VoteHistoryStorage, voting_loop::BLSOp},
+    solana_votor::{vote_history_storage::VoteHistoryStorage, voting_utils::BLSOp},
     std::{
         net::SocketAddr,
         sync::{Arc, RwLock},
