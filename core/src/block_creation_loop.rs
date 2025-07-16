@@ -20,7 +20,10 @@ use {
         bank_forks::BankForks,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
-    solana_votor::{block_timeout, Block},
+    solana_votor::{
+        block_timeout,
+        voting_loop::{LeaderWindowInfo, LeaderWindowNotifier},
+    },
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -34,8 +37,6 @@ use {
 
 pub struct BlockCreationLoopConfig {
     pub exit: Arc<AtomicBool>,
-    // Validator config
-    pub wait_for_vote_to_start_leader: bool,
     pub track_transaction_indexes: bool,
 
     // Shared state
@@ -73,20 +74,6 @@ struct LeaderContext {
 pub struct ReplayHighestFrozen {
     pub highest_frozen_slot: Mutex<Slot>,
     pub freeze_notification: Condvar,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct LeaderWindowInfo {
-    pub start_slot: Slot,
-    pub end_slot: Slot,
-    pub parent_block: Block,
-    pub skip_timer: Instant,
-}
-
-#[derive(Default)]
-pub struct LeaderWindowNotifier {
-    pub window_info: Mutex<Option<LeaderWindowInfo>>,
-    pub window_notification: Condvar,
 }
 
 #[derive(Debug, Error)]
@@ -147,8 +134,6 @@ fn start_receive_and_record_loop(
 pub fn start_loop(config: BlockCreationLoopConfig) {
     let BlockCreationLoopConfig {
         exit,
-        // TODO: plumb through
-        wait_for_vote_to_start_leader: _,
         track_transaction_indexes,
         bank_forks,
         blockstore,
@@ -386,7 +371,6 @@ fn start_leader_retry_replay(
 /// - Is the highest notarization/finalized slot from `cert_pool` frozen
 /// - Startup verification is complete
 /// - Bank forks does not already contain a bank for `slot`
-/// - If `wait_for_vote_to_start_leader` is set, we have landed a vote
 ///
 /// If checks pass we return `Ok(())` and:
 /// - Reset poh to the `parent_slot`

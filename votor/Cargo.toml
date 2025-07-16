@@ -51,11 +51,13 @@ solana-frozen-abi = { workspace = true, optional = true, features = [
 solana-frozen-abi-macro = { workspace = true, optional = true, features = [
     "frozen-abi",
 ] }
+solana-gossip = { workspace = true }
 solana-ledger = { workspace = true }
 solana-logger = { workspace = true }
 solana-measure = { workspace = true }
 solana-metrics = { workspace = true }
 solana-pubkey = { workspace = true }
+solana-rpc = { workspace = true }
 solana-runtime = { workspace = true }
 solana-sdk = { workspace = true }
 solana-vote = { workspace = true }

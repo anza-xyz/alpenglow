@@ -1,11 +1,8 @@
-#[cfg(feature = "frozen-abi")]
-use solana_frozen_abi_macro::{frozen_abi, AbiExample};
 use {
     super::vote_history_storage::{
         Result, SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
     },
     alpenglow_vote::vote::Vote,
-    serde::{Deserialize, Serialize},
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
     std::collections::{HashMap, HashSet},
     thiserror::Error,
