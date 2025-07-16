@@ -11,6 +11,7 @@ pub mod root_utils;
 pub mod vote_history;
 pub mod vote_history_storage;
 pub mod voting_loop;
+pub mod voting_utils;
 
 #[macro_use]
 extern crate log;
