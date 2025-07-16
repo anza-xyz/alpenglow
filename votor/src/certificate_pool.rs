@@ -257,7 +257,9 @@ impl CertificatePool {
                 }
 
                 match cert_id {
-                    CertificateId::Notarize(_, _, _) => (),
+                    CertificateId::Notarize(slot, block_id, bank_hash) => {
+                        events.push(VotorEvent::BlockNotarized((slot, block_id, bank_hash)));
+                    }
                     CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
                         self.parent_ready_tracker
                             .add_new_notar_fallback((slot, block_id, bank_hash), events);
@@ -332,9 +334,10 @@ impl CertificatePool {
                 .parent_ready_tracker
                 .add_new_notar_fallback((slot, block_id, bank_hash), events),
             CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot, events),
-            CertificateId::Finalize(_)
-            | CertificateId::FinalizeFast(_, _, _)
-            | CertificateId::Notarize(_, _, _) => (),
+            CertificateId::Notarize(slot, block_id, bank_hash) => {
+                events.push(VotorEvent::BlockNotarized((slot, block_id, bank_hash)))
+            }
+            CertificateId::Finalize(_) | CertificateId::FinalizeFast(_, _, _) => (),
         }
     }
 
