@@ -367,6 +367,7 @@ impl CertificatePool {
     /// return the slot
     pub fn add_transaction(
         &mut self,
+        my_vote_pubkey: &Pubkey,
         transaction: &BLSMessage,
         events: &mut Vec<VotorEvent>,
     ) -> Result<Option<Slot>, AddVoteError> {
@@ -429,12 +430,12 @@ impl CertificatePool {
         // TODO: we should just handle this when adding the vote rather than
         // calling out here again. Also deal with duplicate events, don't notify
         // everytime.
-        // if self.safe_to_skip(slot, vote_history) {
-        //     events.push(VotorEvent::SafeToSkip(slot));
-        // }
-        // for (block_id, bank_hash) in self.safe_to_notar(slot, vote_history) {
-        //     events.push(VotorEvent::SafeToNotar((slot, block_id, bank_hash)));
-        // }
+        if self.safe_to_skip(my_vote_pubkey, slot) {
+            events.push(VotorEvent::SafeToSkip(slot));
+        }
+        for (block_id, bank_hash) in self.safe_to_notar(my_vote_pubkey, slot) {
+            events.push(VotorEvent::SafeToNotar((slot, block_id, bank_hash)));
+        }
 
         self.update_certificates(vote, voted_block_key, events, total_stake)
     }
@@ -790,6 +791,7 @@ mod tests {
         for rank in 0..6 {
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -797,6 +799,7 @@ mod tests {
         }
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(validator_keypairs, &vote, 6),
                 &mut vec![]
             )
@@ -820,7 +823,11 @@ mod tests {
         for slot in start..=end {
             let vote = Vote::new_skip_vote(slot);
             assert!(pool
-                .add_transaction(&dummy_transaction(keypairs, &vote, rank), &mut vec![])
+                .add_transaction(
+                    &Pubkey::new_unique(),
+                    &dummy_transaction(keypairs, &vote, rank),
+                    &mut vec![]
+                )
                 .is_ok());
         }
     }
@@ -1070,6 +1077,7 @@ mod tests {
         };
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, my_validator_ix),
                 &mut vec![]
             )
@@ -1079,6 +1087,7 @@ mod tests {
         // Same key voting again shouldn't make a certificate
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, my_validator_ix),
                 &mut vec![]
             )
@@ -1087,6 +1096,7 @@ mod tests {
         for rank in 0..4 {
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1096,6 +1106,7 @@ mod tests {
         let new_validator_ix = 6;
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, new_validator_ix),
                 &mut vec![]
             )
@@ -1108,6 +1119,7 @@ mod tests {
         let (_, mut pool) = create_keypairs_and_pool();
         assert_eq!(
             pool.add_transaction(
+                &Pubkey::new_unique(),
                 &BLSMessage::Vote(VoteMessage {
                     vote: Vote::new_skip_vote(5),
                     rank: 100,
@@ -1142,6 +1154,7 @@ mod tests {
             // These should not extend the skip range
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, i),
                     &mut vec![]
                 )
@@ -1210,6 +1223,7 @@ mod tests {
         let vote = Vote::new_skip_vote(2);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
@@ -1221,6 +1235,7 @@ mod tests {
         let vote = Vote::new_skip_vote(4);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 7),
                 &mut vec![]
             )
@@ -1233,6 +1248,7 @@ mod tests {
         let vote = Vote::new_skip_vote(3);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 8),
                 &mut vec![]
             )
@@ -1258,6 +1274,7 @@ mod tests {
         let vote = Vote::new_skip_vote(1);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
@@ -1284,6 +1301,7 @@ mod tests {
         let vote = Vote::new_skip_vote(20);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
@@ -1341,6 +1359,7 @@ mod tests {
         let vote = Vote::new_skip_vote(2);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 0),
                 &mut vec![]
             )
@@ -1350,6 +1369,7 @@ mod tests {
             let vote = Vote::new_notarization_vote(2, block_id, bank_hash);
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1370,6 +1390,7 @@ mod tests {
             let vote = Vote::new_notarization_vote(3, block_id, bank_hash);
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1381,6 +1402,7 @@ mod tests {
         let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::new_unique());
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 0),
                 &mut vec![]
             )
@@ -1392,6 +1414,7 @@ mod tests {
             let vote = Vote::new_skip_vote(3);
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1409,6 +1432,7 @@ mod tests {
             let vote = Vote::new_notarization_vote(3, duplicate_block_id, duplicate_bank_hash);
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1444,6 +1468,7 @@ mod tests {
         let vote = Vote::new_notarization_vote(2, block_id, block_hash);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 0),
                 &mut vec![]
             )
@@ -1455,6 +1480,7 @@ mod tests {
             let vote = Vote::new_skip_vote(2);
             assert!(pool
                 .add_transaction(
+                    &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
@@ -1465,6 +1491,7 @@ mod tests {
         let vote = Vote::new_notarization_vote(2, block_id, block_hash);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
@@ -1497,12 +1524,14 @@ mod tests {
         let vote_2 = create_new_vote(vote_type_2, slot);
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(validator_keypairs, &vote_1, 0),
                 &mut vec![]
             )
             .is_ok());
         assert!(pool
             .add_transaction(
+                &Pubkey::new_unique(),
                 &dummy_transaction(validator_keypairs, &vote_2, 0),
                 &mut vec![]
             )

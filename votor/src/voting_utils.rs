@@ -248,6 +248,7 @@ pub fn send_vote(
 
     if let Err(e) = add_message_and_maybe_update_commitment(
         &context.identity_keypair.pubkey(),
+        &context.vote_account_pubkey,
         &bls_message,
         cert_pool,
         &mut vec![],
@@ -282,12 +283,15 @@ pub fn send_vote(
 /// Adds a vote to the certificate pool and updates the commitment cache if necessary
 pub fn add_message_and_maybe_update_commitment(
     my_pubkey: &Pubkey,
+    my_vote_pubkey: &Pubkey,
     message: &BLSMessage,
     cert_pool: &mut CertificatePool,
     votor_events: &mut Vec<VotorEvent>,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
 ) -> Result<(), AddVoteError> {
-    let Some(new_finalized_slot) = cert_pool.add_transaction(message, votor_events)? else {
+    let Some(new_finalized_slot) =
+        cert_pool.add_transaction(my_vote_pubkey, message, votor_events)?
+    else {
         return Ok(());
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");

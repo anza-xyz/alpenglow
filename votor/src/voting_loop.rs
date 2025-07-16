@@ -419,6 +419,7 @@ impl VotingLoop {
                     // Block on certificate ingest
                     if let Err(e) = Self::ingest_votes_into_certificate_pool(
                         &my_pubkey,
+                        &voting_context.vote_account_pubkey,
                         &shared_context.vote_receiver,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
@@ -439,6 +440,7 @@ impl VotingLoop {
 
                     if let Err(e) = Self::ingest_votes_into_certificate_pool(
                         &my_pubkey,
+                        &voting_context.vote_account_pubkey,
                         &shared_context.vote_receiver,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
@@ -794,6 +796,7 @@ impl VotingLoop {
     /// Returns the highest slot of the newly created notarization/skip certificates
     fn ingest_votes_into_certificate_pool(
         my_pubkey: &Pubkey,
+        my_vote_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
@@ -803,6 +806,7 @@ impl VotingLoop {
             trace!("{my_pubkey}: ingesting BLS Message: {bls_message:?}");
             add_message_and_maybe_update_commitment(
                 my_pubkey,
+                my_vote_pubkey,
                 &bls_message,
                 cert_pool,
                 &mut vec![],

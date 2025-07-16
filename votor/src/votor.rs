@@ -72,6 +72,7 @@ struct CertificatePoolContext {
     start: Arc<(Mutex<bool>, Condvar)>,
 
     my_pubkey: Pubkey,
+    my_vote_pubkey: Pubkey,
     blockstore: Arc<Blockstore>,
     bank_forks: Arc<RwLock<BankForks>>,
 
@@ -162,6 +163,7 @@ impl Votor {
             exit: exit.clone(),
             start: start.clone(),
             my_pubkey,
+            my_vote_pubkey: vote_account,
             blockstore,
             bank_forks,
             bls_receiver,
@@ -245,6 +247,7 @@ impl Votor {
             for message in bls_messages {
                 match voting_utils::add_message_and_maybe_update_commitment(
                     &ctx.my_pubkey,
+                    &ctx.my_vote_pubkey,
                     &message,
                     &mut cert_pool,
                     &mut events,
