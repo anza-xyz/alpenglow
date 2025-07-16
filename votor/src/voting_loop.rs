@@ -805,6 +805,7 @@ impl VotingLoop {
                 my_pubkey,
                 &bls_message,
                 cert_pool,
+                &mut vec![],
                 commitment_sender,
             )
             .or_else(|e| match e {

@@ -6,6 +6,7 @@ use {
     std::{sync::Arc, time::Instant},
 };
 
+#[derive(Debug, Clone)]
 pub struct CompletedBlock {
     pub slot: Slot,
     // TODO: once we have the async execution changes this can be (block_id, parent_block_id) instead
@@ -25,6 +26,7 @@ pub struct LeaderWindowInfo {
 
 /// Events that trigger actions in Votor
 /// TODO: remove bank hash once we update votes
+#[derive(Debug, Clone)]
 pub enum VotorEvent {
     /// A block has completed replay and is ready for voting
     Block(CompletedBlock),

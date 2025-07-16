@@ -5,6 +5,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
+        event::VotorEvent,
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
@@ -249,6 +250,7 @@ pub fn send_vote(
         &context.identity_keypair.pubkey(),
         &bls_message,
         cert_pool,
+        &mut vec![],
         &context.commitment_sender,
     ) {
         if !is_refresh {
@@ -282,9 +284,10 @@ pub fn add_message_and_maybe_update_commitment(
     my_pubkey: &Pubkey,
     message: &BLSMessage,
     cert_pool: &mut CertificatePool,
+    votor_events: &mut Vec<VotorEvent>,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
 ) -> Result<(), AddVoteError> {
-    let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
+    let Some(new_finalized_slot) = cert_pool.add_transaction(message, votor_events)? else {
         return Ok(());
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
