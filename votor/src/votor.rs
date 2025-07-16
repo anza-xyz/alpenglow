@@ -3,16 +3,22 @@ use {
         certificate_pool::{self, AddVoteError},
         commitment::AlpenglowCommitmentAggregationData,
         event::{CompletedBlockReceiver, VotorEvent},
-        vote_history::VoteHistory,
+        vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::VoteHistoryStorage,
-        voting_loop::LeaderWindowNotifier,
+        voting_loop::{LeaderWindowNotifier, PendingBlocks},
         voting_utils::{self, BLSOp, VotingContext},
-        CertificateId, STANDSTILL_TIMEOUT,
+        Block, CertificateId, STANDSTILL_TIMEOUT,
     },
-    alpenglow_vote::bls_message::CertificateMessage,
-    crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender},
+    alpenglow_vote::{bls_message::CertificateMessage, vote::Vote},
+    crossbeam_channel::{bounded, select, Receiver, RecvTimeoutError, Sender},
     solana_gossip::cluster_info::ClusterInfo,
-    solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
+    solana_ledger::{
+        blockstore::Blockstore,
+        leader_schedule_cache::LeaderScheduleCache,
+        leader_schedule_utils::{
+            first_of_consecutive_leader_slots, last_of_consecutive_leader_slots,
+        },
+    },
     solana_pubkey::Pubkey,
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
@@ -20,7 +26,8 @@ use {
     },
     solana_runtime::{
         accounts_background_service::AbsRequestSender, bank_forks::BankForks,
-        installed_scheduler_pool::BankWithScheduler, vote_sender_types::BLSVerifiedMessageReceiver,
+        installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
+        vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::{clock::Slot, signature::Keypair, signer::Signer},
     std::{
@@ -82,14 +89,29 @@ struct CertificatePoolContext {
     certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 }
 
+/// Context shared with block creation, replay, gossip, banking stage etc
+struct SharedContext {
+    blockstore: Arc<Blockstore>,
+    leader_schedule_cache: Arc<LeaderScheduleCache>,
+    bank_forks: Arc<RwLock<BankForks>>,
+    cluster_info: Arc<ClusterInfo>,
+    rpc_subscriptions: Arc<RpcSubscriptions>,
+    leader_window_notifier: Arc<LeaderWindowNotifier>,
+    vote_history_storage: Arc<dyn VoteHistoryStorage>,
+}
+
 /// Inputs for the voting loop thread
 #[allow(dead_code)]
 struct VotingLoopContext {
     exit: Arc<AtomicBool>,
     start: Arc<(Mutex<bool>, Condvar)>,
 
+    // VotorEvent receivers
     completed_block_receiver: CompletedBlockReceiver,
     event_receiver: Receiver<VotorEvent>,
+
+    // Contexts
+    shared_context: SharedContext,
     voting_context: VotingContext,
 }
 
@@ -111,19 +133,19 @@ impl Votor {
             wait_to_vote_slot,
             wait_for_vote_to_start_leader,
             vote_history,
-            vote_history_storage: _,
+            vote_history_storage,
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
             cluster_info,
-            leader_schedule_cache: _,
-            rpc_subscriptions: _,
+            leader_schedule_cache,
+            rpc_subscriptions,
             accounts_background_request_sender: _,
             bls_sender,
             commitment_sender,
             drop_bank_sender: _,
             bank_notification_sender: _,
-            leader_window_notifier: _,
+            leader_window_notifier,
             certificate_sender,
             completed_block_receiver,
             bls_receiver,
@@ -138,6 +160,16 @@ impl Votor {
         // This should not backup, TODO: add metrics for length
         let (event_sender, event_receiver) = bounded(1000);
 
+        let shared_context = SharedContext {
+            blockstore: blockstore.clone(),
+            leader_schedule_cache,
+            bank_forks: bank_forks.clone(),
+            rpc_subscriptions,
+            leader_window_notifier,
+            cluster_info: cluster_info.clone(),
+            vote_history_storage,
+        };
+
         let voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -149,6 +181,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             voted_signatures: vec![],
+            root_bank_cache: RootBankCache::new(bank_forks.clone()),
         };
 
         let voting_loop_context = VotingLoopContext {
@@ -156,6 +189,7 @@ impl Votor {
             start: start.clone(),
             completed_block_receiver,
             event_receiver,
+            shared_context,
             voting_context,
         };
 
@@ -174,7 +208,16 @@ impl Votor {
 
         let t_voting_loop = Builder::new()
             .name("solVotingLoop".to_string())
-            .spawn(move || Self::voting_loop(voting_loop_context))
+            .spawn(move || {
+                if let Err(e) = Self::voting_loop(voting_loop_context) {
+                    // A sender disconnected, shutdown
+                    info!(
+                        "{}: Voting loop sender disconnected {e:?}. Exiting",
+                        cluster_info.id()
+                    );
+                    exit.store(true, Ordering::Relaxed);
+                }
+            })
             .unwrap();
 
         let t_cert_pool = Builder::new()
@@ -209,7 +252,202 @@ impl Votor {
         }
     }
 
-    fn voting_loop(_context: VotingLoopContext) {}
+    fn handle_set_identity(
+        my_pubkey: &mut Pubkey,
+        ctx: &SharedContext,
+        vctx: &mut VotingContext,
+    ) -> Result<(), VoteHistoryError> {
+        let new_identity = ctx.cluster_info.keypair();
+        let new_pubkey = new_identity.pubkey();
+        // This covers both:
+        // - startup set-identity so that vote_history is outdated but my_pubkey == new_pubkey
+        // - set-identity during normal operation, vote_history == my_pubkey != new_pubkey
+        if *my_pubkey != new_pubkey || vctx.vote_history.node_pubkey != new_pubkey {
+            let my_old_pubkey = vctx.vote_history.node_pubkey;
+            *my_pubkey = new_pubkey;
+            vctx.vote_history = VoteHistory::restore(ctx.vote_history_storage.as_ref(), my_pubkey)?;
+            vctx.identity_keypair = new_identity.clone();
+            warn!("set-identity: from {my_old_pubkey} to {my_pubkey}");
+        }
+        Ok(())
+    }
+
+    fn voting_loop(context: VotingLoopContext) -> Result<(), RecvTimeoutError> {
+        let VotingLoopContext {
+            exit,
+            start,
+            completed_block_receiver,
+            event_receiver,
+            shared_context: mut ctx,
+            voting_context: mut vctx,
+        } = context;
+        let mut my_pubkey = vctx.identity_keypair.pubkey();
+        let mut pending_blocks = PendingBlocks::default();
+
+        // Wait until migration has completed
+        Self::wait_for_migration_or_exit(&exit, &start);
+
+        if exit.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        // Check for set identity
+        if let Err(e) = Self::handle_set_identity(&mut my_pubkey, &ctx, &mut vctx) {
+            error!(
+                "Unable to load new vote history when attempting to change identity from {} \
+                 to {} on voting loop startup, Exiting: {}",
+                vctx.vote_history.node_pubkey,
+                ctx.cluster_info.id(),
+                e
+            );
+            exit.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+
+        while !exit.load(Ordering::Relaxed) {
+            let event = select! {
+                recv(completed_block_receiver) -> msg => {
+                    VotorEvent::Block(msg?)
+                },
+                recv(event_receiver) -> msg => {
+                    msg?
+                },
+                default(Duration::from_secs(1))  => continue
+            };
+
+            match event {
+                // Block has completed replay
+                VotorEvent::Block(completed_block) => todo!(),
+
+                // Block has received a notarization certificate
+                VotorEvent::BlockNotarized(block) => {
+                    vctx.vote_history.add_block_notarized(block);
+                }
+
+                // Received a parent ready notification for `slot`
+                VotorEvent::ParentReady { slot, parent_block } => {
+                    vctx.vote_history.add_parent_ready(slot, parent_block);
+                    // TODO:
+                    // check_pending_blocks();
+                    // set_timeouts();
+                    // notify block creation loop
+                }
+
+                // Skip timer for the slot has fired, TODO: plug this in
+                VotorEvent::Timeout(slot) => {
+                    if vctx.vote_history.voted(slot) {
+                        continue;
+                    }
+                    Self::try_skip_window(&my_pubkey, slot, &mut vctx);
+                }
+
+                // We have observed the safe to notar condition, and can send a notar fallback vote
+                // TODO: cert pool check for parent block id for intra window slots
+                VotorEvent::SafeToNotar((slot, block_id, bank_hash)) => {
+                    Self::try_skip_window(&my_pubkey, slot, &mut vctx);
+                    if vctx.vote_history.its_over(slot)
+                        || vctx
+                            .vote_history
+                            .voted_notar_fallback(slot, block_id, bank_hash)
+                    {
+                        continue;
+                    }
+                    voting_utils::send_vote_and_queue_for_cert_pool(
+                        &my_pubkey,
+                        Vote::new_notarization_fallback_vote(slot, block_id, bank_hash),
+                        false,
+                        &mut vctx,
+                    );
+                }
+
+                // We have observed the safe to skip condition, and can send a skip fallback vote
+                VotorEvent::SafeToSkip(slot) => {
+                    Self::try_skip_window(&my_pubkey, slot, &mut vctx);
+                    if vctx.vote_history.its_over(slot)
+                        || vctx.vote_history.voted_skip_fallback(slot)
+                    {
+                        continue;
+                    }
+                    voting_utils::send_vote_and_queue_for_cert_pool(
+                        &my_pubkey,
+                        Vote::new_skip_fallback_vote(slot),
+                        false,
+                        &mut vctx,
+                    );
+                }
+
+                // We have not observed a finalization certificate in a while, refresh our votes and certs
+                VotorEvent::Standstill(highest_finalized_slot) => {
+                    // TODO: once we have certificate broadcast, we should also refresh certs
+                    Self::refresh_votes(&my_pubkey, highest_finalized_slot, &mut vctx);
+                }
+
+                // Operator called set identity make sure that our keypair is updated for voting
+                // TODO: plug this in from cli
+                VotorEvent::SetIdentity => {
+                    if let Err(e) = Self::handle_set_identity(&mut my_pubkey, &ctx, &mut vctx) {
+                        error!(
+                            "Unable to load new vote history when attempting to change identity from {} \
+                             to {} in voting loop, Exiting: {}",
+                             vctx.vote_history.node_pubkey,
+                             ctx.cluster_info.id(),
+                             e
+                        );
+                        exit.store(true, Ordering::Relaxed);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn try_final(
+        my_pubkey: &Pubkey,
+        block @ (slot, _, _): Block,
+        voting_context: &mut VotingContext,
+    ) {
+        // if voting_context.vote_history.
+    }
+
+    fn try_skip_window(my_pubkey: &Pubkey, slot: Slot, voting_context: &mut VotingContext) {
+        for s in first_of_consecutive_leader_slots(slot)..=last_of_consecutive_leader_slots(slot) {
+            if voting_context.vote_history.voted(s) {
+                continue;
+            }
+            if !voting_utils::send_vote_and_queue_for_cert_pool(
+                my_pubkey,
+                Vote::new_skip_vote(s),
+                false,
+                voting_context,
+            ) {
+                warn!("{my_pubkey}: send skip vote failed for {s}");
+            }
+        }
+    }
+
+    /// Refresh all votes cast for slots >= highest_finalized_slot
+    fn refresh_votes(
+        my_pubkey: &Pubkey,
+        highest_finalized_slot: Slot,
+        voting_context: &mut VotingContext,
+    ) {
+        for vote in voting_context
+            .vote_history
+            .votes_cast_since(highest_finalized_slot)
+        {
+            info!("{my_pubkey}: Refreshing vote {vote:?}");
+            if !voting_utils::send_vote_and_queue_for_cert_pool(
+                my_pubkey,
+                vote,
+                true,
+                voting_context,
+            ) {
+                warn!("{my_pubkey}: send_vote failed for {:?}", vote);
+            }
+        }
+    }
 
     fn certificate_pool_ingestion(ctx: CertificatePoolContext) {
         let root_bank = ctx.bank_forks.read().unwrap().root_bank();
