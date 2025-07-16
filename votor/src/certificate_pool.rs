@@ -19,7 +19,6 @@ use {
         vote::Vote,
     },
     crossbeam_channel::Sender,
-    log::{error, trace},
     solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
