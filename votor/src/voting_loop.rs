@@ -704,7 +704,16 @@ impl VotingLoop {
             cert_pool,
             voting_context,
         );
+        if voting_context.vote_history.its_over(slot) {
+            return false;
+        }
         for (block_id, bank_hash) in blocks.into_iter() {
+            if voting_context
+                .vote_history
+                .voted_notar_fallback(slot, block_id, bank_hash)
+            {
+                continue;
+            }
             info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
             let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
             if !send_vote(
@@ -742,6 +751,11 @@ impl VotingLoop {
             cert_pool,
             voting_context,
         );
+        if voting_context.vote_history.its_over(slot)
+            || voting_context.vote_history.voted_skip_fallback(slot)
+        {
+            return false;
+        }
         info!("{my_pubkey}: Voting skip fallback for slot {slot}");
         let vote = Vote::new_skip_fallback_vote(slot);
         send_vote(
