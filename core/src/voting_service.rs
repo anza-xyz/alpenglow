@@ -243,13 +243,15 @@ impl VotingService {
                 slot,
                 saved_vote_history,
             } => {
-                let mut measure = Measure::start("alpenglow vote history save");
-                if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
-                    std::process::exit(1);
+                if let Some(saved_vote_history) = saved_vote_history {
+                    let mut measure = Measure::start("alpenglow vote history save");
+                    if let Err(err) = vote_history_storage.store(&saved_vote_history) {
+                        error!("Unable to save vote history to storage: {:?}", err);
+                        std::process::exit(1);
+                    }
+                    measure.stop();
+                    trace!("{measure}");
                 }
-                measure.stop();
-                trace!("{measure}");
 
                 Self::broadcast_alpenglow_message(
                     slot,
@@ -418,7 +420,9 @@ mod tests {
             signature: BLSSignature::default(),
             rank: 1,
         });
-        let saved_vote_history = SavedVoteHistoryVersions::Current(SavedVoteHistory::default());
+        let saved_vote_history = Some(SavedVoteHistoryVersions::Current(
+            SavedVoteHistory::default(),
+        ));
         assert!(bls_sender
             .send(BLSOp::PushVote {
                 bls_message: bls_message.clone(),
