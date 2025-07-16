@@ -120,6 +120,14 @@ impl VotePool {
         Ok(())
     }
 
+    // Get the previous notarization vote, only used for safe to notar to figure out previous notar vote
+    pub(crate) fn get_prev_notarize_vote(&self, validator_key: &Pubkey) -> Option<(Hash, Hash)> {
+        self.prev_votes
+            .get(validator_key)
+            .and_then(|vs| vs.first())
+            .and_then(|vk| vk.block_id.zip(vk.bank_hash))
+    }
+
     pub(crate) fn has_prev_vote(&self, validator_key: &Pubkey, vote_key: Option<&VoteKey>) -> bool {
         match vote_key {
             Some(vote_key) => self
