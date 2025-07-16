@@ -213,11 +213,13 @@ impl Votor {
 
     fn certificate_pool_ingestion(ctx: CertificatePoolContext) {
         let root_bank = ctx.bank_forks.read().unwrap().root_bank();
+        let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &ctx.my_pubkey,
             &root_bank,
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender),
+            &mut events,
         );
 
         // Wait until migration has completed
@@ -226,6 +228,20 @@ impl Votor {
         // Ingest votes into certificate pool and notify voting loop of new events
         loop {
             if ctx.exit.load(Ordering::Relaxed) {
+                return;
+            }
+
+            if events
+                .drain(..)
+                .try_for_each(|event| ctx.event_sender.send(event))
+                .is_err()
+            {
+                // Shutdown
+                info!(
+                    "{}: Votor event receiver disconnected. Exiting.",
+                    ctx.my_pubkey
+                );
+                ctx.exit.store(true, Ordering::Relaxed);
                 return;
             }
 
@@ -243,7 +259,6 @@ impl Votor {
             )
             .chain(ctx.bls_receiver.try_iter());
 
-            let mut events = vec![];
             for message in bls_messages {
                 match voting_utils::add_message_and_maybe_update_commitment(
                     &ctx.my_pubkey,
@@ -269,20 +284,6 @@ impl Votor {
                         continue;
                     }
                 };
-            }
-
-            if events
-                .into_iter()
-                .try_for_each(|event| ctx.event_sender.send(event))
-                .is_err()
-            {
-                // Shutdown
-                info!(
-                    "{}: Votor event receiver disconnected. Exiting.",
-                    ctx.my_pubkey
-                );
-                ctx.exit.store(true, Ordering::Relaxed);
-                return;
             }
         }
     }

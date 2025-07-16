@@ -207,7 +207,7 @@ impl CertificatePool {
         &mut self,
         vote: &Vote,
         voted_block_key: Option<VotedBlockKey>,
-        _events: &mut Vec<VotorEvent>,
+        events: &mut Vec<VotorEvent>,
         total_stake: Stake,
     ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
@@ -260,7 +260,7 @@ impl CertificatePool {
                     CertificateId::Notarize(_, _, _) => (),
                     CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
                         self.parent_ready_tracker
-                            .add_new_notar_fallback((slot, block_id, bank_hash));
+                            .add_new_notar_fallback((slot, block_id, bank_hash), events);
                         if self
                             .highest_notarized_fallback
                             .map_or(true, |(s, _, _)| s < slot)
@@ -268,7 +268,7 @@ impl CertificatePool {
                             self.highest_notarized_fallback = Some((slot, block_id, bank_hash));
                         }
                     }
-                    CertificateId::Skip(_) => self.parent_ready_tracker.add_new_skip(slot),
+                    CertificateId::Skip(_) => self.parent_ready_tracker.add_new_skip(slot, events),
                     CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
                         if self.highest_finalized_slot.map_or(true, |s| s < slot) {
                             self.highest_finalized_slot = Some(slot);
@@ -320,13 +320,18 @@ impl CertificatePool {
         None
     }
 
-    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VoteCertificate) {
+    pub(crate) fn insert_certificate(
+        &mut self,
+        cert_id: CertificateId,
+        cert: VoteCertificate,
+        events: &mut Vec<VotorEvent>,
+    ) {
         self.completed_certificates.insert(cert_id, cert);
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id, bank_hash) => self
                 .parent_ready_tracker
-                .add_new_notar_fallback((slot, block_id, bank_hash)),
-            CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot),
+                .add_new_notar_fallback((slot, block_id, bank_hash), events),
+            CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot, events),
             CertificateId::Finalize(_)
             | CertificateId::FinalizeFast(_, _, _)
             | CertificateId::Notarize(_, _, _) => (),
@@ -695,6 +700,7 @@ pub fn load_from_blockstore(
     root_bank: &Bank,
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    events: &mut Vec<VotorEvent>,
 ) -> CertificatePool {
     let mut cert_pool =
         CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
@@ -716,7 +722,7 @@ pub fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(cert_id, cert.into());
+            cert_pool.insert_certificate(cert_id, cert.into(), events);
         }
     }
     cert_pool
