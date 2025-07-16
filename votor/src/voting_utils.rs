@@ -280,6 +280,63 @@ pub fn send_vote(
     true
 }
 
+/// Send an alpenglow vote as a BLSMessage
+/// `bank` will be used for:
+/// - startup verification
+/// - vote account checks
+/// - authorized voter checks
+///
+/// We also update the vote history and send the vote to
+/// the certificate pool thread for ingestion.
+///
+/// Returns false if we are currently a non-voting node
+pub(crate) fn send_vote_and_queue_for_cert_pool(
+    my_pubkey: &Pubkey,
+    vote: Vote,
+    is_refresh: bool,
+    context: &mut VotingContext,
+) -> bool {
+    // Update and save the vote history
+    if !is_refresh {
+        context.vote_history.add_vote(vote);
+    }
+
+    let bank = context.root_bank_cache.root_bank();
+    let bls_message = match generate_vote_tx(&vote, &bank, context) {
+        GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
+        e => {
+            warn!("{my_pubkey}: Unable to vote: {e:?}");
+            return false;
+        }
+    };
+
+    // TODO: send to ourselves
+
+    // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
+    let saved_vote_history =
+        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
+            |err| {
+                error!(
+                    "{my_pubkey}: Unable to create saved vote history: {:?}",
+                    err
+                );
+                // TODO: maybe unify this with exit flag instead
+                std::process::exit(1);
+            },
+        );
+
+    // Send the vote over the wire
+    context
+        .bls_sender
+        .send(BLSOp::PushVote {
+            bls_message,
+            slot: vote.slot(),
+            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+        })
+        .unwrap_or_else(|err| warn!("Error: {:?}", err));
+    true
+}
+
 /// Adds a vote to the certificate pool and updates the commitment cache if necessary
 ///
 /// If a new finalization slot was recognized, returns the slot
