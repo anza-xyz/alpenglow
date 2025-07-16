@@ -8,7 +8,9 @@ use {
                 DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
             },
         },
-        conflicting_types, vote_to_certificate_ids, CertificateId, Stake, VoteType,
+        conflicting_types,
+        vote_history::VoteHistory,
+        vote_to_certificate_ids, CertificateId, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
@@ -103,6 +105,8 @@ pub struct CertificatePool {
     root_epoch: Epoch,
     /// The certificate sender, if set, newly created certificates will be sent here
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    /// The voting sender, used to send certificates all-to-all
+    voting_sender: Option<Sender<BLSOp>>,
 }
 
 impl CertificatePool {
@@ -110,6 +114,7 @@ impl CertificatePool {
         my_pubkey: Pubkey,
         bank: &Bank,
         certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+        voting_sender: Option<Sender<BLSOp>>,
     ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
@@ -131,6 +136,7 @@ impl CertificatePool {
             root_epoch: Epoch::default(),
             certificate_sender,
             parent_ready_tracker,
+            voting_sender,
         };
 
         // Update the epoch_stakes_map and root
@@ -238,41 +244,7 @@ impl CertificatePool {
                         VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(voted_block_key.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}"), &mut vote_certificate),
                     }.map_err(AddVoteError::Certificate)?;
                 }
-                self.completed_certificates
-                    .insert(cert_id, vote_certificate.clone());
-                if let Some(sender) = &self.certificate_sender {
-                    if cert_id.is_critical() {
-                        if let Err(e) =
-                            sender.try_send((cert_id, vote_certificate.certificate().clone()))
-                        {
-                            error!("Unable to send certificate {cert_id:?}: {e:?}");
-                            return Err(AddVoteError::CertificateSenderError);
-                        }
-                    }
-                }
-
-                match cert_id {
-                    CertificateId::Notarize(_, _, _) => (),
-                    CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
-                        self.parent_ready_tracker
-                            .add_new_notar_fallback((slot, block_id, bank_hash));
-                        if self
-                            .highest_notarized_fallback
-                            .map_or(true, |(s, _, _)| s < slot)
-                        {
-                            self.highest_notarized_fallback = Some((slot, block_id, bank_hash));
-                        }
-                    }
-                    CertificateId::Skip(_) => self.parent_ready_tracker.add_new_skip(slot),
-                    CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
-                        if self.highest_finalized_slot.map_or(true, |s| s < slot) {
-                            self.highest_finalized_slot = Some(slot);
-                            return Ok(Some(slot));
-                        }
-                    }
-                };
-
-                Ok(highest)
+                self.insert_certificate(cert_id, vote_certificate, true)
             })
     }
 
@@ -315,17 +287,43 @@ impl CertificatePool {
         None
     }
 
-    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VoteCertificate) {
+    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VoteCertificate, send_to_certificate_sender: bool) -> Result<Option<Slot>, AddVoteError> {
         self.completed_certificates.insert(cert_id, cert);
-        match cert_id {
-            CertificateId::NotarizeFallback(slot, block_id, bank_hash) => self
-                .parent_ready_tracker
-                .add_new_notar_fallback((slot, block_id, bank_hash)),
-            CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot),
-            CertificateId::Finalize(_)
-            | CertificateId::FinalizeFast(_, _, _)
-            | CertificateId::Notarize(_, _, _) => (),
+        if send_to_certificate_sender {
+            if let Some(sender) = &self.certificate_sender {
+                if cert_id.is_critical() {
+                    if let Err(e) =
+                        sender.try_send((cert_id, vote_certificate.certificate().clone()))
+                    {
+                        error!("Unable to send certificate {cert_id:?}: {e:?}");
+                        return Err(AddVoteError::CertificateSenderError);
+                    }
+                }
+            }
         }
+        match cert_id {
+            CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
+                self
+                .parent_ready_tracker
+                .add_new_notar_fallback((slot, block_id, bank_hash));
+                if self
+                    .highest_notarized_fallback
+                    .map_or(true, |(s, _, _)| s < slot)
+                {
+                    self.highest_notarized_fallback = Some((slot, block_id, bank_hash));
+                }
+            }
+            CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot),
+            CertificateId::Finalize(slot)
+            | CertificateId::FinalizeFast(slot, _, _) => {
+                if self.highest_finalized_slot.map_or(true, |s| s < slot) {
+                    self.highest_finalized_slot = Some(slot);
+                    return Ok(Some(slot));
+                }
+            }
+            CertificateId::Notarize(_, _, _) => (),
+        }
+        Ok(None)
     }
 
     fn get_key_and_stakes(
@@ -352,18 +350,26 @@ impl CertificatePool {
         Ok((*vote_key, stake, epoch_stakes.total_stake()))
     }
 
-    /// Adds the new vote the the certificate pool. If a new certificate is created
-    /// as a result of this, send it via the `self.certificate_sender`
+    /// Adds the new message to the the certificate pool. If a new certificate is created
+    /// or accepted as a result of this, send it via the `self.certificate_sender`
     ///
     /// If this resulted in a new highest Finalize or FastFinalize certificate,
     /// return the slot
-    pub fn add_transaction(
+    pub fn add_transaction(&mut self, transaction: &BLSMessage) -> Result<Option<Slot>, AddVoteError> {
+        match transaction {
+            BLSMessage::Vote(vote_message) => {
+                self.add_vote(vote_message)
+            }
+            BLSMessage::Certificate(certificate_message) => {
+                self.add_certificate(&certificate_message)
+            }
+        }
+    }
+
+    fn add_vote(
         &mut self,
-        transaction: &BLSMessage,
+        vote_message: &VoteMessage,
     ) -> Result<Option<Slot>, AddVoteError> {
-        let BLSMessage::Vote(vote_message) = transaction else {
-            return Err(AddVoteError::InvalidVoteType);
-        };
         let vote = &vote_message.vote;
         let rank = vote_message.rank;
         let slot = vote.slot();
@@ -417,6 +423,45 @@ impl CertificatePool {
             return Ok(None);
         }
         self.update_certificates(vote, voted_block_key, total_stake)
+    }
+
+    fn add_certificate(&mut self, certificate_message: &CertificateMessage) -> Result<Option<Slot>, AddVoteError> {
+        let certificate = &certificate_message.certificate;
+        let certificate_id = match certificate {
+            CertificateMessage::Notarize(certificate) => {
+                CertificateId::Notarize(
+                    certificate.slot,
+                    certificate.block_id,
+                    certificate.bank_hash,
+                )
+            }
+            CertificateMessage::NotarizeFallback(certificate) => {
+                CertificateId::NotarizeFallback(
+                    certificate.slot,
+                    certificate.block_id,
+                    certificate.bank_hash,
+                )
+            }
+            CertificateMessage::Skip(certificate) => CertificateId::Skip(certificate.slot),
+            CertificateMessage::SkipFallback(certificate) => {
+                CertificateId::SkipFallback(certificate.slot)
+            }
+            CertificateMessage::Finalize(certificate) => {
+                CertificateId::Finalize(certificate.slot)
+            }
+            CertificateMessage::FinalizeFast(certificate) => {
+                CertificateId::FinalizeFast(
+                    certificate.slot,
+                    certificate.block_id,
+                    certificate.bank_hash,
+                )
+            }
+        };
+        if self.completed_certificates.contains_key(&certificate_id) {
+            return Ok(None);
+        }
+        self.completed_certificates.insert(certificate_id, certificate);
+        Ok(Some(certificate.slot()))
     }
 
     /// The highest notarized fallback slot, for use as the parent slot in leader window
@@ -674,9 +719,10 @@ pub fn load_from_blockstore(
     root_bank: &Bank,
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    voting_sender: Option<Sender<BLSOp>>,
 ) -> CertificatePool {
     let mut cert_pool =
-        CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
+        CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender, voting_sender);
     for (slot, slot_cert) in blockstore
         .slot_certificates_iterator(root_bank.slot())
         .unwrap()
