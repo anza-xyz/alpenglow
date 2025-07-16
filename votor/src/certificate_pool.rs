@@ -8,16 +8,16 @@ use {
                 DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
             },
         },
-        conflicting_types,
-        vote_history::VoteHistory,
-        vote_to_certificate_ids, CertificateId, Stake, VoteType,
-        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
-        MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        conflicting_types, vote_to_certificate_ids,
+        voting_utils::BLSOp,
+        CertificateId, Stake, VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES, MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
         SAFE_TO_SKIP_THRESHOLD,
     },
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage},
+        certificate::CertificateType,
         vote::Vote,
     },
     crossbeam_channel::Sender,
@@ -73,6 +73,9 @@ pub enum AddVoteError {
 
     #[error("Certificate sender error")]
     CertificateSenderError,
+
+    #[error("Voting sender error")]
+    VotingSenderError,
 
     #[error("Invalid vote type")]
     InvalidVoteType,
@@ -287,25 +290,37 @@ impl CertificatePool {
         None
     }
 
-    pub(crate) fn insert_certificate(&mut self, cert_id: CertificateId, cert: VoteCertificate, send_to_certificate_sender: bool) -> Result<Option<Slot>, AddVoteError> {
-        self.completed_certificates.insert(cert_id, cert);
-        if send_to_certificate_sender {
+    pub(crate) fn insert_certificate(
+        &mut self,
+        cert_id: CertificateId,
+        cert: VoteCertificate,
+        send_certificates: bool,
+    ) -> Result<Option<Slot>, AddVoteError> {
+        if send_certificates {
             if let Some(sender) = &self.certificate_sender {
                 if cert_id.is_critical() {
-                    if let Err(e) =
-                        sender.try_send((cert_id, vote_certificate.certificate().clone()))
-                    {
+                    if let Err(e) = sender.try_send((cert_id, cert.certificate().clone())) {
                         error!("Unable to send certificate {cert_id:?}: {e:?}");
                         return Err(AddVoteError::CertificateSenderError);
                     }
                 }
             }
+            if let Some(voting_sender) = &self.voting_sender {
+                if let Err(e) = voting_sender.send(BLSOp::PushVote {
+                    bls_message: BLSMessage::Certificate(cert.certificate().clone()),
+                    slot: cert_id.slot(),
+                    saved_vote_history: None,
+                }) {
+                    error!("Unable to send certificate {cert_id:?}: {e:?}");
+                    return Err(AddVoteError::VotingSenderError);
+                }
+            }
         }
+        self.completed_certificates.insert(cert_id, cert);
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
-                self
-                .parent_ready_tracker
-                .add_new_notar_fallback((slot, block_id, bank_hash));
+                self.parent_ready_tracker
+                    .add_new_notar_fallback((slot, block_id, bank_hash));
                 if self
                     .highest_notarized_fallback
                     .map_or(true, |(s, _, _)| s < slot)
@@ -314,8 +329,7 @@ impl CertificatePool {
                 }
             }
             CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot),
-            CertificateId::Finalize(slot)
-            | CertificateId::FinalizeFast(slot, _, _) => {
+            CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
                 if self.highest_finalized_slot.map_or(true, |s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
                     return Ok(Some(slot));
@@ -355,21 +369,19 @@ impl CertificatePool {
     ///
     /// If this resulted in a new highest Finalize or FastFinalize certificate,
     /// return the slot
-    pub fn add_transaction(&mut self, transaction: &BLSMessage) -> Result<Option<Slot>, AddVoteError> {
+    pub fn add_transaction(
+        &mut self,
+        transaction: &BLSMessage,
+    ) -> Result<Option<Slot>, AddVoteError> {
         match transaction {
-            BLSMessage::Vote(vote_message) => {
-                self.add_vote(vote_message)
-            }
+            BLSMessage::Vote(vote_message) => self.add_vote(vote_message),
             BLSMessage::Certificate(certificate_message) => {
-                self.add_certificate(&certificate_message)
+                self.add_certificate(certificate_message)
             }
         }
     }
 
-    fn add_vote(
-        &mut self,
-        vote_message: &VoteMessage,
-    ) -> Result<Option<Slot>, AddVoteError> {
+    fn add_vote(&mut self, vote_message: &VoteMessage) -> Result<Option<Slot>, AddVoteError> {
         let vote = &vote_message.vote;
         let rank = vote_message.rank;
         let slot = vote.slot();
@@ -425,43 +437,38 @@ impl CertificatePool {
         self.update_certificates(vote, voted_block_key, total_stake)
     }
 
-    fn add_certificate(&mut self, certificate_message: &CertificateMessage) -> Result<Option<Slot>, AddVoteError> {
+    fn add_certificate(
+        &mut self,
+        certificate_message: &CertificateMessage,
+    ) -> Result<Option<Slot>, AddVoteError> {
         let certificate = &certificate_message.certificate;
-        let certificate_id = match certificate {
-            CertificateMessage::Notarize(certificate) => {
-                CertificateId::Notarize(
-                    certificate.slot,
-                    certificate.block_id,
-                    certificate.bank_hash,
-                )
-            }
-            CertificateMessage::NotarizeFallback(certificate) => {
-                CertificateId::NotarizeFallback(
-                    certificate.slot,
-                    certificate.block_id,
-                    certificate.bank_hash,
-                )
-            }
-            CertificateMessage::Skip(certificate) => CertificateId::Skip(certificate.slot),
-            CertificateMessage::SkipFallback(certificate) => {
-                CertificateId::SkipFallback(certificate.slot)
-            }
-            CertificateMessage::Finalize(certificate) => {
-                CertificateId::Finalize(certificate.slot)
-            }
-            CertificateMessage::FinalizeFast(certificate) => {
-                CertificateId::FinalizeFast(
-                    certificate.slot,
-                    certificate.block_id,
-                    certificate.bank_hash,
-                )
-            }
+        let certificate_id = match certificate.certificate_type {
+            CertificateType::Finalize => CertificateId::Finalize(certificate.slot),
+            CertificateType::FinalizeFast => CertificateId::FinalizeFast(
+                certificate.slot,
+                certificate.block_id.unwrap(),
+                certificate.replayed_bank_hash.unwrap(),
+            ),
+            CertificateType::Notarize => CertificateId::Notarize(
+                certificate.slot,
+                certificate.block_id.unwrap(),
+                certificate.replayed_bank_hash.unwrap(),
+            ),
+            CertificateType::NotarizeFallback => CertificateId::NotarizeFallback(
+                certificate.slot,
+                certificate.block_id.unwrap(),
+                certificate.replayed_bank_hash.unwrap(),
+            ),
+            CertificateType::Skip => CertificateId::Skip(certificate.slot),
         };
         if self.completed_certificates.contains_key(&certificate_id) {
             return Ok(None);
         }
-        self.completed_certificates.insert(certificate_id, certificate);
-        Ok(Some(certificate.slot()))
+        self.insert_certificate(
+            certificate_id,
+            VoteCertificate::from(certificate_message.clone()),
+            true,
+        )
     }
 
     /// The highest notarized fallback slot, for use as the parent slot in leader window
@@ -721,8 +728,12 @@ pub fn load_from_blockstore(
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
     voting_sender: Option<Sender<BLSOp>>,
 ) -> CertificatePool {
-    let mut cert_pool =
-        CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender, voting_sender);
+    let mut cert_pool = CertificatePool::new_from_root_bank(
+        *my_pubkey,
+        root_bank,
+        certificate_sender,
+        voting_sender,
+    );
     for (slot, slot_cert) in blockstore
         .slot_certificates_iterator(root_bank.slot())
         .unwrap()
@@ -741,7 +752,9 @@ pub fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(cert_id, cert.into());
+            if let Err(e) = cert_pool.insert_certificate(cert_id, cert.into(), false) {
+                error!("{my_pubkey}: failed to insert certificate {cert_id:?} into pool: {e}");
+            }
         }
     }
     cert_pool
@@ -804,7 +817,12 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank.clone(), None),
+            CertificatePool::new_from_root_bank(
+                Pubkey::new_unique(),
+                &root_bank.clone(),
+                None,
+                None,
+            ),
         )
     }
 
@@ -1507,8 +1525,12 @@ mod tests {
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
-        let mut pool: CertificatePool =
-            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank.clone(), None);
+        let mut pool: CertificatePool = CertificatePool::new_from_root_bank(
+            Pubkey::new_unique(),
+            &root_bank.clone(),
+            None,
+            None,
+        );
         assert_eq!(pool.root(), 0);
 
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));

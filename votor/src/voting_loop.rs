@@ -243,6 +243,7 @@ impl VotingLoop {
             &root_bank_cache.root_bank(),
             blockstore.as_ref(),
             Some(certificate_sender),
+            Some(bls_sender.clone()),
         );
         let mut pending_blocks = PendingBlocks::default();
 
