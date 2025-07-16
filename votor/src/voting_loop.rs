@@ -265,6 +265,7 @@ impl VotingLoop {
             commitment_sender,
             wait_to_vote_slot,
             voted_signatures: vec![],
+            root_bank_cache: root_bank_cache.clone(),
         };
         let mut shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -479,8 +480,6 @@ impl VotingLoop {
                     if refresh_timer.elapsed() > Duration::from_secs(1) {
                         Self::refresh_votes_and_cert(
                             &my_pubkey,
-                            current_slot,
-                            &mut root_bank_cache,
                             &mut cert_pool,
                             &mut voting_context,
                         );
@@ -771,30 +770,29 @@ impl VotingLoop {
     /// For each slot past this up to our current slot `slot`, refresh our votes
     fn refresh_votes_and_cert(
         my_pubkey: &Pubkey,
-        slot: Slot,
-        root_bank_cache: &mut RootBankCache,
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) {
         let highest_finalization_slot = cert_pool
             .highest_finalized_slot()
-            .max(root_bank_cache.root_bank().slot());
+            .max(voting_context.root_bank_cache.root_bank().slot());
         // TODO: rebroadcast finalization cert for block once we have BLS
         // This includes the notarized fallback cert if it was a slow finalization
 
         // Refresh votes for all slots up to our current slot
-        for s in highest_finalization_slot..=slot {
-            for vote in voting_context.vote_history.votes_cast(s) {
-                info!("{my_pubkey}: Refreshing vote {vote:?}");
-                if !send_vote(
-                    vote,
-                    true,
-                    root_bank_cache.root_bank().as_ref(),
-                    cert_pool,
-                    voting_context,
-                ) {
-                    warn!("send_vote failed for {:?}", vote);
-                }
+        for vote in voting_context
+            .vote_history
+            .votes_cast_since(highest_finalization_slot)
+        {
+            info!("{my_pubkey}: Refreshing vote {vote:?}");
+            if !send_vote(
+                vote,
+                true,
+                voting_context.root_bank_cache.root_bank().as_ref(),
+                cert_pool,
+                voting_context,
+            ) {
+                warn!("send_vote failed for {:?}", vote);
             }
         }
     }
