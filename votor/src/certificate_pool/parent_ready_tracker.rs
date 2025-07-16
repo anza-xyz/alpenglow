@@ -14,7 +14,6 @@
 
 use {
     crate::{Block, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
-    log::trace,
     solana_pubkey::Pubkey,
     solana_sdk::clock::Slot,
     std::collections::HashMap,
