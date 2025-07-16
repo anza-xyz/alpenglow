@@ -210,7 +210,7 @@ where
 
     // Dropping the bank_forks write lock and reacquiring as a read lock is
     // safe because updates to bank_forks are only made by a single thread.
-    // TODO(ashwin): Once PR #254 lands move this back to ReplayStage
+    // TODO(ashwin): Once PR #245 lands move this back to ReplayStage
     let r_bank_forks = bank_forks.read().unwrap();
     let new_root_bank = &r_bank_forks[new_root];
     if !*has_new_vote_been_rooted {

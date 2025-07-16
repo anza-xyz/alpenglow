@@ -87,7 +87,7 @@ impl Finalizer {
     }
 }
 
-// TODO(ashwin): This will be removed in PR #254
+// TODO(ashwin): This will be removed in PR #245
 const MAX_VOTE_SIGNATURES: usize = 200;
 
 // Implement a destructor for Finalizer.
