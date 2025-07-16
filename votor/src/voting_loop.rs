@@ -1,13 +1,19 @@
 //! The Alpenglow voting loop, handles all three types of votes as well as
 //! rooting, leader logic, and dumping and repairing the notarized versions.
 use {
-    super::block_creation_loop::{LeaderWindowInfo, LeaderWindowNotifier},
     crate::{
-        commitment_service::{
-            AlpenglowCommitmentAggregationData, AlpenglowCommitmentType, CommitmentAggregationData,
+        certificate_pool::{
+            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
         },
-        replay_stage::{Finalizer, ReplayStage, MAX_VOTE_SIGNATURES},
-        voting_service::VoteOp,
+        commitment::{
+            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
+            AlpenglowCommitmentType,
+        },
+        root_utils::maybe_set_root,
+        skip_timeout,
+        vote_history::VoteHistory,
+        vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
+        Block, CertificateId,
     },
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
@@ -25,7 +31,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_rpc::{
-        optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
+        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
@@ -37,23 +43,13 @@ use {
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
-        timing::timestamp,
         transaction::Transaction,
-    },
-    solana_votor::{
-        certificate_pool::{
-            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
-        },
-        skip_timeout,
-        vote_history::VoteHistory,
-        vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage},
-        Block, CertificateId,
     },
     std::{
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, RwLock,
+            Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -61,7 +57,53 @@ use {
 };
 
 /// Banks that have completed replay, but are yet to be voted on
-type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
+pub(crate) type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
+
+/// Context for the block creation loop to start a leader window
+#[derive(Copy, Clone, Debug)]
+pub struct LeaderWindowInfo {
+    pub start_slot: Slot,
+    pub end_slot: Slot,
+    pub parent_block: Block,
+    pub skip_timer: Instant,
+}
+
+/// Communication with the block creation loop to notify leader window
+#[derive(Default)]
+pub struct LeaderWindowNotifier {
+    pub window_info: Mutex<Option<LeaderWindowInfo>>,
+    pub window_notification: Condvar,
+}
+
+// Implement a destructor for the VotingLoop thread to signal it exited
+// even on panics
+pub(crate) struct Finalizer {
+    exit_sender: Arc<AtomicBool>,
+}
+
+impl Finalizer {
+    pub(crate) fn new(exit_sender: Arc<AtomicBool>) -> Self {
+        Finalizer { exit_sender }
+    }
+}
+
+// TODO(ashwin): This will be removed in PR #245
+const MAX_VOTE_SIGNATURES: usize = 200;
+
+// Implement a destructor for Finalizer.
+impl Drop for Finalizer {
+    fn drop(&mut self) {
+        self.exit_sender.clone().store(true, Ordering::Relaxed);
+    }
+}
+
+pub enum BLSOp {
+    PushVote {
+        bls_message: BLSMessage,
+        slot: Slot,
+        saved_vote_history: SavedVoteHistoryVersions,
+    },
+}
 
 /// Inputs to the voting loop
 pub struct VotingLoopConfig {
@@ -83,15 +125,15 @@ pub struct VotingLoopConfig {
 
     // Senders / Notifiers
     pub accounts_background_request_sender: AbsRequestSender,
-    pub voting_sender: Sender<VoteOp>,
-    pub commitment_sender: Sender<CommitmentAggregationData>,
+    pub bls_sender: Sender<BLSOp>,
+    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 
     // Receivers
-    pub(crate) completed_block_receiver: CompletedBlockReceiver,
+    pub completed_block_receiver: CompletedBlockReceiver,
     pub vote_receiver: VoteReceiver,
 }
 
@@ -104,8 +146,8 @@ struct VotingContext {
     // The BLS keypair should always change with authorized_voter_keypairs.
     derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     has_new_vote_been_rooted: bool,
-    voting_sender: Sender<VoteOp>,
-    commitment_sender: Sender<CommitmentAggregationData>,
+    bls_sender: Sender<BLSOp>,
+    commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     wait_to_vote_slot: Option<Slot>,
     voted_signatures: Vec<Signature>,
 }
@@ -121,7 +163,7 @@ struct SharedContext {
 }
 
 #[derive(Debug)]
-pub(crate) enum GenerateVoteTxResult {
+pub enum GenerateVoteTxResult {
     // non voting validator, not eligible for refresh
     // until authorized keypair is overriden
     NonVoting,
@@ -139,13 +181,37 @@ pub(crate) enum GenerateVoteTxResult {
 }
 
 impl GenerateVoteTxResult {
-    pub(crate) fn is_non_voting(&self) -> bool {
+    pub fn is_non_voting(&self) -> bool {
         matches!(self, Self::NonVoting)
     }
 
-    pub(crate) fn is_hot_spare(&self) -> bool {
+    pub fn is_hot_spare(&self) -> bool {
         matches!(self, Self::HotSpare)
     }
+}
+
+pub fn log_leader_change(
+    my_pubkey: &Pubkey,
+    bank_slot: Slot,
+    current_leader: &mut Option<Pubkey>,
+    new_leader: &Pubkey,
+) {
+    if let Some(ref current_leader) = current_leader {
+        if current_leader != new_leader {
+            let msg = if current_leader == my_pubkey {
+                ". I am no longer the leader"
+            } else if new_leader == my_pubkey {
+                ". I am now the leader"
+            } else {
+                ""
+            };
+            info!(
+                "LEADER CHANGE at slot: {} leader: {}{}",
+                bank_slot, new_leader, msg
+            );
+        }
+    }
+    current_leader.replace(new_leader.to_owned());
 }
 
 pub struct VotingLoop {
@@ -181,7 +247,7 @@ impl VotingLoop {
             leader_schedule_cache,
             rpc_subscriptions,
             accounts_background_request_sender,
-            voting_sender,
+            bls_sender,
             commitment_sender,
             drop_bank_sender,
             bank_notification_sender,
@@ -228,7 +294,7 @@ impl VotingLoop {
                     "{my_pubkey}: Mismatch bank forks root {bank_forks_slot} vs vote history root {vote_history_slot}"
                 );
             }
-            let slot = bank_forks_slot + 1;
+            let slot = bank_forks_slot.saturating_add(1);
             info!(
                 "{my_pubkey}: Starting voting loop from {slot}: root {}",
                 root_bank_cache.root_bank().slot()
@@ -251,7 +317,7 @@ impl VotingLoop {
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted,
-            voting_sender,
+            bls_sender,
             commitment_sender,
             wait_to_vote_slot,
             voted_signatures: vec![],
@@ -348,7 +414,7 @@ impl VotingLoop {
                 };
             }
 
-            ReplayStage::log_leader_change(
+            log_leader_change(
                 &my_pubkey,
                 current_slot,
                 &mut current_leader,
@@ -492,97 +558,30 @@ impl VotingLoop {
                     &mut cert_pool,
                     &mut voting_context,
                 );
-                current_slot += 1;
+                current_slot = current_slot.saturating_add(1);
             }
 
             // Set new root
-            Self::maybe_set_root(
+            maybe_set_root(
                 leader_end_slot,
                 &mut cert_pool,
                 &mut pending_blocks,
                 &accounts_background_request_sender,
                 &bank_notification_sender,
                 &drop_bank_sender,
-                &mut shared_context,
-                &mut voting_context,
+                &shared_context.blockstore,
+                &shared_context.leader_schedule_cache,
+                &shared_context.bank_forks,
+                &shared_context.rpc_subscriptions,
+                &shared_context.my_pubkey,
+                &mut voting_context.vote_history,
+                &mut voting_context.has_new_vote_been_rooted,
+                &mut voting_context.voted_signatures,
             );
 
             // TODO(ashwin): If we were the leader for `current_slot` and the bank has not completed,
             // we can abandon the bank now
         }
-    }
-
-    /// Checks if any slots between `vote_history`'s current root
-    /// and `slot` have received a finalization certificate and are frozen
-    ///
-    /// If so, set the root as the highest slot that fits these conditions
-    /// and return the root
-    fn maybe_set_root(
-        slot: Slot,
-        cert_pool: &mut CertificatePool,
-        pending_blocks: &mut PendingBlocks,
-        accounts_background_request_sender: &AbsRequestSender,
-        bank_notification_sender: &Option<BankNotificationSenderConfig>,
-        drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-        ctx: &mut SharedContext,
-        vctx: &mut VotingContext,
-    ) -> Option<Slot> {
-        let old_root = vctx.vote_history.root();
-        info!(
-            "{}: Checking for finalization certificates between {old_root} and {slot}",
-            ctx.my_pubkey
-        );
-        let new_root = (old_root + 1..=slot).rev().find(|slot| {
-            cert_pool.is_finalized(*slot) && ctx.bank_forks.read().unwrap().is_frozen(*slot)
-        })?;
-        trace!("{}: Attempting to set new root {new_root}", ctx.my_pubkey);
-        vctx.vote_history.set_root(new_root);
-        cert_pool.handle_new_root(ctx.bank_forks.read().unwrap().get(new_root).unwrap());
-        *pending_blocks = pending_blocks.split_off(&new_root);
-        if let Err(e) = ReplayStage::check_and_handle_new_root(
-            &ctx.my_pubkey,
-            slot,
-            new_root,
-            ctx.bank_forks.as_ref(),
-            None,
-            ctx.blockstore.as_ref(),
-            &ctx.leader_schedule_cache,
-            accounts_background_request_sender,
-            &ctx.rpc_subscriptions,
-            Some(new_root),
-            bank_notification_sender,
-            &mut vctx.has_new_vote_been_rooted,
-            &mut vctx.voted_signatures,
-            drop_bank_sender,
-            None,
-        ) {
-            error!("Unable to set root: {e:?}");
-            return None;
-        }
-
-        // Distinguish between duplicate versions of same slot
-        let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
-        if let Err(e) =
-            ctx.blockstore
-                .insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
-        {
-            error!(
-                "failed to record optimistic slot in blockstore: slot={}: {:?}",
-                new_root, &e
-            );
-        }
-        // It is critical to send the OC notification in order to keep compatibility with
-        // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
-        // in order to perform cleanup. In the future we will look to deprecate OC and remove
-        // these code paths.
-        if let Some(config) = bank_notification_sender {
-            config
-                .sender
-                .send(BankNotification::OptimisticallyConfirmed(new_root))
-                .unwrap();
-        }
-
-        Some(new_root)
     }
 
     /// Attempts to create and send a skip vote for all unvoted slots in `[start, end]`
@@ -689,7 +688,7 @@ impl VotingLoop {
                 return false;
             }
         } else {
-            if parent_slot + 1 != slot {
+            if parent_slot.saturating_add(1) != slot {
                 // Non consecutive
                 return false;
             }
@@ -730,7 +729,7 @@ impl VotingLoop {
             return false;
         }
 
-        Self::alpenglow_update_commitment_cache(
+        alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
             slot,
             &voting_context.commitment_sender,
@@ -897,8 +896,8 @@ impl VotingLoop {
 
         // Send the vote over the wire
         context
-            .voting_sender
-            .send(VoteOp::PushAlpenglowBLSMessage {
+            .bls_sender
+            .send(BLSOp::PushVote {
                 bls_message,
                 slot: vote.slot(),
                 saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
@@ -1047,7 +1046,7 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool,
-        commitment_sender: &Sender<CommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
         timeout: Duration,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
@@ -1118,35 +1117,18 @@ impl VotingLoop {
         my_pubkey: &Pubkey,
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
-        commitment_sender: &Sender<CommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) -> Result<(), AddVoteError> {
         let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
             return Ok(());
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
-        Self::alpenglow_update_commitment_cache(
+        alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Finalized,
             new_finalized_slot,
             commitment_sender,
         );
         Ok(())
-    }
-
-    fn alpenglow_update_commitment_cache(
-        commitment_type: AlpenglowCommitmentType,
-        slot: Slot,
-        commitment_sender: &Sender<CommitmentAggregationData>,
-    ) {
-        if let Err(e) = commitment_sender.send(
-            CommitmentAggregationData::AlpenglowCommitmentAggregationData(
-                AlpenglowCommitmentAggregationData {
-                    commitment_type,
-                    slot,
-                },
-            ),
-        ) {
-            trace!("commitment_sender failed: {:?}", e);
-        }
     }
 
     pub fn join(self) -> thread::Result<()> {

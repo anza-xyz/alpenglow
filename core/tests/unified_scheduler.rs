@@ -167,13 +167,13 @@ fn test_scheduler_waited_by_drop_bank_service() {
         ReplayStage::handle_new_root(
             root,
             &bank_forks,
-            Some(&mut progress),
+            &mut progress,
             &AbsRequestSender::default(),
             None,
             &mut true,
             &mut Vec::new(),
             &drop_bank_sender1,
-            Some(&mut tbft_structs),
+            &mut tbft_structs,
         )
         .unwrap();
     }
