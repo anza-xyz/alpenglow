@@ -692,7 +692,7 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
-        let blocks = cert_pool.safe_to_notar(slot, &voting_context.vote_history);
+        let blocks = cert_pool.safe_to_notar(&voting_context.vote_account_pubkey, slot);
         if blocks.is_empty() {
             return false;
         }
@@ -704,7 +704,16 @@ impl VotingLoop {
             cert_pool,
             voting_context,
         );
+        if voting_context.vote_history.its_over(slot) {
+            return false;
+        }
         for (block_id, bank_hash) in blocks.into_iter() {
+            if voting_context
+                .vote_history
+                .voted_notar_fallback(slot, block_id, bank_hash)
+            {
+                continue;
+            }
             info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
             let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
             if !send_vote(
@@ -731,7 +740,7 @@ impl VotingLoop {
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
     ) -> bool {
-        if !cert_pool.safe_to_skip(slot, &voting_context.vote_history) {
+        if !cert_pool.safe_to_skip(&voting_context.vote_account_pubkey, slot) {
             return false;
         }
         Self::try_skip_window(
@@ -742,6 +751,11 @@ impl VotingLoop {
             cert_pool,
             voting_context,
         );
+        if voting_context.vote_history.its_over(slot)
+            || voting_context.vote_history.voted_skip_fallback(slot)
+        {
+            return false;
+        }
         info!("{my_pubkey}: Voting skip fallback for slot {slot}");
         let vote = Vote::new_skip_fallback_vote(slot);
         send_vote(
