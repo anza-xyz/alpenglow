@@ -136,10 +136,26 @@ impl VoteHistory {
         self.its_over.contains(&slot)
     }
 
-    /// All votes in a slot, for use in refresh
-    pub fn votes_cast(&self, slot: Slot) -> Vec<Vote> {
+    /// All votes cast since `slot` including `slot`, for use in
+    /// refresh
+    pub fn votes_cast_since(&self, slot: Slot) -> Vec<Vote> {
+        self.votes_cast
+            .iter()
+            .filter(|(&s, _)| s >= slot)
+            .flat_map(|(_, votes)| votes.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Have we casted a bad window vote for `slot`:
+    /// - Skip
+    /// - Notarize fallback
+    /// - Skip fallback
+    pub fn bad_window(&self, slot: Slot) -> bool {
         assert!(slot >= self.root);
-        self.votes_cast.get(&slot).cloned().unwrap_or_default()
+        self.skipped.contains(&slot)
+            || self.voted_notar_fallback.contains_key(&slot)
+            || self.voted_skip_fallback.contains(&slot)
     }
 
     pub fn is_block_notarized(&self, block: &Block) -> bool {
