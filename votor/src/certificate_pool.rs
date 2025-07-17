@@ -75,9 +75,6 @@ pub enum AddVoteError {
     #[error("Voting sender error")]
     VotingSenderError,
 
-    #[error("Invalid vote type")]
-    InvalidVoteType,
-
     #[error("Invalid rank: {0}")]
     InvalidRank(u16),
 }
