@@ -3,6 +3,7 @@ use {
     solana_sdk::clock::Slot,
 };
 
+#[derive(Debug)]
 pub enum AlpenglowCommitmentType {
     /// Our node has voted notarize for the slot
     Notarize,
@@ -10,27 +11,26 @@ pub enum AlpenglowCommitmentType {
     Finalized,
 }
 
+#[derive(Debug)]
 pub struct AlpenglowCommitmentAggregationData {
     pub commitment_type: AlpenglowCommitmentType,
     pub slot: Slot,
 }
 
 pub fn alpenglow_update_commitment_cache(
-    commitment_type: AlpenglowCommitmentType,
-    slot: Slot,
+    msg: AlpenglowCommitmentAggregationData,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) -> bool {
-    match commitment_sender.try_send(AlpenglowCommitmentAggregationData {
-        commitment_type,
-        slot,
-    }) {
-        Err(TrySendError::Disconnected(_)) => {
-            info!("commitment_sender has disconnected");
+) -> Result<(), AlpenglowCommitmentAggregationData> {
+    match commitment_sender.try_send(msg) {
+        Err(TrySendError::Disconnected(msg)) => {
+            error!("Sending {msg:?}: commitment_sender has disconnected");
             // TODO(ashwin): Use return type to exit voting loop
-            return false;
+            Err(msg)
         }
-        Err(TrySendError::Full(_)) => error!("commitment_sender is backed up, something is wrong"),
-        Ok(_) => (),
+        Err(TrySendError::Full(msg)) => {
+            error!("Sending {msg:?}: commitment_sender is full");
+            Err(msg)
+        }
+        Ok(()) => Ok(()),
     }
-    true
 }

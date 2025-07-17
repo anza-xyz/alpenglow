@@ -54,6 +54,16 @@ use {
     },
 };
 
+/// Different errors that `vote_notarize` can return
+enum VoteNotarizeError {
+    /// sending the vote failed.
+    /// FIXME: Add context.
+    SendVote,
+    /// Updating the commitment failed.
+    /// FIXME: Add context.
+    UpdateCommitment,
+}
+
 /// Banks that have completed replay, but are yet to be voted on
 pub(crate) type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
 
@@ -645,7 +655,7 @@ impl VotingLoop {
         }
 
         // Broadcast notarize vote
-        let voted = Self::vote_notarize(my_pubkey, bank, cert_pool, voting_context);
+        let voted = Self::vote_notarize(my_pubkey, bank, cert_pool, voting_context).is_ok();
 
         // Try to finalize
         Self::try_final(my_pubkey, slot, bank, cert_pool, voting_context);
@@ -658,7 +668,7 @@ impl VotingLoop {
         bank: &Bank,
         cert_pool: &mut CertificatePool,
         voting_context: &mut VotingContext,
-    ) -> bool {
+    ) -> Result<(), VoteNotarizeError> {
         debug_assert!(bank.is_frozen());
         debug_assert!(bank.block_id().is_some());
         let slot = bank.slot();
@@ -670,15 +680,17 @@ impl VotingLoop {
         info!("{my_pubkey}: Voting notarize for slot {slot} hash {hash} block_id {block_id}");
         let vote = Vote::new_notarization_vote(slot, block_id, hash);
         if !send_vote(vote, false, bank, cert_pool, voting_context) {
-            return false;
+            return Err(VoteNotarizeError::SendVote);
         }
 
         alpenglow_update_commitment_cache(
-            AlpenglowCommitmentType::Notarize,
-            slot,
+            AlpenglowCommitmentAggregationData {
+                commitment_type: AlpenglowCommitmentType::Notarize,
+                slot,
+            },
             &voting_context.commitment_sender,
-        );
-        true
+        )
+        .map_err(|_msg| VoteNotarizeError::UpdateCommitment)
     }
 
     /// Consider voting notarize fallback for this slot

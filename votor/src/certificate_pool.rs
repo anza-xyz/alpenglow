@@ -75,6 +75,9 @@ pub enum AddVoteError {
 
     #[error("Invalid rank: {0}")]
     InvalidRank(u16),
+
+    #[error("Updating the commitment cache failed")]
+    UpdateCommitmentCache,
 }
 
 #[derive(Default)]

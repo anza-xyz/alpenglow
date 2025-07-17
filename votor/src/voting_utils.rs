@@ -221,7 +221,6 @@ pub fn generate_vote_tx(
 /// For notarization & finalization votes this will be the voted bank
 /// for skip votes we need to ensure that the bank selected will be on
 /// the leader's choosen fork.
-#[allow(clippy::too_many_arguments)]
 pub fn send_vote(
     vote: Vote,
     is_refresh: bool,
@@ -288,9 +287,11 @@ pub fn add_message_and_maybe_update_commitment(
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
     alpenglow_update_commitment_cache(
-        AlpenglowCommitmentType::Finalized,
-        new_finalized_slot,
+        AlpenglowCommitmentAggregationData {
+            commitment_type: AlpenglowCommitmentType::Finalized,
+            slot: new_finalized_slot,
+        },
         commitment_sender,
-    );
-    Ok(())
+    )
+    .map_err(|_msg| AddVoteError::UpdateCommitmentCache)
 }
