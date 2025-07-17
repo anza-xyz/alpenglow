@@ -13,7 +13,7 @@ use {
         bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
-    crossbeam_channel::Sender,
+    crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_measure::measure::Measure,
     solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
@@ -24,6 +24,7 @@ use {
         transaction::Transaction,
     },
     std::{collections::HashMap, sync::Arc},
+    thiserror::Error,
 };
 
 // TODO(ashwin): This will be removed in PR #245
@@ -63,6 +64,15 @@ pub enum BLSOp {
         slot: Slot,
         saved_vote_history: SavedVoteHistoryVersions,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum VoteError {
+    #[error("Unable to generate bls vote message")]
+    GenerationError(Box<GenerateVoteTxResult>),
+
+    #[error("Unable to send to certificate pool")]
+    CertificatePoolError(#[from] SendError<()>),
 }
 
 /// Context required to construct vote transactions
@@ -290,12 +300,12 @@ pub fn send_vote(
 /// the certificate pool thread for ingestion.
 ///
 /// Returns false if we are currently a non-voting node
-pub(crate) fn send_vote_and_queue_for_cert_pool(
+pub(crate) fn insert_vote_and_create_bls_message(
     my_pubkey: &Pubkey,
     vote: Vote,
     is_refresh: bool,
     context: &mut VotingContext,
-) -> bool {
+) -> Result<BLSOp, VoteError> {
     // Update and save the vote history
     if !is_refresh {
         context.vote_history.add_vote(vote);
@@ -305,8 +315,7 @@ pub(crate) fn send_vote_and_queue_for_cert_pool(
     let bls_message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
         e => {
-            warn!("{my_pubkey}: Unable to vote: {e:?}");
-            return false;
+            return Err(VoteError::GenerationError(Box::new(e)));
         }
     };
 
@@ -325,16 +334,12 @@ pub(crate) fn send_vote_and_queue_for_cert_pool(
             },
         );
 
-    // Send the vote over the wire
-    context
-        .bls_sender
-        .send(BLSOp::PushVote {
-            bls_message,
-            slot: vote.slot(),
-            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-        })
-        .unwrap_or_else(|err| warn!("Error: {:?}", err));
-    true
+    // Return vote for sending
+    Ok(BLSOp::PushVote {
+        bls_message,
+        slot: vote.slot(),
+        saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+    })
 }
 
 /// Adds a vote to the certificate pool and updates the commitment cache if necessary

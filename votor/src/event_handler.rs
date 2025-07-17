@@ -6,12 +6,12 @@ use {
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
         vote_history::{VoteHistory, VoteHistoryError},
-        voting_utils::{self, VotingContext},
+        voting_utils::{self, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
         Block,
     },
     alpenglow_vote::vote::Vote,
-    crossbeam_channel::{select, Receiver, RecvTimeoutError},
+    crossbeam_channel::{select, Receiver, RecvError, SendError},
     solana_ledger::leader_schedule_utils::{
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
@@ -26,6 +26,7 @@ use {
         thread::{self, Builder, JoinHandle},
         time::Duration,
     },
+    thiserror::Error,
 };
 
 /// Banks that have completed replay, but are yet to be voted on
@@ -46,17 +47,34 @@ pub(crate) struct EventHandlerContext {
     pub(crate) voting_context: VotingContext,
 }
 
+#[derive(Debug, Error)]
+enum EventLoopError {
+    #[error("Receiver is disconnected")]
+    ReceiverDisconnected(#[from] RecvError),
+
+    #[error("Sender is disconnected")]
+    SenderDisconnected(#[from] SendError<()>),
+
+    #[error("Error generating and inserting vote")]
+    VotingError(#[from] VoteError),
+
+    #[error("Set identity error")]
+    SetIdentityError(#[from] VoteHistoryError),
+}
+
 pub(crate) struct EventHandler {
     t_event_handler: JoinHandle<()>,
 }
 
 impl EventHandler {
     pub(crate) fn new(ctx: EventHandlerContext) -> Self {
+        let exit = ctx.exit.clone();
         let t_event_handler = Builder::new()
             .name("solVotorEventLoop".to_string())
             .spawn(move || {
                 if let Err(e) = Self::event_loop(ctx) {
-                    error!("Event loop exited with error: {e:?}");
+                    error!("Event loop exited with error: {e:?}. Shutting down");
+                    exit.store(true, Ordering::Relaxed);
                 }
             })
             .unwrap();
@@ -64,7 +82,7 @@ impl EventHandler {
         Self { t_event_handler }
     }
 
-    fn event_loop(context: EventHandlerContext) -> Result<(), RecvTimeoutError> {
+    fn event_loop(context: EventHandlerContext) -> Result<(), EventLoopError> {
         let EventHandlerContext {
             exit,
             start,
@@ -92,8 +110,7 @@ impl EventHandler {
                 ctx.cluster_info.id(),
                 e
             );
-            exit.store(true, Ordering::Relaxed);
-            return Ok(());
+            return Err(EventLoopError::SetIdentityError(e));
         }
 
         while !exit.load(Ordering::Relaxed) {
@@ -108,7 +125,13 @@ impl EventHandler {
             };
             // TODO: filter events < root
 
-            Self::handle_event(&mut my_pubkey, event, &ctx, &mut vctx, &mut pending_blocks);
+            let votes =
+                Self::handle_event(&mut my_pubkey, event, &ctx, &mut vctx, &mut pending_blocks)?;
+
+            // TODO: properly bubble up error handling here and in call graph
+            for vote in votes {
+                vctx.bls_sender.send(vote?).map_err(|_| SendError(()))?;
+            }
         }
 
         Ok(())
@@ -120,7 +143,8 @@ impl EventHandler {
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         pending_blocks: &mut PendingBlocks,
-    ) {
+    ) -> Result<Vec<Result<BLSOp, VoteError>>, EventLoopError> {
+        let mut votes = vec![];
         match event {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
@@ -140,8 +164,15 @@ impl EventHandler {
                     Hash::default()
                 });
                 let parent_block = (parent_slot, parent_block_id, bank.parent_hash());
-                if Self::try_notar(my_pubkey, block, parent_block, pending_blocks, vctx) {
-                    Self::check_pending_blocks(my_pubkey, pending_blocks, vctx);
+                if Self::try_notar(
+                    my_pubkey,
+                    block,
+                    parent_block,
+                    pending_blocks,
+                    vctx,
+                    &mut votes,
+                ) {
+                    Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
                 } else if !vctx.vote_history.voted(slot) {
                     pending_blocks
                         .entry(slot)
@@ -153,13 +184,13 @@ impl EventHandler {
             // Block has received a notarization certificate
             VotorEvent::BlockNotarized(block) => {
                 vctx.vote_history.add_block_notarized(block);
-                Self::try_final(my_pubkey, block, vctx);
+                Self::try_final(my_pubkey, block, vctx, &mut votes);
             }
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
                 vctx.vote_history.add_parent_ready(slot, parent_block);
-                Self::check_pending_blocks(my_pubkey, pending_blocks, vctx);
+                Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
                 // TODO:
                 // set_timeouts();
                 // notify block creation loop
@@ -168,42 +199,42 @@ impl EventHandler {
             // Skip timer for the slot has fired, TODO: plug this in
             VotorEvent::Timeout(slot) => {
                 if vctx.vote_history.voted(slot) {
-                    return;
+                    return Ok(votes);
                 }
-                Self::try_skip_window(my_pubkey, slot, vctx);
+                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
             }
 
             // We have observed the safe to notar condition, and can send a notar fallback vote
             // TODO: cert pool check for parent block id for intra window slots
             VotorEvent::SafeToNotar((slot, block_id, bank_hash)) => {
-                Self::try_skip_window(my_pubkey, slot, vctx);
+                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
                 if vctx.vote_history.its_over(slot)
                     || vctx
                         .vote_history
                         .voted_notar_fallback(slot, block_id, bank_hash)
                 {
-                    return;
+                    return Ok(votes);
                 }
-                voting_utils::send_vote_and_queue_for_cert_pool(
+                votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
                     Vote::new_notarization_fallback_vote(slot, block_id, bank_hash),
                     false,
                     vctx,
-                );
+                ));
             }
 
             // We have observed the safe to skip condition, and can send a skip fallback vote
             VotorEvent::SafeToSkip(slot) => {
-                Self::try_skip_window(my_pubkey, slot, vctx);
+                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
                 if vctx.vote_history.its_over(slot) || vctx.vote_history.voted_skip_fallback(slot) {
-                    return;
+                    return Ok(votes);
                 }
-                voting_utils::send_vote_and_queue_for_cert_pool(
+                votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
                     Vote::new_skip_fallback_vote(slot),
                     false,
                     vctx,
-                );
+                ));
             }
 
             // It is time to produce our leader window
@@ -234,7 +265,7 @@ impl EventHandler {
             // We have not observed a finalization certificate in a while, refresh our votes and certs
             VotorEvent::Standstill(highest_finalized_slot) => {
                 // TODO: once we have certificate broadcast, we should also refresh certs
-                Self::refresh_votes(my_pubkey, highest_finalized_slot, vctx);
+                Self::refresh_votes(my_pubkey, highest_finalized_slot, vctx, &mut votes);
             }
 
             // Operator called set identity make sure that our keypair is updated for voting
@@ -248,10 +279,11 @@ impl EventHandler {
                              ctx.cluster_info.id(),
                              e
                         );
-                    // TODO: exit.store(true, Ordering::Relaxed);
+                    return Err(EventLoopError::SetIdentityError(e));
                 }
             }
         }
+        Ok(votes)
     }
 
     fn handle_set_identity(
@@ -283,10 +315,11 @@ impl EventHandler {
     /// If successful returns true
     fn try_notar(
         my_pubkey: &Pubkey,
-        block @ (slot, block_id, bank_hash): Block,
+        (slot, block_id, bank_hash): Block,
         parent_block @ (parent_slot, parent_block_id, parent_bank_hash): Block,
         pending_blocks: &mut PendingBlocks,
         voting_context: &mut VotingContext,
+        votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) -> bool {
         if voting_context.vote_history.voted(slot) {
             return false;
@@ -313,14 +346,12 @@ impl EventHandler {
             }
         }
 
-        if !voting_utils::send_vote_and_queue_for_cert_pool(
+        votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
             Vote::new_notarization_vote(slot, block_id, bank_hash),
             false,
             voting_context,
-        ) {
-            warn!("{my_pubkey}: send notarization vote failed for {block:?}");
-        }
+        ));
         alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
             slot,
@@ -337,6 +368,7 @@ impl EventHandler {
         my_pubkey: &Pubkey,
         pending_blocks: &mut PendingBlocks,
         voting_context: &mut VotingContext,
+        votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) {
         let blocks_to_check: Vec<(Block, Block)> = pending_blocks
             .values()
@@ -351,6 +383,7 @@ impl EventHandler {
                 parent_block,
                 pending_blocks,
                 voting_context,
+                votes,
             );
         }
     }
@@ -366,6 +399,7 @@ impl EventHandler {
         my_pubkey: &Pubkey,
         block @ (slot, block_id, _): Block,
         voting_context: &mut VotingContext,
+        votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) -> bool {
         if !voting_context.vote_history.is_block_notarized(&block)
             || voting_context.vote_history.its_over(slot)
@@ -382,30 +416,31 @@ impl EventHandler {
             return false;
         }
 
-        if !voting_utils::send_vote_and_queue_for_cert_pool(
+        votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
             Vote::new_finalization_vote(slot),
             false,
             voting_context,
-        ) {
-            warn!("{my_pubkey}: send finalization vote failed for {slot}");
-        }
+        ));
         true
     }
 
-    fn try_skip_window(my_pubkey: &Pubkey, slot: Slot, voting_context: &mut VotingContext) {
+    fn try_skip_window(
+        my_pubkey: &Pubkey,
+        slot: Slot,
+        voting_context: &mut VotingContext,
+        votes: &mut Vec<Result<BLSOp, VoteError>>,
+    ) {
         for s in first_of_consecutive_leader_slots(slot)..=last_of_consecutive_leader_slots(slot) {
             if voting_context.vote_history.voted(s) {
                 continue;
             }
-            if !voting_utils::send_vote_and_queue_for_cert_pool(
+            votes.push(voting_utils::insert_vote_and_create_bls_message(
                 my_pubkey,
                 Vote::new_skip_vote(s),
                 false,
                 voting_context,
-            ) {
-                warn!("{my_pubkey}: send skip vote failed for {s}");
-            }
+            ));
         }
     }
 
@@ -414,20 +449,19 @@ impl EventHandler {
         my_pubkey: &Pubkey,
         highest_finalized_slot: Slot,
         voting_context: &mut VotingContext,
+        votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) {
         for vote in voting_context
             .vote_history
             .votes_cast_since(highest_finalized_slot)
         {
             info!("{my_pubkey}: Refreshing vote {vote:?}");
-            if !voting_utils::send_vote_and_queue_for_cert_pool(
+            votes.push(voting_utils::insert_vote_and_create_bls_message(
                 my_pubkey,
                 vote,
                 true,
                 voting_context,
-            ) {
-                warn!("{my_pubkey}: send_vote failed for {:?}", vote);
-            }
+            ));
         }
     }
 
