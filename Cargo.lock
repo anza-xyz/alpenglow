@@ -11054,6 +11054,7 @@ dependencies = [
  "solana-sdk",
  "solana-streamer",
  "solana-tls-utils",
+ "solana-votor",
  "static_assertions",
  "test-case",
  "thiserror 2.0.12",

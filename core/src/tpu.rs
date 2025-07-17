@@ -31,8 +31,7 @@ use {
     solana_client::connection_cache::ConnectionCache,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::{Blockstore, CompletedBlockSender},
-        blockstore_processor::TransactionStatusSender,
+        blockstore::Blockstore, blockstore_processor::TransactionStatusSender,
         entry_notifier_service::EntryNotifierSender,
     },
     solana_perf::data_budget::DataBudget,
@@ -55,6 +54,7 @@ use {
         streamer::StakedNodes,
     },
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
+    solana_votor::event::CompletedBlockSender,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},

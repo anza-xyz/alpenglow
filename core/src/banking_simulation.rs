@@ -21,7 +21,7 @@ use {
         contact_info::ContactInfoQuery,
     },
     solana_ledger::{
-        blockstore::{Blockstore, CompletedBlockReceiver, PurgeType},
+        blockstore::{Blockstore, PurgeType},
         leader_schedule_cache::LeaderScheduleCache,
     },
     solana_net_utils::bind_to_localhost,
@@ -45,6 +45,7 @@ use {
     },
     solana_streamer::socket::SocketAddrSpace,
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
+    solana_votor::event::CompletedBlockReceiver,
     std::{
         collections::BTreeMap,
         fmt::Display,

@@ -9,6 +9,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
+        event::{CompletedBlock, CompletedBlockReceiver, LeaderWindowInfo},
         root_utils::maybe_set_root,
         skip_timeout,
         vote_history::VoteHistory,
@@ -23,7 +24,7 @@ use {
     crossbeam_channel::{RecvTimeoutError, Sender},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::{Blockstore, CompletedBlock, CompletedBlockReceiver},
+        blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::{
             first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
@@ -56,15 +57,6 @@ use {
 
 /// Banks that have completed replay, but are yet to be voted on
 pub(crate) type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
-
-/// Context for the block creation loop to start a leader window
-#[derive(Copy, Clone, Debug)]
-pub struct LeaderWindowInfo {
-    pub start_slot: Slot,
-    pub end_slot: Slot,
-    pub parent_block: Block,
-    pub skip_timer: Instant,
-}
 
 /// Communication with the block creation loop to notify leader window
 #[derive(Default)]
