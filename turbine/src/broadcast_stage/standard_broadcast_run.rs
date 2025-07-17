@@ -8,10 +8,11 @@ use {
     crate::cluster_nodes::ClusterNodesCache,
     solana_entry::entry::Entry,
     solana_ledger::{
-        blockstore::{self, CompletedBlockSender},
+        blockstore::{self},
         shred::{shred_code, ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder},
     },
     solana_sdk::{hash::Hash, signature::Keypair, timing::AtomicInterval},
+    solana_votor::event::CompletedBlockSender,
     std::{borrow::Cow, sync::RwLock, time::Duration},
     tokio::sync::mpsc::Sender as AsyncSender,
 };
