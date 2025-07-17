@@ -2,11 +2,9 @@ use {
     super::*,
     solana_entry::entry::Entry,
     solana_gossip::contact_info::ContactInfo,
-    solana_ledger::{
-        blockstore::CompletedBlockSender,
-        shred::{self, ProcessShredsStats, ReedSolomonCache, Shredder},
-    },
+    solana_ledger::shred::{self, ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_sdk::{hash::Hash, signature::Keypair},
+    solana_votor::event::CompletedBlockSender,
 };
 
 #[derive(Clone)]
