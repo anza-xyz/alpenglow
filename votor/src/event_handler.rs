@@ -110,7 +110,9 @@ impl EventHandler {
         let mut finalized_blocks = BTreeSet::default();
 
         // Wait until migration has completed
+        info!("{my_pubkey}: Event loop initialized");
         Votor::wait_for_migration_or_exit(&exit, &start);
+        info!("{my_pubkey}: Event loop starting");
 
         if exit.load(Ordering::Relaxed) {
             return Ok(());
@@ -141,7 +143,10 @@ impl EventHandler {
                 }
                 default(Duration::from_secs(1))  => continue
             };
-            // TODO: filter events < root
+
+            if event.should_ignore(vctx.root_bank_cache.root_bank().slot()) {
+                continue;
+            }
 
             let votes = Self::handle_event(
                 &mut my_pubkey,
@@ -183,6 +188,7 @@ impl EventHandler {
                     bank.block_id().expect("Block id must be set upstream"),
                     bank.hash(),
                 );
+                info!("{my_pubkey}: Block {block:?}");
                 let parent_slot = bank.parent_slot();
                 let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
                     // To account for child of genesis and snapshots we insert a
@@ -220,12 +226,14 @@ impl EventHandler {
 
             // Block has received a notarization certificate
             VotorEvent::BlockNotarized(block) => {
+                info!("{my_pubkey}: Block Notarized {block:?}");
                 vctx.vote_history.add_block_notarized(block);
                 Self::try_final(my_pubkey, block, vctx, &mut votes);
             }
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
+                info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
                 vctx.vote_history.add_parent_ready(slot, parent_block);
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
                 skip_timer.write().unwrap().set_timeouts(slot);
@@ -233,6 +241,7 @@ impl EventHandler {
 
             // Skip timer for the slot has fired
             VotorEvent::Timeout(slot) => {
+                info!("{my_pubkey}: Timeout {slot}");
                 if vctx.vote_history.voted(slot) {
                     return Ok(votes);
                 }
@@ -241,7 +250,8 @@ impl EventHandler {
 
             // We have observed the safe to notar condition, and can send a notar fallback vote
             // TODO: cert pool check for parent block id for intra window slots
-            VotorEvent::SafeToNotar((slot, block_id, bank_hash)) => {
+            VotorEvent::SafeToNotar(block @ (slot, block_id, bank_hash)) => {
+                info!("{my_pubkey}: SafeToNotar {block:?}");
                 Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
                 if vctx.vote_history.its_over(slot)
                     || vctx
@@ -260,6 +270,7 @@ impl EventHandler {
 
             // We have observed the safe to skip condition, and can send a skip fallback vote
             VotorEvent::SafeToSkip(slot) => {
+                info!("{my_pubkey}: SafeToSkip {slot}");
                 Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
                 if vctx.vote_history.its_over(slot) || vctx.vote_history.voted_skip_fallback(slot) {
                     return Ok(votes);
@@ -274,6 +285,7 @@ impl EventHandler {
 
             // It is time to produce our leader window
             VotorEvent::ProduceWindow(window_info) => {
+                info!("{my_pubkey}: ProduceWindow {window_info:?}");
                 let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
                 if let Some(old_window_info) = l_window_info.as_ref() {
                     error!(
@@ -292,6 +304,7 @@ impl EventHandler {
 
             // We have finalized this block consider it for rooting
             VotorEvent::Finalized(block) => {
+                info!("{my_pubkey}: Finalized {block:?}");
                 finalized_blocks.insert(block);
                 Self::check_rootable_blocks(
                     my_pubkey,
@@ -305,6 +318,7 @@ impl EventHandler {
 
             // We have not observed a finalization certificate in a while, refresh our votes and certs
             VotorEvent::Standstill(highest_finalized_slot) => {
+                info!("{my_pubkey}: Standstill {highest_finalized_slot}");
                 // TODO: once we have certificate broadcast, we should also refresh certs
                 Self::refresh_votes(my_pubkey, highest_finalized_slot, vctx, &mut votes);
             }
@@ -312,6 +326,7 @@ impl EventHandler {
             // Operator called set identity make sure that our keypair is updated for voting
             // TODO: plug this in from cli
             VotorEvent::SetIdentity => {
+                info!("{my_pubkey}: SetIdentity");
                 if let Err(e) = Self::handle_set_identity(my_pubkey, ctx, vctx) {
                     error!(
                             "Unable to load new vote history when attempting to change identity from {} \
@@ -530,6 +545,7 @@ impl EventHandler {
             // No rootable banks
             return Ok(());
         };
+        drop(bank_forks_r);
         root_utils::set_root(
             my_pubkey,
             new_root,

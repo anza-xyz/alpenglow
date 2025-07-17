@@ -10,7 +10,7 @@ use {
         },
         conflicting_types,
         event::VotorEvent,
-        vote_to_certificate_ids, CertificateId, Stake, VoteType,
+        vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
@@ -501,6 +501,16 @@ impl CertificatePool {
             .max()
             .copied()
             .unwrap_or(0)
+    }
+
+    pub fn highest_fast_finalized_block(&self) -> Option<Block> {
+        self.completed_certificates
+            .iter()
+            .filter_map(|(cert_id, _)| match cert_id {
+                CertificateId::FinalizeFast(s, bid, bh) => Some((*s, *bid, *bh)),
+                _ => None,
+            })
+            .max()
     }
 
     /// Checks if any block in the slot `s` is finalized

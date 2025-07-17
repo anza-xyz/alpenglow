@@ -81,10 +81,9 @@ pub(crate) fn set_root(
     // in order to perform cleanup. In the future we will look to deprecate OC and remove
     // these code paths.
     if let Some(config) = &rctx.bank_notification_sender {
-        config
+        let _ = config
             .sender
-            .send(BankNotification::OptimisticallyConfirmed(new_root))
-            .unwrap();
+            .send(BankNotification::OptimisticallyConfirmed(new_root));
     }
     Ok(())
 }

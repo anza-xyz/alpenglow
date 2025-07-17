@@ -85,21 +85,43 @@ impl CertificatePoolService {
             Some(ctx.certificate_sender.clone()),
             &mut events,
         );
-        let mut highest_parent_ready = cert_pool.parent_ready_tracker.highest_parent_ready();
 
         // Wait until migration has completed
+        info!("{}: Certificate pool loop initialized", &ctx.my_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
+        info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
         let mut current_root = ctx.root_bank_cache.root_bank().slot();
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
         let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
 
+        // Kick off parent ready
+        let root_bank = ctx.root_bank_cache.root_bank();
+        let root_block = (
+            root_bank.slot(),
+            root_bank.block_id().unwrap_or_default(),
+            root_bank.hash(),
+        );
+        let mut highest_parent_ready = root_bank.slot();
+        events.push(VotorEvent::ParentReady {
+            slot: root_bank.slot().checked_add(1).unwrap(),
+            parent_block: root_block,
+        });
+
         // Ingest votes into certificate pool and notify voting loop of new events
         loop {
             if ctx.exit.load(Ordering::Relaxed) {
                 return Ok(());
             }
+
+            // TODO: we need set identity here as well
+            Self::add_produce_block_event(
+                &mut highest_parent_ready,
+                &cert_pool,
+                &mut ctx,
+                &mut events,
+            );
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
                 events.push(VotorEvent::Standstill(highest_finalized_slot));
@@ -144,6 +166,11 @@ impl CertificatePoolService {
                         debug_assert!(finalized_slot > highest_finalized_slot);
                         highest_finalized_slot = finalized_slot;
                         standstill_timer = Instant::now();
+                        // Send finalized
+                        // TODO: plug this in properly to take care of slow final too
+                        if let Some(block) = cert_pool.highest_fast_finalized_block() {
+                            events.push(VotorEvent::Finalized(block));
+                        }
                         // Set root
                         let root_bank = ctx.root_bank_cache.root_bank();
                         if root_bank.slot() > current_root {
@@ -168,14 +195,6 @@ impl CertificatePoolService {
                     }
                 };
             }
-
-            // TODO: we need set identity here as well
-            Self::add_produce_block_event(
-                &mut highest_parent_ready,
-                &cert_pool,
-                &mut ctx,
-                &mut events,
-            );
         }
     }
 
