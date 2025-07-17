@@ -6,6 +6,7 @@ use {
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
         root_utils::{self, RootContext},
+        skip_timer::SkipTimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
         voting_utils::{self, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
@@ -23,7 +24,7 @@ use {
         collections::{BTreeMap, BTreeSet},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex,
+            Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::Duration,
@@ -43,6 +44,10 @@ pub(crate) struct EventHandlerContext {
     // VotorEvent receivers
     pub(crate) completed_block_receiver: CompletedBlockReceiver,
     pub(crate) event_receiver: Receiver<VotorEvent>,
+    pub(crate) skip_timeout_receiver: Receiver<VotorEvent>,
+
+    // Skip timer
+    pub(crate) skip_timer: Arc<RwLock<SkipTimerManager>>,
 
     // Contexts
     pub(crate) shared_context: SharedContext,
@@ -94,6 +99,8 @@ impl EventHandler {
             start,
             completed_block_receiver,
             event_receiver,
+            skip_timeout_receiver,
+            skip_timer,
             shared_context: ctx,
             voting_context: mut vctx,
             root_context: rctx,
@@ -129,6 +136,9 @@ impl EventHandler {
                 recv(event_receiver) -> msg => {
                     msg?
                 },
+                recv(skip_timeout_receiver) -> msg => {
+                    msg?
+                }
                 default(Duration::from_secs(1))  => continue
             };
             // TODO: filter events < root
@@ -136,6 +146,7 @@ impl EventHandler {
             let votes = Self::handle_event(
                 &mut my_pubkey,
                 event,
+                &skip_timer,
                 &ctx,
                 &mut vctx,
                 &rctx,
@@ -155,6 +166,7 @@ impl EventHandler {
     fn handle_event(
         my_pubkey: &mut Pubkey,
         event: VotorEvent,
+        skip_timer: &RwLock<SkipTimerManager>,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         rctx: &RootContext,
@@ -216,11 +228,10 @@ impl EventHandler {
             VotorEvent::ParentReady { slot, parent_block } => {
                 vctx.vote_history.add_parent_ready(slot, parent_block);
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
-                // TODO:
-                // set_timeouts();
+                skip_timer.write().unwrap().set_timeouts(slot);
             }
 
-            // Skip timer for the slot has fired, TODO: plug this in
+            // Skip timer for the slot has fired
             VotorEvent::Timeout(slot) => {
                 if vctx.vote_history.voted(slot) {
                     return Ok(votes);

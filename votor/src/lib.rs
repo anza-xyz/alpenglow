@@ -11,6 +11,7 @@ pub mod commitment;
 pub mod event;
 mod event_handler;
 pub mod root_utils;
+mod skip_timer;
 pub mod vote_history;
 pub mod vote_history_storage;
 pub mod voting_utils;

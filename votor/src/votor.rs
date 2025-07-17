@@ -2,6 +2,7 @@ use crate::{
     certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
     event_handler::{EventHandler, EventHandlerContext},
     root_utils::RootContext,
+    skip_timer::SkipTimerService,
 };
 //TODO: remove
 #[allow(dead_code)]
@@ -97,6 +98,7 @@ pub struct Votor {
 
     event_handler: EventHandler,
     certificate_pool_service: CertificatePoolService,
+    skip_timer_service: SkipTimerService,
 }
 
 impl Votor {
@@ -133,6 +135,7 @@ impl Votor {
 
         // These should not backup, TODO: add metrics for length
         let (event_sender, event_receiver) = bounded(1000);
+        let (skip_timeout_sender, skip_timeout_receiver) = bounded(1000);
         let (own_vote_sender, own_vote_receiver) = bounded(1000);
 
         let shared_context = SharedContext {
@@ -166,11 +169,16 @@ impl Votor {
             drop_bank_sender,
         };
 
+        let (skip_timer_service, skip_timer) =
+            SkipTimerService::new(exit.clone(), 100, skip_timeout_sender);
+
         let event_handler_context = EventHandlerContext {
             exit: exit.clone(),
             start: start.clone(),
             completed_block_receiver,
             event_receiver,
+            skip_timeout_receiver,
+            skip_timer,
             shared_context,
             voting_context,
             root_context,
@@ -198,6 +206,7 @@ impl Votor {
             start,
             event_handler,
             certificate_pool_service,
+            skip_timer_service,
         }
     }
 
@@ -225,6 +234,7 @@ impl Votor {
 
     pub fn join(self) -> thread::Result<()> {
         self.certificate_pool_service.join()?;
+        self.skip_timer_service.join()?;
         self.event_handler.join()
     }
 }
