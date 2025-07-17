@@ -277,10 +277,9 @@ impl CertificatePool {
                 }
             }
             if let Some(voting_sender) = &self.voting_sender {
-                if let Err(e) = voting_sender.send(BLSOp::PushVote {
-                    bls_message: BLSMessage::Certificate(cert.certificate().clone()),
+                if let Err(e) = voting_sender.send(BLSOp::PushCertificate {
+                    certificate: cert.certificate().clone(),
                     slot: cert_id.slot(),
-                    saved_vote_history: None,
                 }) {
                     error!("Unable to send certificate {cert_id:?}: {e:?}");
                     return Err(AddVoteError::VotingSenderError);
@@ -738,6 +737,7 @@ mod tests {
             certificate::Certificate,
         },
         bitvec::prelude::*,
+        core::panic,
         itertools::Itertools,
         solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
@@ -1130,26 +1130,23 @@ mod tests {
             .is_ok());
         assert_eq!(highest_slot_fn(&pool), slot);
         for certificate_type in &certificate_types {
-            let BLSOp::PushVote {
-                bls_message,
+            let BLSOp::PushCertificate {
+                certificate,
                 slot: vote_slot,
-                saved_vote_history,
             } = voting_receiver
                 .recv()
-                .expect("Expected a certificate message to be sent");
-            let BLSMessage::Certificate(certificate_message) = &bls_message else {
-                panic!("Expected a certificate message");
+                .expect("Expected a certificate message to be sent")
+            else {
+                panic!("Expected a certificate message to be sent");
             };
-            assert_eq!(certificate_message.certificate.slot, slot);
-            assert_eq!(
-                certificate_message.certificate.certificate_type,
-                *certificate_type
-            );
             assert_eq!(vote_slot, slot);
-            assert!(saved_vote_history.is_none());
+            assert_eq!(certificate.certificate.certificate_type, *certificate_type);
+            assert_eq!(vote_slot, slot);
 
             // Now add the same certificate again, this should silently exit.
-            assert!(pool.add_transaction(&bls_message).is_ok());
+            assert!(pool
+                .add_transaction(&BLSMessage::Certificate(certificate))
+                .is_ok());
         }
 
         assert!(voting_receiver.is_empty());
@@ -1179,23 +1176,26 @@ mod tests {
             block_id: vote.block_id().copied(),
             replayed_bank_hash: vote.replayed_bank_hash().copied(),
         };
-        let bls_message = BLSMessage::Certificate(CertificateMessage {
+        let certificate_message = CertificateMessage {
             certificate: certificate.clone(),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
-        });
+        };
+        let bls_message = BLSMessage::Certificate(certificate_message.clone());
         // Add the certificate to the pool
         assert!(pool.add_transaction(&bls_message).is_ok());
         // Because this is the first certificate of this type, it should be sent out.
-        let BLSOp::PushVote {
-            bls_message: pushed_bls_message,
-            slot: _,
-            saved_vote_history,
+        let BLSOp::PushCertificate {
+            certificate: pushed_certificate,
+            slot: pushed_slot,
         } = voting_receiver
             .recv()
-            .expect("Expected a certificate message to be sent");
-        assert_eq!(pushed_bls_message, bls_message);
-        assert!(saved_vote_history.is_none());
+            .expect("Expected a certificate message to be sent")
+        else {
+            panic!("Expected a certificate message to be sent");
+        };
+        assert_eq!(pushed_certificate, certificate_message);
+        assert_eq!(pushed_slot, certificate.slot);
 
         // Adding the cert again will not trigger another send
         assert!(pool.add_transaction(&bls_message).is_ok());
@@ -1208,19 +1208,19 @@ mod tests {
                 .is_ok());
         }
         for bls_op in voting_receiver.try_iter() {
-            let BLSOp::PushVote {
-                bls_message: pushed_bls_message,
+            let BLSOp::PushCertificate {
+                certificate: pushed_certificate,
                 slot: _,
-                saved_vote_history: _,
-            } = bls_op;
-            if let BLSMessage::Certificate(certificate_message) = pushed_bls_message {
-                // Notarize and notarize fallback votes might trigger other certificate types to
-                // be sent, but we should not send out the same certificate type again
-                assert_ne!(
-                    certificate_message.certificate.certificate_type,
-                    certificate_type
-                );
-            }
+            } = bls_op
+            else {
+                panic!("Expected a certificate message to be sent");
+            };
+            // Notarize and notarize fallback votes might trigger other certificate types to
+            // be sent, but we should not send out the same certificate type again
+            assert_ne!(
+                pushed_certificate.certificate.certificate_type,
+                certificate_type
+            );
         }
     }
 
