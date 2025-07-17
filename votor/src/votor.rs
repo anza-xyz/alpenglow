@@ -448,6 +448,12 @@ impl Votor {
                     ctx.leader_window_notifier.window_notification.notify_one();
                 }
 
+                // We have finalized this block consider it for rooting
+                VotorEvent::Finalized(_block) => {
+                    // TODO: add to finalized blocks, when intersect with pending blocks (frozen)
+                    // call root_utils::check_and_set_root
+                }
+
                 // We have not observed a finalization certificate in a while, refresh our votes and certs
                 VotorEvent::Standstill(highest_finalized_slot) => {
                     // TODO: once we have certificate broadcast, we should also refresh certs
