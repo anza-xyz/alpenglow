@@ -9,7 +9,7 @@ use {
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
     alpenglow_vote::{
-        bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     crossbeam_channel::Sender,
@@ -60,7 +60,11 @@ pub enum BLSOp {
     PushVote {
         bls_message: BLSMessage,
         slot: Slot,
-        saved_vote_history: Option<SavedVoteHistoryVersions>,
+        saved_vote_history: SavedVoteHistoryVersions,
+    },
+    PushCertificate {
+        certificate: CertificateMessage,
+        slot: Slot,
     },
 }
 
@@ -271,7 +275,7 @@ pub fn send_vote(
         .send(BLSOp::PushVote {
             bls_message,
             slot: vote.slot(),
-            saved_vote_history: Some(SavedVoteHistoryVersions::from(saved_vote_history)),
+            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
         })
         .unwrap_or_else(|err| warn!("Error: {:?}", err));
     true
