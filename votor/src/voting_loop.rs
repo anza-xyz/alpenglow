@@ -22,7 +22,7 @@ use {
         bls_message::{BLSMessage, CertificateMessage},
         vote::Vote,
     },
-    crossbeam_channel::{RecvTimeoutError, Sender},
+    crossbeam_channel::{bounded, RecvTimeoutError, Sender},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::Blockstore,
@@ -241,6 +241,7 @@ impl VotingLoop {
         );
         let mut pending_blocks = PendingBlocks::default();
 
+        let (own_vote_sender, _) = bounded(0);
         let mut voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -249,6 +250,7 @@ impl VotingLoop {
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted,
             bls_sender,
+            own_vote_sender,
             commitment_sender,
             wait_to_vote_slot,
             voted_signatures: vec![],

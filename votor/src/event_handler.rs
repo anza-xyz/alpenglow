@@ -73,7 +73,7 @@ impl EventHandler {
             .name("solVotorEventLoop".to_string())
             .spawn(move || {
                 if let Err(e) = Self::event_loop(ctx) {
-                    error!("Event loop exited with error: {e:?}. Shutting down");
+                    info!("Event loop exited with error: {e:?}. Shutting down");
                     exit.store(true, Ordering::Relaxed);
                 }
             })

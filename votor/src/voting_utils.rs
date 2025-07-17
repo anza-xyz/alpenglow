@@ -16,7 +16,9 @@ use {
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_measure::measure::Measure,
-    solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
+    solana_runtime::{
+        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageSender,
+    },
     solana_sdk::{
         clock::Slot,
         pubkey::Pubkey,
@@ -84,6 +86,7 @@ pub struct VotingContext {
     // The BLS keypair should always change with authorized_voter_keypairs.
     pub derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     pub has_new_vote_been_rooted: bool,
+    pub own_vote_sender: BLSVerifiedMessageSender,
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
@@ -318,8 +321,10 @@ pub(crate) fn insert_vote_and_create_bls_message(
             return Err(VoteError::GenerationError(Box::new(e)));
         }
     };
-
-    // TODO: send to ourselves
+    context
+        .own_vote_sender
+        .send(bls_message.clone())
+        .map_err(|_| SendError(()))?;
 
     // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
     let saved_vote_history =

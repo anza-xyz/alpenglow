@@ -132,8 +132,9 @@ impl Votor {
         let my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
-        // This should not backup, TODO: add metrics for length
+        // These should not backup, TODO: add metrics for length
         let (event_sender, event_receiver) = bounded(1000);
+        let (own_vote_sender, own_vote_receiver) = bounded(1000);
 
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -151,6 +152,7 @@ impl Votor {
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted,
+            own_vote_sender,
             bls_sender,
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
@@ -174,11 +176,12 @@ impl Votor {
             my_vote_pubkey: vote_account,
             blockstore,
             bank_forks,
+            leader_schedule_cache,
+            own_vote_receiver,
             bls_receiver,
             event_sender,
             commitment_sender,
             certificate_sender,
-            leader_schedule_cache,
         };
 
         let event_handler = EventHandler::new(event_handler_context);

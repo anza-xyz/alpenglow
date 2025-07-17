@@ -13,7 +13,7 @@ use {
         CertificateId, STANDSTILL_TIMEOUT,
     },
     alpenglow_vote::bls_message::CertificateMessage,
-    crossbeam_channel::{RecvTimeoutError, Sender},
+    crossbeam_channel::{select, RecvError, Sender},
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -42,6 +42,11 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) bank_forks: Arc<RwLock<BankForks>>,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
+    // TODO: for now we ingest our own votes into the certificate pool
+    // just like regular votes. However do we need to convert
+    // Vote -> BLSMessage -> Vote?
+    // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
+    pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
     pub(crate) event_sender: Sender<VotorEvent>,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
@@ -54,15 +59,22 @@ pub(crate) struct CertificatePoolService {
 
 impl CertificatePoolService {
     pub(crate) fn new(ctx: CertificatePoolContext) -> Self {
+        let exit = ctx.exit.clone();
         let t_ingest = Builder::new()
             .name("solCertPoolIngest".to_string())
-            .spawn(move || Self::certificate_pool_ingest(ctx))
+            .spawn(move || {
+                if let Err(e) = Self::certificate_pool_ingest(ctx) {
+                    info!("Certificate pool service exited with error: {e:?}. Shutting down");
+                    exit.store(true, Ordering::Relaxed);
+                }
+            })
             .unwrap();
 
         Self { t_ingest }
     }
 
-    fn certificate_pool_ingest(ctx: CertificatePoolContext) {
+    // TODO: properly bubble up errors
+    fn certificate_pool_ingest(ctx: CertificatePoolContext) -> Result<(), RecvError> {
         let root_bank = ctx.bank_forks.read().unwrap().root_bank();
         let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
@@ -84,7 +96,7 @@ impl CertificatePoolService {
         // Ingest votes into certificate pool and notify voting loop of new events
         loop {
             if ctx.exit.load(Ordering::Relaxed) {
-                return;
+                return Ok(());
             }
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
@@ -103,22 +115,18 @@ impl CertificatePoolService {
                     ctx.my_pubkey
                 );
                 ctx.exit.store(true, Ordering::Relaxed);
-                return;
+                return Ok(());
             }
 
-            let bls_messages = std::iter::once(
-                match ctx.bls_receiver.recv_timeout(Duration::from_secs(1)) {
-                    Ok(msg) => msg,
-                    Err(RecvTimeoutError::Timeout) => continue,
-                    Err(RecvTimeoutError::Disconnected) => {
-                        // Shutdown
-                        info!("{}: BLS sender disconnected. Exiting.", ctx.my_pubkey);
-                        ctx.exit.store(true, Ordering::Relaxed);
-                        return;
-                    }
+            let bls_messages = select! {
+                recv(ctx.own_vote_receiver) -> msg => {
+                    std::iter::once(msg?).chain(ctx.own_vote_receiver.try_iter())
                 },
-            )
-            .chain(ctx.bls_receiver.try_iter());
+                recv(ctx.bls_receiver) -> msg => {
+                    std::iter::once(msg?).chain(ctx.bls_receiver.try_iter())
+                },
+                default(Duration::from_secs(1)) => continue
+            };
 
             for message in bls_messages {
                 match voting_utils::add_message_and_maybe_update_commitment(
@@ -143,7 +151,7 @@ impl CertificatePoolService {
                             ctx.my_pubkey
                         );
                         ctx.exit.store(true, Ordering::Relaxed);
-                        return;
+                        return Ok(());
                     }
                     Err(e) => {
                         // This is a non critical error, a duplicate vote for example
