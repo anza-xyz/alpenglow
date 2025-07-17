@@ -15,7 +15,7 @@ use {
     crossbeam_channel::Sender,
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_measure::measure::Measure,
-    solana_runtime::bank::Bank,
+    solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
     solana_sdk::{
         clock::Slot,
         pubkey::Pubkey,
@@ -77,6 +77,7 @@ pub struct VotingContext {
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
     pub voted_signatures: Vec<Signature>,
+    pub root_bank_cache: RootBankCache,
 }
 
 pub fn get_bls_keypair(
