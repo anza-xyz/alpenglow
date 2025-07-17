@@ -17,7 +17,7 @@ use {
         contact_info::Protocol,
     },
     solana_ledger::{
-        blockstore::{Blockstore, CompletedBlockSender},
+        blockstore::Blockstore,
         shred::{self, Shred},
     },
     solana_measure::measure::Measure,
@@ -34,6 +34,7 @@ use {
         sendmmsg::{batch_send, SendPktsError},
         socket::SocketAddrSpace,
     },
+    solana_votor::event::CompletedBlockSender,
     static_assertions::const_assert_eq,
     std::{
         collections::{HashMap, HashSet},
