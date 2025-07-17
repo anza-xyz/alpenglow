@@ -4,15 +4,13 @@ use {
     crossbeam_channel::Sender,
     itertools::Itertools,
     solana_entry::entry::Entry,
-    solana_ledger::{
-        blockstore::CompletedBlockSender,
-        shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-    },
+    solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_sdk::{
         hash::Hash,
         signature::{Keypair, Signature, Signer},
         system_transaction,
     },
+    solana_votor::event::CompletedBlockSender,
     std::collections::HashSet,
 };
 
