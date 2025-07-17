@@ -1,0 +1,235 @@
+//! Service in charge of ingesting new messages into the certificate pool
+//! and notifying votor of new events that occur
+
+use {
+    crate::{
+        certificate_pool::{
+            self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
+        },
+        commitment::AlpenglowCommitmentAggregationData,
+        event::{LeaderWindowInfo, VotorEvent},
+        voting_utils,
+        votor::Votor,
+        CertificateId, STANDSTILL_TIMEOUT,
+    },
+    alpenglow_vote::bls_message::CertificateMessage,
+    crossbeam_channel::{RecvTimeoutError, Sender},
+    solana_ledger::{
+        blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
+        leader_schedule_utils::last_of_consecutive_leader_slots,
+    },
+    solana_pubkey::Pubkey,
+    solana_runtime::{bank_forks::BankForks, vote_sender_types::BLSVerifiedMessageReceiver},
+    solana_sdk::clock::Slot,
+    std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Condvar, Mutex, RwLock,
+        },
+        thread::{self, Builder, JoinHandle},
+        time::{Duration, Instant},
+    },
+};
+
+/// Inputs for the certificate pool thread
+pub(crate) struct CertificatePoolContext {
+    pub(crate) exit: Arc<AtomicBool>,
+    pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
+
+    pub(crate) my_pubkey: Pubkey,
+    pub(crate) my_vote_pubkey: Pubkey,
+    pub(crate) blockstore: Arc<Blockstore>,
+    pub(crate) bank_forks: Arc<RwLock<BankForks>>,
+    pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
+
+    pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) event_sender: Sender<VotorEvent>,
+    pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+}
+
+pub(crate) struct CertificatePoolService {
+    t_ingest: JoinHandle<()>,
+}
+
+impl CertificatePoolService {
+    pub(crate) fn new(ctx: CertificatePoolContext) -> Self {
+        let t_ingest = Builder::new()
+            .name("solCertPoolIngest".to_string())
+            .spawn(move || Self::certificate_pool_ingest(ctx))
+            .unwrap();
+
+        Self { t_ingest }
+    }
+
+    fn certificate_pool_ingest(ctx: CertificatePoolContext) {
+        let root_bank = ctx.bank_forks.read().unwrap().root_bank();
+        let mut events = vec![];
+        let mut cert_pool = certificate_pool::load_from_blockstore(
+            &ctx.my_pubkey,
+            &root_bank,
+            ctx.blockstore.as_ref(),
+            Some(ctx.certificate_sender.clone()),
+            &mut events,
+        );
+        let mut highest_parent_ready = cert_pool.parent_ready_tracker.highest_parent_ready();
+
+        // Wait until migration has completed
+        Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
+
+        // Standstill tracking
+        let mut standstill_timer = Instant::now();
+        let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
+
+        // Ingest votes into certificate pool and notify voting loop of new events
+        loop {
+            if ctx.exit.load(Ordering::Relaxed) {
+                return;
+            }
+
+            if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
+                events.push(VotorEvent::Standstill(highest_finalized_slot));
+                standstill_timer = Instant::now();
+            }
+
+            if events
+                .drain(..)
+                .try_for_each(|event| ctx.event_sender.send(event))
+                .is_err()
+            {
+                // Shutdown
+                info!(
+                    "{}: Votor event receiver disconnected. Exiting.",
+                    ctx.my_pubkey
+                );
+                ctx.exit.store(true, Ordering::Relaxed);
+                return;
+            }
+
+            let bls_messages = std::iter::once(
+                match ctx.bls_receiver.recv_timeout(Duration::from_secs(1)) {
+                    Ok(msg) => msg,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        // Shutdown
+                        info!("{}: BLS sender disconnected. Exiting.", ctx.my_pubkey);
+                        ctx.exit.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                },
+            )
+            .chain(ctx.bls_receiver.try_iter());
+
+            for message in bls_messages {
+                match voting_utils::add_message_and_maybe_update_commitment(
+                    &ctx.my_pubkey,
+                    &ctx.my_vote_pubkey,
+                    &message,
+                    &mut cert_pool,
+                    &mut events,
+                    &ctx.commitment_sender,
+                ) {
+                    Ok(Some(finalized_slot)) => {
+                        // Reset standstill timer
+                        debug_assert!(finalized_slot > highest_finalized_slot);
+                        highest_finalized_slot = finalized_slot;
+                        standstill_timer = Instant::now();
+                    }
+                    Ok(_) => (),
+                    Err(AddVoteError::CertificateSenderError) => {
+                        // Shutdown
+                        info!(
+                            "{}: Certificate receiver disconnected. Exiting.",
+                            ctx.my_pubkey
+                        );
+                        ctx.exit.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                    Err(e) => {
+                        // This is a non critical error, a duplicate vote for example
+                        trace!("{}: unable to push vote into pool {}", ctx.my_pubkey, e);
+                        continue;
+                    }
+                };
+            }
+
+            // TODO: we need set identity here as well
+            Self::add_produce_block_event(&mut highest_parent_ready, &cert_pool, &ctx, &mut events);
+        }
+    }
+
+    fn add_produce_block_event(
+        highest_parent_ready: &mut Slot,
+        cert_pool: &CertificatePool,
+        ctx: &CertificatePoolContext,
+        events: &mut Vec<VotorEvent>,
+    ) {
+        let Some(new_highest_parent_ready) = events
+            .iter()
+            .filter_map(|event| match event {
+                VotorEvent::ParentReady { slot, .. } => Some(slot),
+                _ => None,
+            })
+            .max()
+            .copied()
+        else {
+            return;
+        };
+
+        if new_highest_parent_ready <= *highest_parent_ready {
+            return;
+        }
+        *highest_parent_ready = new_highest_parent_ready;
+
+        // TODO: can we use root_bank_cache
+        let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
+            *highest_parent_ready,
+            Some(ctx.bank_forks.read().unwrap().root_bank().as_ref()),
+        ) else {
+            error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
+            ctx.exit.store(true, Ordering::Relaxed);
+            return;
+        };
+
+        if leader_pubkey != ctx.my_pubkey {
+            return;
+        }
+
+        let start_slot = *highest_parent_ready;
+        let end_slot = last_of_consecutive_leader_slots(start_slot);
+
+        match cert_pool
+            .parent_ready_tracker
+            .block_production_parent(start_slot)
+        {
+            BlockProductionParent::MissedWindow => {
+                warn!(
+                    "{}: Leader slot {start_slot} has already been certified, \
+                    skipping production of {start_slot}-{end_slot}",
+                    ctx.my_pubkey,
+                );
+            }
+            BlockProductionParent::ParentNotReady => {
+                // This can't happen, place holder depending on how we hook up optimistic
+                ctx.exit.store(true, Ordering::Relaxed);
+                panic!(
+                    "Must have a block production parent: {:#?}",
+                    cert_pool.parent_ready_tracker
+                );
+            }
+            BlockProductionParent::Parent(parent_block) => {
+                events.push(VotorEvent::ProduceWindow(LeaderWindowInfo {
+                    start_slot,
+                    end_slot,
+                    parent_block,
+                    // TODO: we can just remove this
+                    skip_timer: Instant::now(),
+                }))
+            }
+        }
+    }
+
+    pub(crate) fn join(self) -> thread::Result<()> {
+        self.t_ingest.join()
+    }
+}

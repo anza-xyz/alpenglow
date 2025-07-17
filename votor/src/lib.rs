@@ -6,8 +6,10 @@ use {
 };
 
 pub mod certificate_pool;
+mod certificate_pool_service;
 pub mod commitment;
 pub mod event;
+mod event_handler;
 pub mod root_utils;
 pub mod vote_history;
 pub mod vote_history_storage;
