@@ -210,7 +210,7 @@ impl ParentReadyTracker {
         // TODO: for duplicate blocks we should adjust this to choose the
         // parent with the least amount of duplicate blocks if possible.
         // Notice that each scenario with multiple NotarFallbacks also will eventually
-        // have a skip for that slot, so prefer the skip if we've received it
+        // have a skip for that slot, so prefer the skip if we've received it.
         match self
             .slot_statuses
             .get(&slot)

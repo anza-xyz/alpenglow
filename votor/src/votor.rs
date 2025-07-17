@@ -1,3 +1,4 @@
+use crate::certificate_pool::{parent_ready_tracker::BlockProductionParent, CertificatePool};
 //TODO: remove
 #[allow(dead_code)]
 use {
@@ -7,7 +8,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
-        event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
+        event::{CompletedBlock, CompletedBlockReceiver, LeaderWindowInfo, VotorEvent},
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::VoteHistoryStorage,
         voting_utils::{self, BLSOp, VotingContext},
@@ -48,15 +49,6 @@ use {
 /// Banks that have completed replay, but are yet to be voted on
 /// in the form of (block, parent block)
 type PendingBlocks = BTreeMap<Slot, Vec<(Block, Block)>>;
-
-/// Context for the block creation loop to start a leader window
-#[derive(Copy, Clone, Debug)]
-pub struct LeaderWindowInfo {
-    pub start_slot: Slot,
-    pub end_slot: Slot,
-    pub parent_block: Block,
-    pub skip_timer: Instant,
-}
 
 /// Communication with the block creation loop to notify leader window
 #[derive(Default)]
@@ -106,6 +98,7 @@ struct CertificatePoolContext {
     my_vote_pubkey: Pubkey,
     blockstore: Arc<Blockstore>,
     bank_forks: Arc<RwLock<BankForks>>,
+    leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     bls_receiver: BLSVerifiedMessageReceiver,
     event_sender: Sender<VotorEvent>,
@@ -118,7 +111,6 @@ struct CertificatePoolContext {
 #[allow(dead_code)]
 struct SharedContext {
     blockstore: Arc<Blockstore>,
-    leader_schedule_cache: Arc<LeaderScheduleCache>,
     bank_forks: Arc<RwLock<BankForks>>,
     cluster_info: Arc<ClusterInfo>,
     rpc_subscriptions: Arc<RpcSubscriptions>,
@@ -188,7 +180,6 @@ impl Votor {
 
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
-            leader_schedule_cache,
             bank_forks: bank_forks.clone(),
             rpc_subscriptions,
             leader_window_notifier,
@@ -230,6 +221,7 @@ impl Votor {
             event_sender,
             commitment_sender,
             certificate_sender,
+            leader_schedule_cache,
         };
 
         let t_voting_loop = Builder::new()
@@ -437,6 +429,25 @@ impl Votor {
                     );
                 }
 
+                // It is time to produce our leader window
+                VotorEvent::ProduceWindow(window_info) => {
+                    // TODO: reintroduce blockstore check either here or on receiver
+                    let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
+                    if let Some(old_window_info) = l_window_info.as_ref() {
+                        error!(
+                            "{my_pubkey}: Attempting to start leader window for {}-{}, \
+                            however there is already a pending window to produce {}-{}. \
+                            Our production is lagging, discarding in favor of the newer window",
+                            window_info.start_slot,
+                            window_info.end_slot,
+                            old_window_info.start_slot,
+                            old_window_info.end_slot,
+                        );
+                    }
+                    *l_window_info = Some(window_info);
+                    ctx.leader_window_notifier.window_notification.notify_one();
+                }
+
                 // We have not observed a finalization certificate in a while, refresh our votes and certs
                 VotorEvent::Standstill(highest_finalized_slot) => {
                     // TODO: once we have certificate broadcast, we should also refresh certs
@@ -628,9 +639,10 @@ impl Votor {
             &ctx.my_pubkey,
             &root_bank,
             ctx.blockstore.as_ref(),
-            Some(ctx.certificate_sender),
+            Some(ctx.certificate_sender.clone()),
             &mut events,
         );
+        let mut highest_parent_ready = cert_pool.parent_ready_tracker.highest_parent_ready();
 
         // Wait until migration has completed
         Self::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
@@ -709,6 +721,80 @@ impl Votor {
                         continue;
                     }
                 };
+            }
+
+            // TODO: we need set identity here as well
+            Self::add_produce_block_event(&mut highest_parent_ready, &cert_pool, &ctx, &mut events);
+        }
+    }
+
+    fn add_produce_block_event(
+        highest_parent_ready: &mut Slot,
+        cert_pool: &CertificatePool,
+        ctx: &CertificatePoolContext,
+        events: &mut Vec<VotorEvent>,
+    ) {
+        let Some(new_highest_parent_ready) = events
+            .iter()
+            .filter_map(|event| match event {
+                VotorEvent::ParentReady { slot, .. } => Some(slot),
+                _ => None,
+            })
+            .max()
+            .copied()
+        else {
+            return;
+        };
+
+        if new_highest_parent_ready <= *highest_parent_ready {
+            return;
+        }
+        *highest_parent_ready = new_highest_parent_ready;
+
+        // TODO: can we use root_bank_cache
+        let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
+            *highest_parent_ready,
+            Some(ctx.bank_forks.read().unwrap().root_bank().as_ref()),
+        ) else {
+            error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
+            ctx.exit.store(true, Ordering::Relaxed);
+            return;
+        };
+
+        if leader_pubkey != ctx.my_pubkey {
+            return;
+        }
+
+        let start_slot = *highest_parent_ready;
+        let end_slot = last_of_consecutive_leader_slots(start_slot);
+
+        match cert_pool
+            .parent_ready_tracker
+            .block_production_parent(start_slot)
+        {
+            BlockProductionParent::MissedWindow => {
+                warn!(
+                    "{}: Leader slot {start_slot} has already been certified, \
+                    skipping production of {start_slot}-{end_slot}",
+                    ctx.my_pubkey,
+                );
+            }
+            BlockProductionParent::ParentNotReady => {
+                // This can't happen, place holder depending on how we hook up optimistic
+                ctx.exit.store(true, Ordering::Relaxed);
+                panic!(
+                    "Must have a block production parent: {:#?}",
+                    cert_pool.parent_ready_tracker
+                );
+            }
+            BlockProductionParent::Parent(parent_block) => {
+                events.push(VotorEvent::ProduceWindow(LeaderWindowInfo {
+                    start_slot,
+                    end_slot,
+                    parent_block,
+                    // TODO: we can just remove this
+                    skip_timer: Instant::now(),
+                }))
             }
         }
     }
