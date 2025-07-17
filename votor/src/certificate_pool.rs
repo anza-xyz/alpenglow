@@ -733,7 +733,11 @@ pub fn load_from_blockstore(
 mod tests {
     use {
         super::*,
-        alpenglow_vote::bls_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        alpenglow_vote::{
+            bls_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+            certificate::Certificate,
+        },
+        bitvec::prelude::*,
         itertools::Itertools,
         solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
@@ -1149,6 +1153,75 @@ mod tests {
         }
 
         assert!(voting_receiver.is_empty());
+    }
+
+    #[test_case(CertificateType::Finalize, Vote::new_finalization_vote(5))]
+    #[test_case(
+        CertificateType::FinalizeFast,
+        Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique())
+    )]
+    #[test_case(
+        CertificateType::Notarize,
+        Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique())
+    )]
+    #[test_case(
+        CertificateType::NotarizeFallback,
+        Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique())
+    )]
+    #[test_case(CertificateType::Skip, Vote::new_skip_vote(8))]
+    fn test_add_certificate_with_types(certificate_type: CertificateType, vote: Vote) {
+        let (voting_sender, voting_receiver) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut pool) =
+            create_keypairs_and_pool_with_voting_sender(voting_sender);
+        let certificate = Certificate {
+            slot: vote.slot(),
+            certificate_type,
+            block_id: vote.block_id().copied(),
+            replayed_bank_hash: vote.replayed_bank_hash().copied(),
+        };
+        let bls_message = BLSMessage::Certificate(CertificateMessage {
+            certificate: certificate.clone(),
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        });
+        // Add the certificate to the pool
+        assert!(pool.add_transaction(&bls_message).is_ok());
+        // Because this is the first certificate of this type, it should be sent out.
+        let BLSOp::PushVote {
+            bls_message: pushed_bls_message,
+            slot: _,
+            saved_vote_history,
+        } = voting_receiver
+            .recv()
+            .expect("Expected a certificate message to be sent");
+        assert_eq!(pushed_bls_message, bls_message);
+        assert!(saved_vote_history.is_none());
+
+        // Adding the cert again will not trigger another send
+        assert!(pool.add_transaction(&bls_message).is_ok());
+        assert!(voting_receiver.is_empty());
+
+        // Now add the vote from everyone else, this will not trigger a certificate send
+        for rank in 0..validator_keypairs.len() {
+            assert!(pool
+                .add_transaction(&dummy_transaction(&validator_keypairs, &vote, rank))
+                .is_ok());
+        }
+        for bls_op in voting_receiver.try_iter() {
+            let BLSOp::PushVote {
+                bls_message: pushed_bls_message,
+                slot: _,
+                saved_vote_history: _,
+            } = bls_op;
+            if let BLSMessage::Certificate(certificate_message) = pushed_bls_message {
+                // Notarize and notarize fallback votes might trigger other certificate types to
+                // be sent, but we should not send out the same certificate type again
+                assert_ne!(
+                    certificate_message.certificate.certificate_type,
+                    certificate_type
+                );
+            }
+        }
     }
 
     #[test]
