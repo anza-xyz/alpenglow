@@ -201,8 +201,7 @@ impl Votor {
         }
     }
 
-    #[allow(dead_code)]
-    fn start_migration(&self) {
+    pub fn start_migration(&self) {
         // TODO: evaluate once we have actual migration logic
         let (lock, cvar) = &*self.start;
         let mut started = lock.lock().unwrap();

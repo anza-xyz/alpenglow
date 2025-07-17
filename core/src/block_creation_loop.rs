@@ -125,7 +125,7 @@ fn start_receive_and_record_loop(
 
 /// The block creation loop.
 ///
-/// The `alpenglow_consensus::voting_loop` tracks when it is our leader window, and populates
+/// The `votor::certificate_pool_service` tracks when it is our leader window, and populates
 /// communicates the skip timer and parent slot for our window. This loop takes the responsibility
 /// of creating our `NUM_CONSECUTIVE_LEADER_SLOTS` blocks and finishing them within the required timeout.
 pub fn start_loop(config: BlockCreationLoopConfig) {

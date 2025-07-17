@@ -203,10 +203,10 @@ impl CertificatePoolService {
         *highest_parent_ready = new_highest_parent_ready;
 
         // TODO: Add blockstore check
-        let Some(leader_pubkey) = ctx
-            .leader_schedule_cache
-            .slot_leader_at(*highest_parent_ready, Some(&ctx.root_bank_cache.root_bank()))
-        else {
+        let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
+            *highest_parent_ready,
+            Some(&ctx.root_bank_cache.root_bank()),
+        ) else {
             error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
             ctx.exit.store(true, Ordering::Relaxed);
             return;
