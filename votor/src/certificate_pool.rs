@@ -203,39 +203,44 @@ impl CertificatePool {
         total_stake: Stake,
     ) -> Result<Option<Slot>, AddVoteError> {
         let slot = vote.slot();
-        vote_to_certificate_ids(vote)
-            .iter()
-            .try_fold(None, |highest, &cert_id| {
-                // If the certificate is already complete, skip it
-                if self.completed_certificates.contains_key(&cert_id) {
-                    return Ok(highest);
-                }
-                // Otherwise check whether the certificate is complete
-                let (limit, vote_types) = certificate_limits_and_vote_types(cert_id);
-                let accumulated_stake = vote_types
-                    .iter()
-                    .filter_map(|vote_type| {
-                        Some(
-                            self.vote_pools
-                                .get(&(slot, *vote_type))?
-                                .total_stake_by_key(bank_hash, block_id),
-                        )
-                    })
-                    .sum::<Stake>();
-                if accumulated_stake as f64 / (total_stake as f64) < limit {
-                    return Ok(highest);
-                }
-                let mut vote_certificate = VoteCertificate::new(cert_id);
-                for vote_type in vote_types {
-                    let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
-                        continue;
-                    };
-                    vote_pool
-                        .add_to_certificate(bank_hash, block_id, &mut vote_certificate)
-                        .map_err(AddVoteError::Certificate)?;
-                }
-                self.insert_certificate(cert_id, vote_certificate, true)
-            })
+        let current_highest_finalized_slot = self.highest_finalized_slot;
+        for cert_id in vote_to_certificate_ids(vote) {
+            // If the certificate is already complete, skip it
+            if self.completed_certificates.contains_key(&cert_id) {
+                continue;
+            }
+            // Otherwise check whether the certificate is complete
+            let (limit, vote_types) = certificate_limits_and_vote_types(cert_id);
+            let accumulated_stake = vote_types
+                .iter()
+                .filter_map(|vote_type| {
+                    Some(
+                        self.vote_pools
+                            .get(&(slot, *vote_type))?
+                            .total_stake_by_key(bank_hash, block_id),
+                    )
+                })
+                .sum::<Stake>();
+            if accumulated_stake as f64 / (total_stake as f64) < limit {
+                continue;
+            }
+            let mut vote_certificate = VoteCertificate::new(cert_id);
+            for vote_type in vote_types {
+                let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
+                    continue;
+                };
+                vote_pool
+                    .add_to_certificate(bank_hash, block_id, &mut vote_certificate)
+                    .map_err(AddVoteError::Certificate)?;
+            }
+            self.insert_certificate(cert_id, vote_certificate, true)?;
+        }
+        // If we have a new highest finalized slot, return it
+        if self.highest_finalized_slot != current_highest_finalized_slot {
+            Ok(self.highest_finalized_slot)
+        } else {
+            Ok(None)
+        }
     }
 
     fn has_conflicting_vote(
@@ -266,7 +271,7 @@ impl CertificatePool {
         cert_id: CertificateId,
         cert: VoteCertificate,
         send_certificates: bool,
-    ) -> Result<Option<Slot>, AddVoteError> {
+    ) -> Result<(), AddVoteError> {
         if send_certificates {
             if let Some(sender) = &self.certificate_sender {
                 if cert_id.is_critical() {
@@ -302,12 +307,11 @@ impl CertificatePool {
             CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
                 if self.highest_finalized_slot.map_or(true, |s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
-                    return Ok(Some(slot));
                 }
             }
             CertificateId::Notarize(_, _, _) => (),
         }
-        Ok(None)
+        Ok(())
     }
 
     fn get_key_and_stakes(
@@ -434,11 +438,18 @@ impl CertificatePool {
         if self.completed_certificates.contains_key(&certificate_id) {
             return Ok(None);
         }
+        let current_highest_finalized_slot = self.highest_finalized_slot;
         self.insert_certificate(
             certificate_id,
             VoteCertificate::from(certificate_message.clone()),
             true,
-        )
+        )?;
+        // If we have a new highest finalized slot, return it
+        if self.highest_finalized_slot != current_highest_finalized_slot {
+            Ok(self.highest_finalized_slot)
+        } else {
+            Ok(None)
+        }
     }
 
     /// The highest notarized fallback slot, for use as the parent slot in leader window
