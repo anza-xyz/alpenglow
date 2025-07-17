@@ -182,7 +182,7 @@ impl Votor {
             my_pubkey,
             my_vote_pubkey: vote_account,
             blockstore,
-            bank_forks,
+            root_bank_cache: RootBankCache::new(bank_forks.clone()),
             leader_schedule_cache,
             own_vote_receiver,
             bls_receiver,

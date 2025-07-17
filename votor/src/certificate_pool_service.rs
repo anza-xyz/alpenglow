@@ -19,12 +19,14 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{bank_forks::BankForks, vote_sender_types::BLSVerifiedMessageReceiver},
+    solana_runtime::{
+        root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
+    },
     solana_sdk::clock::Slot,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex, RwLock,
+            Arc, Condvar, Mutex,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -39,7 +41,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) my_pubkey: Pubkey,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
-    pub(crate) bank_forks: Arc<RwLock<BankForks>>,
+    pub(crate) root_bank_cache: RootBankCache,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     // TODO: for now we ingest our own votes into the certificate pool
@@ -74,12 +76,11 @@ impl CertificatePoolService {
     }
 
     // TODO: properly bubble up errors
-    fn certificate_pool_ingest(ctx: CertificatePoolContext) -> Result<(), RecvError> {
-        let root_bank = ctx.bank_forks.read().unwrap().root_bank();
+    fn certificate_pool_ingest(mut ctx: CertificatePoolContext) -> Result<(), RecvError> {
         let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &ctx.my_pubkey,
-            &root_bank,
+            &ctx.root_bank_cache.root_bank(),
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
             &mut events,
@@ -88,6 +89,7 @@ impl CertificatePoolService {
 
         // Wait until migration has completed
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
+        let mut current_root = ctx.root_bank_cache.root_bank().slot();
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
@@ -142,6 +144,12 @@ impl CertificatePoolService {
                         debug_assert!(finalized_slot > highest_finalized_slot);
                         highest_finalized_slot = finalized_slot;
                         standstill_timer = Instant::now();
+                        // Set root
+                        let root_bank = ctx.root_bank_cache.root_bank();
+                        if root_bank.slot() > current_root {
+                            current_root = root_bank.slot();
+                            cert_pool.handle_new_root(root_bank);
+                        }
                     }
                     Ok(_) => (),
                     Err(AddVoteError::CertificateSenderError) => {
@@ -162,14 +170,19 @@ impl CertificatePoolService {
             }
 
             // TODO: we need set identity here as well
-            Self::add_produce_block_event(&mut highest_parent_ready, &cert_pool, &ctx, &mut events);
+            Self::add_produce_block_event(
+                &mut highest_parent_ready,
+                &cert_pool,
+                &mut ctx,
+                &mut events,
+            );
         }
     }
 
     fn add_produce_block_event(
         highest_parent_ready: &mut Slot,
         cert_pool: &CertificatePool,
-        ctx: &CertificatePoolContext,
+        ctx: &mut CertificatePoolContext,
         events: &mut Vec<VotorEvent>,
     ) {
         let Some(new_highest_parent_ready) = events
@@ -189,11 +202,11 @@ impl CertificatePoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
-        // TODO: can we use root_bank_cache
-        let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
-            *highest_parent_ready,
-            Some(ctx.bank_forks.read().unwrap().root_bank().as_ref()),
-        ) else {
+        // TODO: Add blockstore check
+        let Some(leader_pubkey) = ctx
+            .leader_schedule_cache
+            .slot_leader_at(*highest_parent_ready, Some(&ctx.root_bank_cache.root_bank()))
+        else {
             error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
             ctx.exit.store(true, Ordering::Relaxed);
             return;

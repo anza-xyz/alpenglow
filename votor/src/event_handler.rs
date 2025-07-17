@@ -263,7 +263,6 @@ impl EventHandler {
 
             // It is time to produce our leader window
             VotorEvent::ProduceWindow(window_info) => {
-                // TODO: reintroduce blockstore check either here or on receiver
                 let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
                 if let Some(old_window_info) = l_window_info.as_ref() {
                     error!(
