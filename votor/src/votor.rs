@@ -1,6 +1,7 @@
 use crate::{
     certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
     event_handler::{EventHandler, EventHandlerContext},
+    root_utils::RootContext,
 };
 //TODO: remove
 #[allow(dead_code)]
@@ -79,8 +80,6 @@ pub struct VotorConfig {
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
-// TODO: remove
-#[allow(dead_code)]
 pub(crate) struct SharedContext {
     pub(crate) blockstore: Arc<Blockstore>,
     pub(crate) bank_forks: Arc<RwLock<BankForks>>,
@@ -115,11 +114,11 @@ impl Votor {
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
-            accounts_background_request_sender: _,
+            accounts_background_request_sender,
             bls_sender,
             commitment_sender,
-            drop_bank_sender: _,
-            bank_notification_sender: _,
+            drop_bank_sender,
+            bank_notification_sender,
             leader_window_notifier,
             certificate_sender,
             completed_block_receiver,
@@ -139,9 +138,9 @@ impl Votor {
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
             bank_forks: bank_forks.clone(),
+            cluster_info: cluster_info.clone(),
             rpc_subscriptions,
             leader_window_notifier,
-            cluster_info: cluster_info.clone(),
             vote_history_storage,
         };
 
@@ -160,6 +159,13 @@ impl Votor {
             root_bank_cache: RootBankCache::new(bank_forks.clone()),
         };
 
+        let root_context = RootContext {
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            accounts_background_request_sender,
+            bank_notification_sender,
+            drop_bank_sender,
+        };
+
         let event_handler_context = EventHandlerContext {
             exit: exit.clone(),
             start: start.clone(),
@@ -167,6 +173,7 @@ impl Votor {
             event_receiver,
             shared_context,
             voting_context,
+            root_context,
         };
 
         let cert_pool_context = CertificatePoolContext {

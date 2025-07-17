@@ -5,6 +5,7 @@ use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
+        root_utils::{self, RootContext},
         vote_history::{VoteHistory, VoteHistoryError},
         voting_utils::{self, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
@@ -16,9 +17,10 @@ use {
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
     solana_pubkey::Pubkey,
+    solana_runtime::bank_forks::SetRootError,
     solana_sdk::{clock::Slot, hash::Hash, signature::Signer},
     std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex,
@@ -31,7 +33,7 @@ use {
 
 /// Banks that have completed replay, but are yet to be voted on
 /// in the form of (block, parent block)
-type PendingBlocks = BTreeMap<Slot, Vec<(Block, Block)>>;
+pub(crate) type PendingBlocks = BTreeMap<Slot, Vec<(Block, Block)>>;
 
 /// Inputs for the event handler thread
 pub(crate) struct EventHandlerContext {
@@ -45,6 +47,7 @@ pub(crate) struct EventHandlerContext {
     // Contexts
     pub(crate) shared_context: SharedContext,
     pub(crate) voting_context: VotingContext,
+    pub(crate) root_context: RootContext,
 }
 
 #[derive(Debug, Error)]
@@ -57,6 +60,9 @@ enum EventLoopError {
 
     #[error("Error generating and inserting vote")]
     VotingError(#[from] VoteError),
+
+    #[error("Unable to set root")]
+    SetRootError(#[from] SetRootError),
 
     #[error("Set identity error")]
     SetIdentityError(#[from] VoteHistoryError),
@@ -90,9 +96,11 @@ impl EventHandler {
             event_receiver,
             shared_context: ctx,
             voting_context: mut vctx,
+            root_context: rctx,
         } = context;
         let mut my_pubkey = vctx.identity_keypair.pubkey();
         let mut pending_blocks = PendingBlocks::default();
+        let mut finalized_blocks = BTreeSet::default();
 
         // Wait until migration has completed
         Votor::wait_for_migration_or_exit(&exit, &start);
@@ -125,8 +133,15 @@ impl EventHandler {
             };
             // TODO: filter events < root
 
-            let votes =
-                Self::handle_event(&mut my_pubkey, event, &ctx, &mut vctx, &mut pending_blocks)?;
+            let votes = Self::handle_event(
+                &mut my_pubkey,
+                event,
+                &ctx,
+                &mut vctx,
+                &rctx,
+                &mut pending_blocks,
+                &mut finalized_blocks,
+            )?;
 
             // TODO: properly bubble up error handling here and in call graph
             for vote in votes {
@@ -142,7 +157,9 @@ impl EventHandler {
         event: VotorEvent,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
+        rctx: &RootContext,
         pending_blocks: &mut PendingBlocks,
+        finalized_blocks: &mut BTreeSet<Block>,
     ) -> Result<Vec<Result<BLSOp, VoteError>>, EventLoopError> {
         let mut votes = vec![];
         match event {
@@ -179,6 +196,14 @@ impl EventHandler {
                         .or_default()
                         .push((block, parent_block));
                 }
+                Self::check_rootable_blocks(
+                    my_pubkey,
+                    ctx,
+                    vctx,
+                    rctx,
+                    pending_blocks,
+                    finalized_blocks,
+                )?;
             }
 
             // Block has received a notarization certificate
@@ -193,7 +218,6 @@ impl EventHandler {
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
                 // TODO:
                 // set_timeouts();
-                // notify block creation loop
             }
 
             // Skip timer for the slot has fired, TODO: plug this in
@@ -257,9 +281,16 @@ impl EventHandler {
             }
 
             // We have finalized this block consider it for rooting
-            VotorEvent::Finalized(_block) => {
-                // TODO: add to finalized blocks, when intersect with pending blocks (frozen)
-                // call root_utils::check_and_set_root
+            VotorEvent::Finalized(block) => {
+                finalized_blocks.insert(block);
+                Self::check_rootable_blocks(
+                    my_pubkey,
+                    ctx,
+                    vctx,
+                    rctx,
+                    pending_blocks,
+                    finalized_blocks,
+                )?;
             }
 
             // We have not observed a finalization certificate in a while, refresh our votes and certs
@@ -463,6 +494,41 @@ impl EventHandler {
                 voting_context,
             ));
         }
+    }
+
+    /// Checks if we can set root on a new block
+    fn check_rootable_blocks(
+        my_pubkey: &Pubkey,
+        ctx: &SharedContext,
+        vctx: &mut VotingContext,
+        rctx: &RootContext,
+        pending_blocks: &mut PendingBlocks,
+        finalized_blocks: &mut BTreeSet<Block>,
+    ) -> Result<(), SetRootError> {
+        let bank_forks_r = ctx.bank_forks.read().unwrap();
+        let Some(new_root) = finalized_blocks
+            .iter()
+            .filter_map(|&(slot, block_id, bank_hash)| {
+                let bank = bank_forks_r.get(slot)?;
+                (bank.is_frozen()
+                    && bank.block_id().is_some_and(|bid| bid == block_id)
+                    && bank.hash() == bank_hash)
+                    .then_some(slot)
+            })
+            .max()
+        else {
+            // No rootable banks
+            return Ok(());
+        };
+        root_utils::set_root(
+            my_pubkey,
+            new_root,
+            ctx,
+            vctx,
+            rctx,
+            pending_blocks,
+            finalized_blocks,
+        )
     }
 
     pub(crate) fn join(self) -> thread::Result<()> {
