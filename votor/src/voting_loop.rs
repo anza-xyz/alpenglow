@@ -15,6 +15,7 @@ use {
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         voting_utils::{add_message_and_maybe_update_commitment, send_vote, BLSOp, VotingContext},
+        votor::LeaderWindowNotifier,
         Block, CertificateId,
     },
     alpenglow_vote::{
@@ -48,7 +49,7 @@ use {
         collections::{BTreeMap, HashMap},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex, RwLock,
+            Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -57,13 +58,6 @@ use {
 
 /// Banks that have completed replay, but are yet to be voted on
 pub(crate) type PendingBlocks = BTreeMap<Slot, Arc<Bank>>;
-
-/// Communication with the block creation loop to notify leader window
-#[derive(Default)]
-pub struct LeaderWindowNotifier {
-    pub window_info: Mutex<Option<LeaderWindowInfo>>,
-    pub window_notification: Condvar,
-}
 
 // Implement a destructor for the VotingLoop thread to signal it exited
 // even on panics

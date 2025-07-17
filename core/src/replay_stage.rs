@@ -87,8 +87,9 @@ use {
         root_utils,
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
-        voting_loop::{log_leader_change, LeaderWindowNotifier, VotingLoop, VotingLoopConfig},
+        voting_loop::{log_leader_change, VotingLoop, VotingLoopConfig},
         voting_utils::{BLSOp, GenerateVoteTxResult},
+        votor::LeaderWindowNotifier,
         CertificateId,
     },
     std::{

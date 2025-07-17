@@ -20,7 +20,7 @@ use {
         bank_forks::BankForks,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
-    solana_votor::{block_timeout, event::LeaderWindowInfo, voting_loop::LeaderWindowNotifier},
+    solana_votor::{block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

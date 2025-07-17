@@ -10,7 +10,6 @@ use {
         event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::VoteHistoryStorage,
-        voting_loop::LeaderWindowNotifier,
         voting_utils::{self, BLSOp, VotingContext},
         Block, CertificateId, STANDSTILL_TIMEOUT,
     },
@@ -49,6 +48,22 @@ use {
 /// Banks that have completed replay, but are yet to be voted on
 /// in the form of (block, parent block)
 type PendingBlocks = BTreeMap<Slot, Vec<(Block, Block)>>;
+
+/// Context for the block creation loop to start a leader window
+#[derive(Copy, Clone, Debug)]
+pub struct LeaderWindowInfo {
+    pub start_slot: Slot,
+    pub end_slot: Slot,
+    pub parent_block: Block,
+    pub skip_timer: Instant,
+}
+
+/// Communication with the block creation loop to notify leader window
+#[derive(Default)]
+pub struct LeaderWindowNotifier {
+    pub window_info: Mutex<Option<LeaderWindowInfo>>,
+    pub window_notification: Condvar,
+}
 
 /// Inputs to Votor
 pub struct VotorConfig {
@@ -99,6 +114,8 @@ struct CertificatePoolContext {
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
+// TODO: remove
+#[allow(dead_code)]
 struct SharedContext {
     blockstore: Arc<Blockstore>,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
@@ -287,7 +304,7 @@ impl Votor {
             start,
             completed_block_receiver,
             event_receiver,
-            shared_context: mut ctx,
+            shared_context: ctx,
             voting_context: mut vctx,
         } = context;
         let mut my_pubkey = vctx.identity_keypair.pubkey();
