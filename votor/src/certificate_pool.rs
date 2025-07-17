@@ -805,7 +805,9 @@ mod tests {
         BankForks::new_rw_arc(bank0)
     }
 
-    fn create_keypairs_and_pool() -> (Vec<ValidatorVoteKeypairs>, CertificatePool) {
+    fn create_keypairs_and_pool_select_voting_sender(
+        voting_sender: Option<Sender<BLSOp>>,
+    ) -> (Vec<ValidatorVoteKeypairs>, CertificatePool) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
@@ -818,9 +820,19 @@ mod tests {
                 Pubkey::new_unique(),
                 &root_bank.clone(),
                 None,
-                None,
+                voting_sender,
             ),
         )
+    }
+
+    fn create_keypairs_and_pool() -> (Vec<ValidatorVoteKeypairs>, CertificatePool) {
+        create_keypairs_and_pool_select_voting_sender(None)
+    }
+
+    fn create_keypairs_and_pool_with_voting_sender(
+        voting_sender: Sender<BLSOp>,
+    ) -> (Vec<ValidatorVoteKeypairs>, CertificatePool) {
+        create_keypairs_and_pool_select_voting_sender(Some(voting_sender))
     }
 
     fn add_certificate(
@@ -1088,13 +1100,18 @@ mod tests {
         assert!(pool.make_start_leader_decision(my_leader_slot, parent_slot, first_alpenglow_slot));
     }
 
-    #[test_case(Vote::new_finalization_vote(5))]
-    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()))]
-    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()))]
-    #[test_case(Vote::new_skip_vote(8))]
-    #[test_case(Vote::new_skip_fallback_vote(9))]
-    fn test_add_vote_and_create_new_certificate_with_types(vote: Vote) {
-        let (validator_keypairs, mut pool) = create_keypairs_and_pool();
+    #[test_case(Vote::new_finalization_vote(5), vec![CertificateType::Finalize])]
+    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()), vec![CertificateType::Notarize, CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()), vec![CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_skip_vote(8), vec![CertificateType::Skip])]
+    #[test_case(Vote::new_skip_fallback_vote(9), vec![CertificateType::Skip])]
+    fn test_add_vote_and_create_new_certificate_with_types(
+        vote: Vote,
+        certificate_types: Vec<CertificateType>,
+    ) {
+        let (voting_sender, voting_receiver) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut pool) =
+            create_keypairs_and_pool_with_voting_sender(voting_sender);
         let my_validator_ix = 5;
         let highest_slot_fn = match &vote {
             Vote::Finalize(_) => |pool: &CertificatePool| pool.highest_finalized_slot(),
@@ -1136,6 +1153,30 @@ mod tests {
             ))
             .is_ok());
         assert_eq!(highest_slot_fn(&pool), slot);
+        for certificate_type in &certificate_types {
+            let BLSOp::PushVote {
+                bls_message,
+                slot: vote_slot,
+                saved_vote_history,
+            } = voting_receiver
+                .recv()
+                .expect("Expected a certificate message to be sent");
+            let BLSMessage::Certificate(certificate_message) = &bls_message else {
+                panic!("Expected a certificate message");
+            };
+            assert_eq!(certificate_message.certificate.slot, slot);
+            assert_eq!(
+                certificate_message.certificate.certificate_type,
+                *certificate_type
+            );
+            assert_eq!(vote_slot, slot);
+            assert!(saved_vote_history.is_none());
+
+            // Now add the same certificate again, this should silently exit.
+            assert!(pool.add_transaction(&bls_message).is_ok());
+        }
+
+        assert!(voting_receiver.is_empty());
     }
 
     #[test]
