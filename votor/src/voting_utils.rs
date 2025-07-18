@@ -64,7 +64,6 @@ pub enum BLSOp {
     },
     PushCertificate {
         certificate: Arc<CertificateMessage>,
-        slot: Slot,
     },
 }
 
@@ -292,11 +291,9 @@ pub fn add_message_and_maybe_update_commitment(
 ) -> Result<(), AddVoteError> {
     let (new_finalized_slot, new_certs_to_send) = cert_pool.add_transaction(message)?;
     for cert in new_certs_to_send {
-        let slot = cert.certificate.slot;
         bls_sender
             .send(BLSOp::PushCertificate {
                 certificate: cert.clone(),
-                slot,
             })
             .unwrap_or_else(|err| {
                 warn!("Unable to send certificate {:?}: {err:?}", cert.certificate);
