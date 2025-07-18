@@ -1,15 +1,11 @@
-use crate::{
-    certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
-    event_handler::{EventHandler, EventHandlerContext},
-    root_utils::RootContext,
-    skip_timer::SkipTimerService,
-};
-//TODO: remove
-#[allow(dead_code)]
 use {
     crate::{
+        certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
         event::{CompletedBlockReceiver, LeaderWindowInfo},
+        event_handler::{EventHandler, EventHandlerContext},
+        root_utils::RootContext,
+        skip_timer::SkipTimerService,
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         voting_utils::{BLSOp, VotingContext},

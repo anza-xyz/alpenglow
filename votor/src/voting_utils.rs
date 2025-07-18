@@ -15,7 +15,6 @@ use {
     },
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
-    solana_measure::measure::Measure,
     solana_runtime::{
         bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageSender,
     },
@@ -224,73 +223,6 @@ pub fn generate_vote_tx(
         signature: bls_keypair.sign(&vote_serialized).into(),
         rank: *my_rank,
     }))
-}
-
-/// Send an alpenglow vote
-/// `bank` will be used for:
-/// - startup verification
-/// - vote account checks
-/// - authorized voter checks
-/// - selecting the blockhash to sign with
-///
-/// For notarization & finalization votes this will be the voted bank
-/// for skip votes we need to ensure that the bank selected will be on
-/// the leader's choosen fork.
-#[allow(clippy::too_many_arguments)]
-pub fn send_vote(
-    vote: Vote,
-    is_refresh: bool,
-    bank: &Bank,
-    cert_pool: &mut CertificatePool,
-    context: &mut VotingContext,
-) -> bool {
-    // Update and save the vote history
-    if !is_refresh {
-        context.vote_history.add_vote(vote);
-    }
-
-    let mut generate_time = Measure::start("generate_alpenglow_vote");
-    let vote_tx_result = generate_vote_tx(&vote, bank, context);
-    generate_time.stop();
-    // TODO(ashwin): add metrics struct here and throughout the whole file
-    // replay_timing.generate_vote_us += generate_time.as_us();
-    let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
-        warn!("Unable to vote, vote_tx_result {:?}", vote_tx_result);
-        return false;
-    };
-
-    if let Err(e) = add_message_and_maybe_update_commitment(
-        &context.identity_keypair.pubkey(),
-        &context.vote_account_pubkey,
-        &bls_message,
-        cert_pool,
-        &mut vec![],
-        &context.commitment_sender,
-    ) {
-        if !is_refresh {
-            warn!("Unable to push our own vote into the pool {}", e);
-            return false;
-        }
-    };
-
-    let saved_vote_history =
-        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
-            |err| {
-                error!("Unable to create saved vote history: {:?}", err);
-                std::process::exit(1);
-            },
-        );
-
-    // Send the vote over the wire
-    context
-        .bls_sender
-        .send(BLSOp::PushVote {
-            bls_message,
-            slot: vote.slot(),
-            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-        })
-        .unwrap_or_else(|err| warn!("Error: {:?}", err));
-    true
 }
 
 /// Send an alpenglow vote as a BLSMessage

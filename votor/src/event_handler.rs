@@ -18,7 +18,7 @@ use {
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::bank_forks::SetRootError,
+    solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_sdk::{clock::Slot, hash::Hash, signature::Signer},
     std::{
         collections::{BTreeMap, BTreeSet},
@@ -183,22 +183,8 @@ impl EventHandler {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
-                let block = (
-                    slot,
-                    bank.block_id().expect("Block id must be set upstream"),
-                    bank.hash(),
-                );
-                info!("{my_pubkey}: Block {block:?}");
-                let parent_slot = bank.parent_slot();
-                let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
-                    // To account for child of genesis and snapshots we insert a
-                    // default block id here. Charlie is working on a SIMD to add block
-                    // id to snapshots, which can allow us to remove this and update
-                    // the default case in parent ready tracker.
-                    trace!("{my_pubkey}: using default block id for {slot} parent {parent_slot}");
-                    Hash::default()
-                });
-                let parent_block = (parent_slot, parent_block_id, bank.parent_hash());
+                let (block, parent_block) = Self::get_block_parent_block(&bank);
+                info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
                 if Self::try_notar(
                     my_pubkey,
                     block,
@@ -251,7 +237,7 @@ impl EventHandler {
             }
 
             // We have observed the safe to notar condition, and can send a notar fallback vote
-            // TODO: cert pool check for parent block id for intra window slots
+            // TODO: update cert pool to check parent block id for intra window slots
             VotorEvent::SafeToNotar(block @ (slot, block_id, bank_hash)) => {
                 info!("{my_pubkey}: SafeToNotar {block:?}");
                 Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
@@ -294,8 +280,8 @@ impl EventHandler {
                 if let Some(old_window_info) = l_window_info.as_ref() {
                     error!(
                         "{my_pubkey}: Attempting to start leader window for {}-{}, \
-                            however there is already a pending window to produce {}-{}. \
-                            Our production is lagging, discarding in favor of the newer window",
+                        however there is already a pending window to produce {}-{}. \
+                        Our production is lagging, discarding in favor of the newer window",
                         window_info.start_slot,
                         window_info.end_slot,
                         old_window_info.start_slot,
@@ -364,6 +350,26 @@ impl EventHandler {
             warn!("set-identity: from {my_old_pubkey} to {my_pubkey}");
         }
         Ok(())
+    }
+
+    fn get_block_parent_block(bank: &Bank) -> (Block, Block) {
+        let slot = bank.slot();
+        let block = (
+            slot,
+            bank.block_id().expect("Block id must be set upstream"),
+            bank.hash(),
+        );
+        let parent_slot = bank.parent_slot();
+        let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
+            // To account for child of genesis and snapshots we insert a
+            // default block id here. Charlie is working on a SIMD to add block
+            // id to snapshots, which can allow us to remove this and update
+            // the default case in parent ready tracker.
+            trace!("Using default block id for {slot} parent {parent_slot}");
+            Hash::default()
+        });
+        let parent_block = (parent_slot, parent_block_id, bank.parent_hash());
+        (block, parent_block)
     }
 
     /// Tries to vote notarize on `block`:
@@ -494,7 +500,8 @@ impl EventHandler {
         votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) {
         // In case we set root in the middle of a leader window,
-        // it's not necessary to vote skip prior to it
+        // it's not necessary to vote skip prior to it and we won't
+        // be able to check vote history if we've already voted on it
         let start = first_of_consecutive_leader_slots(slot)
             .max(voting_context.root_bank_cache.root_bank().slot());
         for s in start..=last_of_consecutive_leader_slots(slot) {
@@ -533,6 +540,14 @@ impl EventHandler {
     }
 
     /// Checks if we can set root on a new block
+    /// The block must be:
+    /// - Present in bank forks
+    /// - Newer than the current root
+    /// - We must have already voted on bank.slot()
+    /// - Bank is frozen and finished shredding
+    /// - Block has a finalization certificate
+    ///
+    /// If so set root on the highest block that fits these conditions
     fn check_rootable_blocks(
         my_pubkey: &Pubkey,
         ctx: &SharedContext,
