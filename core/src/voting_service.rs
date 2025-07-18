@@ -260,10 +260,8 @@ impl VotingService {
                     staked_validators_cache,
                 );
             }
-            BLSOp::PushCertificate {
-                certificate,
-                slot: vote_slot,
-            } => {
+            BLSOp::PushCertificate { certificate } => {
+                let vote_slot = certificate.certificate.slot;
                 let bls_message = BLSMessage::Certificate((*certificate).clone());
                 Self::broadcast_alpenglow_message(
                     vote_slot,
@@ -358,6 +356,7 @@ mod tests {
             net::{SocketAddr, UdpSocket},
             sync::{atomic::AtomicBool, Arc, RwLock},
         },
+        test_case::test_case,
     };
 
     fn create_voting_service(
@@ -428,9 +427,9 @@ mod tests {
             })
     }
 
-    #[allow(clippy::disallowed_methods)]
-    #[test]
-    fn test_send_vote() {
+    #[test_case(true)]
+    #[test_case(false)]
+    fn test_send_bls_message(send_vote: bool) {
         solana_logger::setup();
         let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
@@ -447,64 +446,44 @@ mod tests {
             .unwrap();
 
         // Send a BLS message via the VotingService
-        let bls_message = BLSMessage::Vote(VoteMessage {
-            vote: Vote::new_notarization_vote(5, Hash::new_unique(), Hash::new_unique()),
-            signature: BLSSignature::default(),
-            rank: 1,
-        });
-        let saved_vote_history = SavedVoteHistoryVersions::Current(SavedVoteHistory::default());
-        let bls_message = Arc::new(bls_message);
-        assert!(bls_sender
-            .send(BLSOp::PushVote {
-                bls_message: bls_message.clone(),
-                slot: 5,
-                saved_vote_history,
-            })
-            .is_ok());
+        let (op, expected_bls_message) = if send_vote {
+            let bls_message = BLSMessage::Vote(VoteMessage {
+                vote: Vote::new_notarization_vote(5, Hash::new_unique(), Hash::new_unique()),
+                signature: BLSSignature::default(),
+                rank: 1,
+            });
+            (
+                BLSOp::PushVote {
+                    bls_message: Arc::new(bls_message.clone()),
+                    slot: 5,
+                    saved_vote_history: SavedVoteHistoryVersions::Current(
+                        SavedVoteHistory::default(),
+                    ),
+                },
+                bls_message,
+            )
+        } else {
+            let certificate = CertificateMessage {
+                certificate: Certificate {
+                    certificate_type: CertificateType::Skip,
+                    slot: 5,
+                    block_id: None,
+                    replayed_bank_hash: None,
+                },
+                signature: BLSSignature::default(),
+                bitmap: BitVec::new(),
+            };
+            (
+                BLSOp::PushCertificate {
+                    certificate: Arc::new(certificate.clone()),
+                },
+                BLSMessage::Certificate(certificate),
+            )
+        };
+        assert!(bls_sender.send(op).is_ok());
 
         // Wait for the listener to receive the message
         let received_bls_message = receive_bls_message(&socket);
-        assert_eq!(received_bls_message, *bls_message);
-    }
-
-    #[test]
-    fn test_send_certificate() {
-        solana_logger::setup();
-        let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
-        let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
-        // Create listener thread on a random port we allocated and return SocketAddr to create VotingService
-
-        // Bind to a random UDP port
-        let socket = solana_net_utils::bind_to_localhost().unwrap();
-        let listener_addr = socket.local_addr().unwrap();
-
-        // Create VotingService with the listener address
-        let _ = create_voting_service(vote_receiver, bls_receiver, listener_addr);
-        socket
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        // Now send a certificate message
-        let certificate = CertificateMessage {
-            certificate: Certificate {
-                certificate_type: CertificateType::Skip,
-                slot: 5,
-                block_id: None,
-                replayed_bank_hash: None,
-            },
-            signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
-        };
-        let certificate = Arc::new(certificate);
-        assert!(bls_sender
-            .send(BLSOp::PushCertificate {
-                certificate: certificate.clone(),
-                slot: 5,
-            })
-            .is_ok());
-        let received_bls_message = receive_bls_message(&socket);
-        assert_eq!(
-            received_bls_message,
-            BLSMessage::Certificate((*certificate).clone())
-        );
+        assert_eq!(received_bls_message, expected_bls_message);
     }
 }
