@@ -166,11 +166,6 @@ impl CertificatePoolService {
                         debug_assert!(finalized_slot > highest_finalized_slot);
                         highest_finalized_slot = finalized_slot;
                         standstill_timer = Instant::now();
-                        // Send finalized
-                        // TODO: plug this in properly to take care of slow final too
-                        if let Some(block) = cert_pool.highest_fast_finalized_block() {
-                            events.push(VotorEvent::Finalized(block));
-                        }
                         // Set root
                         let root_bank = ctx.root_bank_cache.root_bank();
                         if root_bank.slot() > current_root {

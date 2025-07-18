@@ -259,6 +259,9 @@ impl CertificatePool {
                 match cert_id {
                     CertificateId::Notarize(slot, block_id, bank_hash) => {
                         events.push(VotorEvent::BlockNotarized((slot, block_id, bank_hash)));
+                        if self.is_finalized(slot) {
+                            events.push(VotorEvent::Finalized((slot, block_id, bank_hash)));
+                        }
                     }
                     CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
                         self.parent_ready_tracker
@@ -271,13 +274,23 @@ impl CertificatePool {
                         }
                     }
                     CertificateId::Skip(_) => self.parent_ready_tracker.add_new_skip(slot, events),
-                    CertificateId::Finalize(slot) | CertificateId::FinalizeFast(slot, _, _) => {
-                        if self.highest_finalized_slot.map_or(true, |s| s < slot) {
-                            self.highest_finalized_slot = Some(slot);
-                            return Ok(Some(slot));
+                    CertificateId::Finalize(slot) => {
+                        if let Some(block) = self.get_notarized_block(slot) {
+                            events.push(VotorEvent::Finalized(block));
                         }
                     }
+                    CertificateId::FinalizeFast(slot, block_id, bank_hash) => {
+                        events.push(VotorEvent::Finalized((slot, block_id, bank_hash)));
+                    }
                 };
+
+                if cert_id.is_finalization_variant() {
+                    let slot = cert_id.slot();
+                    if self.highest_finalized_slot.map_or(true, |s| s < slot) {
+                        self.highest_finalized_slot = Some(slot);
+                        return Ok(Some(slot));
+                    }
+                }
 
                 Ok(highest)
             })
@@ -460,6 +473,18 @@ impl CertificatePool {
             .filter(|cert| cert.is_fast_finalization())
             .max()?
             .to_block()
+    }
+
+    /// Get the notarized block in `slot`
+    pub fn get_notarized_block(&self, slot: Slot) -> Option<Block> {
+        self.completed_certificates
+            .iter()
+            .find_map(|(cert_id, _)| match cert_id {
+                CertificateId::Notarize(s, block_id, bank_hash) if slot == *s => {
+                    Some((*s, *block_id, *bank_hash))
+                }
+                _ => None,
+            })
     }
 
     #[cfg(test)]

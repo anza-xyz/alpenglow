@@ -65,8 +65,8 @@ impl VotorEvent {
     /// Ignore old events
     pub(crate) fn should_ignore(&self, root: Slot) -> bool {
         match self {
-            VotorEvent::Block(completed_block) => completed_block.slot < root,
-            VotorEvent::BlockNotarized((s, _, _)) => *s < root,
+            VotorEvent::Block(completed_block) => completed_block.slot <= root,
+            VotorEvent::BlockNotarized((s, _, _)) => *s <= root,
             VotorEvent::ParentReady {
                 slot,
                 parent_block: _,
