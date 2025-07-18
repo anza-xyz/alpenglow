@@ -542,11 +542,13 @@ impl EventHandler {
         finalized_blocks: &mut BTreeSet<Block>,
     ) -> Result<(), SetRootError> {
         let bank_forks_r = ctx.bank_forks.read().unwrap();
+        let old_root = bank_forks_r.root();
         let Some(new_root) = finalized_blocks
             .iter()
             .filter_map(|&(slot, block_id, bank_hash)| {
                 let bank = bank_forks_r.get(slot)?;
-                (bank.is_frozen()
+                (slot > old_root
+                    && bank.is_frozen()
                     && bank.block_id().is_some_and(|bid| bid == block_id)
                     && bank.hash() == bank_hash)
                     .then_some(slot)
