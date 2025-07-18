@@ -243,7 +243,6 @@ impl VotingLoop {
             &root_bank_cache.root_bank(),
             blockstore.as_ref(),
             Some(certificate_sender),
-            Some(bls_sender.clone()),
         );
         let mut pending_blocks = PendingBlocks::default();
 
@@ -423,6 +422,7 @@ impl VotingLoop {
                         &shared_context.vote_receiver,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
+                        &voting_context.bls_sender,
                         timeout.saturating_sub(skip_timer.elapsed()),
                     ) {
                         error!("{my_pubkey}: error ingesting votes into certificate pool, exiting: {e:?}");
@@ -443,6 +443,7 @@ impl VotingLoop {
                         &shared_context.vote_receiver,
                         &mut cert_pool,
                         &voting_context.commitment_sender,
+                        &voting_context.bls_sender,
                         // Need to provide a timeout to check exit flag
                         Duration::from_secs(1),
                     ) {
@@ -798,6 +799,7 @@ impl VotingLoop {
         vote_receiver: &VoteReceiver,
         cert_pool: &mut CertificatePool,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+        bls_sender: &Sender<BLSOp>,
         timeout: Duration,
     ) -> Result<(), AddVoteError> {
         let add_to_cert_pool = |bls_message: BLSMessage| {
@@ -807,6 +809,7 @@ impl VotingLoop {
                 &bls_message,
                 cert_pool,
                 commitment_sender,
+                bls_sender,
             )
             .or_else(|e| match e {
                 AddVoteError::CertificateSenderError => Err(e),

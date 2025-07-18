@@ -264,7 +264,7 @@ impl VotingService {
                 certificate,
                 slot: vote_slot,
             } => {
-                let bls_message = BLSMessage::Certificate(certificate);
+                let bls_message = BLSMessage::Certificate((*certificate).clone());
                 Self::broadcast_alpenglow_message(
                     vote_slot,
                     cluster_info,
@@ -433,6 +433,7 @@ mod tests {
             rank: 1,
         });
         let saved_vote_history = SavedVoteHistoryVersions::Current(SavedVoteHistory::default());
+        let bls_message = Arc::new(bls_message);
         assert!(bls_sender
             .send(BLSOp::PushVote {
                 bls_message: bls_message.clone(),
@@ -457,6 +458,6 @@ mod tests {
                     err
                 )
             });
-        assert_eq!(received_bls_message, bls_message);
+        assert_eq!(received_bls_message, *bls_message);
     }
 }
