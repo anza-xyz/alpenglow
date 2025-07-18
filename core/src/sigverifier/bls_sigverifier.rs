@@ -1,6 +1,8 @@
 //! The BLS signature verifier.
 //! This is just a placeholder for now, until we have a real implementation.
 
+mod stats;
+
 use {
     crate::{
         cluster_info_vote_listener::VerifiedVoteSender,
@@ -15,6 +17,7 @@ use {
         epoch_schedule::EpochSchedule,
     },
     solana_streamer::packet::PacketBatch,
+    stats::BLSSigVerifierStats,
     std::{
         collections::HashMap,
         sync::{Arc, RwLock},
@@ -22,50 +25,7 @@ use {
     },
 };
 
-const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1); // Log stats every second
-const EPOCH_STAKES_QUERY_INTERVAL: Duration = Duration::from_secs(60); // Query epoch stakes every 60 seconds
-
-// We are adding our own stats because we do BLS decoding in batch verification,
-// and we send one BLS message at a time. So it makes sense to have finer-grained stats
-#[derive(Debug)]
-pub(crate) struct BLSSigVerifierStats {
-    pub sent: u64,
-    pub sent_failed: u64,
-    pub verified_votes_sent: u64,
-    pub verified_votes_sent_failed: u64,
-    pub received: u64,
-    pub received_malformed: u64,
-    pub received_no_epoch_stakes: u64,
-    pub received_votes: u64,
-    pub last_stats_logged: Instant,
-}
-
-impl BLSSigVerifierStats {
-    pub fn new() -> Self {
-        Self {
-            sent: 0,
-            sent_failed: 0,
-            verified_votes_sent: 0,
-            verified_votes_sent_failed: 0,
-            received: 0,
-            received_malformed: 0,
-            received_no_epoch_stakes: 0,
-            received_votes: 0,
-            last_stats_logged: Instant::now(),
-        }
-    }
-
-    pub fn accumulate(&mut self, other: BLSSigVerifierStats) {
-        self.sent += other.sent;
-        self.sent_failed += other.sent_failed;
-        self.verified_votes_sent += other.verified_votes_sent;
-        self.verified_votes_sent_failed += other.verified_votes_sent_failed;
-        self.received += other.received;
-        self.received_malformed += other.received_malformed;
-        self.received_no_epoch_stakes += other.received_no_epoch_stakes;
-        self.received_votes += other.received_votes;
-    }
-}
+const EPOCH_STAKES_QUERY_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct BLSSigVerifier {
     bank_forks: Arc<RwLock<BankForks>>,
@@ -80,6 +40,7 @@ pub struct BLSSigVerifier {
 
 impl SigVerifier for BLSSigVerifier {
     type SendType = BLSMessage;
+
     // TODO(wen): just a placeholder without any verification.
     fn verify_batches(&self, batches: Vec<PacketBatch>, _valid_packets: usize) -> Vec<PacketBatch> {
         batches
@@ -90,17 +51,16 @@ impl SigVerifier for BLSSigVerifier {
         packet_batches: Vec<PacketBatch>,
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         // TODO(wen): just a placeholder without any batching.
-        let mut stats = BLSSigVerifierStats::new();
-        let mut verified_votes: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
+        let mut verified_votes = HashMap::new();
 
         for packet in packet_batches.iter().flatten() {
-            stats.received += 1;
+            self.stats.received += 1;
 
-            let message = match packet.deserialize_slice::<BLSMessage, _>(..) {
+            let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
                     trace!("Failed to deserialize BLS message: {}", e);
-                    stats.received_malformed += 1;
+                    self.stats.received_malformed += 1;
                     continue;
                 }
             };
@@ -115,13 +75,13 @@ impl SigVerifier for BLSSigVerifier {
             let rank_to_pubkey_map = if let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) {
                 epoch_stakes.bls_pubkey_to_rank_map()
             } else {
-                stats.received_no_epoch_stakes += 1;
+                self.stats.received_no_epoch_stakes += 1;
                 continue;
             };
 
             if let BLSMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
-                stats.received_votes += 1;
+                self.stats.received_votes += 1;
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
                     let Some((pubkey, _)) = rank_to_pubkey_map.get_pubkey(vote_message.rank.into())
                     else {
@@ -137,9 +97,9 @@ impl SigVerifier for BLSSigVerifier {
 
             // Now send the BLS message to certificate pool.
             match self.message_sender.try_send(message) {
-                Ok(()) => stats.sent += 1,
+                Ok(()) => self.stats.sent += 1,
                 Err(TrySendError::Full(_)) => {
-                    stats.sent_failed += 1;
+                    self.stats.sent_failed += 1;
                 }
                 Err(e @ TrySendError::Disconnected(_)) => {
                     return Err(e.into());
@@ -147,51 +107,13 @@ impl SigVerifier for BLSSigVerifier {
             }
         }
         self.send_verified_votes(verified_votes);
-        self.stats.accumulate(stats);
-        // We don't need lock on stats for now because stats are read and written in a single thread.
-        self.maybe_report_stats();
+        self.stats.report_stats();
+        self.update_epoch_stakes_map();
         Ok(())
     }
 }
 
 impl BLSSigVerifier {
-    fn maybe_report_stats(&mut self) {
-        let now = Instant::now();
-        let time_since_last_log = now.duration_since(self.stats.last_stats_logged);
-        if time_since_last_log < STATS_INTERVAL_DURATION {
-            return;
-        }
-        self.update_epoch_stakes_map();
-        datapoint_info!(
-            "bls_sig_verifier_stats",
-            ("sent", self.stats.sent as i64, i64),
-            ("sent_failed", self.stats.sent_failed as i64, i64),
-            (
-                "verified_votes_sent",
-                self.stats.verified_votes_sent as i64,
-                i64
-            ),
-            (
-                "verified_votes_sent_failed",
-                self.stats.verified_votes_sent_failed as i64,
-                i64
-            ),
-            ("received", self.stats.received as i64, i64),
-            ("received_votes", self.stats.received_votes as i64, i64),
-            (
-                "received_no_epoch_stakes",
-                self.stats.received_no_epoch_stakes as i64,
-                i64
-            ),
-            (
-                "received_malformed",
-                self.stats.received_malformed as i64,
-                i64
-            ),
-        );
-        self.stats = BLSSigVerifierStats::new();
-    }
-
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
         verified_votes_sender: VerifiedVoteSender,
@@ -242,16 +164,6 @@ impl BLSSigVerifier {
             }
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn stats(&self) -> &BLSSigVerifierStats {
-        &self.stats
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_last_stats_logged(&mut self, last_stats_logged: Instant) {
-        self.stats.last_stats_logged = last_stats_logged;
-    }
 }
 
 // Add tests for the BLS signature verifier
@@ -277,6 +189,7 @@ mod tests {
             },
         },
         solana_sdk::{hash::Hash, signer::Signer},
+        stats::STATS_INTERVAL_DURATION,
         std::time::Duration,
     };
 
@@ -367,10 +280,9 @@ mod tests {
             }),
         ];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 2);
-        assert_eq!(stats.received, 2);
-        assert_eq!(stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent, 2);
+        assert_eq!(verifier.stats.received, 2);
+        assert_eq!(verifier.stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -384,10 +296,9 @@ mod tests {
             rank: vote_rank as u16,
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 3);
-        assert_eq!(stats.received, 3);
-        assert_eq!(stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent, 3);
+        assert_eq!(verifier.stats.received, 3);
+        assert_eq!(verifier.stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -395,7 +306,7 @@ mod tests {
         );
 
         // Pretend 10 seconds have passed, make sure stats are reset
-        verifier.set_last_stats_logged(Instant::now() - STATS_INTERVAL_DURATION);
+        verifier.stats.last_stats_logged = Instant::now() - STATS_INTERVAL_DURATION;
         let vote_rank: usize = 9;
         let messages = vec![BLSMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()),
@@ -404,10 +315,9 @@ mod tests {
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         // Since we just logged all stats (including the packet just sent), stats should be reset
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.received, 0);
-        assert_eq!(stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.received, 0);
+        assert_eq!(verifier.stats.received_malformed, 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -424,11 +334,10 @@ mod tests {
         let packets = vec![Packet::default()];
         let packet_batches = vec![PacketBatch::new(packets)];
         assert!(verifier.send_packets(packet_batches).is_ok());
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.received, 1);
-        assert_eq!(stats.received_malformed, 1);
-        assert_eq!(stats.received_no_epoch_stakes, 0);
+        assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.received, 1);
+        assert_eq!(verifier.stats.received_malformed, 1);
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 0);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -440,11 +349,10 @@ mod tests {
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.received, 2);
-        assert_eq!(stats.received_malformed, 1);
-        assert_eq!(stats.received_no_epoch_stakes, 1);
+        assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.received, 2);
+        assert_eq!(verifier.stats.received_malformed, 1);
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 1);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -456,11 +364,10 @@ mod tests {
             rank: 1000, // Invalid rank
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.received, 3);
-        assert_eq!(stats.received_malformed, 2);
-        assert_eq!(stats.received_no_epoch_stakes, 1);
+        assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.received, 3);
+        assert_eq!(verifier.stats.received_malformed, 2);
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 1);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -491,10 +398,9 @@ mod tests {
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
 
         // We failed to send the second message because the channel is full.
-        let stats = verifier.stats();
-        assert_eq!(stats.sent, 1);
-        assert_eq!(stats.received, 2);
-        assert_eq!(stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent, 1);
+        assert_eq!(verifier.stats.received, 2);
+        assert_eq!(verifier.stats.received_malformed, 0);
     }
 
     #[test]
