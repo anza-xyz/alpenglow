@@ -262,6 +262,7 @@ impl EventHandler {
                 {
                     return Ok(votes);
                 }
+                info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
                 votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
                     Vote::new_notarization_fallback_vote(slot, block_id, bank_hash),
@@ -277,6 +278,7 @@ impl EventHandler {
                 if vctx.vote_history.its_over(slot) || vctx.vote_history.voted_skip_fallback(slot) {
                     return Ok(votes);
                 }
+                info!("{my_pubkey}: Voting skip-fallback for {slot}");
                 votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
                     Vote::new_skip_fallback_vote(slot),
@@ -404,6 +406,7 @@ impl EventHandler {
             }
         }
 
+        info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
         votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
             Vote::new_notarization_vote(slot, block_id, bank_hash),
@@ -474,6 +477,7 @@ impl EventHandler {
             return false;
         }
 
+        info!("{my_pubkey}: Voting finalize for {slot}");
         votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
             Vote::new_finalization_vote(slot),
@@ -497,6 +501,7 @@ impl EventHandler {
             if voting_context.vote_history.voted(s) {
                 continue;
             }
+            info!("{my_pubkey}: Voting skip for {s}");
             votes.push(voting_utils::insert_vote_and_create_bls_message(
                 my_pubkey,
                 Vote::new_skip_vote(s),
