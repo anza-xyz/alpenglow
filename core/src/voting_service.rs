@@ -322,9 +322,11 @@ mod tests {
         super::*,
         crate::consensus::tower_storage::NullTowerStorage,
         alpenglow_vote::{
-            bls_message::{BLSMessage, VoteMessage},
+            bls_message::{BLSMessage, CertificateMessage, VoteMessage},
+            certificate::{Certificate, CertificateType},
             vote::Vote,
         },
+        bitvec::prelude::*,
         solana_bls_signatures::Signature as BLSSignature,
         solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
         solana_ledger::{
@@ -353,7 +355,7 @@ mod tests {
             NullVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
         },
         std::{
-            net::SocketAddr,
+            net::{SocketAddr, UdpSocket},
             sync::{atomic::AtomicBool, Arc, RwLock},
         },
     };
@@ -411,9 +413,24 @@ mod tests {
         )
     }
 
+    fn receive_bls_message(socket: &UdpSocket) -> BLSMessage {
+        let mut packet_batch = PacketBatch::new(vec![Packet::default()]);
+        assert!(recv_mmsg(socket, &mut packet_batch[..]).is_ok());
+        let packet = packet_batch.iter().next().expect("No packets received");
+        packet
+            .deserialize_slice::<BLSMessage, _>(..)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to deserialize BLSMessage: {:?} {:?}",
+                    size_of::<BLSMessage>(),
+                    err
+                )
+            })
+    }
+
     #[allow(clippy::disallowed_methods)]
     #[test]
-    fn test_send_bls_message() {
+    fn test_send_vote() {
         solana_logger::setup();
         let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
@@ -425,6 +442,9 @@ mod tests {
 
         // Create VotingService with the listener address
         let _ = create_voting_service(vote_receiver, bls_receiver, listener_addr);
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Send a BLS message via the VotingService
         let bls_message = BLSMessage::Vote(VoteMessage {
@@ -443,21 +463,48 @@ mod tests {
             .is_ok());
 
         // Wait for the listener to receive the message
-        let mut packet_batch = PacketBatch::new(vec![Packet::default()]);
+        let received_bls_message = receive_bls_message(&socket);
+        assert_eq!(received_bls_message, *bls_message);
+    }
+
+    #[test]
+    fn test_send_certificate() {
+        solana_logger::setup();
+        let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
+        let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
+        // Create listener thread on a random port we allocated and return SocketAddr to create VotingService
+
+        // Bind to a random UDP port
+        let socket = solana_net_utils::bind_to_localhost().unwrap();
+        let listener_addr = socket.local_addr().unwrap();
+
+        // Create VotingService with the listener address
+        let _ = create_voting_service(vote_receiver, bls_receiver, listener_addr);
         socket
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        assert!(recv_mmsg(&socket, &mut packet_batch[..]).is_ok());
-        let packet = packet_batch.iter().next().expect("No packets received");
-        let received_bls_message = packet
-            .deserialize_slice::<BLSMessage, _>(..)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "Failed to deserialize BLSMessage: {:?} {:?}",
-                    size_of::<BLSMessage>(),
-                    err
-                )
-            });
-        assert_eq!(received_bls_message, *bls_message);
+        // Now send a certificate message
+        let certificate = CertificateMessage {
+            certificate: Certificate {
+                certificate_type: CertificateType::Skip,
+                slot: 5,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        let certificate = Arc::new(certificate);
+        assert!(bls_sender
+            .send(BLSOp::PushCertificate {
+                certificate: certificate.clone(),
+                slot: 5,
+            })
+            .is_ok());
+        let received_bls_message = receive_bls_message(&socket);
+        assert_eq!(
+            received_bls_message,
+            BLSMessage::Certificate((*certificate).clone())
+        );
     }
 }
