@@ -110,11 +110,7 @@ impl CertificatePoolService {
         });
 
         // Ingest votes into certificate pool and notify voting loop of new events
-        loop {
-            if ctx.exit.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-
+        while !ctx.exit.load(Ordering::Relaxed) {
             // TODO: we need set identity here as well
             Self::add_produce_block_event(
                 &mut highest_parent_ready,
@@ -191,6 +187,7 @@ impl CertificatePoolService {
                 };
             }
         }
+        Ok(())
     }
 
     fn add_produce_block_event(
