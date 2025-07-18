@@ -234,9 +234,11 @@ impl EventHandler {
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
                 info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
-                vctx.vote_history.add_parent_ready(slot, parent_block);
+                let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
-                skip_timer.write().unwrap().set_timeouts(slot);
+                if should_set_timeouts {
+                    skip_timer.write().unwrap().set_timeouts(slot);
+                }
             }
 
             // Skip timer for the slot has fired

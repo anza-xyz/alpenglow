@@ -4,8 +4,13 @@ use {
     },
     crate::Block,
     alpenglow_vote::vote::Vote,
-    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
-    std::collections::{HashMap, HashSet},
+    solana_sdk::{
+        clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+        hash::Hash,
+        pubkey::Pubkey,
+        signature::Keypair,
+    },
+    std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
 
@@ -222,14 +227,24 @@ impl VoteHistory {
     }
 
     /// Add a new parent ready slot
-    pub fn add_parent_ready(&mut self, slot: Slot, parent: Block) {
+    ///
+    /// Returns true if the insertion was successful and this was the
+    /// first parent ready for this slot, indicating we should set timeouts.
+    pub fn add_parent_ready(&mut self, slot: Slot, parent: Block) -> bool {
+        assert!(slot % NUM_CONSECUTIVE_LEADER_SLOTS == 0);
         if slot < self.root {
-            return;
+            return false;
         }
-        self.parent_ready_slots
-            .entry(slot)
-            .or_default()
-            .insert(parent);
+        match self.parent_ready_slots.entry(slot) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().insert(parent);
+                false
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(HashSet::from([parent]));
+                true
+            }
+        }
     }
 
     /// Sets the new root slot and cleans up outdated slots < `root`
