@@ -4,6 +4,7 @@
 use {
     crate::{event::VotorEvent, skip_timeout, BLOCKTIME},
     crossbeam_channel::Sender,
+    solana_ledger::leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     solana_sdk::clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     std::{
         collections::{BinaryHeap, VecDeque},
@@ -23,6 +24,13 @@ struct SkipTimer {
     interval: Duration,
     remaining: u64,
     start_slot: Slot,
+}
+
+impl SkipTimer {
+    fn slot_to_fire(&self) -> Slot {
+        let end_slot = last_of_consecutive_leader_slots(self.start_slot);
+        end_slot.checked_sub(self.remaining).unwrap().checked_add(1).unwrap()
+    }
 }
 
 impl PartialEq for SkipTimer {
@@ -70,12 +78,20 @@ impl SkipTimerManager {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
 
+        // To account for restarting from a snapshot in the middle of a leader window
+        // or from genesis, we compute the exact length of this leader window:
+        let leader_window_offset = leader_slot_index(start_slot);
+        let remaining = NUM_CONSECUTIVE_LEADER_SLOTS
+            .checked_sub(leader_window_offset as u64)
+            .unwrap();
+        // TODO: should we change the first fire as well?
+        let next_fire = Instant::now().checked_add(skip_timeout(0)).unwrap();
+
         let timer = SkipTimer {
             id,
-            // TODO: genesis / snapshot?
-            next_fire: Instant::now().checked_add(skip_timeout(0)).unwrap(),
+            next_fire,
             interval: BLOCKTIME,
-            remaining: NUM_CONSECUTIVE_LEADER_SLOTS,
+            remaining,
             start_slot,
         };
         self.order.push_back(id);
@@ -117,12 +133,8 @@ impl SkipTimerService {
                     manager_w.heap.pop();
 
                     // Send timeout event
-                    let slot = NUM_CONSECUTIVE_LEADER_SLOTS
-                        .checked_sub(timer.remaining)
-                        .unwrap()
-                        .checked_add(timer.start_slot)
-                        .unwrap();
                     // TODO: handle error
+                    let slot = timer.slot_to_fire();
                     trace!("Firing skip timeout {slot}");
                     event_sender.send(VotorEvent::Timeout(slot)).unwrap();
 

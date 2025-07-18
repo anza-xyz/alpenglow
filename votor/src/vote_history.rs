@@ -4,12 +4,7 @@ use {
     },
     crate::Block,
     alpenglow_vote::vote::Vote,
-    solana_sdk::{
-        clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
-        hash::Hash,
-        pubkey::Pubkey,
-        signature::Keypair,
-    },
+    solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
@@ -231,7 +226,6 @@ impl VoteHistory {
     /// Returns true if the insertion was successful and this was the
     /// first parent ready for this slot, indicating we should set timeouts.
     pub fn add_parent_ready(&mut self, slot: Slot, parent: Block) -> bool {
-        assert!(slot % NUM_CONSECUTIVE_LEADER_SLOTS == 0);
         if slot < self.root {
             return false;
         }

@@ -66,7 +66,7 @@ impl CertificatePoolService {
             .name("solCertPoolIngest".to_string())
             .spawn(move || {
                 if let Err(e) = Self::certificate_pool_ingest(ctx) {
-                    info!("Certificate pool service exited with error: {e:?}. Shutting down");
+                    info!("Certificate pool service exited: {e:?}. Shutting down");
                     exit.store(true, Ordering::Relaxed);
                 }
             })

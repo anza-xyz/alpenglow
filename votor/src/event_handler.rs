@@ -84,7 +84,7 @@ impl EventHandler {
             .name("solVotorEventLoop".to_string())
             .spawn(move || {
                 if let Err(e) = Self::event_loop(ctx) {
-                    info!("Event loop exited with error: {e:?}. Shutting down");
+                    info!("Event loop exited: {e:?}. Shutting down");
                     exit.store(true, Ordering::Relaxed);
                 }
             })
@@ -489,7 +489,11 @@ impl EventHandler {
         voting_context: &mut VotingContext,
         votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) {
-        for s in first_of_consecutive_leader_slots(slot)..=last_of_consecutive_leader_slots(slot) {
+        // In case we set root in the middle of a leader window,
+        // it's not necessary to vote skip prior to it
+        let start = first_of_consecutive_leader_slots(slot)
+            .max(voting_context.root_bank_cache.root_bank().slot());
+        for s in start..=last_of_consecutive_leader_slots(slot) {
             if voting_context.vote_history.voted(s) {
                 continue;
             }
