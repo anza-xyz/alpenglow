@@ -213,10 +213,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             parent: {parent_slot}"
         );
 
-        assert!(
-            first_in_leader_window(start_slot),
-            "{start_slot} was not first in leader window but voting loop notified us"
-        );
         if let Err(e) = start_leader_retry_replay(start_slot, parent_slot, skip_timer, &ctx) {
             // Give up on this leader window
             error!(
@@ -288,15 +284,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
     }
 
     receive_record_loop.join().unwrap();
-}
-
-/// Is `slot` the first of leader window, accounts for (TODO) WFSM and genesis
-fn first_in_leader_window(slot: Slot) -> bool {
-    leader_slot_index(slot) == 0
-        || slot == 1
-        // TODO: figure out the WFSM hack properly
-        || slot == 2
-    // TODO: also test for restarting in middle of leader window
 }
 
 /// Resets poh recorder
