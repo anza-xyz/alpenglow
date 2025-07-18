@@ -58,12 +58,12 @@ impl GenerateVoteTxResult {
 
 pub enum BLSOp {
     PushVote {
-        bls_message: BLSMessage,
+        bls_message: Arc<BLSMessage>,
         slot: Slot,
         saved_vote_history: SavedVoteHistoryVersions,
     },
     PushCertificate {
-        certificate: CertificateMessage,
+        certificate: Arc<CertificateMessage>,
         slot: Slot,
     },
 }
@@ -254,6 +254,7 @@ pub fn send_vote(
         &bls_message,
         cert_pool,
         &context.commitment_sender,
+        &context.bls_sender,
     ) {
         if !is_refresh {
             warn!("Unable to push our own vote into the pool {}", e);
@@ -273,7 +274,7 @@ pub fn send_vote(
     context
         .bls_sender
         .send(BLSOp::PushVote {
-            bls_message,
+            bls_message: Arc::new(bls_message),
             slot: vote.slot(),
             saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
         })
@@ -287,8 +288,21 @@ pub fn add_message_and_maybe_update_commitment(
     message: &BLSMessage,
     cert_pool: &mut CertificatePool,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+    bls_sender: &Sender<BLSOp>,
 ) -> Result<(), AddVoteError> {
-    let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
+    let (new_finalized_slot, new_certs_to_send) = cert_pool.add_transaction(message)?;
+    for cert in new_certs_to_send {
+        let slot = cert.certificate.slot;
+        bls_sender
+            .send(BLSOp::PushCertificate {
+                certificate: cert.clone(),
+                slot,
+            })
+            .unwrap_or_else(|err| {
+                warn!("Unable to send certificate {:?}: {err:?}", cert.certificate);
+            });
+    }
+    let Some(new_finalized_slot) = new_finalized_slot else {
         return Ok(());
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
