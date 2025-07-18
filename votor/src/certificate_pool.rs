@@ -202,7 +202,6 @@ impl CertificatePool {
     /// - Potentially update `self.highest_finalized_slot`,
     /// - If we have a new highest finalized slot, return it
     /// - update any newly created events
-    #[allow(clippy::ptr_arg)]
     fn update_certificates(
         &mut self,
         vote: &Vote,
@@ -348,9 +347,19 @@ impl CertificatePool {
                 .add_new_notar_fallback((slot, block_id, bank_hash), events),
             CertificateId::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot, events),
             CertificateId::Notarize(slot, block_id, bank_hash) => {
-                events.push(VotorEvent::BlockNotarized((slot, block_id, bank_hash)))
+                events.push(VotorEvent::BlockNotarized((slot, block_id, bank_hash)));
+                if self.is_finalized(slot) {
+                    events.push(VotorEvent::Finalized((slot, block_id, bank_hash)));
+                }
             }
-            CertificateId::Finalize(_) | CertificateId::FinalizeFast(_, _, _) => (),
+            CertificateId::Finalize(slot) => {
+                if let Some(block) = self.get_notarized_block(slot) {
+                    events.push(VotorEvent::Finalized(block));
+                }
+            }
+            CertificateId::FinalizeFast(slot, block_id, bank_hash) => {
+                events.push(VotorEvent::Finalized((slot, block_id, bank_hash)));
+            }
         }
     }
 
@@ -464,15 +473,6 @@ impl CertificatePool {
     /// The highest notarized fallback slot, for use as the parent slot in leader window
     pub fn highest_notarized_fallback(&self) -> Option<(Slot, Hash, Hash)> {
         self.highest_notarized_fallback
-    }
-
-    /// The highest fast finalized block, for use in catchup
-    pub fn highest_fast_finalized(&self) -> Option<(Slot, Hash, Hash)> {
-        self.completed_certificates
-            .keys()
-            .filter(|cert| cert.is_fast_finalization())
-            .max()?
-            .to_block()
     }
 
     /// Get the notarized block in `slot`
