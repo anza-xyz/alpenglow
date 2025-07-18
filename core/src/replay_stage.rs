@@ -3377,7 +3377,7 @@ impl ReplayStage {
         block_metadata_notifier: Option<BlockMetadataNotifierArc>,
         replay_result_vec: &[ReplaySlotFromBlockstore],
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
-        my_pubkey: &Pubkey,
+        _my_pubkey: &Pubkey,
         first_alpenglow_slot: Option<Slot>,
         poh_recorder: &RwLock<PohRecorder>,
         is_alpenglow_migration_complete: &mut bool,
@@ -3479,10 +3479,9 @@ impl ReplayStage {
                     }
                 }
 
-                let block_id = if bank.collector_id() != my_pubkey {
-                    // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
-                    // shreds in the last FEC set, mark it dead. No reason to perform this check on our leader block.
-                    match blockstore.check_last_fec_set_and_get_block_id(
+                // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
+                // shreds in the last FEC set, mark it dead.
+                let block_id = match blockstore.check_last_fec_set_and_get_block_id(
                         bank.slot(),
                         bank.hash(),
                         false,
@@ -3506,11 +3505,11 @@ impl ReplayStage {
                             );
                             continue;
                         }
-                    }
-                } else {
-                    None
                 };
-                bank.set_block_id(block_id);
+
+                if bank.block_id().is_none() {
+                    bank.set_block_id(block_id);
+                }
 
                 let r_replay_stats = replay_stats.read().unwrap();
                 let replay_progress = bank_progress.replay_progress.clone();
@@ -3606,6 +3605,12 @@ impl ReplayStage {
                     }
                 }
 
+                // For leader banks:
+                // 1) Replay finishes before shredding, broadcast_stage will take care off
+                //      notifying votor
+                // 2) Shredding finishes before replay, we notify here
+                //
+                // For non leader banks (2) is always true, so notify here
                 if *is_alpenglow_migration_complete && bank.block_id().is_some() {
                     // Leader blocks will not have a block id, broadcast stage will
                     // take care of notifying the voting loop
