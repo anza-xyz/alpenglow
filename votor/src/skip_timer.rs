@@ -29,7 +29,11 @@ struct SkipTimer {
 impl SkipTimer {
     fn slot_to_fire(&self) -> Slot {
         let end_slot = last_of_consecutive_leader_slots(self.start_slot);
-        end_slot.checked_sub(self.remaining).unwrap().checked_add(1).unwrap()
+        end_slot
+            .checked_sub(self.remaining)
+            .unwrap()
+            .checked_add(1)
+            .unwrap()
     }
 }
 
@@ -135,7 +139,6 @@ impl SkipTimerService {
                     // Send timeout event
                     // TODO: handle error
                     let slot = timer.slot_to_fire();
-                    trace!("Firing skip timeout {slot}");
                     event_sender.send(VotorEvent::Timeout(slot)).unwrap();
 
                     timer.remaining = timer.remaining.checked_sub(1).unwrap();

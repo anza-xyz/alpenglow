@@ -111,17 +111,19 @@ impl ParentReadyTracker {
                 self.my_pubkey
             );
             let status = self.slot_statuses.entry(s).or_default();
-            status.parents_ready.push(block);
+            if !status.parents_ready.contains(&block) {
+                status.parents_ready.push(block);
 
-            // Only notify for parent ready on first leader slots
-            if s % NUM_CONSECUTIVE_LEADER_SLOTS == 0 {
-                events.push(VotorEvent::ParentReady {
-                    slot: s,
-                    parent_block: block,
-                });
+                // Only notify for parent ready on first leader slots
+                if s % NUM_CONSECUTIVE_LEADER_SLOTS == 0 {
+                    events.push(VotorEvent::ParentReady {
+                        slot: s,
+                        parent_block: block,
+                    });
+                }
+
+                self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
             }
-
-            self.highest_with_parent_ready = s.max(self.highest_with_parent_ready);
 
             if !status.skip {
                 break;
@@ -177,8 +179,11 @@ impl ParentReadyTracker {
                 self.my_pubkey,
             );
             let status = self.slot_statuses.entry(s).or_default();
-            status.parents_ready.extend_from_slice(&potential_parents);
             for &block in &potential_parents {
+                if status.parents_ready.contains(&block) {
+                    // We already have this parent ready
+                    continue;
+                }
                 status.parents_ready.push(block);
                 // Only notify for parent ready on first leader slots
                 if s % NUM_CONSECUTIVE_LEADER_SLOTS == 0 {
