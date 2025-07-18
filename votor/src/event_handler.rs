@@ -548,6 +548,7 @@ impl EventHandler {
             .filter_map(|&(slot, block_id, bank_hash)| {
                 let bank = bank_forks_r.get(slot)?;
                 (slot > old_root
+                    && vctx.vote_history.voted(slot)
                     && bank.is_frozen()
                     && bank.block_id().is_some_and(|bid| bid == block_id)
                     && bank.hash() == bank_hash)

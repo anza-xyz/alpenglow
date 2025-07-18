@@ -70,7 +70,7 @@ impl VotorEvent {
             VotorEvent::ParentReady {
                 slot,
                 parent_block: _,
-            } => *slot < root,
+            } => *slot <= root,
             VotorEvent::Timeout(s) => *s <= root,
             VotorEvent::SafeToNotar((s, _, _)) => *s <= root,
             VotorEvent::SafeToSkip(s) => *s <= root,
