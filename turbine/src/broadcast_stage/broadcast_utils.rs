@@ -127,10 +127,12 @@ pub(super) fn set_block_id_and_send(
     block_id: Hash,
 ) -> Result<()> {
     bank.set_block_id(Some(block_id));
-    completed_block_sender.send(CompletedBlock {
-        slot: bank.slot(),
-        bank,
-    })?;
+    if bank.is_frozen() {
+        completed_block_sender.send(CompletedBlock {
+            slot: bank.slot(),
+            bank,
+        })?;
+    }
     Ok(())
 }
 
