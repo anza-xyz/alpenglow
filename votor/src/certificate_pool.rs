@@ -16,7 +16,6 @@ use {
     },
     alpenglow_vote::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage},
-        certificate::CertificateType,
         vote::Vote,
     },
     crossbeam_channel::Sender,
@@ -237,7 +236,8 @@ impl CertificatePool {
                     .add_to_certificate(bank_hash, block_id, &mut vote_certificate)
                     .map_err(AddVoteError::Certificate)?;
             }
-            let new_cert = self.insert_certificate(cert_id, vote_certificate, true)?;
+            let new_cert = Arc::new(vote_certificate.certificate());
+            self.send_and_insert_certificate(cert_id, new_cert.clone())?;
             new_certificates.push(new_cert);
         }
         Ok(new_certificates)
@@ -282,25 +282,29 @@ impl CertificatePool {
         None
     }
 
-    pub(crate) fn insert_certificate(
+    pub(crate) fn send_and_insert_certificate(
         &mut self,
         cert_id: CertificateId,
-        cert: VoteCertificate,
-        send_certificates: bool,
-    ) -> Result<Arc<CertificateMessage>, AddVoteError> {
-        if send_certificates {
-            if let Some(sender) = &self.certificate_sender {
-                if cert_id.is_critical() {
-                    if let Err(e) = sender.try_send((cert_id, cert.certificate().clone())) {
-                        error!("Unable to send certificate {cert_id:?}: {e:?}");
-                        return Err(AddVoteError::CertificateSenderError);
-                    }
+        cert: Arc<CertificateMessage>,
+    ) -> Result<(), AddVoteError> {
+        if let Some(sender) = &self.certificate_sender {
+            if cert_id.is_critical() {
+                if let Err(e) = sender.try_send((cert_id, (*cert).clone())) {
+                    error!("Unable to send certificate {cert_id:?}: {e:?}");
+                    return Err(AddVoteError::CertificateSenderError);
                 }
             }
         }
-        let new_cert = Arc::new(cert.certificate().clone());
-        self.completed_certificates
-            .insert(cert_id, new_cert.clone());
+        self.insert_certificate(cert_id, cert.clone());
+        Ok(())
+    }
+
+    pub(crate) fn insert_certificate(
+        &mut self,
+        cert_id: CertificateId,
+        cert: Arc<CertificateMessage>,
+    ) {
+        self.completed_certificates.insert(cert_id, cert.clone());
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id, bank_hash) => {
                 self.parent_ready_tracker
@@ -320,7 +324,6 @@ impl CertificatePool {
             }
             CertificateId::Notarize(_, _, _) => (),
         }
-        Ok(new_cert)
     }
 
     fn get_key_and_stakes(
@@ -436,33 +439,12 @@ impl CertificatePool {
         certificate_message: &CertificateMessage,
     ) -> Result<Vec<Arc<CertificateMessage>>, AddVoteError> {
         let certificate = &certificate_message.certificate;
-        let certificate_id = match certificate.certificate_type {
-            CertificateType::Finalize => CertificateId::Finalize(certificate.slot),
-            CertificateType::FinalizeFast => CertificateId::FinalizeFast(
-                certificate.slot,
-                certificate.block_id.unwrap(),
-                certificate.replayed_bank_hash.unwrap(),
-            ),
-            CertificateType::Notarize => CertificateId::Notarize(
-                certificate.slot,
-                certificate.block_id.unwrap(),
-                certificate.replayed_bank_hash.unwrap(),
-            ),
-            CertificateType::NotarizeFallback => CertificateId::NotarizeFallback(
-                certificate.slot,
-                certificate.block_id.unwrap(),
-                certificate.replayed_bank_hash.unwrap(),
-            ),
-            CertificateType::Skip => CertificateId::Skip(certificate.slot),
-        };
+        let certificate_id = CertificateId::from(certificate);
         if self.completed_certificates.contains_key(&certificate_id) {
             return Ok(vec![]);
         }
-        let new_certificate = self.insert_certificate(
-            certificate_id,
-            VoteCertificate::from(certificate_message.clone()),
-            true,
-        )?;
+        let new_certificate = Arc::new(certificate_message.clone());
+        self.send_and_insert_certificate(certificate_id, new_certificate.clone())?;
         Ok(vec![new_certificate])
     }
 
@@ -742,9 +724,7 @@ pub fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            if let Err(e) = cert_pool.insert_certificate(cert_id, cert.into(), false) {
-                error!("{my_pubkey}: failed to insert certificate {cert_id:?} into pool: {e}");
-            }
+            cert_pool.insert_certificate(cert_id, cert.into());
         }
     }
     cert_pool
@@ -756,7 +736,7 @@ mod tests {
         super::*,
         alpenglow_vote::{
             bls_message::{VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-            certificate::Certificate,
+            certificate::{Certificate, CertificateType},
         },
         bitvec::prelude::*,
         itertools::Itertools,
@@ -815,6 +795,7 @@ mod tests {
         )
     }
 
+    #[cfg(test)]
     fn add_certificate(
         pool: &mut CertificatePool,
         validator_keypairs: &[ValidatorVoteKeypairs],
