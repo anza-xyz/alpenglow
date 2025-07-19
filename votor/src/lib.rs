@@ -26,14 +26,14 @@ extern crate solana_frozen_abi_macro;
 
 // Core consensus types and constants
 pub type Stake = u64;
-pub type Block = (Slot, Hash, Hash);
+pub type Block = (Slot, Hash);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateId {
     Finalize(Slot),
-    FinalizeFast(Slot, Hash, Hash),
-    Notarize(Slot, Hash, Hash),
-    NotarizeFallback(Slot, Hash, Hash),
+    FinalizeFast(Slot, Hash),
+    Notarize(Slot, Hash),
+    NotarizeFallback(Slot, Hash),
     Skip(Slot),
 }
 
@@ -42,25 +42,25 @@ impl CertificateId {
     pub fn slot(&self) -> Slot {
         match self {
             CertificateId::Finalize(slot)
-            | CertificateId::FinalizeFast(slot, _, _)
-            | CertificateId::Notarize(slot, _, _)
-            | CertificateId::NotarizeFallback(slot, _, _)
+            | CertificateId::FinalizeFast(slot, _)
+            | CertificateId::Notarize(slot, _)
+            | CertificateId::NotarizeFallback(slot, _)
             | CertificateId::Skip(slot) => *slot,
         }
     }
 
     pub fn is_fast_finalization(&self) -> bool {
-        matches!(self, Self::FinalizeFast(_, _, _))
+        matches!(self, Self::FinalizeFast(_, _))
     }
 
     #[allow(dead_code)]
     pub fn is_finalization_variant(&self) -> bool {
-        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _, _))
+        matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _))
     }
 
     #[allow(dead_code)]
     pub fn is_notarize_fallback(&self) -> bool {
-        matches!(self, Self::NotarizeFallback(_, _, _))
+        matches!(self, Self::NotarizeFallback(_, _))
     }
 
     #[allow(dead_code)]
@@ -71,11 +71,9 @@ impl CertificateId {
     pub fn to_block(self) -> Option<Block> {
         match self {
             CertificateId::Finalize(_) | CertificateId::Skip(_) => None,
-            CertificateId::Notarize(slot, block_id, bank_hash)
-            | CertificateId::NotarizeFallback(slot, block_id, bank_hash)
-            | CertificateId::FinalizeFast(slot, block_id, bank_hash) => {
-                Some((slot, block_id, bank_hash))
-            }
+            CertificateId::Notarize(slot, block_id)
+            | CertificateId::NotarizeFallback(slot, block_id)
+            | CertificateId::FinalizeFast(slot, block_id) => Some((slot, block_id)),
         }
     }
 
@@ -86,7 +84,7 @@ impl CertificateId {
     /// Note: Notarization certificates necessarily generate a
     /// NotarizeFallback certificate as well
     pub fn is_critical(&self) -> bool {
-        matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+        matches!(self, Self::NotarizeFallback(_, _) | Self::Skip(_))
     }
 }
 
@@ -128,11 +126,11 @@ pub const fn certificate_limits_and_vote_types(
     cert_type: CertificateId,
 ) -> (f64, &'static [VoteType]) {
     match cert_type {
-        CertificateId::Notarize(_, _, _) => (0.6, &[VoteType::Notarize]),
-        CertificateId::NotarizeFallback(_, _, _) => {
+        CertificateId::Notarize(_, _) => (0.6, &[VoteType::Notarize]),
+        CertificateId::NotarizeFallback(_, _) => {
             (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
         }
-        CertificateId::FinalizeFast(_, _, _) => (0.8, &[VoteType::Notarize]),
+        CertificateId::FinalizeFast(_, _) => (0.8, &[VoteType::Notarize]),
         CertificateId::Finalize(_) => (0.6, &[VoteType::Finalize]),
         CertificateId::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
     }
@@ -144,18 +142,13 @@ pub const fn certificate_limits_and_vote_types(
 pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<CertificateId> {
     match vote {
         Vote::Notarize(vote) => vec![
-            CertificateId::Notarize(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
-            CertificateId::NotarizeFallback(
-                vote.slot(),
-                *vote.block_id(),
-                *vote.replayed_bank_hash(),
-            ),
-            CertificateId::FinalizeFast(vote.slot(), *vote.block_id(), *vote.replayed_bank_hash()),
+            CertificateId::Notarize(vote.slot(), *vote.block_id()),
+            CertificateId::NotarizeFallback(vote.slot(), *vote.block_id()),
+            CertificateId::FinalizeFast(vote.slot(), *vote.block_id()),
         ],
         Vote::NotarizeFallback(vote) => vec![CertificateId::NotarizeFallback(
             vote.slot(),
             *vote.block_id(),
-            *vote.replayed_bank_hash(),
         )],
         Vote::Finalize(vote) => vec![CertificateId::Finalize(vote.slot())],
         Vote::Skip(vote) => vec![CertificateId::Skip(vote.slot())],

@@ -41,6 +41,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+        hash::Hash,
         pubkey::Pubkey,
         signature::{Keypair, Signer},
     },
@@ -565,11 +566,11 @@ impl VotingLoop {
             // Cannot have voted a skip variant
             return false;
         }
-        let Some((block_id, bank_hash)) = voting_context.vote_history.voted_notar(slot) else {
+        let Some(block_id) = voting_context.vote_history.voted_notar(slot) else {
             // Must have voted notarize in order to vote finalize
             return false;
         };
-        if !cert_pool.is_notarized(slot, block_id, bank_hash) {
+        if !cert_pool.is_notarized(slot, block_id) {
             // Must have a notarization certificate
             return false;
         }
@@ -599,7 +600,6 @@ impl VotingLoop {
         let leader_slot_index = leader_slot_index(slot);
 
         let parent_slot = bank.parent_slot();
-        let parent_bank_hash = bank.parent_hash();
         let parent_block_id = bank
             .parent_block_id()
             // To account for child of genesis and snapshots we allow default block id
@@ -617,7 +617,7 @@ impl VotingLoop {
         if leader_slot_index == 0 || slot == 1 {
             if !cert_pool
                 .parent_ready_tracker
-                .parent_ready(slot, (parent_slot, parent_block_id, parent_bank_hash))
+                .parent_ready(slot, (parent_slot, parent_block_id))
             {
                 // Need to ingest more votes
                 return false;
@@ -627,9 +627,7 @@ impl VotingLoop {
                 // Non consecutive
                 return false;
             }
-            if voting_context.vote_history.voted_notar(parent_slot)
-                != Some((parent_block_id, parent_bank_hash))
-            {
+            if voting_context.vote_history.voted_notar(parent_slot) != Some(parent_block_id) {
                 // Voted skip or notarize on a different version of the parent
                 return false;
             }
@@ -698,15 +696,15 @@ impl VotingLoop {
         if voting_context.vote_history.its_over(slot) {
             return false;
         }
-        for (block_id, bank_hash) in blocks.into_iter() {
+        for block_id in blocks.into_iter() {
             if voting_context
                 .vote_history
-                .voted_notar_fallback(slot, block_id, bank_hash)
+                .voted_notar_fallback(slot, block_id)
             {
                 continue;
             }
-            info!("{my_pubkey}: Voting notarize fallback for slot {slot} hash {bank_hash} block_id {block_id}");
-            let vote = Vote::new_notarization_fallback_vote(slot, block_id, bank_hash);
+            info!("{my_pubkey}: Voting notarize fallback for slot {slot} block_id {block_id}");
+            let vote = Vote::new_notarization_fallback_vote(slot, block_id, Hash::default());
             if !send_vote(
                 vote,
                 false,
@@ -836,7 +834,7 @@ impl VotingLoop {
         leader_window_notifier: &LeaderWindowNotifier,
         start_slot: Slot,
         end_slot: Slot,
-        parent_block @ (parent_slot, _, _): Block,
+        parent_block @ (parent_slot, _): Block,
         skip_timer: Instant,
     ) -> bool {
         debug_assert!(parent_slot < start_slot);
