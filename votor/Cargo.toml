@@ -65,6 +65,7 @@ solana-vote-program = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+solana-runtime = { workspace = true, features = ["dev-context-only-utils"] }
 test-case = { workspace = true }
 
 [lints]
