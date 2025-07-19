@@ -95,8 +95,8 @@ impl VoteCertificate {
         Ok(())
     }
 
-    pub fn certificate(&self) -> &CertificateMessage {
-        &self.0
+    pub fn certificate(self) -> CertificateMessage {
+        self.0
     }
 }
 
