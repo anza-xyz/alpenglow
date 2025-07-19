@@ -7,7 +7,6 @@ use {
     crate::result::{Error, Result},
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
-    solana_sdk::hash::Hash,
     solana_vote::alpenglow::bls_message::CertificateMessage,
     solana_votor::CertificateId,
     std::{
@@ -91,12 +90,7 @@ impl CertificateService {
     ) -> Result<()> {
         match cert_id {
             CertificateId::NotarizeFallback(slot, block_id) => blockstore
-                .insert_new_notarization_fallback_certificate(
-                    slot,
-                    block_id,
-                    Hash::default(),
-                    vote_certificate,
-                )?,
+                .insert_new_notarization_fallback_certificate(slot, block_id, vote_certificate)?,
             CertificateId::Skip(slot) => {
                 blockstore.insert_new_skip_certificate(slot, vote_certificate)?
             }
