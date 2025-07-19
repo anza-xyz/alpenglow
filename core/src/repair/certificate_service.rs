@@ -7,6 +7,7 @@ use {
     crate::result::{Error, Result},
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
+    solana_sdk::hash::Hash,
     solana_vote::alpenglow::bls_message::CertificateMessage,
     solana_votor::CertificateId,
     std::{
@@ -89,19 +90,19 @@ impl CertificateService {
         vote_certificate: CertificateMessage,
     ) -> Result<()> {
         match cert_id {
-            CertificateId::NotarizeFallback(slot, block_id, bank_hash) => blockstore
+            CertificateId::NotarizeFallback(slot, block_id) => blockstore
                 .insert_new_notarization_fallback_certificate(
                     slot,
                     block_id,
-                    bank_hash,
+                    Hash::default(),
                     vote_certificate,
                 )?,
             CertificateId::Skip(slot) => {
                 blockstore.insert_new_skip_certificate(slot, vote_certificate)?
             }
             CertificateId::Finalize(_)
-            | CertificateId::FinalizeFast(_, _, _)
-            | CertificateId::Notarize(_, _, _) => {
+            | CertificateId::FinalizeFast(_, _)
+            | CertificateId::Notarize(_, _) => {
                 panic!("Programmer error, certificate pool should not notify for {cert_id:?}")
             }
         }

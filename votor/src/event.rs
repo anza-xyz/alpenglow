@@ -67,16 +67,16 @@ impl VotorEvent {
     pub(crate) fn should_ignore(&self, root: Slot) -> bool {
         match self {
             VotorEvent::Block(completed_block) => completed_block.slot <= root,
-            VotorEvent::BlockNotarized((s, _, _)) => *s <= root,
+            VotorEvent::BlockNotarized((s, _)) => *s <= root,
             VotorEvent::ParentReady {
                 slot,
                 parent_block: _,
             } => *slot <= root,
             VotorEvent::Timeout(s) => *s <= root,
-            VotorEvent::SafeToNotar((s, _, _)) => *s <= root,
+            VotorEvent::SafeToNotar((s, _)) => *s <= root,
             VotorEvent::SafeToSkip(s) => *s <= root,
             VotorEvent::ProduceWindow(_) => false,
-            VotorEvent::Finalized((s, _, _)) => *s <= root,
+            VotorEvent::Finalized((s, _)) => *s <= root,
             VotorEvent::Standstill(_) => false,
             VotorEvent::SetIdentity => false,
         }
