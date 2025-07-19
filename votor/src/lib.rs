@@ -6,13 +6,16 @@ use {
 };
 
 pub mod certificate_pool;
+mod certificate_pool_service;
 pub mod commitment;
 pub mod event;
+mod event_handler;
 pub mod root_utils;
+mod skip_timer;
 pub mod vote_history;
 pub mod vote_history_storage;
-pub mod voting_loop;
 pub mod voting_utils;
+pub mod votor;
 
 #[macro_use]
 extern crate log;
@@ -174,6 +177,8 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
 pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
+
+pub const STANDSTILL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Alpenglow block constants
 /// The amount of time a leader has to build their block

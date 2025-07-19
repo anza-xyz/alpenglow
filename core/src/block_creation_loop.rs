@@ -20,7 +20,7 @@ use {
         bank_forks::BankForks,
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey},
-    solana_votor::{block_timeout, event::LeaderWindowInfo, voting_loop::LeaderWindowNotifier},
+    solana_votor::{block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -125,7 +125,7 @@ fn start_receive_and_record_loop(
 
 /// The block creation loop.
 ///
-/// The `alpenglow_consensus::voting_loop` tracks when it is our leader window, and populates
+/// The `votor::certificate_pool_service` tracks when it is our leader window, and populates
 /// communicates the skip timer and parent slot for our window. This loop takes the responsibility
 /// of creating our `NUM_CONSECUTIVE_LEADER_SLOTS` blocks and finishing them within the required timeout.
 pub fn start_loop(config: BlockCreationLoopConfig) {
@@ -213,10 +213,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             parent: {parent_slot}"
         );
 
-        assert!(
-            first_in_leader_window(start_slot),
-            "{start_slot} was not first in leader window but voting loop notified us"
-        );
         if let Err(e) = start_leader_retry_replay(start_slot, parent_slot, skip_timer, &ctx) {
             // Give up on this leader window
             error!(
@@ -288,15 +284,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
     }
 
     receive_record_loop.join().unwrap();
-}
-
-/// Is `slot` the first of leader window, accounts for (TODO) WFSM and genesis
-fn first_in_leader_window(slot: Slot) -> bool {
-    leader_slot_index(slot) == 0
-        || slot == 1
-        // TODO: figure out the WFSM hack properly
-        || slot == 2
-    // TODO: also test for restarting in middle of leader window
 }
 
 /// Resets poh recorder

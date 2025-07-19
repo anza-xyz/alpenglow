@@ -66,11 +66,9 @@ pub const RUST_LOG_FILTER: &str =
 
 pub const AG_DEBUG_LOG_FILTER: &str = "error,solana_core::replay_stage=info,\
         solana_local_cluster=info,local_cluster=info,\
-        solana_poh::poh_recorder=trace,solana_poh::poh_service=trace,\
-        solana_core::alpenglow_consensus::voting_loop=trace,\
-        solana_core::alpenglow_consensus::block_creation_loop=trace,\
-        solana_votor::certificate_pool=trace,\
-        solana_votor::parent_ready_tracker=trace,\
+        solana_core::block_creation_loop=trace,\
+        solana_votor=trace,\
+        solana_votor::vote_history_storage=info,\
         solana_core::validator=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
