@@ -297,13 +297,12 @@ mod test {
         let my_pubkey = Pubkey::new_unique();
 
         let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();
-        let bank_hashes: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();
 
         // Adding the first 3 votes should succeed, but total_stake should remain at 10
-        for i in 0..3 {
-            assert!(vote_pool.add_vote(&my_pubkey, block_ids[i], &transaction, 10));
+        for block_id in block_ids.iter().take(3) {
+            assert!(vote_pool.add_vote(&my_pubkey, *block_id, &transaction, 10));
             assert_eq!(vote_pool.total_stake(), 10);
-            assert_eq!(vote_pool.total_stake_by_block_id(&block_ids[i]), 10);
+            assert_eq!(vote_pool.total_stake_by_block_id(block_id), 10);
         }
         // Adding the 4th vote should fail
         assert!(!vote_pool.add_vote(&my_pubkey, block_ids[3], &transaction, 10));
@@ -312,13 +311,13 @@ mod test {
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        for i in 1..3 {
-            assert!(vote_pool.add_vote(&new_pubkey, block_ids[i], &transaction, 60));
+        for block_id in block_ids.iter().skip(1).take(3) {
+            assert!(vote_pool.add_vote(&new_pubkey, *block_id, &transaction, 60));
             assert_eq!(vote_pool.total_stake(), 70);
-            assert_eq!(vote_pool.total_stake_by_block_id(&block_ids[i]), 70);
+            assert_eq!(vote_pool.total_stake_by_block_id(block_id), 70);
         }
 
-        // The new key only added 2 votes, so adding bank_hashes[3] should succeed
+        // The new key only added 2 votes, so adding block_ids[3] should succeed
         assert!(vote_pool.add_vote(&new_pubkey, block_ids[3], &transaction, 60));
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_block_id(&block_ids[3]), 60);

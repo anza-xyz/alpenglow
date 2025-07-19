@@ -663,7 +663,7 @@ pub fn load_from_blockstore(
         let certs = slot_cert
             .notarize_fallback_certificates
             .into_iter()
-            .map(|((block_id, bank_hash), cert)| {
+            .map(|(block_id, cert)| {
                 let cert_id = CertificateId::NotarizeFallback(slot, block_id);
                 (cert_id, cert)
             })
