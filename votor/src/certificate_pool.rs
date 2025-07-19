@@ -215,15 +215,15 @@ impl CertificatePool {
             // Otherwise check whether the certificate is complete
             let (limit, vote_types) = certificate_limits_and_vote_types(cert_id);
             let accumulated_stake = vote_types
-                .iter()
-                .filter_map(|vote_type| {
-                    Some(
-                        self.vote_pools
-                            .get(&(slot, *vote_type))?
-                            .total_stake_by_key(bank_hash, block_id),
-                    )
-                })
-                .sum::<Stake>();
+                    .iter()
+                    .filter_map(|vote_type| {
+                        Some(match self.vote_pools
+                            .get(&(slot, *vote_type))? {
+                                VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
+                                VotePoolType::DuplicateBlockVotePool(pool) => pool.total_stake_by_voted_block_key(voted_block_key.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}")),
+                            })
+                    })
+                    .sum::<Stake>();
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
@@ -232,9 +232,10 @@ impl CertificatePool {
                 let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) else {
                     continue;
                 };
-                vote_pool
-                    .add_to_certificate(bank_hash, block_id, &mut vote_certificate)
-                    .map_err(AddVoteError::Certificate)?;
+                match vote_pool {
+                        VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate),
+                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(voted_block_key.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}"), &mut vote_certificate),
+                    }.map_err(AddVoteError::Certificate)?;
             }
             let new_cert = Arc::new(vote_certificate.certificate());
             self.send_and_insert_certificate(cert_id, new_cert.clone())?;
