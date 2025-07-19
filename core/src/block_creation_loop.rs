@@ -13,17 +13,19 @@ use {
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::leader_slot_index,
     },
+    solana_measure::measure::Measure,
+    solana_metrics::datapoint_info,
     solana_poh::poh_recorder::{PohRecorder, Record, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     solana_rpc::{rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier},
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
-    solana_sdk::{clock::Slot, pubkey::Pubkey},
+    solana_sdk::{clock::Slot, pubkey::Pubkey, timing::AtomicInterval},
     solana_votor::{block_timeout, event::LeaderWindowInfo, voting_loop::LeaderWindowNotifier},
     std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
         thread,
@@ -71,6 +73,135 @@ struct LeaderContext {
 pub struct ReplayHighestFrozen {
     pub highest_frozen_slot: Mutex<Slot>,
     pub freeze_notification: Condvar,
+}
+
+#[derive(Default)]
+struct BlockCreationLoopMetrics {
+    last_report: AtomicInterval,
+    loop_count: AtomicUsize,
+    replay_is_behind_count: AtomicUsize,
+    startup_verification_incomplete_count: AtomicUsize,
+    already_have_bank_count: AtomicUsize,
+    bank_timeout_completion_count: AtomicUsize,
+    bank_filled_completion_count: AtomicUsize,
+
+    replay_is_behind_wait_elapsed: AtomicU64,
+    window_production_elapsed: AtomicU64,
+    slot_production_elapsed_hist: histogram::Histogram,
+    bank_completion_elapsed_hist: histogram::Histogram,
+}
+
+impl BlockCreationLoopMetrics {
+    fn is_empty(&self) -> bool {
+        0 == self.loop_count.load(Ordering::Relaxed) as u64
+            + self.replay_is_behind_count.load(Ordering::Relaxed) as u64
+            + self
+                .startup_verification_incomplete_count
+                .load(Ordering::Relaxed) as u64
+            + self.already_have_bank_count.load(Ordering::Relaxed) as u64
+            + self.bank_timeout_completion_count.load(Ordering::Relaxed) as u64
+            + self.bank_filled_completion_count.load(Ordering::Relaxed) as u64
+            + self.replay_is_behind_wait_elapsed.load(Ordering::Relaxed) as u64
+            + self.window_production_elapsed.load(Ordering::Relaxed) as u64
+            + self.slot_production_elapsed_hist.entries() as u64
+            + self.bank_completion_elapsed_hist.entries() as u64
+    }
+
+    fn report(&mut self, report_interval_ms: u64) {
+        // skip reporting metrics if stats is empty
+        if self.is_empty() {
+            return;
+        }
+
+        if self.last_report.should_update(report_interval_ms) {
+            datapoint_info!(
+                "block-creation-loop-metrics",
+                ("loop_count", self.loop_count.load(Ordering::Relaxed), i64),
+                (
+                    "replay_is_behind_count",
+                    self.replay_is_behind_count.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "startup_verification_incomplete_count",
+                    self.startup_verification_incomplete_count
+                        .swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "already_have_bank_count",
+                    self.already_have_bank_count.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "bank_timeout_completion_count",
+                    self.bank_timeout_completion_count
+                        .swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "bank_filled_completion_count",
+                    self.bank_filled_completion_count.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "replay_is_behind_wait_elapsed",
+                    self.replay_is_behind_wait_elapsed
+                        .swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "window_production_elapsed",
+                    self.window_production_elapsed.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "slot_production_elapsed_90pct",
+                    self.slot_production_elapsed_hist
+                        .percentile(90.0)
+                        .unwrap_or(0),
+                    i64
+                ),
+                (
+                    "slot_production_elapsed_mean",
+                    self.slot_production_elapsed_hist.mean().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "slot_production_elapsed_min",
+                    self.slot_production_elapsed_hist.minimum().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "slot_production_elapsed_max",
+                    self.slot_production_elapsed_hist.maximum().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "bank_completion_elapsed_90pct",
+                    self.bank_completion_elapsed_hist
+                        .percentile(90.0)
+                        .unwrap_or(0),
+                    i64
+                ),
+                (
+                    "bank_completion_elapsed_mean",
+                    self.bank_completion_elapsed_hist.mean().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "bank_completion_elapsed_min",
+                    self.bank_completion_elapsed_hist.minimum().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "bank_completion_elapsed_max",
+                    self.bank_completion_elapsed_hist.maximum().unwrap_or(0),
+                    i64
+                ),
+            );
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -165,6 +296,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
     };
 
+    let mut metrics = BlockCreationLoopMetrics::default();
+
     // Setup poh
     reset_poh_recorder(&ctx.bank_forks.read().unwrap().working_bank(), &ctx);
 
@@ -217,7 +350,9 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             first_in_leader_window(start_slot),
             "{start_slot} was not first in leader window but voting loop notified us"
         );
-        if let Err(e) = start_leader_retry_replay(start_slot, parent_slot, skip_timer, &ctx) {
+        if let Err(e) =
+            start_leader_retry_replay(start_slot, parent_slot, skip_timer, &ctx, &mut metrics)
+        {
             // Give up on this leader window
             error!(
                 "{my_pubkey}: Unable to produce first slot {start_slot}, skipping production of our entire leader window \
@@ -227,6 +362,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         }
 
         // Produce our window
+        let mut window_production_start = Measure::start("window_production");
         let mut slot = start_slot;
         // TODO(ashwin): Handle preemption of leader window during this loop
         while !exit.load(Ordering::Relaxed) {
@@ -240,6 +376,10 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 "{my_pubkey}: waiting for leader bank {slot} to finish, remaining time: {}",
                 remaining_slot_time.as_millis(),
             );
+
+            // Start measuring bank completion time
+            let mut bank_completion_measure = Measure::start("bank_completion");
+
             leader_bank_notifier.wait_for_completed(remaining_slot_time);
 
             // Time to complete the bank, there are two possibilities:
@@ -254,6 +394,12 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                         bank.collector_id(),
                         bank.slot()
                     );
+
+                    // Record timeout completion metric
+                    metrics
+                        .bank_timeout_completion_count
+                        .fetch_add(1, Ordering::Relaxed);
+
                     let max_tick_height = bank.max_tick_height();
                     // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
                     // will properly increment the tick_height to max_tick_height.
@@ -266,10 +412,22 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                     w_poh_recorder.tick_alpenglow(max_tick_height);
                 } else {
                     trace!("{my_pubkey}: {slot} reached max tick height, moving to next block");
+
+                    // Record filled completion metric
+                    metrics
+                        .bank_filled_completion_count
+                        .fetch_add(1, Ordering::Relaxed);
                 }
             }
 
+            // Assert that the bank has been cleared
             assert!(!poh_recorder.read().unwrap().has_bank());
+
+            // Record bank completion time
+            bank_completion_measure.stop();
+            let _ = metrics
+                .bank_completion_elapsed_hist
+                .increment(bank_completion_measure.as_us());
 
             // Produce our next slot
             slot += 1;
@@ -277,14 +435,29 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 trace!("{my_pubkey}: finished leader window {start_slot}-{end_slot}");
                 break;
             }
+            let mut slot_production_start = Measure::start("slot_production");
 
             // Although `slot - 1`has been cleared from `poh_recorder`, it might not have finished processing in
             // `replay_stage`, which is why we use `start_leader_retry_replay`
-            if let Err(e) = start_leader_retry_replay(slot, slot - 1, skip_timer, &ctx) {
+            if let Err(e) =
+                start_leader_retry_replay(slot, slot - 1, skip_timer, &ctx, &mut metrics)
+            {
                 error!("{my_pubkey}: Unable to produce {slot}, skipping rest of leader window {slot} - {end_slot}: {e:?}");
                 break;
             }
+
+            // Record individual slot production time
+            slot_production_start.stop();
+            let _ = metrics
+                .slot_production_elapsed_hist
+                .increment(slot_production_start.as_us());
         }
+        window_production_start.stop();
+        metrics
+            .window_production_elapsed
+            .fetch_add(window_production_start.as_us(), Ordering::Relaxed);
+        metrics.loop_count.fetch_add(1, Ordering::Relaxed);
+        metrics.report(1000);
     }
 
     receive_record_loop.join().unwrap();
@@ -323,15 +496,20 @@ fn start_leader_retry_replay(
     parent_slot: Slot,
     skip_timer: Instant,
     ctx: &LeaderContext,
+    metrics: &mut BlockCreationLoopMetrics,
 ) -> Result<(), StartLeaderError> {
     let my_pubkey = ctx.my_pubkey;
     let timeout = block_timeout(leader_slot_index(slot));
     while !timeout.saturating_sub(skip_timer.elapsed()).is_zero() {
-        match maybe_start_leader(slot, parent_slot, ctx) {
+        match maybe_start_leader(slot, parent_slot, ctx, metrics) {
             Ok(()) => {
                 return Ok(());
             }
             Err(StartLeaderError::ReplayIsBehind(_)) => {
+                metrics
+                    .replay_is_behind_count
+                    .fetch_add(1, Ordering::Relaxed);
+
                 trace!(
                     "{my_pubkey}: Attempting to produce slot {slot}, however replay of the \
                     the parent {parent_slot} is not yet finished, waiting. Skip timer {}",
@@ -342,7 +520,9 @@ fn start_leader_retry_replay(
                     .highest_frozen_slot
                     .lock()
                     .unwrap();
+
                 // We wait until either we finish replay of the parent or the skip timer finishes
+                let mut wait_start = Measure::start("replay_is_behind");
                 let _unused = ctx
                     .replay_highest_frozen
                     .freeze_notification
@@ -352,11 +532,18 @@ fn start_leader_retry_replay(
                         |hfs| *hfs < parent_slot,
                     )
                     .unwrap();
+                wait_start.stop();
+                metrics
+                    .replay_is_behind_wait_elapsed
+                    .fetch_add(wait_start.as_us(), Ordering::Relaxed);
             }
             Err(e) => return Err(e),
         }
     }
 
+    metrics
+        .replay_is_behind_count
+        .fetch_add(1, Ordering::Relaxed);
     error!(
         "{my_pubkey}: Skipping production of {slot}: \
         Unable to replay parent {parent_slot} in time"
@@ -377,20 +564,33 @@ fn maybe_start_leader(
     slot: Slot,
     parent_slot: Slot,
     ctx: &LeaderContext,
+    metrics: &mut BlockCreationLoopMetrics,
 ) -> Result<(), StartLeaderError> {
     if ctx.bank_forks.read().unwrap().get(slot).is_some() {
+        metrics
+            .already_have_bank_count
+            .fetch_add(1, Ordering::Relaxed);
         return Err(StartLeaderError::AlreadyHaveBank(slot));
     }
 
     let Some(parent_bank) = ctx.bank_forks.read().unwrap().get(parent_slot) else {
+        metrics
+            .replay_is_behind_count
+            .fetch_add(1, Ordering::Relaxed);
         return Err(StartLeaderError::ReplayIsBehind(parent_slot));
     };
 
     if !parent_bank.is_frozen() {
+        metrics
+            .replay_is_behind_count
+            .fetch_add(1, Ordering::Relaxed);
         return Err(StartLeaderError::ReplayIsBehind(parent_slot));
     }
 
     if !parent_bank.is_startup_verification_complete() {
+        metrics
+            .startup_verification_incomplete_count
+            .fetch_add(1, Ordering::Relaxed);
         return Err(StartLeaderError::StartupVerificationIncomplete(parent_slot));
     }
 
