@@ -4673,7 +4673,7 @@ impl RpcClient {
         let result: Response<Vec<Option<TransactionStatus>>> = self
             .send(
                 RpcRequest::GetSignatureStatuses,
-                json!([[signature.to_string()]]),
+                json!([[signature.to_string()], {"searchTransactionHistory": true}]),
             )
             .await?;
 
