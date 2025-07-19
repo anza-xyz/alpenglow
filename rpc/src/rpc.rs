@@ -204,6 +204,8 @@ impl JsonRpcConfig {
         Self {
             full_api: true,
             disable_health_check: true,
+            // Alpenglow requires this to serve transaction signatures
+            enable_rpc_transaction_history: true,
             ..Self::default()
         }
     }

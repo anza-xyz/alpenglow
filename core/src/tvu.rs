@@ -53,7 +53,7 @@ use {
         event::{CompletedBlockReceiver, CompletedBlockSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
-        voting_loop::LeaderWindowNotifier,
+        votor::LeaderWindowNotifier,
     },
     std::{
         collections::HashSet,

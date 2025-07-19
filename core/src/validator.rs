@@ -135,7 +135,7 @@ use {
     solana_votor::{
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
-        voting_loop::LeaderWindowNotifier,
+        votor::LeaderWindowNotifier,
     },
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{

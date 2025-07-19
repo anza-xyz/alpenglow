@@ -1,6 +1,6 @@
 use {
     crate::{
-        certificate_pool::CertificatePool, vote_history::VoteHistory, voting_loop::PendingBlocks,
+        event_handler::PendingBlocks, voting_utils::VotingContext, votor::SharedContext, Block,
     },
     crossbeam_channel::Sender,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
@@ -13,86 +13,80 @@ use {
         bank_forks::{BankForks, SetRootError},
         installed_scheduler_pool::BankWithScheduler,
     },
-    solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature, timing::timestamp},
-    std::sync::{Arc, RwLock},
+    solana_sdk::{
+        clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signature, timing::timestamp,
+    },
+    std::{
+        collections::BTreeSet,
+        sync::{Arc, RwLock},
+    },
 };
 
-/// Checks if any slots between `vote_history`'s current root
-/// and `slot` have received a finalization certificate and are frozen
-///
-/// If so, set the root as the highest slot that fits these conditions
-/// and return the root
-#[allow(clippy::too_many_arguments)]
-pub fn maybe_set_root(
-    slot: Slot,
-    cert_pool: &mut CertificatePool,
-    pending_blocks: &mut PendingBlocks,
-    accounts_background_request_sender: &AbsRequestSender,
-    bank_notification_sender: &Option<BankNotificationSenderConfig>,
-    drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
-    blockstore: &Arc<Blockstore>,
-    leader_schedule_cache: &Arc<LeaderScheduleCache>,
-    bank_forks: &Arc<RwLock<BankForks>>,
-    rpc_subscriptions: &Arc<RpcSubscriptions>,
+/// Structures that are not used in the event loop, but need to be updated
+/// or notified when setting root
+pub(crate) struct RootContext {
+    pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
+    pub(crate) accounts_background_request_sender: AbsRequestSender,
+    pub(crate) bank_notification_sender: Option<BankNotificationSenderConfig>,
+    pub(crate) drop_bank_sender: Sender<Vec<BankWithScheduler>>,
+}
+
+/// Sets the root for the votor event handling loop. Handles rooting all things
+/// except the certificate pool
+pub(crate) fn set_root(
     my_pubkey: &Pubkey,
-    vote_history: &mut VoteHistory,
-    has_new_vote_been_rooted: &mut bool,
-    voted_signatures: &mut Vec<Signature>,
-) -> Option<Slot> {
-    let old_root = vote_history.root();
-    info!(
-        "{}: Checking for finalization certificates between {old_root} and {slot}",
-        my_pubkey
-    );
-    let new_root = (old_root.saturating_add(1)..=slot).rev().find(|slot| {
-        cert_pool.is_finalized(*slot) && bank_forks.read().unwrap().is_frozen(*slot)
-    })?;
-    trace!("{}: Attempting to set new root {new_root}", my_pubkey);
-    vote_history.set_root(new_root);
-    cert_pool.handle_new_root(bank_forks.read().unwrap().get(new_root).unwrap());
+    new_root: Slot,
+    ctx: &SharedContext,
+    vctx: &mut VotingContext,
+    rctx: &RootContext,
+    pending_blocks: &mut PendingBlocks,
+    finalized_blocks: &mut BTreeSet<Block>,
+) -> Result<(), SetRootError> {
+    info!("{my_pubkey}: setting root {new_root}");
+    vctx.vote_history.set_root(new_root);
     *pending_blocks = pending_blocks.split_off(&new_root);
-    if let Err(e) = check_and_handle_new_root(
-        slot,
+    *finalized_blocks = finalized_blocks.split_off(&(new_root, Hash::default(), Hash::default()));
+
+    check_and_handle_new_root(
         new_root,
-        accounts_background_request_sender,
+        new_root,
+        &rctx.accounts_background_request_sender,
         Some(new_root),
-        bank_notification_sender,
-        drop_bank_sender,
-        blockstore,
-        leader_schedule_cache,
-        bank_forks,
-        rpc_subscriptions,
+        &rctx.bank_notification_sender,
+        &rctx.drop_bank_sender,
+        &ctx.blockstore,
+        &rctx.leader_schedule_cache,
+        &ctx.bank_forks,
+        &ctx.rpc_subscriptions,
         my_pubkey,
-        has_new_vote_been_rooted,
-        voted_signatures,
+        &mut false,
+        &mut vec![],
         |_| {},
-    ) {
-        error!("Unable to set root: {e:?}");
-        return None;
-    }
+    )?;
 
     // Distinguish between duplicate versions of same slot
-    let hash = bank_forks.read().unwrap().bank_hash(new_root).unwrap();
+    let hash = ctx.bank_forks.read().unwrap().bank_hash(new_root).unwrap();
     if let Err(e) =
-        blockstore.insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
+        ctx.blockstore
+            .insert_optimistic_slot(new_root, &hash, timestamp().try_into().unwrap())
     {
         error!(
             "failed to record optimistic slot in blockstore: slot={}: {:?}",
             new_root, &e
         );
     }
+
     // It is critical to send the OC notification in order to keep compatibility with
     // the RPC API. Additionally the PrioritizationFeeCache relies on this notification
     // in order to perform cleanup. In the future we will look to deprecate OC and remove
     // these code paths.
-    if let Some(config) = bank_notification_sender {
-        config
+    if let Some(config) = &rctx.bank_notification_sender {
+        // TODO: propagate error
+        let _ = config
             .sender
-            .send(BankNotification::OptimisticallyConfirmed(new_root))
-            .unwrap();
+            .send(BankNotification::OptimisticallyConfirmed(new_root));
     }
-
-    Some(new_root)
+    Ok(())
 }
 
 /// Sets the new root, additionally performs the callback after setting the bank forks root
