@@ -74,6 +74,9 @@ pub enum AddVoteError {
     #[error("Certificate sender error")]
     CertificateSenderError,
 
+    #[error("Voting Service sender disconnected")]
+    VotingServiceSenderDisconnected,
+
     #[error("Invalid rank: {0}")]
     InvalidRank(u16),
 }
