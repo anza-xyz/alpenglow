@@ -72,7 +72,9 @@ impl VoteCertificate {
             // we have a base3 encoding implementation.
             assert!(
                 bitmap.len() <= vote_message.rank as usize,
-                "Vote rank exceeds bitmap length"
+                "Vote rank {} exceeds bitmap length {}",
+                vote_message.rank,
+                bitmap.len()
             );
             assert!(
                 bitmap.get(vote_message.rank as usize).as_deref() != Some(&true),
