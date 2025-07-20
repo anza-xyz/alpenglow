@@ -25,12 +25,8 @@ pub enum CertificateError {
     BlsError(#[from] BlsError),
     #[error("Invalid pubkey")]
     InvalidPubkey,
-    #[error("Invalid signature")]
-    InvalidSignature,
     #[error("Validator does not exist for given rank")]
-    ValidatorDoesNotExist,
-    #[error("Invalid vote type")]
-    InvalidVoteType,
+    ValidatorDoesNotExist(usize),
 }
 
 //TODO(wen): Maybe we can merge all the below functions into CertificateMessage.
@@ -52,7 +48,7 @@ impl VoteCertificate {
         })
     }
 
-    pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
+    pub fn aggregate<'a, 'b, T>(&mut self, messages: T)
     where
         T: Iterator<Item = &'a VoteMessage>,
         Self: 'b,
@@ -64,8 +60,7 @@ impl VoteCertificate {
         let mut current_signature = if signature == &Signature::default() {
             SignatureProjective::identity()
         } else {
-            SignatureProjective::try_from(*signature)
-                .map_err(|_| CertificateError::InvalidSignature)?
+            SignatureProjective::try_from(*signature).expect("Invalid signature")
         };
 
         // aggregate the votes
@@ -75,19 +70,23 @@ impl VoteCertificate {
             //
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
-            if bitmap.len() <= vote_message.rank as usize {
-                return Err(CertificateError::ValidatorDoesNotExist);
-            }
+            assert!(
+                bitmap.len() <= vote_message.rank as usize,
+                "Vote rank exceeds bitmap length"
+            );
             assert!(
                 bitmap.get(vote_message.rank as usize).as_deref() != Some(&true),
                 "Conflicting vote check should make this unreachable {vote_message:?}"
             );
             bitmap.set(vote_message.rank as usize, true);
             // aggregate the signature
-            current_signature.aggregate_with([&vote_message.signature])?;
+            current_signature
+                .aggregate_with([&vote_message.signature])
+                .expect(
+                    "Failed to aggregate signature: {vote_message.signature:?} into {current_signature:?}"
+                );
         }
         *signature = Signature::from(current_signature);
-        Ok(())
     }
 
     pub fn certificate(self) -> CertificateMessage {
@@ -107,7 +106,7 @@ pub fn aggregate_pubkey(
         if *included {
             let bls_pubkey: PubkeyProjective = bls_pubkey_to_rank_map
                 .get_pubkey(i)
-                .ok_or(CertificateError::ValidatorDoesNotExist)?
+                .ok_or(CertificateError::ValidatorDoesNotExist(i))?
                 .1
                 .try_into()
                 .map_err(|_| CertificateError::InvalidPubkey)?;
