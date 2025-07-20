@@ -52,11 +52,6 @@ impl VoteCertificate {
         })
     }
 
-    #[allow(dead_code)]
-    pub fn vote_count(&self) -> usize {
-        self.0.bitmap.count_ones()
-    }
-
     pub fn aggregate<'a, 'b, T>(&mut self, messages: T) -> Result<(), CertificateError>
     where
         T: Iterator<Item = &'a VoteMessage>,
@@ -95,8 +90,8 @@ impl VoteCertificate {
         Ok(())
     }
 
-    pub fn certificate(&self) -> &CertificateMessage {
-        &self.0
+    pub fn certificate(self) -> CertificateMessage {
+        self.0
     }
 }
 

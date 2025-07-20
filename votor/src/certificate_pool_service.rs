@@ -8,7 +8,7 @@ use {
         },
         commitment::AlpenglowCommitmentAggregationData,
         event::{LeaderWindowInfo, VotorEvent},
-        voting_utils,
+        voting_utils::{self, BLSOp},
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
     },
@@ -50,6 +50,7 @@ pub(crate) struct CertificatePoolContext {
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
     pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: Sender<VotorEvent>,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
@@ -157,19 +158,38 @@ impl CertificatePoolService {
                     &mut events,
                     &ctx.commitment_sender,
                 ) {
-                    Ok(Some(finalized_slot)) => {
-                        // Reset standstill timer
-                        debug_assert!(finalized_slot > highest_finalized_slot);
-                        highest_finalized_slot = finalized_slot;
-                        standstill_timer = Instant::now();
-                        // Set root
-                        let root_bank = ctx.root_bank_cache.root_bank();
-                        if root_bank.slot() > current_root {
-                            current_root = root_bank.slot();
-                            cert_pool.handle_new_root(root_bank);
+                    Ok((new_finalized_slot, new_certificates_to_send)) => {
+                        if let Some(new_finalized_slot) = new_finalized_slot {
+                            // Reset standstill timer
+                            debug_assert!(new_finalized_slot > highest_finalized_slot);
+                            highest_finalized_slot = new_finalized_slot;
+                            standstill_timer = Instant::now();
+                            // Set root
+                            let root_bank = ctx.root_bank_cache.root_bank();
+                            if root_bank.slot() > current_root {
+                                current_root = root_bank.slot();
+                                cert_pool.handle_new_root(root_bank);
+                            }
+                        }
+                        // Send new certificates to peers
+                        for certificate in new_certificates_to_send {
+                            if ctx
+                                .bls_sender
+                                .send(BLSOp::PushCertificate {
+                                    certificate: certificate.clone(),
+                                })
+                                .is_err()
+                            {
+                                // Shutdown
+                                info!(
+                                    "{}: Certificate sender disconnected. Exiting.",
+                                    ctx.my_pubkey
+                                );
+                                ctx.exit.store(true, Ordering::Relaxed);
+                                return Ok(());
+                            }
                         }
                     }
-                    Ok(_) => (),
                     Err(AddVoteError::CertificateSenderError) => {
                         // Shutdown
                         info!(
