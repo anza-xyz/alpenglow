@@ -71,7 +71,7 @@ impl VoteCertificate {
             // TODO: This only accounts for one type of vote. Update this after
             // we have a base3 encoding implementation.
             assert!(
-                bitmap.len() <= vote_message.rank as usize,
+                bitmap.len() > vote_message.rank as usize,
                 "Vote rank {} exceeds bitmap length {}",
                 vote_message.rank,
                 bitmap.len()
