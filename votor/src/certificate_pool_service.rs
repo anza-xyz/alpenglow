@@ -108,7 +108,7 @@ impl CertificatePoolService {
                 })
                 .is_err()
             {
-                return Err(AddVoteError::CertificateSenderError);
+                return Err(AddVoteError::VotingServiceSenderDisconnected);
             }
         }
         Ok(())
