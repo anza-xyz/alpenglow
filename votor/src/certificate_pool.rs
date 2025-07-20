@@ -392,7 +392,7 @@ impl CertificatePool {
             }
         };
         // If we have a new highest finalized slot, return it
-        let new_finalized_slot = if self.highest_finalized_slot != current_highest_finalized_slot {
+        let new_finalized_slot = if self.highest_finalized_slot > current_highest_finalized_slot {
             self.highest_finalized_slot
         } else {
             None
