@@ -5,6 +5,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
+        event::VotorEvent,
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
@@ -12,10 +13,11 @@ use {
         bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
-    crossbeam_channel::Sender,
+    crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
-    solana_measure::measure::Measure,
-    solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
+    solana_runtime::{
+        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageSender,
+    },
     solana_sdk::{
         clock::Slot,
         pubkey::Pubkey,
@@ -23,6 +25,7 @@ use {
         transaction::Transaction,
     },
     std::{collections::HashMap, sync::Arc},
+    thiserror::Error,
 };
 
 // TODO(ashwin): This will be removed in PR #245
@@ -64,6 +67,15 @@ pub enum BLSOp {
     },
 }
 
+#[derive(Debug, Error)]
+pub enum VoteError {
+    #[error("Unable to generate bls vote message")]
+    GenerationError(Box<GenerateVoteTxResult>),
+
+    #[error("Unable to send to certificate pool")]
+    CertificatePoolError(#[from] SendError<()>),
+}
+
 /// Context required to construct vote transactions
 pub struct VotingContext {
     pub vote_history: VoteHistory,
@@ -73,6 +85,7 @@ pub struct VotingContext {
     // The BLS keypair should always change with authorized_voter_keypairs.
     pub derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     pub has_new_vote_been_rooted: bool,
+    pub own_vote_sender: BLSVerifiedMessageSender,
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
@@ -212,80 +225,75 @@ pub fn generate_vote_tx(
     }))
 }
 
-/// Send an alpenglow vote
+/// Send an alpenglow vote as a BLSMessage
 /// `bank` will be used for:
 /// - startup verification
 /// - vote account checks
 /// - authorized voter checks
-/// - selecting the blockhash to sign with
 ///
-/// For notarization & finalization votes this will be the voted bank
-/// for skip votes we need to ensure that the bank selected will be on
-/// the leader's choosen fork.
-#[allow(clippy::too_many_arguments)]
-pub fn send_vote(
+/// We also update the vote history and send the vote to
+/// the certificate pool thread for ingestion.
+///
+/// Returns false if we are currently a non-voting node
+pub(crate) fn insert_vote_and_create_bls_message(
+    my_pubkey: &Pubkey,
     vote: Vote,
     is_refresh: bool,
-    bank: &Bank,
-    cert_pool: &mut CertificatePool,
     context: &mut VotingContext,
-) -> bool {
+) -> Result<BLSOp, VoteError> {
     // Update and save the vote history
     if !is_refresh {
         context.vote_history.add_vote(vote);
     }
 
-    let mut generate_time = Measure::start("generate_alpenglow_vote");
-    let vote_tx_result = generate_vote_tx(&vote, bank, context);
-    generate_time.stop();
-    // TODO(ashwin): add metrics struct here and throughout the whole file
-    // replay_timing.generate_vote_us += generate_time.as_us();
-    let GenerateVoteTxResult::BLSMessage(bls_message) = vote_tx_result else {
-        warn!("Unable to vote, vote_tx_result {:?}", vote_tx_result);
-        return false;
-    };
-
-    if let Err(e) = add_message_and_maybe_update_commitment(
-        &context.identity_keypair.pubkey(),
-        &bls_message,
-        cert_pool,
-        &context.commitment_sender,
-    ) {
-        if !is_refresh {
-            warn!("Unable to push our own vote into the pool {}", e);
-            return false;
+    let bank = context.root_bank_cache.root_bank();
+    let bls_message = match generate_vote_tx(&vote, &bank, context) {
+        GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
+        e => {
+            return Err(VoteError::GenerationError(Box::new(e)));
         }
     };
+    context
+        .own_vote_sender
+        .send(bls_message.clone())
+        .map_err(|_| SendError(()))?;
 
+    // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
     let saved_vote_history =
         SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
             |err| {
-                error!("Unable to create saved vote history: {:?}", err);
+                error!(
+                    "{my_pubkey}: Unable to create saved vote history: {:?}",
+                    err
+                );
+                // TODO: maybe unify this with exit flag instead
                 std::process::exit(1);
             },
         );
 
-    // Send the vote over the wire
-    context
-        .bls_sender
-        .send(BLSOp::PushVote {
-            bls_message,
-            slot: vote.slot(),
-            saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
-        })
-        .unwrap_or_else(|err| warn!("Error: {:?}", err));
-    true
+    // Return vote for sending
+    Ok(BLSOp::PushVote {
+        bls_message,
+        slot: vote.slot(),
+        saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
+    })
 }
 
 /// Adds a vote to the certificate pool and updates the commitment cache if necessary
+///
+/// If a new finalization slot was recognized, returns the slot
 pub fn add_message_and_maybe_update_commitment(
     my_pubkey: &Pubkey,
+    my_vote_pubkey: &Pubkey,
     message: &BLSMessage,
     cert_pool: &mut CertificatePool,
+    votor_events: &mut Vec<VotorEvent>,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) -> Result<(), AddVoteError> {
-    let Some(new_finalized_slot) = cert_pool.add_transaction(message)? else {
-        return Ok(());
+) -> Result<Option<Slot>, AddVoteError> {
+    let Some(new_finalized_slot) =
+        cert_pool.add_transaction(my_vote_pubkey, message, votor_events)?
+    else {
+        return Ok(None);
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
     alpenglow_update_commitment_cache(
@@ -293,5 +301,5 @@ pub fn add_message_and_maybe_update_commitment(
         new_finalized_slot,
         commitment_sender,
     );
-    Ok(())
+    Ok(Some(new_finalized_slot))
 }
