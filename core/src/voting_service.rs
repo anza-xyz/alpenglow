@@ -340,10 +340,7 @@ mod tests {
                 ValidatorVoteKeypairs,
             },
         },
-        solana_sdk::{
-            hash::Hash,
-            signer::{keypair::Keypair, Signer},
-        },
+        solana_sdk::signer::{keypair::Keypair, Signer},
         solana_streamer::{
             packet::{Packet, PacketBatch},
             recvmmsg::recv_mmsg,
@@ -412,9 +409,41 @@ mod tests {
         )
     }
 
-    #[test_case(true)]
-    #[test_case(false)]
-    fn test_send_bls_message(send_vote: bool) {
+    #[test_case(BLSOp::PushVote {
+        bls_message: Arc::new(BLSMessage::Vote(VoteMessage {
+            vote: Vote::new_skip_vote(5),
+            signature: BLSSignature::default(),
+            rank: 1,
+        })),
+        slot: 5,
+        saved_vote_history: SavedVoteHistoryVersions::Current(SavedVoteHistory::default()),
+    }, BLSMessage::Vote(VoteMessage {
+        vote: Vote::new_skip_vote(5),
+        signature: BLSSignature::default(),
+        rank: 1,
+    }))]
+    #[test_case(BLSOp::PushCertificate {
+        certificate: Arc::new(CertificateMessage {
+            certificate: Certificate {
+                certificate_type: CertificateType::Skip,
+                slot: 5,
+                block_id: None,
+                replayed_bank_hash: None,
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        }),
+    }, BLSMessage::Certificate(CertificateMessage {
+        certificate: Certificate {
+            certificate_type: CertificateType::Skip,
+            slot: 5,
+            block_id: None,
+            replayed_bank_hash: None,
+        },
+        signature: BLSSignature::default(),
+        bitmap: BitVec::new(),
+    }))]
+    fn test_send_bls_message(bls_op: BLSOp, expected_bls_message: BLSMessage) {
         solana_logger::setup();
         let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
@@ -428,41 +457,7 @@ mod tests {
         let _ = create_voting_service(vote_receiver, bls_receiver, listener_addr);
 
         // Send a BLS message via the VotingService
-        let (op, expected_bls_message) = if send_vote {
-            let bls_message = BLSMessage::Vote(VoteMessage {
-                vote: Vote::new_notarization_vote(5, Hash::new_unique(), Hash::new_unique()),
-                signature: BLSSignature::default(),
-                rank: 1,
-            });
-            (
-                BLSOp::PushVote {
-                    bls_message: Arc::new(bls_message.clone()),
-                    slot: 5,
-                    saved_vote_history: SavedVoteHistoryVersions::Current(
-                        SavedVoteHistory::default(),
-                    ),
-                },
-                bls_message,
-            )
-        } else {
-            let certificate = CertificateMessage {
-                certificate: Certificate {
-                    certificate_type: CertificateType::Skip,
-                    slot: 5,
-                    block_id: None,
-                    replayed_bank_hash: None,
-                },
-                signature: BLSSignature::default(),
-                bitmap: BitVec::new(),
-            };
-            (
-                BLSOp::PushCertificate {
-                    certificate: Arc::new(certificate.clone()),
-                },
-                BLSMessage::Certificate(certificate),
-            )
-        };
-        assert!(bls_sender.send(op).is_ok());
+        assert!(bls_sender.send(bls_op).is_ok());
 
         // Wait for the listener to receive the message
         let mut packet_batch = PacketBatch::new(vec![Packet::default()]);

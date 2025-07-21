@@ -25,7 +25,7 @@ pub enum CertificateError {
     BlsError(#[from] BlsError),
     #[error("Invalid pubkey")]
     InvalidPubkey,
-    #[error("Validator does not exist for given rank")]
+    #[error("Validator does not exist for given rank: {0}")]
     ValidatorDoesNotExist(usize),
 }
 
