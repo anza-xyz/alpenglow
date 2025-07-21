@@ -17,7 +17,7 @@ use {
         epoch_schedule::EpochSchedule,
     },
     solana_streamer::packet::PacketBatch,
-    stats::BLSSigVerifierStats,
+    stats::{BLSSigVerifierStats, StatsUpdater},
     std::{
         collections::HashMap,
         sync::{Arc, RwLock},
@@ -52,15 +52,16 @@ impl SigVerifier for BLSSigVerifier {
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         // TODO(wen): just a placeholder without any batching.
         let mut verified_votes = HashMap::new();
+        let mut stats_updater = StatsUpdater::default();
 
         for packet in packet_batches.iter().flatten() {
-            self.stats.received += 1;
+            stats_updater.received += 1;
 
             let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
                     trace!("Failed to deserialize BLS message: {}", e);
-                    self.stats.received_malformed += 1;
+                    stats_updater.received_malformed += 1;
                     continue;
                 }
             };
@@ -75,17 +76,17 @@ impl SigVerifier for BLSSigVerifier {
             let rank_to_pubkey_map = if let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) {
                 epoch_stakes.bls_pubkey_to_rank_map()
             } else {
-                self.stats.received_no_epoch_stakes += 1;
+                stats_updater.received_no_epoch_stakes += 1;
                 continue;
             };
 
             if let BLSMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
-                self.stats.received_votes += 1;
+                stats_updater.received_votes += 1;
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
                     let Some((pubkey, _)) = rank_to_pubkey_map.get_pubkey(vote_message.rank.into())
                     else {
-                        self.stats.received_malformed += 1;
+                        stats_updater.received_malformed += 1;
                         continue;
                     };
                     let cur_slots: &mut Vec<Slot> = verified_votes.entry(*pubkey).or_default();
@@ -97,9 +98,9 @@ impl SigVerifier for BLSSigVerifier {
 
             // Now send the BLS message to certificate pool.
             match self.message_sender.try_send(message) {
-                Ok(()) => self.stats.sent += 1,
+                Ok(()) => stats_updater.sent += 1,
                 Err(TrySendError::Full(_)) => {
-                    self.stats.sent_failed += 1;
+                    stats_updater.sent_failed += 1;
                 }
                 Err(e @ TrySendError::Disconnected(_)) => {
                     return Err(e.into());
@@ -107,7 +108,8 @@ impl SigVerifier for BLSSigVerifier {
             }
         }
         self.send_verified_votes(verified_votes);
-        self.stats.report_stats();
+        self.stats.update(stats_updater);
+        self.stats.maybe_report_stats();
         self.update_epoch_stakes_map();
         Ok(())
     }
@@ -152,17 +154,19 @@ impl BLSSigVerifier {
     }
 
     fn send_verified_votes(&mut self, verified_votes: HashMap<Pubkey, Vec<Slot>>) {
+        let mut stats_updater = StatsUpdater::default();
         for (pubkey, slots) in verified_votes {
             match self.verified_votes_sender.try_send((pubkey, slots)) {
                 Ok(()) => {
-                    self.stats.verified_votes_sent += 1;
+                    stats_updater.verified_votes_sent += 1;
                 }
                 Err(e) => {
                     trace!("Failed to send verified vote: {}", e);
-                    self.stats.verified_votes_sent_failed += 1;
+                    stats_updater.verified_votes_sent_failed += 1;
                 }
             }
         }
+        self.stats.update(stats_updater);
     }
 }
 
