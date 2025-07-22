@@ -228,7 +228,7 @@ impl CertificatePoolService {
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
                 events.push(VotorEvent::Standstill(highest_finalized_slot));
-                stats.standstill_expired = true;
+                stats.standstill = true;
                 standstill_timer = Instant::now();
             }
 

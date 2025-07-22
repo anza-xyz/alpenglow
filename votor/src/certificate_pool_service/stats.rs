@@ -12,11 +12,11 @@ pub(crate) struct CertificatePoolServiceStats {
     pub(crate) certificates_dropped: u16,
     pub(crate) new_finalized_slot: u16,
     pub(crate) new_root: u16,
-    pub(crate) parent_ready: u16,
     pub(crate) parent_ready_missed_window: u16,
+    pub(crate) parent_ready_produce_window: u16,
     pub(crate) received_votes: u32,
     pub(crate) received_certificates: u32,
-    pub(crate) standstill_expired: bool,
+    pub(crate) standstill: bool,
     last_request_time: Instant,
 }
 
@@ -28,11 +28,11 @@ impl CertificatePoolServiceStats {
             certificates_dropped: 0,
             new_finalized_slot: 0,
             new_root: 0,
-            parent_ready: 0,
             parent_ready_missed_window: 0,
+            parent_ready_produce_window: 0,
             received_votes: 0,
             received_certificates: 0,
-            standstill_expired: false,
+            standstill: false,
             last_request_time: Instant::now(),
         }
     }
@@ -51,11 +51,11 @@ impl CertificatePoolServiceStats {
         self.certificates_dropped = 0;
         self.new_finalized_slot = 0;
         self.new_root = 0;
-        self.parent_ready = 0;
         self.parent_ready_missed_window = 0;
+        self.parent_ready_produce_window = 0;
         self.received_votes = 0;
         self.received_certificates = 0;
-        self.standstill_expired = false;
+        self.standstill = false;
         self.last_request_time = Instant::now();
     }
 
@@ -67,15 +67,19 @@ impl CertificatePoolServiceStats {
             ("certificates_dropped", self.certificates_dropped, i64),
             ("new_root", self.new_root, i64),
             ("new_finalized_slot", self.new_finalized_slot, i64),
-            ("parent_ready", self.parent_ready, i64),
             (
                 "parent_ready_missed_window",
                 self.parent_ready_missed_window,
                 i64
             ),
+            (
+                "parent_ready_produce_window",
+                self.parent_ready_produce_window,
+                i64
+            ),
             ("received_votes", self.received_votes, i64),
             ("received_certificates", self.received_certificates, i64),
-            ("standstill_expired", self.standstill_expired, i64),
+            ("standstill", self.standstill, i64),
         );
     }
 
