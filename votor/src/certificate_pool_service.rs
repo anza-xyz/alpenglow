@@ -1,6 +1,8 @@
 //! Service in charge of ingesting new messages into the certificate pool
 //! and notifying votor of new events that occur
 
+mod stats;
+
 use {
     crate::{
         certificate_pool::{
@@ -23,6 +25,7 @@ use {
         root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::clock::Slot,
+    stats::CertificatePoolServiceStats,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -85,6 +88,7 @@ impl CertificatePoolService {
         current_root: &mut Slot,
         highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
+        stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
         if let Some(new_finalized_slot) = new_finalized_slot {
@@ -92,25 +96,32 @@ impl CertificatePoolService {
             debug_assert!(new_finalized_slot > *highest_finalized_slot);
             *highest_finalized_slot = new_finalized_slot;
             *standstill_timer = Instant::now();
+            CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
+            CertificatePoolServiceStats::incr_u16(&mut stats.standstill_reset);
             // Set root
             let root_bank = root_bank_cache.root_bank();
             if root_bank.slot() > *current_root {
+                CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
                 *current_root = root_bank.slot();
                 cert_pool.handle_new_root(root_bank);
             }
         }
         // Send new certificates to peers
-        for certificate in new_certificates_to_send {
+        for (i, certificate) in new_certificates_to_send.iter().enumerate() {
             // The buffer should normally be large enough, so we don't handle
             // certificate re-send here.
             match bls_sender.try_send(BLSOp::PushCertificate {
                 certificate: certificate.clone(),
             }) {
-                Ok(_) => (),
+                Ok(_) => {
+                    CertificatePoolServiceStats::incr_u16(&mut stats.certificates_sent);
+                }
                 Err(TrySendError::Disconnected(_)) => {
                     return Err(AddVoteError::VotingServiceSenderDisconnected);
                 }
                 Err(TrySendError::Full(_)) => {
+                    let dropped = new_certificates_to_send.len().saturating_sub(i) as u16;
+                    stats.certificates_dropped = stats.certificates_dropped.saturating_add(dropped);
                     return Err(AddVoteError::VotingServiceQueueFull);
                 }
             }
@@ -126,7 +137,16 @@ impl CertificatePoolService {
         current_root: &mut Slot,
         highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
+        stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
+        match message {
+            BLSMessage::Certificate(_) => {
+                CertificatePoolServiceStats::incr_u32(&mut stats.received_certificates);
+            }
+            BLSMessage::Vote(_) => {
+                CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
+            }
+        }
         match voting_utils::add_message_and_maybe_update_commitment(
             &ctx.my_pubkey,
             &ctx.my_vote_pubkey,
@@ -145,6 +165,7 @@ impl CertificatePoolService {
                     current_root,
                     highest_finalized_slot,
                     standstill_timer,
+                    stats,
                 )?;
             }
             Err(e) => {
@@ -153,6 +174,7 @@ impl CertificatePoolService {
                 } else {
                     // This is a non critical error, a duplicate vote for example
                     trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                    CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
                 }
             }
         };
@@ -175,6 +197,7 @@ impl CertificatePoolService {
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
         info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
         let mut current_root = ctx.root_bank_cache.root_bank().slot();
+        let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
@@ -201,10 +224,12 @@ impl CertificatePoolService {
                 &cert_pool,
                 &mut ctx,
                 &mut events,
+                &mut stats,
             );
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
                 events.push(VotorEvent::Standstill(highest_finalized_slot));
+                CertificatePoolServiceStats::incr_u16(&mut stats.standstill_reset);
                 standstill_timer = Instant::now();
             }
 
@@ -241,6 +266,7 @@ impl CertificatePoolService {
                     &mut current_root,
                     &mut highest_finalized_slot,
                     &mut standstill_timer,
+                    &mut stats,
                 ) {
                     info!(
                         "{}: Unable to process BLS message: {e}. Exiting.",
@@ -250,6 +276,7 @@ impl CertificatePoolService {
                     return Ok(());
                 }
             }
+            stats.maybe_report();
         }
         Ok(())
     }
@@ -259,6 +286,7 @@ impl CertificatePoolService {
         cert_pool: &CertificatePool,
         ctx: &mut CertificatePoolContext,
         events: &mut Vec<VotorEvent>,
+        stats: &mut CertificatePoolServiceStats,
     ) {
         let Some(new_highest_parent_ready) = events
             .iter()
@@ -276,6 +304,7 @@ impl CertificatePoolService {
             return;
         }
         *highest_parent_ready = new_highest_parent_ready;
+        CertificatePoolServiceStats::incr_u16(&mut stats.new_parent_ready);
 
         // TODO: Add blockstore check
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
@@ -304,6 +333,7 @@ impl CertificatePoolService {
                     skipping production of {start_slot}-{end_slot}",
                     ctx.my_pubkey,
                 );
+                CertificatePoolServiceStats::incr_u16(&mut stats.new_parent_ready_missed_window);
             }
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
