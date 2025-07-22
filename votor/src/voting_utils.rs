@@ -10,7 +10,7 @@ use {
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
     alpenglow_vote::{
-        bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     crossbeam_channel::{SendError, Sender},
@@ -61,9 +61,12 @@ impl GenerateVoteTxResult {
 
 pub enum BLSOp {
     PushVote {
-        bls_message: BLSMessage,
+        bls_message: Arc<BLSMessage>,
         slot: Slot,
         saved_vote_history: SavedVoteHistoryVersions,
+    },
+    PushCertificate {
+        certificate: Arc<CertificateMessage>,
     },
 }
 
@@ -273,7 +276,7 @@ pub(crate) fn insert_vote_and_create_bls_message(
 
     // Return vote for sending
     Ok(BLSOp::PushVote {
-        bls_message,
+        bls_message: Arc::new(bls_message),
         slot: vote.slot(),
         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
     })
@@ -289,11 +292,11 @@ pub fn add_message_and_maybe_update_commitment(
     cert_pool: &mut CertificatePool,
     votor_events: &mut Vec<VotorEvent>,
     commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) -> Result<Option<Slot>, AddVoteError> {
-    let Some(new_finalized_slot) =
-        cert_pool.add_transaction(my_vote_pubkey, message, votor_events)?
-    else {
-        return Ok(None);
+) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
+    let (new_finalized_slot, new_certificates_to_send) =
+        cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
+    let Some(new_finalized_slot) = new_finalized_slot else {
+        return Ok((None, new_certificates_to_send));
     };
     trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
     alpenglow_update_commitment_cache(
@@ -301,5 +304,5 @@ pub fn add_message_and_maybe_update_commitment(
         new_finalized_slot,
         commitment_sender,
     );
-    Ok(Some(new_finalized_slot))
+    Ok((Some(new_finalized_slot), new_certificates_to_send))
 }

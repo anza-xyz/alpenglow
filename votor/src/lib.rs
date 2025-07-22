@@ -1,6 +1,9 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 use {
-    alpenglow_vote::vote::Vote,
+    alpenglow_vote::{
+        certificate::{Certificate, CertificateType},
+        vote::Vote,
+    },
     solana_sdk::{clock::Slot, hash::Hash},
     std::time::Duration,
 };
@@ -90,6 +93,40 @@ impl CertificateId {
     /// NotarizeFallback certificate as well
     pub fn is_critical(&self) -> bool {
         matches!(self, Self::NotarizeFallback(_, _, _) | Self::Skip(_))
+    }
+}
+
+impl From<&Certificate> for CertificateId {
+    fn from(certificate: &Certificate) -> Self {
+        match certificate.certificate_type {
+            CertificateType::Finalize => CertificateId::Finalize(certificate.slot),
+            CertificateType::FinalizeFast => CertificateId::FinalizeFast(
+                certificate.slot,
+                certificate
+                    .block_id
+                    .expect("FinalizeFast must have block_id"),
+                certificate
+                    .replayed_bank_hash
+                    .expect("FinalizeFast must have bank_hash"),
+            ),
+            CertificateType::Notarize => CertificateId::Notarize(
+                certificate.slot,
+                certificate.block_id.expect("Notarize must have block_id"),
+                certificate
+                    .replayed_bank_hash
+                    .expect("Notarize must have bank_hash"),
+            ),
+            CertificateType::NotarizeFallback => CertificateId::NotarizeFallback(
+                certificate.slot,
+                certificate
+                    .block_id
+                    .expect("NotarizeFallback must have block_id"),
+                certificate
+                    .replayed_bank_hash
+                    .expect("NotarizeFallback must have bank_hash"),
+            ),
+            CertificateType::Skip => CertificateId::Skip(certificate.slot),
+        }
     }
 }
 
