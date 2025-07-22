@@ -13,7 +13,7 @@ use {
         CertificateId, STANDSTILL_TIMEOUT,
     },
     alpenglow_vote::bls_message::{BLSMessage, CertificateMessage},
-    crossbeam_channel::{select, RecvError, Sender},
+    crossbeam_channel::{select, RecvError, Sender, TrySendError},
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -101,14 +101,18 @@ impl CertificatePoolService {
         }
         // Send new certificates to peers
         for certificate in new_certificates_to_send {
-            // bls_sender is an unbounded channel, so error only happens if the receiver is disconnected
-            if bls_sender
-                .send(BLSOp::PushCertificate {
-                    certificate: certificate.clone(),
-                })
-                .is_err()
-            {
-                return Err(AddVoteError::VotingServiceSenderDisconnected);
+            // The buffer should normally be large enough, so we don't handle
+            // certificate re-send here.
+            match bls_sender.try_send(BLSOp::PushCertificate {
+                certificate: certificate.clone(),
+            }) {
+                Ok(_) => (),
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(AddVoteError::VotingServiceSenderDisconnected);
+                }
+                Err(TrySendError::Full(_)) => {
+                    return Err(AddVoteError::VotingServiceQueueFull);
+                }
             }
         }
         Ok(())

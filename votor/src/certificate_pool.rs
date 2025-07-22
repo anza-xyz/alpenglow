@@ -77,6 +77,9 @@ pub enum AddVoteError {
     #[error("Voting Service sender disconnected")]
     VotingServiceSenderDisconnected,
 
+    #[error("Voting Service queue full")]
+    VotingServiceQueueFull,
+
     #[error("Invalid rank: {0}")]
     InvalidRank(u16),
 }
