@@ -349,7 +349,7 @@ impl CertificatePoolService {
                     // TODO: we can just remove this
                     skip_timer: Instant::now(),
                 }));
-                CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready);
+                CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready_produce_window);
             }
         }
     }
