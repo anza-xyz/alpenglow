@@ -333,7 +333,7 @@ impl CertificatePoolService {
                     skipping production of {start_slot}-{end_slot}",
                     ctx.my_pubkey,
                 );
-                CertificatePoolServiceStats::incr_u16(&mut stats.new_parent_ready_missed_window);
+                CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
             }
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
