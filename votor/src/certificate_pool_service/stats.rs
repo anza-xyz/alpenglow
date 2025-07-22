@@ -11,9 +11,9 @@ pub(crate) struct CertificatePoolServiceStats {
     pub(crate) certificates_sent: u16,
     pub(crate) certificates_dropped: u16,
     pub(crate) new_finalized_slot: u16,
-    pub(crate) new_parent_ready: u16,
-    pub(crate) new_parent_ready_missed_window: u16,
     pub(crate) new_root: u16,
+    pub(crate) parent_ready: u16,
+    pub(crate) parent_ready_missed_window: u16,
     pub(crate) received_votes: u32,
     pub(crate) received_certificates: u32,
     pub(crate) standstill_reset: u16,
@@ -27,9 +27,9 @@ impl CertificatePoolServiceStats {
             certificates_sent: 0,
             certificates_dropped: 0,
             new_finalized_slot: 0,
-            new_parent_ready: 0,
-            new_parent_ready_missed_window: 0,
             new_root: 0,
+            parent_ready: 0,
+            parent_ready_missed_window: 0,
             received_votes: 0,
             received_certificates: 0,
             standstill_reset: 0,
@@ -50,9 +50,9 @@ impl CertificatePoolServiceStats {
         self.certificates_sent = 0;
         self.certificates_dropped = 0;
         self.new_finalized_slot = 0;
-        self.new_parent_ready = 0;
-        self.new_parent_ready_missed_window = 0;
         self.new_root = 0;
+        self.parent_ready = 0;
+        self.parent_ready_missed_window = 0;
         self.received_votes = 0;
         self.received_certificates = 0;
         self.standstill_reset = 0;
@@ -65,14 +65,14 @@ impl CertificatePoolServiceStats {
             ("add_message_failed", self.add_message_failed, i64),
             ("certificates_sent", self.certificates_sent, i64),
             ("certificates_dropped", self.certificates_dropped, i64),
+            ("new_root", self.new_root, i64),
             ("new_finalized_slot", self.new_finalized_slot, i64),
-            ("new_parent_ready", self.new_parent_ready, i64),
+            ("parent_ready", self.parent_ready, i64),
             (
-                "new_parent_ready_missed_window",
-                self.new_parent_ready_missed_window,
+                "parent_ready_missed_window",
+                self.parent_ready_missed_window,
                 i64
             ),
-            ("new_root", self.new_root, i64),
             ("received_votes", self.received_votes, i64),
             ("received_certificates", self.received_certificates, i64),
             ("standstill_reset", self.standstill_reset, i64),

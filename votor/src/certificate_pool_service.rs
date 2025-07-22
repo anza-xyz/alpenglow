@@ -304,7 +304,7 @@ impl CertificatePoolService {
             return;
         }
         *highest_parent_ready = new_highest_parent_ready;
-        CertificatePoolServiceStats::incr_u16(&mut stats.new_parent_ready);
+        CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready);
 
         // TODO: Add blockstore check
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
