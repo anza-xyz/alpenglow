@@ -97,7 +97,6 @@ impl CertificatePoolService {
             *highest_finalized_slot = new_finalized_slot;
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
-            CertificatePoolServiceStats::incr_u16(&mut stats.standstill_reset);
             // Set root
             let root_bank = root_bank_cache.root_bank();
             if root_bank.slot() > *current_root {
@@ -229,7 +228,7 @@ impl CertificatePoolService {
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
                 events.push(VotorEvent::Standstill(highest_finalized_slot));
-                CertificatePoolServiceStats::incr_u16(&mut stats.standstill_reset);
+                stats.standstill_expired = true;
                 standstill_timer = Instant::now();
             }
 
@@ -349,7 +348,7 @@ impl CertificatePoolService {
                     parent_block,
                     // TODO: we can just remove this
                     skip_timer: Instant::now(),
-                }))
+                }));
                 CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready);
             }
         }

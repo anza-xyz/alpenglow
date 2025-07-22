@@ -16,7 +16,7 @@ pub(crate) struct CertificatePoolServiceStats {
     pub(crate) parent_ready_missed_window: u16,
     pub(crate) received_votes: u32,
     pub(crate) received_certificates: u32,
-    pub(crate) standstill_reset: u16,
+    pub(crate) standstill_expired: bool,
     last_request_time: Instant,
 }
 
@@ -32,7 +32,7 @@ impl CertificatePoolServiceStats {
             parent_ready_missed_window: 0,
             received_votes: 0,
             received_certificates: 0,
-            standstill_reset: 0,
+            standstill_expired: false,
             last_request_time: Instant::now(),
         }
     }
@@ -55,7 +55,7 @@ impl CertificatePoolServiceStats {
         self.parent_ready_missed_window = 0;
         self.received_votes = 0;
         self.received_certificates = 0;
-        self.standstill_reset = 0;
+        self.standstill_expired = false;
         self.last_request_time = Instant::now();
     }
 
@@ -75,7 +75,7 @@ impl CertificatePoolServiceStats {
             ),
             ("received_votes", self.received_votes, i64),
             ("received_certificates", self.received_certificates, i64),
-            ("standstill_reset", self.standstill_reset, i64),
+            ("standstill_expired", self.standstill_expired, i64),
         );
     }
 
