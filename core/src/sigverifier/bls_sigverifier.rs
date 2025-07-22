@@ -152,6 +152,7 @@ mod tests {
                 create_genesis_config_with_alpenglow_vote_accounts_no_program,
                 ValidatorVoteKeypairs,
             },
+            root_bank_cache::RootBankCache,
         },
         solana_sdk::{hash::Hash, signer::Signer},
         stats::STATS_INTERVAL_DURATION,
@@ -176,7 +177,8 @@ mod tests {
         );
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
-        let epoch_stakes_service = Arc::new(EpochStakesService::new(bank_forks));
+        let root_bank_cache = RootBankCache::new(bank_forks);
+        let epoch_stakes_service = Arc::new(EpochStakesService::new(root_bank_cache));
         (
             validator_keypairs,
             BLSSigVerifier::new(epoch_stakes_service, verified_vote_sender, message_sender),

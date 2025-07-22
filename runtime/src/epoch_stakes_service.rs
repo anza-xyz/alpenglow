@@ -1,19 +1,14 @@
 use {
     crate::{
-        bank_forks::BankForks,
         epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
+        root_bank_cache::RootBankCache,
     },
     parking_lot::RwLock as PlRwLock,
     solana_sdk::{
         clock::{Epoch, Slot},
         epoch_schedule::EpochSchedule,
     },
-    std::{
-        collections::HashMap,
-        sync::{Arc, RwLock as StdRwLock},
-        thread,
-        time::Duration,
-    },
+    std::{collections::HashMap, sync::Arc, thread, time::Duration},
 };
 
 const EPOCH_STAKES_QUERY_INTERVAL: Duration = Duration::from_secs(60);
@@ -26,8 +21,8 @@ struct State {
 /// Updates the epoch stakes state from the bank forks.
 ///
 /// If new state was found, returns the corresponding root epoch and the state.
-fn update_state(bank_forks: &Arc<StdRwLock<BankForks>>, epoch: Epoch) -> Option<(Epoch, State)> {
-    let root_bank = bank_forks.read().unwrap().root_bank();
+fn update_state(root_bank_cache: &mut RootBankCache, epoch: Epoch) -> Option<(Epoch, State)> {
+    let root_bank = root_bank_cache.root_bank();
     let root_epoch = root_bank.epoch();
     (root_epoch > epoch).then(|| {
         (
@@ -47,7 +42,7 @@ pub struct EpochStakesService {
 }
 
 impl EpochStakesService {
-    pub fn new(bank_forks: Arc<StdRwLock<BankForks>>) -> Self {
+    pub fn new(mut root_bank_cache: RootBankCache) -> Self {
         let mut last_update_epoch = Epoch::default();
         let state = Arc::new(PlRwLock::new(State {
             stakes: HashMap::new(),
@@ -59,7 +54,7 @@ impl EpochStakesService {
             thread::spawn(move || loop {
                 thread::sleep(EPOCH_STAKES_QUERY_INTERVAL);
                 if let Some((new_update_epoch, update)) =
-                    update_state(&bank_forks, last_update_epoch)
+                    update_state(&mut root_bank_cache, last_update_epoch)
                 {
                     last_update_epoch = new_update_epoch;
                     *state.write() = update;
