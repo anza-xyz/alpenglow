@@ -1,8 +1,5 @@
 use {
-    crate::{
-        certificate_pool::vote_certificate::{CertificateError, VoteCertificate},
-        Stake,
-    },
+    crate::{certificate_pool::vote_certificate::VoteCertificate, Stake},
     alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
@@ -105,9 +102,8 @@ impl SimpleVotePool {
         true
     }
 
-    pub fn add_to_certificate(&self, output: &mut VoteCertificate) -> Result<(), CertificateError> {
-        output.aggregate(self.vote_entry.transactions.iter())?;
-        Ok(())
+    pub fn add_to_certificate(&self, output: &mut VoteCertificate) {
+        output.aggregate(self.vote_entry.transactions.iter())
     }
 }
 
@@ -189,11 +185,10 @@ impl DuplicateBlockVotePool {
         &self,
         voted_block_key: &VotedBlockKey,
         output: &mut VoteCertificate,
-    ) -> Result<(), CertificateError> {
+    ) {
         if let Some(vote_entries) = self.votes.get(voted_block_key) {
-            output.aggregate(vote_entries.transactions.iter())?;
+            output.aggregate(vote_entries.transactions.iter())
         }
-        Ok(())
     }
 
     // Get the previous notarization vote, only used for safe to notar to figure out previous notar vote
