@@ -8,12 +8,12 @@ use {
         },
         commitment::AlpenglowCommitmentAggregationData,
         event::{LeaderWindowInfo, VotorEvent},
-        voting_utils,
+        voting_utils::{self, BLSOp},
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
     },
-    alpenglow_vote::bls_message::CertificateMessage,
-    crossbeam_channel::{select, RecvError, Sender},
+    alpenglow_vote::bls_message::{BLSMessage, CertificateMessage},
+    crossbeam_channel::{select, RecvError, Sender, TrySendError},
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -50,6 +50,7 @@ pub(crate) struct CertificatePoolContext {
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
     pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: Sender<VotorEvent>,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
@@ -73,6 +74,89 @@ impl CertificatePoolService {
             .unwrap();
 
         Self { t_ingest }
+    }
+
+    fn maybe_update_root_and_send_new_certificates(
+        cert_pool: &mut CertificatePool,
+        root_bank_cache: &mut RootBankCache,
+        bls_sender: &Sender<BLSOp>,
+        new_finalized_slot: Option<Slot>,
+        new_certificates_to_send: Vec<Arc<CertificateMessage>>,
+        current_root: &mut Slot,
+        highest_finalized_slot: &mut Slot,
+        standstill_timer: &mut Instant,
+    ) -> Result<(), AddVoteError> {
+        // If we have a new finalized slot, update the root and send new certificates
+        if let Some(new_finalized_slot) = new_finalized_slot {
+            // Reset standstill timer
+            debug_assert!(new_finalized_slot > *highest_finalized_slot);
+            *highest_finalized_slot = new_finalized_slot;
+            *standstill_timer = Instant::now();
+            // Set root
+            let root_bank = root_bank_cache.root_bank();
+            if root_bank.slot() > *current_root {
+                *current_root = root_bank.slot();
+                cert_pool.handle_new_root(root_bank);
+            }
+        }
+        // Send new certificates to peers
+        for certificate in new_certificates_to_send {
+            // The buffer should normally be large enough, so we don't handle
+            // certificate re-send here.
+            match bls_sender.try_send(BLSOp::PushCertificate {
+                certificate: certificate.clone(),
+            }) {
+                Ok(_) => (),
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(AddVoteError::VotingServiceSenderDisconnected);
+                }
+                Err(TrySendError::Full(_)) => {
+                    return Err(AddVoteError::VotingServiceQueueFull);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn process_bls_message(
+        ctx: &mut CertificatePoolContext,
+        message: &BLSMessage,
+        cert_pool: &mut CertificatePool,
+        events: &mut Vec<VotorEvent>,
+        current_root: &mut Slot,
+        highest_finalized_slot: &mut Slot,
+        standstill_timer: &mut Instant,
+    ) -> Result<(), AddVoteError> {
+        match voting_utils::add_message_and_maybe_update_commitment(
+            &ctx.my_pubkey,
+            &ctx.my_vote_pubkey,
+            message,
+            cert_pool,
+            events,
+            &ctx.commitment_sender,
+        ) {
+            Ok((new_finalized_slot, new_certificates_to_send)) => {
+                Self::maybe_update_root_and_send_new_certificates(
+                    cert_pool,
+                    &mut ctx.root_bank_cache,
+                    &ctx.bls_sender,
+                    new_finalized_slot,
+                    new_certificates_to_send,
+                    current_root,
+                    highest_finalized_slot,
+                    standstill_timer,
+                )?;
+            }
+            Err(e) => {
+                if e == AddVoteError::CertificateSenderError {
+                    return Err(e);
+                } else {
+                    // This is a non critical error, a duplicate vote for example
+                    trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                }
+            }
+        };
+        Ok(())
     }
 
     // TODO: properly bubble up errors
@@ -138,53 +222,33 @@ impl CertificatePoolService {
                 return Ok(());
             }
 
-            let bls_messages = select! {
+            let bls_messages: Vec<BLSMessage> = select! {
                 recv(ctx.own_vote_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.own_vote_receiver.try_iter())
+                    std::iter::once(msg?).chain(ctx.own_vote_receiver.try_iter()).collect()
                 },
                 recv(ctx.bls_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.bls_receiver.try_iter())
+                    std::iter::once(msg?).chain(ctx.bls_receiver.try_iter()).collect()
                 },
                 default(Duration::from_secs(1)) => continue
             };
 
             for message in bls_messages {
-                match voting_utils::add_message_and_maybe_update_commitment(
-                    &ctx.my_pubkey,
-                    &ctx.my_vote_pubkey,
+                if let Err(e) = Self::process_bls_message(
+                    &mut ctx,
                     &message,
                     &mut cert_pool,
                     &mut events,
-                    &ctx.commitment_sender,
+                    &mut current_root,
+                    &mut highest_finalized_slot,
+                    &mut standstill_timer,
                 ) {
-                    Ok(Some(finalized_slot)) => {
-                        // Reset standstill timer
-                        debug_assert!(finalized_slot > highest_finalized_slot);
-                        highest_finalized_slot = finalized_slot;
-                        standstill_timer = Instant::now();
-                        // Set root
-                        let root_bank = ctx.root_bank_cache.root_bank();
-                        if root_bank.slot() > current_root {
-                            current_root = root_bank.slot();
-                            cert_pool.handle_new_root(root_bank);
-                        }
-                    }
-                    Ok(_) => (),
-                    Err(AddVoteError::CertificateSenderError) => {
-                        // Shutdown
-                        info!(
-                            "{}: Certificate receiver disconnected. Exiting.",
-                            ctx.my_pubkey
-                        );
-                        ctx.exit.store(true, Ordering::Relaxed);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // This is a non critical error, a duplicate vote for example
-                        trace!("{}: unable to push vote into pool {}", ctx.my_pubkey, e);
-                        continue;
-                    }
-                };
+                    info!(
+                        "{}: Unable to process BLS message: {e}. Exiting.",
+                        ctx.my_pubkey
+                    );
+                    ctx.exit.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
             }
         }
         Ok(())

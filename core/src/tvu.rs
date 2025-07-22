@@ -22,7 +22,7 @@ use {
         window_service::{WindowService, WindowServiceChannels},
     },
     bytes::Bytes,
-    crossbeam_channel::{unbounded, Receiver, Sender},
+    crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_client::connection_cache::ConnectionCache,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
     solana_gossip::{
@@ -298,7 +298,10 @@ impl Tvu {
         let (cost_update_sender, cost_update_receiver) = unbounded();
         let (drop_bank_sender, drop_bank_receiver) = unbounded();
         let (voting_sender, voting_receiver) = unbounded();
-        let (bls_sender, bls_receiver) = unbounded();
+        // The BLS sender channel should be mostly used during standstill handling,
+        // there could be 10s/400ms = 25 slots, <=5 votes and <=5 certificates per slot,
+        // we cap the channel at 512 to give some headroom.
+        let (bls_sender, bls_receiver) = bounded(512);
 
         let replay_senders = ReplaySenders {
             rpc_subscriptions: rpc_subscriptions.clone(),
