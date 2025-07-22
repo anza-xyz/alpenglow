@@ -48,8 +48,11 @@ pub struct EpochStakesService {
 
 impl EpochStakesService {
     pub fn new(bank_forks: Arc<StdRwLock<BankForks>>) -> Self {
-        let (mut last_update_epoch, state) = update_state(&bank_forks, Epoch::default()).unwrap();
-        let state = Arc::new(PlRwLock::new(state));
+        let mut last_update_epoch = Epoch::default();
+        let state = Arc::new(PlRwLock::new(State {
+            stakes: HashMap::new(),
+            epoch_schedule: EpochSchedule::default(),
+        }));
 
         {
             let state = state.clone();
