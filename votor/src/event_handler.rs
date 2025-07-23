@@ -4,7 +4,7 @@
 use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
-        event::{CompletedBlock, CompletedBlockReceiver, VotorEvent},
+        event::{CompletedBlock, VotorEvent, VotorEventReceiver},
         root_utils::{self, RootContext},
         skip_timer::SkipTimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
@@ -13,7 +13,7 @@ use {
         Block,
     },
     alpenglow_vote::vote::Vote,
-    crossbeam_channel::{select, Receiver, RecvError, SendError},
+    crossbeam_channel::{select, RecvError, SendError},
     solana_ledger::leader_schedule_utils::{
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
@@ -42,9 +42,8 @@ pub(crate) struct EventHandlerContext {
     pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
 
     // VotorEvent receivers
-    pub(crate) completed_block_receiver: CompletedBlockReceiver,
-    pub(crate) event_receiver: Receiver<VotorEvent>,
-    pub(crate) skip_timeout_receiver: Receiver<VotorEvent>,
+    pub(crate) event_receiver: VotorEventReceiver,
+    pub(crate) skip_timeout_receiver: VotorEventReceiver,
 
     // Skip timer
     pub(crate) skip_timer: Arc<RwLock<SkipTimerManager>>,
@@ -97,7 +96,6 @@ impl EventHandler {
         let EventHandlerContext {
             exit,
             start,
-            completed_block_receiver,
             event_receiver,
             skip_timeout_receiver,
             skip_timer,
@@ -132,9 +130,6 @@ impl EventHandler {
 
         while !exit.load(Ordering::Relaxed) {
             let event = select! {
-                recv(completed_block_receiver) -> msg => {
-                    VotorEvent::Block(msg?)
-                },
                 recv(event_receiver) -> msg => {
                     msg?
                 },
