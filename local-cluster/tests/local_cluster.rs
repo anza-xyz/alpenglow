@@ -88,7 +88,6 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
-    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -6800,29 +6799,29 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 /// and SkipFallback votes in an intertwined manner.
 ///
 /// This test simulates a consensus scenario with four nodes having specific stake distributions:
-/// - Node A: epsilon stake (minimal, acts as perpetual leader)
-/// - Node B: 20% - epsilon stake
-/// - Node C: 40% + epsilon stake
-/// - Node D: 40% - epsilon stake
+/// - Node A: 40% + epsilon stake
+/// - Node B: 40% - epsilon stake
+/// - Node C: 20% - epsilon stake
+/// - Node D: epsilon stake (minimal, acts as perpetual leader)
 ///
 /// The test proceeds through two main stages:
 ///
 /// ## Stage 1: Stable Network Operation
-/// All nodes are voting normally for leader A's proposals, with notarization votes going through
+/// All nodes are voting normally for leader D's proposals, with notarization votes going through
 /// successfully and the network maintaining consensus.
 ///
 /// ## Stage 2: Network Partition and Fallback Scenario
-/// At slot 50, Node C's turbine is disabled, creating a network partition. This triggers the
+/// At slot 50, Node A's turbine is disabled, creating a network partition. This triggers the
 /// following sequence:
-/// 1. Node A (leader) proposes a block b1
-/// 2. Nodes A, B, and D can communicate and vote to notarize b1
-/// 3. Node C is partitioned and cannot receive b1, so it issues a skip vote
+/// 1. Node D (leader) proposes a block b1
+/// 2. Nodes B, C, and D can communicate and vote to notarize b1
+/// 3. Node A is partitioned and cannot receive b1, so it issues a skip vote
 /// 4. The vote distribution creates a complex fallback scenario:
-///    - Nodes A, B, D: Issue notarize votes initially, then skip fallback votes
-///    - Node C: Issues skip vote initially, then notarize fallback vote
+///    - Nodes B, C, D: Issue notarize votes initially, then skip fallback votes
+///    - Node A: Issues skip vote initially, then notarize fallback vote
 /// 5. This creates the specific vote pattern:
-///    - A, B, D: notarize + skip_fallback
-///    - C: skip + notarize_fallback
+///    - B, C, D: notarize + skip_fallback
+///    - A: skip + notarize_fallback
 ///
 /// The test validates that:
 /// - The network can handle intertwined fallback scenarios
@@ -6839,20 +6838,14 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     const EPSILON: u64 = 1;
     const NUM_NODES: usize = 4;
 
+    // Ensure that node stakes are in decreasing order, so node_index can directly be set as
+    // vote_message.rank.
     let node_stakes = [
-        EPSILON,                        // Node A: epsilon
-        TOTAL_STAKE * 2 / 10 - EPSILON, // Node B: 20% - epsilon
-        TOTAL_STAKE * 4 / 10 + EPSILON, // Node C: 40% + epsilon
-        TOTAL_STAKE * 4 / 10 - EPSILON, // Node D: 40% - epsilon
+        TOTAL_STAKE * 4 / 10 + EPSILON, // Node A: 40% + epsilon
+        TOTAL_STAKE * 4 / 10 - EPSILON, // Node B: 40% - epsilon
+        TOTAL_STAKE * 2 / 10 - EPSILON, // Node C: 20% - epsilon
+        EPSILON,                        // Node D: epsilon
     ];
-
-    let get_node_index = |rank| match rank {
-        0 => 2,
-        1 => 3,
-        2 => 1,
-        3 => 0,
-        _ => panic!("Invalid rank"),
-    };
 
     assert_eq!(NUM_NODES, node_stakes.len());
 
@@ -6860,11 +6853,11 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control mechanism for network partition
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_a_turbine_disabled = Arc::new(AtomicBool::new(false));
 
     // Create leader schedule with A as perpetual leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[4, 0, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[0, 0, 0, 4]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6881,8 +6874,8 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
         Some(vec![vote_listener_socket.local_addr().unwrap()]);
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
-    // Node C (index 2) will have its turbine disabled during the experiment
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+    // Node A (index 0) will have its turbine disabled during the experiment
+    validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
 
     assert_eq!(NUM_NODES, validator_keys.len());
 
@@ -6983,15 +6976,15 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
         fn matches_expected_pattern(&mut self) -> bool {
             // Expected patterns:
-            // Nodes 0, 1, 3: notarize + skip_fallback = (1 << 0) | (1 << 4) = 17
-            // Node 2: skip + notarize_fallback = (1 << 2) | (1 << 3) = 12
+            // Nodes 1, 2, 3: notarize + skip_fallback = (1 << 0) | (1 << 4) = 17
+            // Node 0: skip + notarize_fallback = (1 << 2) | (1 << 3) = 12
             const EXPECTED_PATTERN_MAJORITY: u8 = 17; // notarize + skip_fallback
             const EXPECTED_PATTERN_MINORITY: u8 = 12; // skip + notarize_fallback
 
             for pattern in self.vote_type_bitmap.values() {
-                if pattern[0] == EXPECTED_PATTERN_MAJORITY
+                if pattern[0] == EXPECTED_PATTERN_MINORITY
                     && pattern[1] == EXPECTED_PATTERN_MAJORITY
-                    && pattern[2] == EXPECTED_PATTERN_MINORITY
+                    && pattern[2] == EXPECTED_PATTERN_MAJORITY
                     && pattern[3] == EXPECTED_PATTERN_MAJORITY
                 {
                     self.consecutive_pattern_matches += 1;
@@ -7025,7 +7018,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
     // Start vote monitoring thread
     let vote_listener_thread = std::thread::spawn({
-        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let node_c_turbine_disabled = node_a_turbine_disabled.clone();
 
         move || {
             let mut buffer = [0u8; 65_535];
@@ -7046,7 +7039,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                 };
 
                 let vote = &vote_message.vote;
-                let node_index = get_node_index(vote_message.rank);
+                let node_index = vote_message.rank as usize;
 
                 // Stage timeouts
                 let elapsed_time = timer.elapsed();
