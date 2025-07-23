@@ -179,7 +179,8 @@ impl DuplicateBlockVotePool {
 
     pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificate) {
         if let Some(vote_entries) = self.votes.get(block_id) {
-            output.aggregate(&vote_entries.transactions)
+            output
+                .aggregate(&vote_entries.transactions)
                 .expect("Incoming vote message signatures are assumed to be valid")
         }
     }

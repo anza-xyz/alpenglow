@@ -1,27 +1,8 @@
 use {
     crate::{
         certificate_limits_and_vote_types,
-        certificate_pool::{
-            parent_ready_tracker::ParentReadyTracker,
-<<<<<<< HEAD
-            stats::CertificatePoolStats,
-            vote_certificate::{CertificateError, VoteCertificate},
-            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
-||||||| parent of 28d1aac3f6 (replace `VoteCertificate` with either `VoteCertificateBuilder` or `CertificateMessage`)
-            vote_certificate::{CertificateError, VoteCertificate},
-            vote_pool::{
-                DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
-            },
-=======
-            vote_certificate::{CertificateError, VoteCertificateBuilder},
-            vote_pool::{
-                DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
-            },
->>>>>>> 28d1aac3f6 (replace `VoteCertificate` with either `VoteCertificateBuilder` or `CertificateMessage`)
-        },
-        conflicting_types,
-        event::VotorEvent,
-        vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
+        certificate_pool::parent_ready_tracker::ParentReadyTracker, conflicting_types,
+        event::VotorEvent, vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
@@ -49,7 +30,7 @@ use {
 
 pub mod parent_ready_tracker;
 mod stats;
-mod vote_certificate;
+mod vote_certificate_builder;
 mod vote_pool;
 
 impl VoteType {
