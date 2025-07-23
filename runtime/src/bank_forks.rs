@@ -87,7 +87,7 @@ pub struct BankForks {
 
     dumped_slot_subscribers: Vec<DumpedSlotSubscription>,
     /// Tracks subscribers interested in hearing about new epochs.
-    new_epoch_subscribers: Vec<Sender<()>>,
+    new_epoch_subscribers: Vec<Sender<Arc<Bank>>>,
 }
 
 impl Index<u64> for BankForks {
@@ -333,15 +333,15 @@ impl BankForks {
     }
 
     /// Register a new subscriber interested in hearing about new epochs.
-    pub fn register_new_epoch_subscriber(&mut self, tx: Sender<()>) {
+    pub fn register_new_epoch_subscriber(&mut self, tx: Sender<Arc<Bank>>) {
         self.new_epoch_subscribers.push(tx);
     }
 
     /// Call to notify subscribers of new epochs.
-    fn notify_new_epoch_subscribers(&mut self) {
+    fn notify_new_epoch_subscribers(&mut self, root_bank: &Arc<Bank>) {
         let mut channels_to_drop = vec![];
         for (ind, tx) in self.new_epoch_subscribers.iter().enumerate() {
-            if let Err(SendError(())) = tx.send(()) {
+            if let Err(SendError(_)) = tx.send(root_bank.clone()) {
                 channels_to_drop.push(ind);
             }
         }
@@ -465,7 +465,7 @@ impl BankForks {
                     .unwrap()
                     .node_id_to_vote_accounts()
             );
-            self.notify_new_epoch_subscribers();
+            self.notify_new_epoch_subscribers(root_bank);
         }
         let root_tx_count = root_bank
             .parents()

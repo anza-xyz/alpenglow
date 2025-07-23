@@ -1,7 +1,7 @@
 use {
     crate::{
+        bank::Bank,
         epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
-        root_bank_cache::RootBankCache,
     },
     crossbeam_channel::Receiver,
     parking_lot::RwLock as PlRwLock,
@@ -17,23 +17,6 @@ struct State {
     epoch_schedule: EpochSchedule,
 }
 
-/// Updates the epoch stakes state from the bank forks.
-///
-/// If new state was found, returns the corresponding root epoch and the state.
-fn update_state(root_bank_cache: &mut RootBankCache, epoch: Epoch) -> Option<(Epoch, State)> {
-    let root_bank = root_bank_cache.root_bank();
-    let root_epoch = root_bank.epoch();
-    (root_epoch > epoch).then(|| {
-        (
-            root_epoch,
-            State {
-                stakes: root_bank.epoch_stakes_map().clone(),
-                epoch_schedule: root_bank.epoch_schedule().clone(),
-            },
-        )
-    })
-}
-
 /// A service that regularly updates the epoch stakes state from the bank forks
 /// and exposes various methods to access the state.
 pub struct EpochStakesService {
@@ -41,7 +24,7 @@ pub struct EpochStakesService {
 }
 
 impl EpochStakesService {
-    pub fn new(new_epoch_receiver: Receiver<()>, mut root_bank_cache: RootBankCache) -> Self {
+    pub fn new(new_epoch_receiver: Receiver<Arc<Bank>>) -> Self {
         let mut prev_epoch = Epoch::default();
         let state = Arc::new(PlRwLock::new(State {
             stakes: HashMap::new(),
@@ -51,10 +34,14 @@ impl EpochStakesService {
         {
             let state = state.clone();
             thread::spawn(move || loop {
-                let () = new_epoch_receiver.recv().unwrap();
-                if let Some((new_epoch, update)) = update_state(&mut root_bank_cache, prev_epoch) {
+                let root_bank = new_epoch_receiver.recv().unwrap();
+                let new_epoch = root_bank.epoch();
+                if new_epoch > prev_epoch {
                     prev_epoch = new_epoch;
-                    *state.write() = update;
+                    *state.write() = State {
+                        stakes: root_bank.epoch_stakes_map().clone(),
+                        epoch_schedule: root_bank.epoch_schedule().clone(),
+                    };
                 }
             });
         }
