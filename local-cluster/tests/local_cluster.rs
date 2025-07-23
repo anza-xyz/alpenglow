@@ -88,6 +88,7 @@ use {
     },
     solana_stake_program::stake_state::NEW_WARMUP_COOLDOWN_RATE,
     solana_streamer::socket::SocketAddrSpace,
+    solana_transaction::Transaction,
     solana_turbine::broadcast_stage::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, ClusterPartition},
         BroadcastStageType,
@@ -6261,6 +6262,26 @@ fn broadcast_vote(
     }
 }
 
+fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
+    let discriminant = if vote.is_notarization() {
+        0
+    } else if vote.is_finalize() {
+        1
+    } else if vote.is_skip() {
+        2
+    } else if vote.is_notarize_fallback() {
+        3
+    } else if vote.is_skip_fallback() {
+        4
+    } else {
+        panic!("Invalid vote type: {:?}", vote)
+    };
+
+    let slot = vote.slot();
+
+    (slot, discriminant)
+}
+
 /// This test validates the Alpenglow consensus protocol's ability to maintain liveness when a node
 /// needs to issue a NotarizeFallback vote. The test sets up a two-node cluster with a specific
 /// stake distribution to create a scenario where:
@@ -6825,6 +6846,14 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
         TOTAL_STAKE * 4 / 10 - EPSILON, // Node D: 40% - epsilon
     ];
 
+    let get_node_index = |rank| match rank {
+        0 => 2,
+        1 => 3,
+        2 => 1,
+        3 => 0,
+        _ => panic!("Invalid rank"),
+    };
+
     assert_eq!(NUM_NODES, node_stakes.len());
 
     // Verify stake distribution adds up correctly
@@ -6835,7 +6864,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
     // Create leader schedule with A as perpetual leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[1, 0, 0, 0]);
+        create_custom_leader_schedule_with_random_keys(&[4, 0, 0, 0]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -6996,7 +7025,6 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
     // Start vote monitoring thread
     let vote_listener_thread = std::thread::spawn({
-        let vote_pubkey_to_node_index = vote_pubkey_to_node_index.clone();
         let node_c_turbine_disabled = node_c_turbine_disabled.clone();
 
         move || {
@@ -7010,18 +7038,15 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                     .recv(&mut buffer)
                     .expect("Failed to receive vote data");
 
-                let vote_transaction =
-                    bincode::deserialize::<Transaction>(&buffer[..bytes_received])
-                        .expect("Failed to deserialize vote transaction");
+                let bls_message = bincode::deserialize::<BLSMessage>(&buffer[..bytes_received])
+                    .expect("Failed to deserialize BLS message");
 
-                let (vote_pubkey, parsed_vote, ..) =
-                    vote_parser::parse_alpenglow_vote_transaction(&vote_transaction)
-                        .expect("Failed to parse vote transaction");
+                let BLSMessage::Vote(vote_message) = bls_message else {
+                    continue;
+                };
 
-                let node_index = vote_pubkey_to_node_index[&vote_pubkey];
-                let vote = parsed_vote
-                    .as_alpenglow_transaction_ref()
-                    .expect("Failed to get alpenglow vote reference");
+                let vote = &vote_message.vote;
+                let node_index = get_node_index(vote_message.rank);
 
                 // Stage timeouts
                 let elapsed_time = timer.elapsed();
