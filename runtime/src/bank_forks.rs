@@ -86,8 +86,8 @@ pub struct BankForks {
     scheduler_pool: Option<InstalledSchedulerPoolArc>,
 
     dumped_slot_subscribers: Vec<DumpedSlotSubscription>,
-    /// Tracks subscribers interested in hearing about new epochs.
-    new_epoch_subscribers: Vec<Sender<Arc<Bank>>>,
+    /// Tracks subscribers interested in hearing about new `Bank`s.
+    new_bank_subscribers: Vec<Sender<Arc<Bank>>>,
 }
 
 impl Index<u64> for BankForks {
@@ -139,7 +139,7 @@ impl BankForks {
             highest_slot_at_startup: 0,
             scheduler_pool: None,
             dumped_slot_subscribers: vec![],
-            new_epoch_subscribers: vec![],
+            new_bank_subscribers: vec![],
         }));
 
         root_bank.set_fork_graph_in_program_cache(Arc::downgrade(&bank_forks));
@@ -334,19 +334,19 @@ impl BankForks {
 
     /// Register a new subscriber interested in hearing about new epochs.
     pub fn register_new_epoch_subscriber(&mut self, tx: Sender<Arc<Bank>>) {
-        self.new_epoch_subscribers.push(tx);
+        self.new_bank_subscribers.push(tx);
     }
 
     /// Call to notify subscribers of new epochs.
     fn notify_new_epoch_subscribers(&mut self, root_bank: &Arc<Bank>) {
         let mut channels_to_drop = vec![];
-        for (ind, tx) in self.new_epoch_subscribers.iter().enumerate() {
+        for (ind, tx) in self.new_bank_subscribers.iter().enumerate() {
             if let Err(SendError(_)) = tx.send(root_bank.clone()) {
                 channels_to_drop.push(ind);
             }
         }
         for ind in channels_to_drop {
-            self.new_epoch_subscribers.remove(ind);
+            self.new_bank_subscribers.remove(ind);
         }
     }
 

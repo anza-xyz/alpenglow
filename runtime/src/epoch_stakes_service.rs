@@ -4,6 +4,7 @@ use {
         epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
     },
     crossbeam_channel::Receiver,
+    log::warn,
     parking_lot::RwLock as PlRwLock,
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -24,7 +25,7 @@ pub struct EpochStakesService {
 }
 
 impl EpochStakesService {
-    pub fn new(new_epoch_receiver: Receiver<Arc<Bank>>) -> Self {
+    pub fn new(new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
         let mut prev_epoch = Epoch::default();
         let state = Arc::new(PlRwLock::new(State {
             stakes: HashMap::new(),
@@ -34,13 +35,19 @@ impl EpochStakesService {
         {
             let state = state.clone();
             thread::spawn(move || loop {
-                let root_bank = new_epoch_receiver.recv().unwrap();
-                let new_epoch = root_bank.epoch();
+                let new_bank = match new_bank_receiver.recv() {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!("new_epoch_receiver.recv() returned {e:?}.  Exiting.");
+                        break;
+                    }
+                };
+                let new_epoch = new_bank.epoch();
                 if new_epoch > prev_epoch {
                     prev_epoch = new_epoch;
                     *state.write() = State {
-                        stakes: root_bank.epoch_stakes_map().clone(),
-                        epoch_schedule: root_bank.epoch_schedule().clone(),
+                        stakes: new_bank.epoch_stakes_map().clone(),
+                        epoch_schedule: new_bank.epoch_schedule().clone(),
                     };
                 }
             });
