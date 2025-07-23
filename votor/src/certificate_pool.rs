@@ -3,7 +3,7 @@ use {
         certificate_limits_and_vote_types,
         certificate_pool::{
             parent_ready_tracker::ParentReadyTracker,
-            vote_certificate::{CertificateError, VoteCertificate},
+            vote_certificate::{CertificateError, VoteCertificateBuilder},
             vote_pool::{
                 DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
             },
@@ -234,16 +234,16 @@ impl CertificatePool {
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
-            let mut vote_certificate = VoteCertificate::new(cert_id);
+            let mut vote_certificate_builder = VoteCertificateBuilder::new(cert_id);
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                 match vote_pool {
-                    VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate),
-                    VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(voted_block_key.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}"), &mut vote_certificate),
+                    VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate_builder),
+                    VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(voted_block_key.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}"), &mut vote_certificate_builder),
                 };
             }
             });
-            let new_cert = Arc::new(vote_certificate.certificate());
+            let new_cert = Arc::new(vote_certificate_builder.build());
             self.send_and_insert_certificate(cert_id, new_cert.clone(), events)?;
             new_certificates_to_send.push(new_cert);
         }
