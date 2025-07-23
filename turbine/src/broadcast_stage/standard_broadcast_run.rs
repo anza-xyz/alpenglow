@@ -6,13 +6,14 @@ use {
         *,
     },
     crate::cluster_nodes::ClusterNodesCache,
+    crossbeam_channel::Sender,
     solana_entry::entry::Entry,
     solana_ledger::{
         blockstore::{self},
         shred::{shred_code, ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder},
     },
     solana_sdk::{hash::Hash, signature::Keypair, timing::AtomicInterval},
-    solana_votor::event::CompletedBlockSender,
+    solana_votor::event::VotorEventSender,
     std::{borrow::Cow, sync::RwLock, time::Duration},
     tokio::sync::mpsc::Sender as AsyncSender,
 };
@@ -184,7 +185,7 @@ impl StandardBroadcastRun {
         blockstore: &Blockstore,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
-        completed_block_sender: &CompletedBlockSender,
+        votor_event_sender: &VotorEventSender,
         receive_results: ReceiveResults,
     ) -> Result<()> {
         let mut receive_elapsed = receive_results.time_elapsed;
@@ -332,7 +333,7 @@ impl StandardBroadcastRun {
             // Populate the block id and send for voting
             // The block id is the merkle root of the last FEC set which is now the chained merkle root
             broadcast_utils::set_block_id_and_send(
-                completed_block_sender,
+                votor_event_sender,
                 bank.clone(),
                 self.chained_merkle_root,
             )?;
@@ -452,7 +453,7 @@ impl BroadcastRun for StandardBroadcastRun {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
-        completed_block_sender: &CompletedBlockSender,
+        votor_event_sender: &VotorEventSender,
     ) -> Result<()> {
         let receive_results = broadcast_utils::recv_slot_entries(receiver)?;
         // TODO: Confirm that last chunk of coding shreds
@@ -462,7 +463,7 @@ impl BroadcastRun for StandardBroadcastRun {
             blockstore,
             socket_sender,
             blockstore_sender,
-            completed_block_sender,
+            votor_event_sender,
             receive_results,
         )
     }

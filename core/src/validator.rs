@@ -1554,7 +1554,7 @@ impl Validator {
             Arc::new(crate::cluster_slots_service::cluster_slots::ClusterSlots::default());
         // This channel backing up indicates a serious problem in the voting loop
         // Capping at 1000 for now, TODO: add metrics for channel len
-        let (completed_block_sender, completed_block_receiver) = bounded(1000);
+        let (votor_event_sender, votor_event_receiver) = bounded(1000);
 
         // If RPC is supported and ConnectionCache is used, pass ConnectionCache for being warmup inside Tvu.
         let connection_cache_for_warmup = (json_rpc_service.is_some()
@@ -1629,8 +1629,8 @@ impl Validator {
             replay_highest_frozen,
             leader_window_notifier,
             config.voting_service_additional_listeners.as_ref(),
-            completed_block_sender.clone(),
-            completed_block_receiver,
+            votor_event_sender.clone(),
+            votor_event_receiver,
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1690,7 +1690,7 @@ impl Validator {
             bls_verified_message_sender,
             &connection_cache,
             turbine_quic_endpoint_sender,
-            completed_block_sender,
+            votor_event_sender,
             &identity_keypair,
             config.runtime_config.log_messages_bytes_limit,
             &staked_nodes,
