@@ -3,7 +3,7 @@ use {
         certificate_limits_and_vote_types,
         certificate_pool::{
             parent_ready_tracker::ParentReadyTracker,
-            vote_certificate::{CertificateError, VoteCertificateBuilder},
+            vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
             vote_pool::{
                 DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
             },
@@ -37,7 +37,7 @@ use {
 };
 
 pub mod parent_ready_tracker;
-mod vote_certificate;
+mod vote_certificate_builder;
 mod vote_pool;
 
 impl VoteType {

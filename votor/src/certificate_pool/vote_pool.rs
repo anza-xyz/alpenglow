@@ -1,5 +1,5 @@
 use {
-    crate::{certificate_pool::vote_certificate::VoteCertificateBuilder, Stake},
+    crate::{certificate_pool::vote_certificate_builder::VoteCertificateBuilder, Stake},
     alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
