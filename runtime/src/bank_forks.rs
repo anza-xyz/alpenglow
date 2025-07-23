@@ -333,7 +333,7 @@ impl BankForks {
     }
 
     /// Register a new subscriber interested in hearing about new epochs.
-    pub fn register_new_epoch_subscriber(&mut self, tx: Sender<Arc<Bank>>) {
+    pub fn register_new_bank_subscriber(&mut self, tx: Sender<Arc<Bank>>) {
         self.new_bank_subscribers.push(tx);
     }
 
