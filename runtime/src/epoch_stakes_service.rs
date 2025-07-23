@@ -18,7 +18,7 @@ struct State {
     epoch_schedule: EpochSchedule,
 }
 
-/// A service that regularly updates the epoch stakes state from the bank forks
+/// A service that regularly updates the epoch stakes state from `Bank`s
 /// and exposes various methods to access the state.
 pub struct EpochStakesService {
     state: Arc<PlRwLock<State>>,
