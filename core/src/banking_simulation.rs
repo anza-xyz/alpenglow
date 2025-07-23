@@ -45,7 +45,7 @@ use {
     },
     solana_streamer::socket::SocketAddrSpace,
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
-    solana_votor::event::CompletedBlockReceiver,
+    solana_votor::event::VotorEventReceiver,
     std::{
         collections::BTreeMap,
         fmt::Display,
@@ -420,7 +420,7 @@ struct SimulatorLoop {
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     retransmit_slots_sender: Sender<Slot>,
     retracer: Arc<BankingTracer>,
-    _completed_block_receiver: CompletedBlockReceiver,
+    _completed_block_receiver: VotorEventReceiver,
 }
 
 impl SimulatorLoop {
