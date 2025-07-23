@@ -2,8 +2,10 @@
 //! in the event loop.
 //! TODO: Make this mockable in event_handler for tests
 use {
-    crate::{event::VotorEvent, skip_timeout, BLOCKTIME},
-    crossbeam_channel::Sender,
+    crate::{
+        event::{VotorEvent, VotorEventSender},
+        skip_timeout, BLOCKTIME,
+    },
     solana_ledger::leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     solana_sdk::clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     std::{
@@ -111,7 +113,7 @@ impl SkipTimerService {
     pub(crate) fn new(
         exit: Arc<AtomicBool>,
         max_timers: usize,
-        event_sender: Sender<VotorEvent>,
+        event_sender: VotorEventSender,
     ) -> (Self, Arc<RwLock<SkipTimerManager>>) {
         let manager = Arc::new(RwLock::new(SkipTimerManager::new(max_timers)));
         let manager_c = manager.clone();
@@ -125,7 +127,7 @@ impl SkipTimerService {
     pub(crate) fn timer_thread(
         exit: Arc<AtomicBool>,
         manager: Arc<RwLock<SkipTimerManager>>,
-        event_sender: Sender<VotorEvent>,
+        event_sender: VotorEventSender,
     ) {
         while !exit.load(Ordering::Relaxed) {
             let now = Instant::now();

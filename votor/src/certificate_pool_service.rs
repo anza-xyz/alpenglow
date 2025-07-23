@@ -9,7 +9,7 @@ use {
             self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
         },
         commitment::AlpenglowCommitmentAggregationData,
-        event::{LeaderWindowInfo, VotorEvent},
+        event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::{self, BLSOp},
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
@@ -53,8 +53,9 @@ pub(crate) struct CertificatePoolContext {
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
     pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+
     pub(crate) bls_sender: Sender<BLSOp>,
-    pub(crate) event_sender: Sender<VotorEvent>,
+    pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 }
