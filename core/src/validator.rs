@@ -1581,6 +1581,7 @@ impl Validator {
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
             alpenglow_vote_sender.clone(),
+            bls_verified_message_sender.clone(),
             bls_verified_message_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
