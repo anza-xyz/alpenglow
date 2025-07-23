@@ -264,9 +264,13 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let epoch_stakes_service = Arc::new(EpochStakesService::new(RootBankCache::new(
-                bank_forks.clone(),
-            )));
+            let root_bank_cache = RootBankCache::new(bank_forks.clone());
+            let (tx, rx) = unbounded();
+            bank_forks
+                .write()
+                .unwrap()
+                .register_new_epoch_subscriber(tx);
+            let epoch_stakes_service = Arc::new(EpochStakesService::new(rx, root_bank_cache));
             let verifier = BLSSigVerifier::new(
                 epoch_stakes_service,
                 verified_vote_sender.clone(),

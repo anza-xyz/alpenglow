@@ -3,15 +3,14 @@ use {
         epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
         root_bank_cache::RootBankCache,
     },
+    crossbeam_channel::Receiver,
     parking_lot::RwLock as PlRwLock,
     solana_sdk::{
         clock::{Epoch, Slot},
         epoch_schedule::EpochSchedule,
     },
-    std::{collections::HashMap, sync::Arc, thread, time::Duration},
+    std::{collections::HashMap, sync::Arc, thread},
 };
-
-const EPOCH_STAKES_QUERY_INTERVAL: Duration = Duration::from_secs(60);
 
 struct State {
     stakes: HashMap<Epoch, EpochStakes>,
@@ -42,8 +41,8 @@ pub struct EpochStakesService {
 }
 
 impl EpochStakesService {
-    pub fn new(mut root_bank_cache: RootBankCache) -> Self {
-        let mut last_update_epoch = Epoch::default();
+    pub fn new(new_epoch_receiver: Receiver<()>, mut root_bank_cache: RootBankCache) -> Self {
+        let mut prev_epoch = Epoch::default();
         let state = Arc::new(PlRwLock::new(State {
             stakes: HashMap::new(),
             epoch_schedule: EpochSchedule::default(),
@@ -52,11 +51,9 @@ impl EpochStakesService {
         {
             let state = state.clone();
             thread::spawn(move || loop {
-                thread::sleep(EPOCH_STAKES_QUERY_INTERVAL);
-                if let Some((new_update_epoch, update)) =
-                    update_state(&mut root_bank_cache, last_update_epoch)
-                {
-                    last_update_epoch = new_update_epoch;
+                let () = new_epoch_receiver.recv().unwrap();
+                if let Some((new_epoch, update)) = update_state(&mut root_bank_cache, prev_epoch) {
+                    prev_epoch = new_epoch;
                     *state.write() = update;
                 }
             });
