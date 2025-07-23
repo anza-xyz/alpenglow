@@ -50,7 +50,7 @@ use {
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
     solana_votor::{
-        event::{CompletedBlockReceiver, CompletedBlockSender},
+        event::{VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         votor::LeaderWindowNotifier,
@@ -177,8 +177,8 @@ impl Tvu {
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
         voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
-        completed_block_sender: CompletedBlockSender,
-        completed_block_receiver: CompletedBlockReceiver,
+        votor_event_sender: VotorEventSender,
+        votor_event_receiver: VotorEventReceiver,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -323,7 +323,7 @@ impl Tvu {
             dumped_slots_sender,
             alpenglow_vote_sender,
             certificate_sender,
-            completed_block_sender,
+            votor_event_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -334,7 +334,7 @@ impl Tvu {
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
             bls_verified_message_receiver,
-            completed_block_receiver,
+            votor_event_receiver,
         };
 
         let replay_stage_config = ReplayStageConfig {
@@ -568,7 +568,7 @@ pub mod tests {
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
         };
-        let (completed_block_sender, completed_block_receiver) = unbounded();
+        let (votor_event_sender, votor_event_receiver) = unbounded();
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -638,8 +638,8 @@ pub mod tests {
             Arc::new(ReplayHighestFrozen::default()),
             Arc::new(LeaderWindowNotifier::default()),
             None,
-            completed_block_sender,
-            completed_block_receiver,
+            votor_event_sender,
+            votor_event_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {

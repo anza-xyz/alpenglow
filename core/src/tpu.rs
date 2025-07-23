@@ -54,7 +54,7 @@ use {
         streamer::StakedNodes,
     },
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
-    solana_votor::event::CompletedBlockSender,
+    solana_votor::event::VotorEventSender,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -124,7 +124,7 @@ impl Tpu {
         bls_verified_message_sender: BLSVerifiedMessageSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
-        completed_block_sender: CompletedBlockSender,
+        votor_event_sender: VotorEventSender,
         keypair: &Keypair,
         log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
@@ -340,7 +340,7 @@ impl Tpu {
             bank_forks,
             shred_version,
             turbine_quic_endpoint_sender,
-            completed_block_sender,
+            votor_event_sender,
         );
 
         (
