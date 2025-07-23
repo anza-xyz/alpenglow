@@ -51,7 +51,6 @@ pub(crate) struct CertificatePoolContext {
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
-    pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
 
     pub(crate) bls_sender: Sender<BLSOp>,
@@ -248,9 +247,6 @@ impl CertificatePoolService {
             }
 
             let bls_messages: Vec<BLSMessage> = select! {
-                recv(ctx.own_vote_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.own_vote_receiver.try_iter()).collect()
-                },
                 recv(ctx.bls_receiver) -> msg => {
                     std::iter::once(msg?).chain(ctx.bls_receiver.try_iter()).collect()
                 },
