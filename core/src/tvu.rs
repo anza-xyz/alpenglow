@@ -45,7 +45,10 @@ use {
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{AlpenglowVoteSender, BLSVerifiedMessageReceiver, ReplayVoteSender},
+        vote_sender_types::{
+            AlpenglowVoteSender, BLSVerifiedMessageReceiver, BLSVerifiedMessageSender,
+            ReplayVoteSender,
+        },
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
@@ -153,6 +156,7 @@ impl Tvu {
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slots_receiver: DuplicateConfirmedSlotsReceiver,
         alpenglow_vote_sender: AlpenglowVoteSender,
+        own_vote_sender: BLSVerifiedMessageSender,
         bls_verified_message_receiver: BLSVerifiedMessageReceiver,
         tvu_config: TvuConfig,
         max_slots: &Arc<MaxSlots>,
@@ -324,6 +328,7 @@ impl Tvu {
             alpenglow_vote_sender,
             certificate_sender,
             votor_event_sender,
+            own_vote_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -546,7 +551,7 @@ pub mod tests {
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
         let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let (_, gossip_confirmed_slots_receiver) = unbounded();
-        let (_, alpenglow_vote_receiver) = unbounded();
+        let (bls_verified_message_sender, bls_verified_message_receiver) = unbounded();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
         let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let ignored_prioritization_fee_cache = Arc::new(PrioritizationFeeCache::new(0u64));
@@ -614,7 +619,8 @@ pub mod tests {
             None,
             gossip_confirmed_slots_receiver,
             alpenglow_vote_sender,
-            alpenglow_vote_receiver,
+            bls_verified_message_sender,
+            bls_verified_message_receiver,
             TvuConfig::default(),
             &Arc::new(MaxSlots::default()),
             None,

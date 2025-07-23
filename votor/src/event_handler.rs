@@ -41,11 +41,7 @@ pub(crate) struct EventHandlerContext {
     pub(crate) exit: Arc<AtomicBool>,
     pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
 
-    // VotorEvent receivers
     pub(crate) event_receiver: VotorEventReceiver,
-    pub(crate) skip_timeout_receiver: VotorEventReceiver,
-
-    // Skip timer
     pub(crate) skip_timer: Arc<RwLock<SkipTimerManager>>,
 
     // Contexts
@@ -97,7 +93,6 @@ impl EventHandler {
             exit,
             start,
             event_receiver,
-            skip_timeout_receiver,
             skip_timer,
             shared_context: ctx,
             voting_context: mut vctx,
@@ -133,9 +128,6 @@ impl EventHandler {
                 recv(event_receiver) -> msg => {
                     msg?
                 },
-                recv(skip_timeout_receiver) -> msg => {
-                    msg?
-                }
                 default(Duration::from_secs(1))  => continue
             };
 
