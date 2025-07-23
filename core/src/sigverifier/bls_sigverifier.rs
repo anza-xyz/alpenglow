@@ -174,9 +174,9 @@ mod tests {
             stakes_vec,
         );
         let bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
-        let (tx, rx) = unbounded();
-        tx.send(bank).unwrap();
-        let epoch_stakes_service = Arc::new(EpochStakesService::new(rx));
+        let epoch = bank.epoch();
+        let (_tx, rx) = unbounded();
+        let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
         (
             validator_keypairs,
             BLSSigVerifier::new(epoch_stakes_service, verified_vote_sender, message_sender),

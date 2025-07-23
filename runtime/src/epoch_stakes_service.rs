@@ -18,6 +18,15 @@ struct State {
     epoch_schedule: EpochSchedule,
 }
 
+impl State {
+    fn new(bank: Arc<Bank>) -> Self {
+        Self {
+            stakes: bank.epoch_stakes_map().clone(),
+            epoch_schedule: bank.epoch_schedule().clone(),
+        }
+    }
+}
+
 /// A service that regularly updates the epoch stakes state from `Bank`s
 /// and exposes various methods to access the state.
 pub struct EpochStakesService {
@@ -25,30 +34,23 @@ pub struct EpochStakesService {
 }
 
 impl EpochStakesService {
-    pub fn new(new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
-        let mut prev_epoch = Epoch::default();
-        let state = Arc::new(PlRwLock::new(State {
-            stakes: HashMap::new(),
-            epoch_schedule: EpochSchedule::default(),
-        }));
-
+    pub fn new(bank: Arc<Bank>, epoch: Epoch, new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
+        let mut prev_epoch = epoch;
+        let state = Arc::new(PlRwLock::new(State::new(bank)));
         {
             let state = state.clone();
             thread::spawn(move || loop {
-                let new_bank = match new_bank_receiver.recv() {
+                let bank = match new_bank_receiver.recv() {
                     Ok(b) => b,
                     Err(e) => {
-                        warn!("new_epoch_receiver.recv() returned {e:?}.  Exiting.");
+                        warn!("recv() returned {e:?}.  Exiting.");
                         break;
                     }
                 };
-                let new_epoch = new_bank.epoch();
+                let new_epoch = bank.epoch();
                 if new_epoch > prev_epoch {
                     prev_epoch = new_epoch;
-                    *state.write() = State {
-                        stakes: new_bank.epoch_stakes_map().clone(),
-                        epoch_schedule: new_bank.epoch_schedule().clone(),
-                    };
+                    *state.write() = State::new(bank)
                 }
             });
         }
