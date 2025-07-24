@@ -432,14 +432,14 @@ impl CertificatePool {
             "Validator stake is zero for pubkey: {validator_vote_key}"
         );
 
-        CertificatePoolStats::incr_u32_array(&mut self.stats.incoming, true);
+        self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
         if slot < self.root {
-            CertificatePoolStats::incr_u32_array(&mut self.stats.out_of_range, true);
+            self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
         // We only allow votes
         if slot > self.root.saturating_add(MAX_SLOT_AGE) {
-            CertificatePoolStats::incr_u32_array(&mut self.stats.out_of_range, true);
+            self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::SlotInFuture);
         }
 
@@ -458,7 +458,7 @@ impl CertificatePool {
         if let Some(conflicting_type) =
             self.has_conflicting_vote(slot, vote_type, &validator_vote_key, &voted_block_key)
         {
-            CertificatePoolStats::incr_u32(&mut self.stats.conflicting_votes);
+            self.stats.conflicting_votes = self.stats.conflicting_votes.saturating_add(1);
             return Err(AddVoteError::ConflictingVoteType(
                 vote_type,
                 conflicting_type,
@@ -474,7 +474,7 @@ impl CertificatePool {
             &validator_vote_key,
             validator_stake,
         ) {
-            CertificatePoolStats::incr_u32_array(&mut self.stats.exits, true);
+            self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
             return Ok(vec![]);
         }
         // Check if this new vote generated a safe to notar or safe to skip
@@ -483,11 +483,11 @@ impl CertificatePool {
         // everytime.
         if self.safe_to_skip(my_vote_pubkey, slot) {
             events.push(VotorEvent::SafeToSkip(slot));
-            CertificatePoolStats::incr_u32(&mut self.stats.event_safe_to_skip);
+            self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
         }
         for (block_id, bank_hash) in self.safe_to_notar(my_vote_pubkey, slot) {
             events.push(VotorEvent::SafeToNotar((slot, block_id, bank_hash)));
-            CertificatePoolStats::incr_u32(&mut self.stats.event_safe_to_notarize);
+            self.stats.event_safe_to_notarize = self.stats.event_safe_to_notarize.saturating_add(1);
         }
 
         self.stats.incr_ingested_vote_type(vote_type);
@@ -502,13 +502,13 @@ impl CertificatePool {
     ) -> Result<Vec<Arc<CertificateMessage>>, AddVoteError> {
         let certificate = &certificate_message.certificate;
         let certificate_id = CertificateId::from(certificate);
-        CertificatePoolStats::incr_u32_array(&mut self.stats.incoming, false);
+        self.stats.incoming_certs = self.stats.incoming_certs.saturating_add(1);
         if certificate.slot < self.root {
-            CertificatePoolStats::incr_u32_array(&mut self.stats.out_of_range, false);
+            self.stats.out_of_range_certs = self.stats.out_of_range_certs.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
         if self.completed_certificates.contains_key(&certificate_id) {
-            CertificatePoolStats::incr_u32_array(&mut self.stats.exits, false);
+            self.stats.exist_certs = self.stats.exist_certs.saturating_add(1);
             return Ok(vec![]);
         }
         let new_certificate = Arc::new(certificate_message.clone());
