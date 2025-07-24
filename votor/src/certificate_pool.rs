@@ -3,6 +3,7 @@ use {
         certificate_limits_and_vote_types,
         certificate_pool::{
             parent_ready_tracker::ParentReadyTracker,
+            stats::CertificatePoolStats,
             vote_certificate::{CertificateError, VoteCertificate},
             vote_pool::{
                 DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType, VotedBlockKey,
@@ -37,6 +38,7 @@ use {
 };
 
 pub mod parent_ready_tracker;
+mod stats;
 mod vote_certificate;
 mod vote_pool;
 
@@ -108,6 +110,8 @@ pub struct CertificatePool {
     root_epoch: Epoch,
     /// The certificate sender, if set, newly created certificates will be sent here
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
+    /// Stats for the certificate pool
+    stats: CertificatePoolStats,
 }
 
 impl CertificatePool {
@@ -136,6 +140,7 @@ impl CertificatePool {
             root_epoch: Epoch::default(),
             certificate_sender,
             parent_ready_tracker,
+            stats: CertificatePoolStats::new(),
         };
 
         // Update the epoch_stakes_map and root
@@ -245,6 +250,8 @@ impl CertificatePool {
             });
             let new_cert = Arc::new(vote_certificate.certificate());
             self.send_and_insert_certificate(cert_id, new_cert.clone(), events)?;
+            self.stats
+                .incr_cert_type(new_cert.certificate.certificate_type, true);
             new_certificates_to_send.push(new_cert);
         }
         Ok(new_certificates_to_send)
@@ -408,7 +415,6 @@ impl CertificatePool {
     fn add_vote(
         &mut self,
         my_vote_pubkey: &Pubkey,
-
         vote_message: &VoteMessage,
         events: &mut Vec<VotorEvent>,
     ) -> Result<Vec<Arc<CertificateMessage>>, AddVoteError> {
@@ -424,11 +430,14 @@ impl CertificatePool {
             "Validator stake is zero for pubkey: {validator_vote_key}"
         );
 
+        self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
         if slot < self.root {
+            self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
         // We only allow votes
         if slot > self.root.saturating_add(MAX_SLOT_AGE) {
+            self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::SlotInFuture);
         }
 
@@ -447,6 +456,7 @@ impl CertificatePool {
         if let Some(conflicting_type) =
             self.has_conflicting_vote(slot, vote_type, &validator_vote_key, &voted_block_key)
         {
+            self.stats.conflicting_votes = self.stats.conflicting_votes.saturating_add(1);
             return Err(AddVoteError::ConflictingVoteType(
                 vote_type,
                 conflicting_type,
@@ -462,6 +472,7 @@ impl CertificatePool {
             &validator_vote_key,
             validator_stake,
         ) {
+            self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
             return Ok(vec![]);
         }
         // Check if this new vote generated a safe to notar or safe to skip
@@ -470,10 +481,14 @@ impl CertificatePool {
         // everytime.
         if self.safe_to_skip(my_vote_pubkey, slot) {
             events.push(VotorEvent::SafeToSkip(slot));
+            self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
         }
         for (block_id, bank_hash) in self.safe_to_notar(my_vote_pubkey, slot) {
             events.push(VotorEvent::SafeToNotar((slot, block_id, bank_hash)));
+            self.stats.event_safe_to_notarize = self.stats.event_safe_to_notarize.saturating_add(1);
         }
+
+        self.stats.incr_ingested_vote_type(vote_type);
 
         self.update_certificates(vote, voted_block_key, events, total_stake)
     }
@@ -485,11 +500,21 @@ impl CertificatePool {
     ) -> Result<Vec<Arc<CertificateMessage>>, AddVoteError> {
         let certificate = &certificate_message.certificate;
         let certificate_id = CertificateId::from(certificate);
+        self.stats.incoming_certs = self.stats.incoming_certs.saturating_add(1);
+        if certificate.slot < self.root {
+            self.stats.out_of_range_certs = self.stats.out_of_range_certs.saturating_add(1);
+            return Err(AddVoteError::UnrootedSlot);
+        }
         if self.completed_certificates.contains_key(&certificate_id) {
+            self.stats.exist_certs = self.stats.exist_certs.saturating_add(1);
             return Ok(vec![]);
         }
         let new_certificate = Arc::new(certificate_message.clone());
         self.send_and_insert_certificate(certificate_id, new_certificate.clone(), events)?;
+
+        self.stats
+            .incr_cert_type(certificate.certificate_type, false);
+
         Ok(vec![new_certificate])
     }
 
@@ -750,6 +775,10 @@ impl CertificatePool {
     /// not distinguished by the pubkey.
     pub fn update_pubkey(&mut self, new_pubkey: Pubkey) {
         self.parent_ready_tracker.update_pubkey(new_pubkey);
+    }
+
+    pub fn maybe_report(&mut self) {
+        self.stats.maybe_report();
     }
 }
 
@@ -1724,7 +1753,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_conflicting_votes() {
+    fn test_handle_new_root() {
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
@@ -1740,5 +1769,28 @@ mod tests {
         let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
         pool.handle_new_root(new_bank);
         assert_eq!(pool.root(), 3);
+        // Send a vote on slot 1, it should be rejected
+        let vote = Vote::new_skip_vote(1);
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &dummy_transaction(&validator_keypairs, &vote, 0),
+                &mut vec![]
+            )
+            .is_err());
+        // Send a cert on slot 2, it should be rejected
+        let cert = BLSMessage::Certificate(CertificateMessage {
+            certificate: Certificate {
+                slot: 2,
+                certificate_type: CertificateType::Notarize,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        });
+        assert!(pool
+            .add_message(&Pubkey::new_unique(), &cert, &mut vec![])
+            .is_err());
     }
 }

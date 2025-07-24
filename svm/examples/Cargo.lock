@@ -7502,6 +7502,7 @@ dependencies = [
  "num-traits",
  "num_cpus",
  "num_enum",
+ "parking_lot 0.12.3",
  "percentage",
  "qualifier_attr",
  "rand 0.8.5",
