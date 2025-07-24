@@ -44,6 +44,7 @@ use {
         accounts_background_service::AbsRequestSender,
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
+        epoch_stakes_service::EpochStakesService,
         prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::{
             AlpenglowVoteSender, BLSVerifiedMessageReceiver, BLSVerifiedMessageSender,
@@ -183,6 +184,7 @@ impl Tvu {
         voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
+        epoch_stakes_service: Arc<EpochStakesService>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -367,6 +369,7 @@ impl Tvu {
             banking_tracer,
             replay_highest_frozen,
             leader_window_notifier,
+            epoch_stakes_service,
         };
 
         let voting_service = VotingService::new(

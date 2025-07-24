@@ -65,6 +65,7 @@ use {
     solana_runtime::{
         accounts_background_service::AbsRequestSender,
         bank_forks::BankForks,
+        epoch_stakes_service::EpochStakesService,
         installed_scheduler_pool::BankWithScheduler,
         root_bank_cache::RootBankCache,
         vote_sender_types::{BLSVerifiedMessageReceiver, BLSVerifiedMessageSender},
@@ -114,6 +115,7 @@ pub struct VotorConfig {
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub epoch_stakes_service: Arc<EpochStakesService>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: BLSVerifiedMessageSender,
 
@@ -165,6 +167,7 @@ impl Votor {
             bank_notification_sender,
             leader_window_notifier,
             certificate_sender,
+            epoch_stakes_service,
             event_sender,
             event_receiver,
             own_vote_sender,
@@ -234,6 +237,7 @@ impl Votor {
             event_sender,
             commitment_sender,
             certificate_sender,
+            epoch_stakes_service,
         };
 
         let event_handler = EventHandler::new(event_handler_context);

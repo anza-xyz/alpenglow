@@ -25,7 +25,8 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{
-        root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
+        epoch_stakes_service::EpochStakesService, root_bank_cache::RootBankCache,
+        vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::clock::Slot,
     stats::CertificatePoolServiceStats,
@@ -60,6 +61,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub(crate) epoch_stakes_service: Arc<EpochStakesService>,
 }
 
 pub(crate) struct CertificatePoolService {
@@ -191,6 +193,7 @@ impl CertificatePoolService {
             &ctx.root_bank_cache.root_bank(),
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
+            ctx.epoch_stakes_service.clone(),
             &mut events,
         );
 

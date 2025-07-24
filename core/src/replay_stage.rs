@@ -67,6 +67,7 @@ use {
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
         commitment::BlockCommitmentCache,
+        epoch_stakes_service::EpochStakesService,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         vote_sender_types::{
@@ -282,6 +283,7 @@ pub struct ReplayStageConfig {
     pub banking_tracer: Arc<BankingTracer>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub epoch_stakes_service: Arc<EpochStakesService>,
 }
 
 pub struct ReplaySenders {
@@ -590,6 +592,7 @@ impl ReplayStage {
             banking_tracer,
             replay_highest_frozen,
             leader_window_notifier,
+            epoch_stakes_service,
         } = config;
 
         let ReplaySenders {
@@ -658,6 +661,7 @@ impl ReplayStage {
             bank_notification_sender: bank_notification_sender.clone(),
             leader_window_notifier,
             certificate_sender,
+            epoch_stakes_service,
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,
