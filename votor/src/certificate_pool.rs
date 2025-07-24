@@ -188,7 +188,7 @@ impl CertificatePool {
             }
             VotePoolType::DuplicateBlockVotePool(pool) => pool.add_vote(
                 validator_vote_key,
-                block_id.expect("Duplicate block pool expects a voted block key"),
+                block_id.expect("Duplicate block pool expects a block id"),
                 transaction,
                 validator_stake,
             ),
@@ -226,7 +226,7 @@ impl CertificatePool {
                     Some(match self.vote_pools
                         .get(&(slot, *vote_type))? {
                             VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
-                            VotePoolType::DuplicateBlockVotePool(pool) => pool.total_stake_by_block_id(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}")),
+                            VotePoolType::DuplicateBlockVotePool(pool) => pool.total_stake_by_block_id(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}")),
                         })
                 })
                 .sum::<Stake>();
@@ -238,7 +238,7 @@ impl CertificatePool {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                 match vote_pool {
                     VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate),
-                    VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a voted block key for certificate {cert_id:?}"), &mut vote_certificate),
+                    VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), &mut vote_certificate),
                 };
             }
             });
@@ -598,12 +598,12 @@ impl CertificatePool {
             .contains_key(&CertificateId::Skip(slot))
     }
 
-    /// Checks if we have voted to skip `slot` or notarize some block `b' = block_id'` in `slot`
-    /// Additionally check that for some different block `b = block_id` in `slot` either:
+    /// Checks if we have voted to skip `slot` or already notarized some block `b` in `slot`
+    /// Additionally check if there exists blocks `b` in `slot` such that:
     /// (i) At least 40% of stake has voted to notarize `b`
     /// (ii) At least 20% of stake voted to notarize `b` and at least 60% of stake voted to either notarize `b` or skip `slot`
-    /// and we have not already cast a notarize fallback for this `b`
-    /// If all the above hold, return `Some(block_id)` for the `b`
+    /// and we have not already cast a notarize fallback for this `b` in `slot`
+    /// If all the above hold, return the block ids `Vec<block_id>` for all such `b`
     pub fn safe_to_notar(&self, my_vote_pubkey: &Pubkey, slot: Slot) -> Vec<Hash> {
         let Some(epoch_stakes) = self
             .epoch_stakes_map
