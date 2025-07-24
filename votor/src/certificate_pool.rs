@@ -394,8 +394,6 @@ impl CertificatePool {
         message: &BLSMessage,
         events: &mut Vec<VotorEvent>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
-        // We add stats reporting here because we should almost always have a message.
-        self.stats.maybe_report();
         let current_highest_finalized_slot = self.highest_finalized_slot;
         let new_certficates_to_send = match message {
             BLSMessage::Vote(vote_message) => {
@@ -777,6 +775,10 @@ impl CertificatePool {
     /// not distinguished by the pubkey.
     pub fn update_pubkey(&mut self, new_pubkey: Pubkey) {
         self.parent_ready_tracker.update_pubkey(new_pubkey);
+    }
+
+    pub fn report_stats(&mut self) {
+        self.stats.report();
     }
 }
 

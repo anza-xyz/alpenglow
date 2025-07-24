@@ -83,10 +83,13 @@ impl CertificatePoolServiceStats {
         );
     }
 
-    pub fn maybe_report(&mut self) {
+    pub fn maybe_report(&mut self) -> bool {
         if self.last_request_time.elapsed() >= STATS_REPORT_INTERVAL {
             self.report();
             self.reset();
+            true
+        } else {
+            false
         }
     }
 }
