@@ -6264,18 +6264,21 @@ fn copy_vote(
 
 fn broadcast_vote(
     bls_message: BLSMessage,
-    tpu_socket_addrs: &[std::net::SocketAddr],
+    socket_addrs: &[std::net::SocketAddr],
     additional_listeners: Option<&Vec<std::net::SocketAddr>>,
     connection_cache: Arc<ConnectionCache>,
 ) {
-    for tpu_socket_addr in tpu_socket_addrs
+    for socket_addr in socket_addrs
         .iter()
         .chain(additional_listeners.unwrap_or(&vec![]).iter())
     {
         let buf = bincode::serialize(&bls_message).unwrap();
-        let client = connection_cache.get_connection(tpu_socket_addr);
+
+        println!("broadcasting vote :: {:?}", buf);
+
+        let client = connection_cache.get_connection(socket_addr);
         client.send_data_async(buf).unwrap_or_else(|_| {
-            panic!("Failed to broadcast vote to {}", tpu_socket_addr);
+            panic!("Failed to broadcast vote to {}", socket_addr);
         });
     }
 }
@@ -7169,10 +7172,11 @@ fn test_simple_copy_voting() {
     // Node stakes with slight imbalance to trigger fallback behavior
     let node_stakes = [
         TOTAL_STAKE * 4 / 10,
-        TOTAL_STAKE * 2 / 10,
-        TOTAL_STAKE * 2 / 10,
-        TOTAL_STAKE * 2 / 10 - 1,
-        1,
+        // TOTAL_STAKE * 2 / 10,
+        // TOTAL_STAKE * 2 / 10,
+        // TOTAL_STAKE * 2 / 10 - 1,
+        // 1,
+        TOTAL_STAKE * 6 / 10,
     ];
 
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
@@ -7182,7 +7186,8 @@ fn test_simple_copy_voting() {
 
     // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
-        create_custom_leader_schedule_with_random_keys(&[0, 0, 0, 0, 4]);
+        // create_custom_leader_schedule_with_random_keys(&[0, 0, 0, 0, 4]);
+        create_custom_leader_schedule_with_random_keys(&[0, 4]);
 
     let leader_schedule = FixedSchedule {
         leader_schedule: Arc::new(leader_schedule),
@@ -7240,25 +7245,27 @@ fn test_simple_copy_voting() {
     // Collect node pubkeys and TPU addresses
     let node_pubkeys: Vec<_> = validator_keys.iter().map(|key| key.pubkey()).collect();
 
-    let tpu_socket_addrs: Vec<_> = node_pubkeys
+    let bls_socket_addrs: Vec<_> = node_pubkeys
         .iter()
         .map(|pubkey| {
             cluster
                 .get_contact_info(pubkey)
                 .unwrap()
-                .tpu_vote(cluster.connection_cache.protocol())
-                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+                .alpenglow()
+                .unwrap_or_else(|| panic!("Failed to get Alpenglow address for {}", pubkey))
         })
         .collect();
+
+    println!("BLS_Socket Addresses: {:?}", bls_socket_addrs);
 
     let node_b_info = cluster.exit_node(&validator_keys[1].pubkey());
     let node_b_vote_keypair = node_b_info.info.voting_keypair.clone();
 
-    let node_c_info = cluster.exit_node(&validator_keys[2].pubkey());
-    let node_c_vote_keypair = node_c_info.info.voting_keypair.clone();
+    // let node_c_info = cluster.exit_node(&validator_keys[2].pubkey());
+    // let node_c_vote_keypair = node_c_info.info.voting_keypair.clone();
 
-    let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
-    let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
+    // let node_d_info = cluster.exit_node(&validator_keys[3].pubkey());
+    // let node_d_vote_keypair = node_d_info.info.voting_keypair.clone();
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
@@ -7275,11 +7282,11 @@ fn test_simple_copy_voting() {
                     dbg!((node_name, vote));
 
                     // Copy vote for B, C, and D
-                    if node_name == 4 {
+                    if node_name == 1 {
                         for (vote_keypair, rank) in [
-                            (&node_b_vote_keypair, 1),
-                            (&node_c_vote_keypair, 2),
-                            (&node_d_vote_keypair, 3),
+                            (&node_b_vote_keypair, 0),
+                            // (&node_c_vote_keypair, 2),
+                            // (&node_d_vote_keypair, 3),
                         ] {
                             let vote_msg = copy_vote(&vote_message, vote_keypair, rank);
 
@@ -7287,7 +7294,7 @@ fn test_simple_copy_voting() {
 
                             broadcast_vote(
                                 vote_msg,
-                                &tpu_socket_addrs,
+                                &bls_socket_addrs,
                                 None,
                                 cluster.connection_cache.clone(),
                             );

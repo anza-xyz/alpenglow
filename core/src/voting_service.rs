@@ -203,6 +203,11 @@ impl VotingService {
         let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
             .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
 
+        println!(
+            "Staked Validator Alpenglow Sockets: {:?}",
+            staked_validator_alpenglow_sockets
+        );
+
         let sockets = additional_listeners
             .map(|v| v.as_slice())
             .unwrap_or(&[])

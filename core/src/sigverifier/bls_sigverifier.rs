@@ -45,8 +45,15 @@ impl SigVerifier for BLSSigVerifier {
             stats_updater.received += 1;
 
             let message = match packet.deserialize_slice(..) {
-                Ok(msg) => msg,
+                Ok(msg) => {
+                    println!("Success! :: {:?}", &packet);
+                    msg
+                }
                 Err(e) => {
+                    println!(
+                        "Failed to deserialize BLS message: {}. Failure :: {:?}",
+                        e, &packet
+                    );
                     trace!("Failed to deserialize BLS message: {}", e);
                     stats_updater.received_malformed += 1;
                     continue;
@@ -68,6 +75,9 @@ impl SigVerifier for BLSSigVerifier {
 
             if let BLSMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
+
+                println!("RECEIVED VOTE :: {:?}", vote);
+
                 stats_updater.received_votes += 1;
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
                     let Some((pubkey, _)) = rank_to_pubkey_map.get_pubkey(vote_message.rank.into())
