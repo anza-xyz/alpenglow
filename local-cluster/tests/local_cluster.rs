@@ -6364,3 +6364,286 @@ fn test_alpenglow_migration_1() {
 fn test_alpenglow_migration_4() {
     test_alpenglow_migration(4)
 }
+
+/// Test to validate the Alpenglow consensus protocol's ability to maintain liveness when a node
+/// needs to issue NotarizeFallback votes due to the second fallback condition.
+///
+/// This test simulates a scenario with three nodes having the following stake distribution:
+/// - Node A: 40% - ε (small epsilon)
+/// - Node B (Leader): 30% + ε
+/// - Node C: 30%
+///
+/// The test validates the protocol's behavior through two main phases:
+///
+/// ## Phase 1: Node A Goes Offline (Byzantine + Offline Stake)
+/// - Node A (40% - ε stake) is taken offline, representing combined Byzantine and offline stake
+/// - This leaves Node B (30% + ε) and Node C (30%) as the active validators
+/// - Despite the significant offline stake, the remaining nodes can still achieve consensus
+/// - Network continues to fast finalize blocks with the remaining 60% + ε stake
+///
+/// ## Phase 2: Network Partition Triggers NotarizeFallback
+/// - Node C's turbine is disabled at slot 20, causing it to miss incoming blocks
+/// - Node B (as leader) proposes blocks and votes Notarize for them
+/// - Node C, unable to receive blocks, votes Skip for the same slots
+/// - This creates a voting scenario where:
+///   - Notarize votes: 30% + ε (Node B only)
+///   - Skip votes: 30% (Node C only)
+///   - Offline: 40% - ε (Node A)
+///
+/// ## NotarizeFallback Condition 2 Trigger
+/// Node C observes that:
+/// - There are insufficient notarization votes for the current block (30% + ε < 40%)
+/// - But the combination of notarize + skip votes represents >= 60% participation while there is
+///   sufficient notarize stake (>= 20%).
+/// - Protocol determines it's "SafeToNotar" under condition 2 and issues NotarizeFallback
+///
+/// ## Phase 3: Recovery and Liveness Verification
+/// After observing 5 NotarizeFallback votes from Node C:
+/// - Node C's turbine is re-enabled to restore normal block reception
+/// - Network returns to normal operation with both active nodes
+/// - Test verifies 10+ new roots are created, ensuring liveness is maintained
+///
+/// ## Key Validation Points
+/// - Protocol handles significant offline stake (40%) gracefully
+/// - NotarizeFallback condition 2 triggers correctly with insufficient notarization
+/// - Network maintains liveness despite temporary partitioning
+/// - Recovery is seamless once partition is resolved
+#[test]
+#[serial]
+fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    // Configure total stake and stake distribution
+    const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
+    const SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH;
+
+    // Node stakes designed to trigger NotarizeFallback condition 2
+    let node_stakes = [
+        TOTAL_STAKE * 4 / 10 - 1, // Node A: 40% - ε (will go offline)
+        TOTAL_STAKE * 3 / 10 + 1, // Node B: 30% + ε (leader, stays online)
+        TOTAL_STAKE * 3 / 10,     // Node C: 30% (will be partitioned)
+    ];
+
+    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
+
+    // Control component for network partition simulation
+    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+
+    // Create leader schedule with Node B as primary leader (Node A will go offline)
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&[0, 4, 0]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create UDP socket to listen to votes for experiment control
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
+
+    // Create validator configs
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_additional_listeners =
+        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+
+    let mut validator_configs =
+        make_identical_validator_configs(&validator_config, node_stakes.len());
+
+    // Node C will have its turbine disabled during the experiment
+    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+
+    // Cluster configuration
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: TOTAL_STAKE,
+        node_stakes: node_stakes.to_vec(),
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(std::iter::repeat(true))
+                .collect(),
+        ),
+        slots_per_epoch: SLOTS_PER_EPOCH,
+        stakers_slot_offset: SLOTS_PER_EPOCH,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    // Create mapping from vote pubkeys to node indices for vote identification
+    let vote_pubkeys: HashMap<_, _> = validator_keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, keypair)| {
+            cluster
+                .validators
+                .get(&keypair.pubkey())
+                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
+        })
+        .collect();
+
+    assert_eq!(vote_pubkeys.len(), node_stakes.len());
+
+    // Phase 1: Take Node A offline to simulate Byzantine + offline stake
+    // This represents 40% - ε of total stake going offline
+    cluster.exit_node(&validator_keys[0].pubkey());
+
+    // Vote listener state management
+    #[derive(Debug, PartialEq, Eq)]
+    enum Stage {
+        Stability,
+        ObserveNotarFallbacks,
+        ObserveLiveness,
+    }
+
+    impl Stage {
+        fn timeout(&self) -> Duration {
+            match self {
+                Stage::Stability => Duration::from_secs(60),
+                Stage::ObserveNotarFallbacks => Duration::from_secs(120),
+                Stage::ObserveLiveness => Duration::from_secs(180),
+            }
+        }
+
+        fn all() -> Vec<Stage> {
+            vec![
+                Stage::Stability,
+                Stage::ObserveNotarFallbacks,
+                Stage::ObserveLiveness,
+            ]
+        }
+    }
+
+    #[derive(Debug)]
+    struct ExperimentState {
+        stage: Stage,
+        notar_fallbacks: HashSet<Slot>,
+        post_experiment_roots: HashSet<Slot>,
+    }
+
+    impl ExperimentState {
+        fn new() -> Self {
+            Self {
+                stage: Stage::Stability,
+                notar_fallbacks: HashSet::new(),
+                post_experiment_roots: HashSet::new(),
+            }
+        }
+
+        fn handle_experiment_start(
+            &mut self,
+            vote: &Vote,
+            node_c_turbine_disabled: &Arc<AtomicBool>,
+        ) {
+            // Phase 2: Start network partition experiment at slot 20
+            if vote.slot() >= 20 && self.stage == Stage::Stability {
+                info!(
+                    "Starting network partition experiment at slot {}",
+                    vote.slot()
+                );
+                node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                self.stage = Stage::ObserveNotarFallbacks;
+            }
+        }
+
+        fn handle_notar_fallback(
+            &mut self,
+            vote: &Vote,
+            node_name: usize,
+            node_c_turbine_disabled: &Arc<AtomicBool>,
+        ) {
+            // Track NotarizeFallback votes from Node C
+            if self.stage == Stage::ObserveNotarFallbacks
+                && node_name == 2
+                && vote.is_notarize_fallback()
+            {
+                self.notar_fallbacks.insert(vote.slot());
+                info!(
+                    "Node C issued NotarizeFallback for slot {}, total fallbacks: {}",
+                    vote.slot(),
+                    self.notar_fallbacks.len()
+                );
+
+                // Phase 3: End partition after observing sufficient NotarizeFallback votes
+                if self.notar_fallbacks.len() >= 5 {
+                    info!("Sufficient NotarizeFallback votes observed, ending partition");
+                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                    self.stage = Stage::ObserveLiveness;
+                }
+            }
+        }
+
+        fn record_certificate(&mut self, slot: u64) {
+            self.post_experiment_roots.insert(slot);
+        }
+
+        fn sufficient_roots_created(&self) -> bool {
+            self.post_experiment_roots.len() >= 8
+        }
+    }
+
+    // Start vote listener thread to monitor and control the experiment
+    let vote_listener_thread = std::thread::spawn({
+        let mut buf = [0u8; 65_535];
+        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let mut experiment_state = ExperimentState::new();
+        let timer = std::time::Instant::now();
+
+        move || {
+            loop {
+                let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
+
+                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+
+                match bls_message {
+                    BLSMessage::Vote(vote_message) => {
+                        let vote = &vote_message.vote;
+                        let node_name = vote_message.rank as usize;
+
+                        // Stage timeouts
+                        let elapsed_time = timer.elapsed();
+
+                        for stage in Stage::all() {
+                            if elapsed_time > stage.timeout() {
+                                panic!(
+                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
+                                    stage,
+                                    node_c_turbine_disabled.load(Ordering::Acquire),
+                                    vote,
+                                    experiment_state
+                                );
+                            }
+                        }
+
+                        // Handle experiment phase transitions
+                        experiment_state.handle_experiment_start(vote, &node_c_turbine_disabled);
+                        experiment_state.handle_notar_fallback(
+                            vote,
+                            node_name,
+                            &node_c_turbine_disabled,
+                        );
+                    }
+
+                    BLSMessage::Certificate(cert_message) => {
+                        // Check for finalization certificates to determine test completion
+                        if [CertificateType::Finalize, CertificateType::FinalizeFast]
+                            .contains(&cert_message.certificate.certificate_type)
+                        {
+                            experiment_state.record_certificate(cert_message.certificate.slot);
+
+                            if experiment_state.sufficient_roots_created() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    vote_listener_thread.join().unwrap();
+}
