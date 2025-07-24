@@ -276,6 +276,7 @@ impl CertificatePoolService {
                 }
             }
             stats.maybe_report();
+            cert_pool.maybe_report();
         }
         Ok(())
     }
