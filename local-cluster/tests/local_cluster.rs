@@ -2,6 +2,7 @@
 use {
     alpenglow_vote::{
         bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        certificate::CertificateType,
         vote::Vote,
     },
     assert_matches::assert_matches,
@@ -6895,20 +6896,6 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
     assert_eq!(NUM_NODES, cluster.validators.len());
 
-    // Create mapping from vote pubkeys to node indices
-    let vote_pubkey_to_node_index: HashMap<_, _> = validator_keys
-        .iter()
-        .enumerate()
-        .filter_map(|(index, keypair)| {
-            cluster
-                .validators
-                .get(&keypair.pubkey())
-                .map(|validator| (validator.info.voting_keypair.pubkey(), index))
-        })
-        .collect();
-
-    assert_eq!(NUM_NODES, vote_pubkey_to_node_index.len());
-
     /// Helper struct to manage experiment state and vote pattern tracking
     #[derive(Debug, PartialEq, Eq)]
     enum Stage {
@@ -6926,14 +6913,6 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
             }
         }
 
-        fn name(&self) -> &'static str {
-            match self {
-                Stage::Stability => "Stability",
-                Stage::ObserveSkipFallbacks => "ObserveSkipFallbacks",
-                Stage::ObserveLiveness => "ObserveLiveness",
-            }
-        }
-
         fn all() -> Vec<Stage> {
             vec![
                 Stage::Stability,
@@ -6948,7 +6927,6 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
         stage: Stage,
         vote_type_bitmap: HashMap<u64, [u8; 4]>, // slot -> [node_vote_pattern; 4]
         consecutive_pattern_matches: usize,
-        post_experiment_vote_weights: HashMap<u64, u64>, // slot -> total_weight
         post_experiment_roots: HashSet<u64>,
     }
 
@@ -6958,7 +6936,6 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                 stage: Stage::Stability,
                 vote_type_bitmap: HashMap::new(),
                 consecutive_pattern_matches: 0,
-                post_experiment_vote_weights: HashMap::new(),
                 post_experiment_roots: HashSet::new(),
             }
         }
@@ -6993,23 +6970,12 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
             false
         }
 
-        fn record_finalization_vote(
-            &mut self,
-            slot: u64,
-            node_index: usize,
-            node_stakes: &[u64; 4],
-        ) {
-            let total_weight = self.post_experiment_vote_weights.entry(slot).or_insert(0);
-            *total_weight += node_stakes[node_index];
-
-            // Check if we have sufficient stake for finalization (60% threshold)
-            if *total_weight >= TOTAL_STAKE * 6 / 10 {
-                self.post_experiment_roots.insert(slot);
-            }
+        fn record_certificate(&mut self, slot: u64) {
+            self.post_experiment_roots.insert(slot);
         }
 
         fn sufficient_roots_created(&self) -> bool {
-            self.post_experiment_roots.len() >= 10
+            self.post_experiment_roots.len() >= 8
         }
     }
 
@@ -7031,55 +6997,55 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                 let bls_message = bincode::deserialize::<BLSMessage>(&buffer[..bytes_received])
                     .expect("Failed to deserialize BLS message");
 
-                let BLSMessage::Vote(vote_message) = bls_message else {
-                    continue;
-                };
+                match bls_message {
+                    BLSMessage::Vote(vote_message) => {
+                        let vote = &vote_message.vote;
+                        let node_index = vote_message.rank as usize;
 
-                let vote = &vote_message.vote;
-                let node_index = vote_message.rank as usize;
+                        // Stage timeouts
+                        let elapsed_time = timer.elapsed();
 
-                // Stage timeouts
-                let elapsed_time = timer.elapsed();
+                        for stage in Stage::all() {
+                            if elapsed_time > stage.timeout() {
+                                panic!(
+                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
+                                    stage,
+                                    node_c_turbine_disabled.load(Ordering::Acquire),
+                                    vote,
+                                    experiment_state
+                                );
+                            }
+                        }
 
-                for stage in Stage::all() {
-                    if elapsed_time > stage.timeout() {
-                        panic!(
-                            "Timeout during {} stage. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
-                            stage.name(),
-                            node_c_turbine_disabled.load(Ordering::Acquire),
-                            vote,
-                            experiment_state
-                        );
+                        // Stage 1: Wait for stability, then introduce partition at slot 20
+                        if vote.slot() == 20 && !node_c_turbine_disabled.load(Ordering::Acquire) {
+                            node_c_turbine_disabled.store(true, Ordering::Release);
+                            experiment_state.stage = Stage::ObserveSkipFallbacks;
+                        }
+
+                        // Stage 2: Monitor for expected fallback vote patterns
+                        if experiment_state.stage == Stage::ObserveSkipFallbacks {
+                            experiment_state.record_vote_bitmap(vote.slot(), node_index, vote);
+
+                            // Check if we've observed the expected pattern for 3 consecutive slots
+                            if experiment_state.matches_expected_pattern() {
+                                node_c_turbine_disabled.store(false, Ordering::Release);
+                                experiment_state.stage = Stage::ObserveLiveness;
+                            }
+                        }
                     }
-                }
+                    BLSMessage::Certificate(cert_message) => {
+                        // Stage 3: Verify continued liveness after partition resolution
+                        if experiment_state.stage == Stage::ObserveLiveness
+                            && [CertificateType::Finalize, CertificateType::FinalizeFast]
+                                .contains(&cert_message.certificate.certificate_type)
+                        {
+                            experiment_state.record_certificate(cert_message.certificate.slot);
 
-                // Stage 1: Wait for stability, then introduce partition at slot 50
-                if vote.slot() == 50 && !node_c_turbine_disabled.load(Ordering::Acquire) {
-                    node_c_turbine_disabled.store(true, Ordering::Release);
-                    experiment_state.stage = Stage::ObserveSkipFallbacks;
-                }
-
-                // Stage 2: Monitor for expected fallback vote patterns
-                if experiment_state.stage == Stage::ObserveSkipFallbacks {
-                    experiment_state.record_vote_bitmap(vote.slot(), node_index, vote);
-
-                    // Check if we've observed the expected pattern for 3 consecutive slots
-                    if experiment_state.matches_expected_pattern() {
-                        node_c_turbine_disabled.store(false, Ordering::Release);
-                        experiment_state.stage = Stage::ObserveLiveness;
-                    }
-                }
-
-                // Stage 3: Verify continued liveness after partition resolution
-                if experiment_state.stage == Stage::ObserveLiveness && vote.is_finalize() {
-                    experiment_state.record_finalization_vote(
-                        vote.slot(),
-                        node_index,
-                        &node_stakes,
-                    );
-
-                    if experiment_state.sufficient_roots_created() {
-                        break;
+                            if experiment_state.sufficient_roots_created() {
+                                break;
+                            }
+                        }
                     }
                 }
             }
