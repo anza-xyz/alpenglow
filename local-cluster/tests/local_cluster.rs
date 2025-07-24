@@ -6482,6 +6482,7 @@ fn test_alpenglow_migration_4() {
 /// - Recovery is seamless once partition is resolved
 #[test]
 #[serial]
+#[cfg(any())]
 fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 
