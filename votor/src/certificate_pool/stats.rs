@@ -1,6 +1,11 @@
 use {
-    crate::VoteType, alpenglow_vote::certificate::CertificateType, solana_metrics::datapoint_info,
+    crate::VoteType,
+    alpenglow_vote::certificate::CertificateType,
+    solana_metrics::datapoint_info,
+    std::time::{Duration, Instant},
 };
+
+const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(crate) struct CertificatePoolStats {
@@ -17,6 +22,8 @@ pub(crate) struct CertificatePoolStats {
     pub(crate) new_certs_generated: Vec<u32>,
     pub(crate) new_certs_ingested: Vec<u32>,
     pub(crate) ingested_votes: Vec<u32>,
+
+    pub(crate) last_request_time: Instant,
 }
 
 impl Default for CertificatePoolStats {
@@ -43,6 +50,8 @@ impl CertificatePoolStats {
             new_certs_ingested: vec![0; num_cert_types],
             new_certs_generated: vec![0; num_cert_types],
             ingested_votes: vec![0; num_vote_types],
+
+            last_request_time: Instant::now(),
         }
     }
 
@@ -63,7 +72,7 @@ impl CertificatePoolStats {
         array[index] = array[index].saturating_add(1);
     }
 
-    pub fn report(&mut self) {
+    fn report(&self) {
         datapoint_info!(
             "certificate_pool_stats",
             ("conflicting_votes", self.conflicting_votes as i64, i64),
@@ -209,6 +218,12 @@ impl CertificatePoolStats {
                 i64
             ),
         );
-        *self = Self::new();
+    }
+
+    pub fn maybe_report(&mut self) {
+        if self.last_request_time.elapsed() >= STATS_REPORT_INTERVAL {
+            self.report();
+            *self = Self::new();
+        }
     }
 }

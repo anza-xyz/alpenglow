@@ -777,8 +777,8 @@ impl CertificatePool {
         self.parent_ready_tracker.update_pubkey(new_pubkey);
     }
 
-    pub fn report_stats(&mut self) {
-        self.stats.report();
+    pub fn maybe_report(&mut self) {
+        self.stats.maybe_report();
     }
 }
 

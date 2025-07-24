@@ -275,10 +275,8 @@ impl CertificatePoolService {
                     return Ok(());
                 }
             }
-            if stats.maybe_report() {
-                // Stats were reported, report the certificate pool stats
-                cert_pool.report_stats();
-            }
+            stats.maybe_report();
+            cert_pool.maybe_report();
         }
         Ok(())
     }
