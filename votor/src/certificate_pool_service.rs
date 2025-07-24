@@ -8,9 +8,12 @@ use {
         certificate_pool::{
             self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
         },
-        commitment::AlpenglowCommitmentAggregationData,
+        commitment::{
+            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
+            AlpenglowCommitmentType,
+        },
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
-        voting_utils::{self, BLSOp},
+        voting_utils::BLSOp,
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
     },
@@ -146,7 +149,7 @@ impl CertificatePoolService {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
-        match voting_utils::add_message_and_maybe_update_commitment(
+        match Self::add_message_and_maybe_update_commitment(
             &ctx.my_pubkey,
             &ctx.my_vote_pubkey,
             message,
@@ -275,6 +278,31 @@ impl CertificatePoolService {
             stats.maybe_report();
         }
         Ok(())
+    }
+
+    /// Adds a vote to the certificate pool and updates the commitment cache if necessary
+    ///
+    /// If a new finalization slot was recognized, returns the slot
+    fn add_message_and_maybe_update_commitment(
+        my_pubkey: &Pubkey,
+        my_vote_pubkey: &Pubkey,
+        message: &BLSMessage,
+        cert_pool: &mut CertificatePool,
+        votor_events: &mut Vec<VotorEvent>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+    ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
+        let (new_finalized_slot, new_certificates_to_send) =
+            cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
+        let Some(new_finalized_slot) = new_finalized_slot else {
+            return Ok((None, new_certificates_to_send));
+        };
+        trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
+        alpenglow_update_commitment_cache(
+            AlpenglowCommitmentType::Finalized,
+            new_finalized_slot,
+            commitment_sender,
+        );
+        Ok((Some(new_finalized_slot), new_certificates_to_send))
     }
 
     fn add_produce_block_event(
