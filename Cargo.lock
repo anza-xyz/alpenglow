@@ -471,6 +471,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 
 [[package]]
+name = "alpenglow-vote"
+version = "0.1.0"
+source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=cdae90a#cdae90a3c3f57f56bfa6f4c7e05d5b77b83926f1"
+dependencies = [
+ "bincode",
+ "bitflags 2.9.0",
+ "bitvec",
+ "bytemuck",
+ "either",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "serde",
+ "serde_derive",
+ "solana-account",
+ "solana-bls-signatures",
+ "solana-hash",
+ "solana-program",
+ "solana-signature",
+ "solana-vote-interface",
+ "spl-pod",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8252,6 +8277,7 @@ dependencies = [
 name = "solana-keygen"
 version = "2.3.0"
 dependencies = [
+ "alpenglow-vote",
  "bs58",
  "clap 3.2.23",
  "dirs-next",
