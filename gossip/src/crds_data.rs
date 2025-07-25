@@ -364,15 +364,6 @@ impl Vote {
         })
     }
 
-    pub fn new_alpenglow(from: Pubkey, transaction: Transaction, wallclock: u64) -> Option<Self> {
-        vote_parser::parse_alpenglow_vote_transaction(&transaction).map(|(_, vote, ..)| Self {
-            from,
-            transaction,
-            wallclock,
-            slot: vote.last_voted_slot(),
-        })
-    }
-
     /// New random Vote for tests and benchmarks.
     fn new_rand<R: Rng>(rng: &mut R, pubkey: Option<Pubkey>) -> Self {
         Self {
@@ -407,12 +398,8 @@ impl<'de> Deserialize<'de> for Vote {
         vote.transaction
             .sanitize()
             .map_err(serde::de::Error::custom)?;
-        let vote = if vote_parser::is_alpenglow_vote_transaction(&vote.transaction) {
-            Self::new_alpenglow(vote.from, vote.transaction, vote.wallclock)
-        } else {
-            Self::new(vote.from, vote.transaction, vote.wallclock)
-        };
-        vote.ok_or_else(|| serde::de::Error::custom("invalid vote tx"))
+        Self::new(vote.from, vote.transaction, vote.wallclock)
+            .ok_or_else(|| serde::de::Error::custom("invalid vote tx"))
     }
 }
 

@@ -301,8 +301,9 @@ impl ClusterInfoVoteListener {
                 !packet_batch[0].meta().discard()
             })
             .filter_map(|(tx, packet_batch)| {
-                let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)
-                    .or_else(|| vote_parser::parse_alpenglow_vote_transaction(&tx))?;
+                // let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)
+                //     .or_else(|| vote_parser::parse_alpenglow_vote_transaction(&tx))?;
+                let (vote_account_key, vote, ..) = vote_parser::parse_vote_transaction(&tx)?;
                 let slot = vote.last_voted_slot()?;
                 if (slot >= first_alpenglow_slot) ^ vote.is_alpenglow_vote() {
                     return None;
@@ -625,8 +626,7 @@ impl ClusterInfoVoteListener {
         let votes = gossip_vote_txs
             .into_iter()
             .filter_map(|tx| {
-                let parsed_vote = vote_parser::parse_vote_transaction(&tx)
-                    .or_else(|| vote_parser::parse_alpenglow_vote_transaction(&tx))?;
+                let parsed_vote = vote_parser::parse_vote_transaction(&tx)?;
                 Some((parsed_vote, Some(tx)))
             })
             .chain(replayed_votes.into_iter().zip(repeat(/*is_gossip:*/ None)));
