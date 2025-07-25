@@ -40,7 +40,6 @@ use {
         transaction::Transaction,
     },
     solana_vote::{
-        alpenglow::vote::Vote as AlpenglowVote,
         vote_parser::{self, ParsedVote, ParsedVoteTransaction},
         vote_transaction::VoteTransaction,
     },
