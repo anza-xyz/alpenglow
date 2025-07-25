@@ -9,7 +9,6 @@ use {
         resolved_transaction_view::ResolvedTransactionView, transaction_data::TransactionData,
         transaction_version::TransactionVersion, transaction_view::SanitizedTransactionView,
     },
-    alpenglow_vote::ID as alpenglowID,
     solana_message::{
         compiled_instruction::CompiledInstruction,
         v0::{LoadedAddresses, LoadedMessage, MessageAddressTableLookup},
@@ -24,6 +23,7 @@ use {
         versioned::VersionedTransaction,
     },
     solana_transaction_error::{TransactionError, TransactionResult as Result},
+    solana_vote::alpenglow::ID as alpenglowID,
     std::{borrow::Cow, collections::HashSet},
 };
 

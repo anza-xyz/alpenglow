@@ -6006,7 +6006,6 @@ dependencies = [
  "agave-banking-stage-ingress-types",
  "agave-transaction-view",
  "ahash 0.8.11",
- "alpenglow-vote",
  "anyhow",
  "arrayvec",
  "assert_matches",
@@ -6683,8 +6682,6 @@ name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "alpenglow-vote",
- "assert_matches",
  "bincode",
  "bitflags 2.9.0",
  "bzip2",
@@ -7652,7 +7649,6 @@ name = "solana-runtime"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
- "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "base64 0.22.1",
@@ -9317,10 +9313,14 @@ dependencies = [
 name = "solana-vote"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "bincode",
+ "bitvec",
+ "bytemuck",
  "itertools 0.12.1",
  "log",
+ "num-derive",
+ "num-traits",
+ "num_enum",
  "rand 0.8.5",
  "serde",
  "serde_derive",
@@ -9341,6 +9341,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-transaction",
  "solana-vote-interface",
+ "spl-pod",
  "thiserror 2.0.12",
 ]
 
@@ -9404,7 +9405,6 @@ dependencies = [
 name = "solana-votor"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "anyhow",
  "bincode",
  "bitvec",
