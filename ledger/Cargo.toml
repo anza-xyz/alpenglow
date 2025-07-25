@@ -11,7 +11,6 @@ edition = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
-alpenglow-vote = { workspace = true }
 assert_matches = { workspace = true }
 bincode = { workspace = true }
 bitflags = { workspace = true, features = ["serde"] }

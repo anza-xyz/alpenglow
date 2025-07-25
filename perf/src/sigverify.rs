@@ -10,7 +10,6 @@ use {
         perf_libs,
         recycler::Recycler,
     },
-    alpenglow_vote::id as alpenglow_vote_id,
     rayon::{prelude::*, ThreadPool},
     solana_hash::Hash,
     solana_message::{MESSAGE_HEADER_LENGTH, MESSAGE_VERSION_PREFIX},
@@ -18,6 +17,7 @@ use {
     solana_rayon_threadlimit::get_thread_count,
     solana_short_vec::decode_shortu16_len,
     solana_signature::Signature,
+    solana_vote::alpenglow::id as alpenglow_vote_id,
     std::{convert::TryFrom, mem::size_of},
 };
 

@@ -4,7 +4,6 @@ use {
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
     },
-    alpenglow_vote::bls_message::BLSMessage,
     bincode::serialize,
     crossbeam_channel::{select, Receiver},
     solana_client::connection_cache::ConnectionCache,
@@ -18,6 +17,7 @@ use {
         transaction::Transaction,
         transport::TransportError,
     },
+    solana_vote::alpenglow::bls_message::BLSMessage,
     solana_votor::{vote_history_storage::VoteHistoryStorage, voting_utils::BLSOp},
     std::{
         net::SocketAddr,
@@ -319,11 +319,6 @@ mod tests {
     use {
         super::*,
         crate::consensus::tower_storage::NullTowerStorage,
-        alpenglow_vote::{
-            bls_message::{BLSMessage, CertificateMessage, VoteMessage},
-            certificate::{Certificate, CertificateType},
-            vote::Vote,
-        },
         bitvec::prelude::*,
         solana_bls_signatures::Signature as BLSSignature,
         solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
@@ -345,6 +340,11 @@ mod tests {
             packet::{Packet, PacketBatch},
             recvmmsg::recv_mmsg,
             socket::SocketAddrSpace,
+        },
+        solana_vote::alpenglow::{
+            bls_message::{BLSMessage, CertificateMessage, VoteMessage},
+            certificate::{Certificate, CertificateType},
+            vote::Vote,
         },
         solana_votor::vote_history_storage::{
             NullVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,

@@ -12,7 +12,6 @@ use {
         votor::{SharedContext, Votor},
         Block,
     },
-    alpenglow_vote::vote::Vote,
     crossbeam_channel::{select, RecvError, SendError},
     solana_ledger::leader_schedule_utils::{
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
@@ -20,6 +19,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_sdk::{clock::Slot, hash::Hash, signature::Signer},
+    solana_vote::alpenglow::vote::Vote,
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{

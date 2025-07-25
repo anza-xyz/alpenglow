@@ -9,7 +9,6 @@
 )]
 pub use solana_stake_interface::state::*;
 use {
-    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     solana_account::{state_traits::StateMut, AccountSharedData, ReadableAccount},
     solana_clock::{Clock, Epoch},
     solana_feature_set::FeatureSet,
@@ -29,6 +28,7 @@ use {
     solana_transaction_context::{
         BorrowedAccount, IndexOfAccount, InstructionContext, TransactionContext,
     },
+    solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
     solana_vote_interface::state::{VoteState, VoteStateVersions},
     std::{collections::HashSet, convert::TryFrom},
 };
@@ -1429,7 +1429,7 @@ fn do_create_account(
 ) -> AccountSharedData {
     let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
 
-    let credits = if alpenglow_vote::check_id(vote_account.owner()) {
+    let credits = if solana_vote::alpenglow::check_id(vote_account.owner()) {
         AlpenglowVoteState::deserialize(vote_account.data())
             .expect("alpenglow_vote_state")
             .epoch_credits()
