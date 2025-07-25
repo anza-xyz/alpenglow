@@ -152,31 +152,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "alpenglow-vote"
-version = "0.1.0"
-source = "git+https://github.com/solana-program/alpenglow-vote.git?rev=cdae90a#cdae90a3c3f57f56bfa6f4c7e05d5b77b83926f1"
-dependencies = [
- "bincode",
- "bitflags 2.9.0",
- "bitvec",
- "bytemuck",
- "either",
- "num-derive",
- "num-traits",
- "num_enum",
- "serde",
- "serde_derive",
- "solana-account",
- "solana-bls-signatures",
- "solana-hash",
- "solana-program",
- "solana-signature",
- "solana-vote-interface",
- "spl-pod",
- "thiserror 2.0.12",
-]
-
-[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6814,7 +6789,6 @@ name = "solana-perf"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
- "alpenglow-vote",
  "bincode",
  "bv",
  "caps",
@@ -6838,6 +6812,7 @@ dependencies = [
  "solana-short-vec",
  "solana-signature",
  "solana-time-utils",
+ "solana-vote",
 ]
 
 [[package]]
@@ -7558,7 +7533,6 @@ name = "solana-runtime-transaction"
 version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
- "alpenglow-vote",
  "log",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
@@ -7570,6 +7544,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-transaction",
  "solana-transaction-error",
+ "solana-vote",
  "thiserror 2.0.12",
 ]
 
@@ -7925,7 +7900,6 @@ dependencies = [
 name = "solana-stake-program"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "bincode",
  "log",
  "solana-account",
@@ -7946,6 +7920,7 @@ dependencies = [
  "solana-sysvar",
  "solana-transaction-context 2.3.0",
  "solana-type-overrides",
+ "solana-vote",
  "solana-vote-interface",
 ]
 
