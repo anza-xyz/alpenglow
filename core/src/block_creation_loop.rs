@@ -194,7 +194,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             start_slot,
             end_slot,
             // TODO: handle duplicate blocks by using the hash here
-            parent_block: (parent_slot, _, _),
+            parent_block: (parent_slot, _),
             skip_timer,
         } = {
             let window_info = leader_window_notifier.window_info.lock().unwrap();
