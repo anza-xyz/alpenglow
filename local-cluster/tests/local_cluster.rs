@@ -6460,7 +6460,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 /// Node C, observing the conflicting votes, triggers SafeToNotar for both blocks:
 /// - Issues NotarizeFallback for b1 (A's block)
 /// - Issues NotarizeFallback for b2 (B's equivocated block)
-/// - Verifies the block IDs and bank hashes are different due to equivocation
+/// - Verifies the block IDs are different due to equivocation
 /// - Continues this pattern until 3 slots have double NotarizeFallback votes
 ///
 /// ## Phase 4: Recovery and Liveness
@@ -6587,7 +6587,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     struct VoteListenerState {
         num_notar_fallback_votes: u32,
         a_equivocates: bool,
-        notar_fallback_map: HashMap<Slot, Vec<(Hash, Hash)>>,
+        notar_fallback_map: HashMap<Slot, Vec<Hash>>,
         double_notar_fallback_slots: Vec<Slot>,
         check_for_roots: bool,
         post_experiment_votes: HashMap<Slot, Vec<u16>>,
@@ -6678,10 +6678,9 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             // Handle double NotarizeFallback during equivocation
             if self.a_equivocates && vote.is_notarize_fallback() {
                 let block_id = vote.block_id().copied().unwrap();
-                let bank_hash = vote.replayed_bank_hash().copied().unwrap();
 
                 let entry = self.notar_fallback_map.entry(vote.slot()).or_default();
-                entry.push((block_id, bank_hash));
+                entry.push(block_id);
 
                 assert!(
                     entry.len() <= 2,
@@ -6690,14 +6689,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 );
 
                 if entry.len() == 2 {
-                    // Verify equivocation: different block IDs and bank hashes
+                    // Verify equivocation: different block IDs
                     assert_ne!(
-                        entry[0].0, entry[1].0,
+                        entry[0], entry[1],
                         "Block IDs should differ due to equivocation"
-                    );
-                    assert_ne!(
-                        entry[0].1, entry[1].1,
-                        "Bank hashes should differ due to equivocation"
                     );
 
                     self.double_notar_fallback_slots.push(vote.slot());

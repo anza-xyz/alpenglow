@@ -225,20 +225,18 @@ impl EventHandler {
 
             // We have observed the safe to notar condition, and can send a notar fallback vote
             // TODO: update cert pool to check parent block id for intra window slots
-            VotorEvent::SafeToNotar(block @ (slot, block_id, bank_hash)) => {
+            VotorEvent::SafeToNotar(block @ (slot, block_id)) => {
                 info!("{my_pubkey}: SafeToNotar {block:?}");
                 Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
                 if vctx.vote_history.its_over(slot)
-                    || vctx
-                        .vote_history
-                        .voted_notar_fallback(slot, block_id, bank_hash)
+                    || vctx.vote_history.voted_notar_fallback(slot, block_id)
                 {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
                 votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
-                    Vote::new_notarization_fallback_vote(slot, block_id, bank_hash),
+                    Vote::new_notarization_fallback_vote(slot, block_id, Hash::default()),
                     false,
                     vctx,
                 ));
@@ -344,7 +342,6 @@ impl EventHandler {
         let block = (
             slot,
             bank.block_id().expect("Block id must be set upstream"),
-            bank.hash(),
         );
         let parent_slot = bank.parent_slot();
         let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
@@ -355,7 +352,7 @@ impl EventHandler {
             trace!("Using default block id for {slot} parent {parent_slot}");
             Hash::default()
         });
-        let parent_block = (parent_slot, parent_block_id, bank.parent_hash());
+        let parent_block = (parent_slot, parent_block_id);
         (block, parent_block)
     }
 
@@ -368,8 +365,8 @@ impl EventHandler {
     /// If successful returns true
     fn try_notar(
         my_pubkey: &Pubkey,
-        (slot, block_id, bank_hash): Block,
-        parent_block @ (parent_slot, parent_block_id, parent_bank_hash): Block,
+        (slot, block_id): Block,
+        parent_block @ (parent_slot, parent_block_id): Block,
         pending_blocks: &mut PendingBlocks,
         voting_context: &mut VotingContext,
         votes: &mut Vec<Result<BLSOp, VoteError>>,
@@ -391,9 +388,7 @@ impl EventHandler {
                 // Non consecutive
                 return false;
             }
-            if voting_context.vote_history.voted_notar(parent_slot)
-                != Some((parent_block_id, parent_bank_hash))
-            {
+            if voting_context.vote_history.voted_notar(parent_slot) != Some(parent_block_id) {
                 // Voted skip, or notarize on a different version of the parent
                 return false;
             }
@@ -402,7 +397,7 @@ impl EventHandler {
         info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
         votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
-            Vote::new_notarization_vote(slot, block_id, bank_hash),
+            Vote::new_notarization_vote(slot, block_id, Hash::default()),
             false,
             voting_context,
         ));
@@ -451,7 +446,7 @@ impl EventHandler {
     /// If successful returns true
     fn try_final(
         my_pubkey: &Pubkey,
-        block @ (slot, block_id, _): Block,
+        block @ (slot, block_id): Block,
         voting_context: &mut VotingContext,
         votes: &mut Vec<Result<BLSOp, VoteError>>,
     ) -> bool {
@@ -465,7 +460,7 @@ impl EventHandler {
         if voting_context
             .vote_history
             .voted_notar(slot)
-            .is_none_or(|(bid, _)| bid != block_id)
+            .is_none_or(|bid| bid != block_id)
         {
             return false;
         }
@@ -547,14 +542,13 @@ impl EventHandler {
         let old_root = bank_forks_r.root();
         let Some(new_root) = finalized_blocks
             .iter()
-            .filter_map(|&(slot, block_id, bank_hash)| {
+            .filter_map(|&(slot, block_id)| {
                 let bank = bank_forks_r.get(slot)?;
                 (slot > old_root
                     && vctx.vote_history.voted(slot)
                     && bank.is_frozen()
-                    && bank.block_id().is_some_and(|bid| bid == block_id)
-                    && bank.hash() == bank_hash)
-                    .then_some(slot)
+                    && bank.block_id().is_some_and(|bid| bid == block_id))
+                .then_some(slot)
             })
             .max()
         else {
