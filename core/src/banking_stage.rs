@@ -32,10 +32,8 @@ use {
     solana_perf::packet::PACKETS_PER_BATCH,
     solana_poh::poh_recorder::{PohRecorder, TransactionRecorder},
     solana_runtime::{
-        bank::Bank,
-        bank_forks::BankForks,
-        prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{AlpenglowVoteSender, ReplayVoteSender},
+        bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
+        vote_sender_types::ReplayVoteSender,
     },
     solana_runtime_transaction::runtime_transaction::RuntimeTransaction,
     solana_sdk::{
@@ -339,7 +337,6 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
-        alpenglow_vote_sender: Option<AlpenglowVoteSender>,
     ) -> Self {
         Self::new_num_threads(
             block_production_method,
@@ -356,7 +353,6 @@ impl BankingStage {
             log_messages_bytes_limit,
             bank_forks,
             prioritization_fee_cache,
-            alpenglow_vote_sender,
         )
     }
 
@@ -376,7 +372,6 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
-        alpenglow_vote_sender: Option<AlpenglowVoteSender>,
     ) -> Self {
         match block_production_method {
             BlockProductionMethod::CentralScheduler
@@ -400,7 +395,6 @@ impl BankingStage {
                     log_messages_bytes_limit,
                     bank_forks,
                     prioritization_fee_cache,
-                    alpenglow_vote_sender,
                 )
             }
         }
@@ -422,7 +416,6 @@ impl BankingStage {
         log_messages_bytes_limit: Option<usize>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
-        alpenglow_vote_sender: Option<AlpenglowVoteSender>,
     ) -> Self {
         assert!(num_threads >= MIN_TOTAL_THREADS);
         // Keeps track of extraneous vote transactions for the vote threads
@@ -455,7 +448,6 @@ impl BankingStage {
                 transaction_recorder.clone(),
                 log_messages_bytes_limit,
                 VoteStorage::new(latest_unprocessed_votes.clone(), vote_source),
-                alpenglow_vote_sender.clone(),
             ));
         }
 
@@ -605,7 +597,6 @@ impl BankingStage {
         transaction_recorder: TransactionRecorder,
         log_messages_bytes_limit: Option<usize>,
         vote_storage: VoteStorage,
-        alpenglow_vote_sender: Option<AlpenglowVoteSender>,
     ) -> JoinHandle<()> {
         let mut packet_receiver = PacketReceiver::new(id, packet_receiver);
         let consumer = Consumer::new(
@@ -625,7 +616,6 @@ impl BankingStage {
                     &consumer,
                     id,
                     vote_storage,
-                    alpenglow_vote_sender,
                 )
             })
             .unwrap()
@@ -689,7 +679,6 @@ impl BankingStage {
         consumer: &Consumer,
         id: u32,
         mut vote_storage: VoteStorage,
-        alpenglow_vote_sender: Option<AlpenglowVoteSender>,
     ) {
         let mut banking_stage_stats = BankingStageStats::new(id);
 
@@ -717,7 +706,6 @@ impl BankingStage {
                 &mut vote_storage,
                 &mut banking_stage_stats,
                 &mut slot_metrics_tracker,
-                alpenglow_vote_sender.as_ref(),
             ) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => (),
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -928,7 +916,6 @@ mod tests {
             None,
             bank_forks,
             &Arc::new(PrioritizationFeeCache::new(0u64)),
-            None,
         );
         drop(non_vote_sender);
         drop(tpu_vote_sender);
@@ -987,7 +974,6 @@ mod tests {
             None,
             bank_forks,
             &Arc::new(PrioritizationFeeCache::new(0u64)),
-            None,
         );
         trace!("sending bank");
         drop(non_vote_sender);
@@ -1055,7 +1041,6 @@ mod tests {
             None,
             bank_forks.clone(), // keep a local-copy of bank-forks so worker threads do not lose weak access to bank-forks
             &Arc::new(PrioritizationFeeCache::new(0u64)),
-            None,
         );
 
         // fund another account so we can send 2 good transactions in a single batch.
@@ -1207,7 +1192,6 @@ mod tests {
                 None,
                 bank_forks,
                 &Arc::new(PrioritizationFeeCache::new(0u64)),
-                None,
             );
 
             // wait for banking_stage to eat the packets
@@ -1397,7 +1381,6 @@ mod tests {
             None,
             bank_forks,
             &Arc::new(PrioritizationFeeCache::new(0u64)),
-            None,
         );
 
         let keypairs = (0..100).map(|_| Keypair::new()).collect_vec();
