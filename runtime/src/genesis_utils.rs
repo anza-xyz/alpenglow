@@ -1,7 +1,4 @@
 use {
-    alpenglow_vote::{
-        bls_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
-    },
     log::*,
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
     solana_feature_set::{self, FeatureSet, FEATURE_NAMES},
@@ -20,6 +17,9 @@ use {
         system_program,
     },
     solana_stake_program::stake_state,
+    solana_vote::alpenglow::{
+        self, bls_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
+    },
     solana_vote_program::vote_state,
     std::{borrow::Borrow, fs::File, io::Read},
 };
@@ -364,7 +364,7 @@ pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpengl
         });
 
     // Derive the address for the program data account
-    let address = alpenglow_vote::id();
+    let address = alpenglow::id();
     let loader = solana_program::bpf_loader_upgradeable::id();
     let programdata_address =
         solana_program::bpf_loader_upgradeable::get_program_data_address(&address);

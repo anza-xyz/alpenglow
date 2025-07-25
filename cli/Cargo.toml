@@ -10,7 +10,6 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alpenglow-vote = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
 clap = { workspace = true }
@@ -87,6 +86,7 @@ solana-transaction-error = { workspace = true }
 solana-transaction-status = { workspace = true }
 solana-udp-client = { workspace = true }
 solana-version = { workspace = true }
+solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
 spl-memo = { workspace = true, features = ["no-entrypoint"] }
 thiserror = { workspace = true }

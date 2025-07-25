@@ -4,10 +4,6 @@ use {
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
-    alpenglow_vote::{
-        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-        vote::Vote,
-    },
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_runtime::{
@@ -18,6 +14,10 @@ use {
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
+    },
+    solana_vote::alpenglow::{
+        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        vote::Vote,
     },
     std::{collections::HashMap, sync::Arc},
     thiserror::Error,

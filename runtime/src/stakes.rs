@@ -14,7 +14,10 @@ use {
         vote::state::VoteStateVersions,
     },
     solana_stake_program::stake_state::Stake,
-    solana_vote::vote_account::{VoteAccount, VoteAccounts},
+    solana_vote::{
+        alpenglow,
+        vote_account::{VoteAccount, VoteAccounts},
+    },
     std::{
         collections::HashMap,
         ops::Add,
@@ -79,7 +82,7 @@ impl StakesCache {
         // Zero lamport accounts are not stored in accounts-db
         // and so should be removed from cache as well.
         if account.lamports() == 0 {
-            if solana_vote_program::check_id(owner) || alpenglow_vote::check_id(owner) {
+            if solana_vote_program::check_id(owner) || alpenglow::check_id(owner) {
                 let _old_vote_account = {
                     let mut stakes = self.0.write().unwrap();
                     stakes.remove_vote_account(pubkey)
@@ -120,7 +123,7 @@ impl StakesCache {
                     stakes.remove_vote_account(pubkey)
                 };
             };
-        } else if alpenglow_vote::check_id(owner) {
+        } else if alpenglow::check_id(owner) {
             match VoteAccount::try_from(account.to_account_shared_data()) {
                 Ok(vote_account) => {
                     if vote_account
@@ -263,7 +266,7 @@ impl Stakes<StakeAccount> {
                 let voter_pubkey = &delegation.voter_pubkey;
                 if stakes.vote_accounts.get(voter_pubkey).is_none() {
                     if let Some(account) = get_account(voter_pubkey) {
-                        let is_valid_account = if alpenglow_vote::check_id(account.owner()) {
+                        let is_valid_account = if alpenglow::check_id(account.owner()) {
                             match VoteAccount::try_from(account.clone()) {
                                 Ok(vote_account) => vote_account
                                     .alpenglow_vote_state()
@@ -646,11 +649,11 @@ fn refresh_vote_accounts(
 pub(crate) mod tests {
     use {
         super::*,
-        alpenglow_vote::state::VoteState as AlpenglowVoteState,
         rayon::ThreadPoolBuilder,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_sdk::{account::WritableAccount, pubkey::Pubkey, rent::Rent, stake},
         solana_stake_program::stake_state,
+        solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
         solana_vote_program::vote_state::{self, VoteState, VoteStateVersions},
         test_case::test_case,
     };

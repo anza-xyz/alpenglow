@@ -1,10 +1,5 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
-    alpenglow_vote::{
-        bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-        certificate::CertificateType,
-        vote::Vote,
-    },
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -94,6 +89,11 @@ use {
         BroadcastStageType,
     },
     solana_vote::{
+        alpenglow::{
+            bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+            certificate::CertificateType,
+            vote::Vote,
+        },
         vote_parser::{self},
         vote_transaction,
     },
