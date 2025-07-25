@@ -8,7 +8,6 @@ use {
         sigverifier::ed25519_sigverifier::ed25519_verify_cpu,
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
-    alpenglow_vote::vote::Vote as AlpenglowVote,
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Select, Sender},
     log::*,
     solana_gossip::{
@@ -30,7 +29,7 @@ use {
         commitment::VOTE_THRESHOLD_SIZE,
         epoch_stakes::EpochStakes,
         root_bank_cache::RootBankCache,
-        vote_sender_types::{AlpenglowVoteSender, ReplayVoteReceiver},
+        vote_sender_types::ReplayVoteReceiver,
     },
     solana_sdk::{
         clock::{Slot, DEFAULT_MS_PER_SLOT},
@@ -203,7 +202,6 @@ impl ClusterInfoVoteListener {
         blockstore: Arc<Blockstore>,
         bank_notification_sender: Option<BankNotificationSender>,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
-        alpenglow_vote_sender: AlpenglowVoteSender,
     ) -> Self {
         let (verified_vote_transactions_sender, verified_vote_transactions_receiver) = unbounded();
         let listen_thread = {
@@ -241,7 +239,6 @@ impl ClusterInfoVoteListener {
                     blockstore,
                     bank_notification_sender,
                     duplicate_confirmed_slot_sender,
-                    alpenglow_vote_sender,
                 );
             })
             .unwrap();
@@ -338,7 +335,6 @@ impl ClusterInfoVoteListener {
         blockstore: Arc<Blockstore>,
         bank_notification_sender: Option<BankNotificationSender>,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
-        alpenglow_vote_sender: AlpenglowVoteSender,
     ) -> Result<()> {
         let mut confirmation_verifier = OptimisticConfirmationVerifier::new(bank_hash_cache.root());
         let mut latest_vote_slot_per_validator = HashMap::new();
@@ -379,7 +375,6 @@ impl ClusterInfoVoteListener {
                 &mut latest_vote_slot_per_validator,
                 bank_hash_cache,
                 &dumped_slot_subscription,
-                &alpenglow_vote_sender,
             );
             match confirmed_slots {
                 Ok(confirmed_slots) => {
@@ -414,7 +409,6 @@ impl ClusterInfoVoteListener {
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
-        alpenglow_vote_sender: &AlpenglowVoteSender,
     ) -> Result<ThresholdConfirmedSlots> {
         let mut sel = Select::new();
         sel.recv(gossip_vote_txs_receiver);
@@ -447,31 +441,11 @@ impl ClusterInfoVoteListener {
                     latest_vote_slot_per_validator,
                     bank_hash_cache,
                     dumped_slot_subscription,
-                    alpenglow_vote_sender,
                 ));
             }
             remaining_wait_time = remaining_wait_time.saturating_sub(start.elapsed());
         }
         Ok(vec![])
-    }
-
-    fn process_alpenglow_votes(
-        parsed_vote: AlpenglowVote,
-        vote_pubkey: &Pubkey,
-        transaction: Transaction,
-        verified_vote_sender: &VerifiedVoteSender,
-        alpenglow_vote_sender: &AlpenglowVoteSender,
-        _subscriptions: &RpcSubscriptions,
-    ) {
-        let _ = alpenglow_vote_sender.send((parsed_vote, *vote_pubkey, transaction.into()));
-
-        // TODO: maybe replicate is_new behavior from `track_new_votes_and_notify_confirmations`
-        // to not notify repair and more importantly RPC subscribers of votes multiple times
-        if parsed_vote.is_notarization() || parsed_vote.is_finalize() {
-            // TODO: Plumb Alpenglow Vote through RPC notification for `NotificationEntry::Vote`
-            //subscriptions.notify_vote(*vote_pubkey, tower_vote, vote_transaction_signature);
-            let _ = verified_vote_sender.send((*vote_pubkey, vec![parsed_vote.slot()]));
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -642,7 +616,6 @@ impl ClusterInfoVoteListener {
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
-        alpenglow_vote_sender: &AlpenglowVoteSender,
     ) -> ThresholdConfirmedSlots {
         let mut diff: HashMap<Slot, HashMap<Pubkey, bool>> = HashMap::new();
         let mut new_optimistic_confirmed_slots = vec![];
@@ -659,17 +632,8 @@ impl ClusterInfoVoteListener {
             .chain(replayed_votes.into_iter().zip(repeat(/*is_gossip:*/ None)));
         for ((vote_pubkey, vote, _switch_proof, signature), transaction) in votes {
             match vote {
-                ParsedVoteTransaction::Alpenglow(vote) => {
-                    if let Some(transaction) = transaction {
-                        Self::process_alpenglow_votes(
-                            vote,
-                            &vote_pubkey,
-                            transaction,
-                            verified_vote_sender,
-                            alpenglow_vote_sender,
-                            subscriptions,
-                        );
-                    }
+                ParsedVoteTransaction::Alpenglow(_) => {
+                    panic!("Will be removed soon");
                 }
                 ParsedVoteTransaction::Tower(vote) => {
                     if root_bank
@@ -914,7 +878,6 @@ mod tests {
         let (verified_vote_sender, _verified_vote_receiver) = unbounded();
         let (gossip_verified_vote_hash_sender, _gossip_verified_vote_hash_receiver) = unbounded();
         let (replay_votes_sender, replay_votes_receiver) = unbounded();
-        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let mut latest_vote_slot_per_validator = HashMap::new();
         let mut bank_hash_cache = BankHashCache::new(bank_forks);
 
@@ -955,7 +918,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         )
         .unwrap();
 
@@ -991,7 +953,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         )
         .unwrap();
 
@@ -1049,7 +1010,6 @@ mod tests {
         let (replay_votes_sender, replay_votes_receiver) = unbounded();
         let (gossip_verified_vote_hash_sender, gossip_verified_vote_hash_receiver) = unbounded();
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
-        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let mut latest_vote_slot_per_validator = HashMap::new();
         let mut bank_hash_cache = BankHashCache::new(bank_forks);
 
@@ -1087,7 +1047,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         )
         .unwrap();
 
@@ -1212,7 +1171,6 @@ mod tests {
         let (gossip_verified_vote_hash_sender, _gossip_verified_vote_hash_receiver) = unbounded();
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
         let (_replay_votes_sender, replay_votes_receiver) = unbounded();
-        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let mut latest_vote_slot_per_validator = HashMap::new();
         let mut bank_hash_cache = BankHashCache::new(bank_forks);
 
@@ -1259,7 +1217,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         )
         .unwrap();
 
@@ -1305,7 +1262,6 @@ mod tests {
         let (gossip_verified_vote_hash_sender, _gossip_verified_vote_hash_receiver) = unbounded();
         let (replay_votes_sender, replay_votes_receiver): (ReplayVoteSender, ReplayVoteReceiver) =
             unbounded();
-        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let mut latest_vote_slot_per_validator = HashMap::new();
 
         let vote_slot = 1;
@@ -1377,7 +1333,6 @@ mod tests {
                     &mut latest_vote_slot_per_validator,
                     &mut bank_hash_cache,
                     &Mutex::new(false),
-                    &alpenglow_vote_sender,
                 );
             }
             let slot_vote_tracker = vote_tracker.get_slot_vote_tracker(vote_slot).unwrap();
@@ -1456,7 +1411,6 @@ mod tests {
 
         let (verified_vote_sender, _verified_vote_receiver) = unbounded();
         let (gossip_verified_vote_hash_sender, _gossip_verified_vote_hash_receiver) = unbounded();
-        let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         ClusterInfoVoteListener::filter_and_confirm_with_new_votes(
             &vote_tracker,
             vote_tx,
@@ -1480,7 +1434,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         );
 
         // Setup next epoch
@@ -1533,7 +1486,6 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
-            &alpenglow_vote_sender,
         );
     }
 
