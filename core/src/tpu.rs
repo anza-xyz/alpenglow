@@ -42,7 +42,7 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks,
-        epoch_stakes_service::EpochStakesService,
+        bank_service::BankService,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
         vote_sender_types::{
@@ -267,10 +267,9 @@ impl Tpu {
             let (tx, rx) = unbounded();
             bank_forks.write().unwrap().register_new_bank_subscriber(tx);
             let bank = bank_forks.read().unwrap().root_bank();
-            let epoch = bank.epoch();
-            let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+            let bank_service = Arc::new(BankService::new(bank, rx));
             let verifier = BLSSigVerifier::new(
-                epoch_stakes_service,
+                bank_service,
                 verified_vote_sender.clone(),
                 bls_verified_message_sender,
             );

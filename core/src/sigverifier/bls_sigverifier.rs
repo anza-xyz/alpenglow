@@ -11,7 +11,7 @@ use {
     alpenglow_vote::bls_message::BLSMessage,
     crossbeam_channel::{Sender, TrySendError},
     solana_pubkey::Pubkey,
-    solana_runtime::epoch_stakes_service::EpochStakesService,
+    solana_runtime::{bank::Bank, bank_service::BankService, epoch_stakes::BLSPubkeyToRankMap},
     solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
     stats::{BLSSigVerifierStats, StatsUpdater},
@@ -21,8 +21,15 @@ use {
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<BLSMessage>,
-    epoch_stakes_service: Arc<EpochStakesService>,
+    bank_service: Arc<BankService>,
     stats: BLSSigVerifierStats,
+}
+
+fn rank_to_pubkey_map(bank: &Arc<Bank>, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+    let epoch = bank.epoch_schedule().get_epoch(slot);
+    bank.epoch_stakes_map()
+        .get(&epoch)
+        .map(|s| s.bls_pubkey_to_rank_map())
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -60,8 +67,8 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let Some(rank_to_pubkey_map) = self.epoch_stakes_service.get_key_to_rank_map(slot)
-            else {
+            let bank = self.bank_service.get_bank();
+            let Some(rank_to_pubkey_map) = rank_to_pubkey_map(&bank, slot) else {
                 stats_updater.received_no_epoch_stakes += 1;
                 continue;
             };
@@ -102,12 +109,12 @@ impl SigVerifier for BLSSigVerifier {
 
 impl BLSSigVerifier {
     pub fn new(
-        epoch_stakes_service: Arc<EpochStakesService>,
+        bank_service: Arc<BankService>,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<BLSMessage>,
     ) -> Self {
         Self {
-            epoch_stakes_service,
+            bank_service,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
@@ -174,12 +181,11 @@ mod tests {
             stakes_vec,
         );
         let bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
-        let epoch = bank.epoch();
         let (_tx, rx) = unbounded();
-        let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+        let bank_service = Arc::new(BankService::new(bank, rx));
         (
             validator_keypairs,
-            BLSSigVerifier::new(epoch_stakes_service, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(bank_service, verified_vote_sender, message_sender),
         )
     }
 
