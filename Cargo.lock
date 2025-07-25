@@ -10069,7 +10069,6 @@ dependencies = [
 name = "solana-stake-program"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "assert_matches",
  "bincode",
  "criterion",
@@ -10097,6 +10096,7 @@ dependencies = [
  "solana-sysvar-id",
  "solana-transaction-context 2.3.0",
  "solana-type-overrides",
+ "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
  "test-case",
