@@ -1,5 +1,5 @@
 use {
-    crate::vote_sender_types::{AlpenglowVoteSender, ReplayVoteSender},
+    crate::vote_sender_types::ReplayVoteSender,
     solana_runtime_transaction::transaction_with_meta::TransactionWithMeta,
     solana_svm::transaction_commit_result::{
         TransactionCommitResult, TransactionCommitResultExtensions,
@@ -43,9 +43,8 @@ pub fn find_and_send_votes(
     sanitized_txs: &[impl TransactionWithMeta],
     commit_results: &[TransactionCommitResult],
     vote_sender: Option<&ReplayVoteSender>,
-    alpenglow_vote_sender: Option<&AlpenglowVoteSender>,
 ) {
-    if vote_sender.is_some() || alpenglow_vote_sender.is_some() {
+    if vote_sender.is_some() {
         sanitized_txs
             .iter()
             .zip(commit_results.iter())
@@ -56,24 +55,7 @@ pub fn find_and_send_votes(
                         {
                             if parsed_vote.1.last_voted_slot().is_some() {
                                 let _ = vote_sender.send(parsed_vote);
-                                return;
                             }
-                        }
-                    }
-                    if let Some(alpenglow_vote_sender) = alpenglow_vote_sender {
-                        if let Some((
-                            pubkey,
-                            vote_parser::ParsedVoteTransaction::Alpenglow(vote),
-                            _,
-                            _,
-                        )) = vote_parser::parse_sanitized_alpenglow_vote_transaction(tx)
-                        {
-                            let _ = alpenglow_vote_sender.send((
-                                vote,
-                                pubkey,
-                                //TODO(wen): to_versioned_transaction() has performance implications, we should replace it.
-                                tx.to_versioned_transaction(),
-                            ));
                         }
                     }
                 }
