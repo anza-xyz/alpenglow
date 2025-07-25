@@ -57,7 +57,7 @@ struct ParentReadyStatus {
 
 impl ParentReadyTracker {
     /// Creates a new tracker with the root bank as implicitely notarized fallback
-    pub fn new(my_pubkey: Pubkey, root_block @ (root_slot, _, _): Block) -> Self {
+    pub fn new(my_pubkey: Pubkey, root_block @ (root_slot, _): Block) -> Self {
         let mut slot_statuses = HashMap::new();
         slot_statuses.insert(
             root_slot,
@@ -86,7 +86,7 @@ impl ParentReadyTracker {
     /// Adds a new notar-fallback certificate
     pub fn add_new_notar_fallback(
         &mut self,
-        block @ (slot, _, _): Block,
+        block @ (slot, _): Block,
         events: &mut Vec<VotorEvent>,
     ) {
         if slot <= self.root {
@@ -257,7 +257,7 @@ mod tests {
         let mut events = vec![];
 
         for i in 1..2 * NUM_CONSECUTIVE_LEADER_SLOTS {
-            let block = (i, Hash::new_unique(), Hash::new_unique());
+            let block = (i, Hash::new_unique());
             tracker.add_new_notar_fallback(block, &mut events);
             assert_eq!(tracker.highest_parent_ready(), i + 1);
             assert!(tracker.parent_ready(i + 1, block));
@@ -269,7 +269,7 @@ mod tests {
         let genesis = Block::default();
         let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
         let mut events = vec![];
-        let block = (1, Hash::new_unique(), Hash::new_unique());
+        let block = (1, Hash::new_unique());
 
         tracker.add_new_notar_fallback(block, &mut events);
         tracker.add_new_skip(1, &mut events);
@@ -286,7 +286,7 @@ mod tests {
         let genesis = Block::default();
         let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
         let mut events = vec![];
-        let block = (1, Hash::new_unique(), Hash::new_unique());
+        let block = (1, Hash::new_unique());
 
         tracker.add_new_skip(3, &mut events);
         tracker.add_new_skip(2, &mut events);
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn snapshot_wfsm() {
         let root_slot = 2147;
-        let root_block = (root_slot, Hash::new_unique(), Hash::new_unique());
+        let root_block = (root_slot, Hash::new_unique());
         let mut tracker = ParentReadyTracker::new(Pubkey::default(), root_block);
         let mut events = vec![];
 
@@ -321,7 +321,7 @@ mod tests {
         assert!(tracker.parent_ready(root_slot + 3, root_block));
         assert_eq!(tracker.highest_parent_ready(), root_slot + 3);
 
-        let block = (root_slot + 4, Hash::new_unique(), Hash::new_unique());
+        let block = (root_slot + 4, Hash::new_unique());
         tracker.add_new_notar_fallback(block, &mut events);
         assert!(tracker.parent_ready(root_slot + 3, root_block));
         assert!(tracker.parent_ready(root_slot + 5, block));
@@ -361,7 +361,7 @@ mod tests {
             BlockProductionParent::ParentNotReady
         );
 
-        tracker.add_new_notar_fallback((4, Hash::new_unique(), Hash::new_unique()), &mut events);
+        tracker.add_new_notar_fallback((4, Hash::new_unique()), &mut events);
         assert_eq!(tracker.highest_parent_ready(), 5);
         assert_eq!(
             tracker.block_production_parent(4),
@@ -372,7 +372,7 @@ mod tests {
             tracker.block_production_parent(8),
             BlockProductionParent::ParentNotReady
         );
-        tracker.add_new_notar_fallback((64, Hash::new_unique(), Hash::new_unique()), &mut events);
+        tracker.add_new_notar_fallback((64, Hash::new_unique()), &mut events);
         assert_eq!(tracker.highest_parent_ready(), 65);
         assert_eq!(
             tracker.block_production_parent(8),

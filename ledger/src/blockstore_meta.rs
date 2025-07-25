@@ -887,8 +887,8 @@ impl OptimisticSlotMetaVersioned {
 /// This will normally be written to once per slot, but in the worst case 4 times per slot
 /// It will be read to serve repair to other nodes.
 pub struct SlotCertificates {
-    /// The notarization fallback certificates keyed by (block_id, bank_hash)
-    pub notarize_fallback_certificates: HashMap<(Hash, Hash), CertificateMessage>,
+    /// The notarization fallback certificates keyed by block_id
+    pub notarize_fallback_certificates: HashMap<Hash, CertificateMessage>,
     /// The skip certificate
     pub skip_certificate: Option<CertificateMessage>,
 }
@@ -899,11 +899,9 @@ impl SlotCertificates {
     pub fn add_notarization_fallback_certificate(
         &mut self,
         block_id: Hash,
-        bank_hash: Hash,
         cert: CertificateMessage,
     ) {
-        self.notarize_fallback_certificates
-            .insert((block_id, bank_hash), cert);
+        self.notarize_fallback_certificates.insert(block_id, cert);
     }
 
     pub fn set_skip_certificate(&mut self, cert: CertificateMessage) {
