@@ -10,7 +10,6 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alpenglow-vote = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 clap = { workspace = true }
@@ -49,6 +48,7 @@ solana-stake-interface = { workspace = true }
 solana-stake-program = { workspace = true }
 solana-time-utils = { workspace = true }
 solana-version = { workspace = true }
+solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
 tempfile = { workspace = true }
 

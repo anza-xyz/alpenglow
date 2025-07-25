@@ -53,7 +53,6 @@ use {
         voting_utils::{BLSOp, VotingContext},
         CertificateId,
     },
-    alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::Sender,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
@@ -70,6 +69,7 @@ use {
         vote_sender_types::{BLSVerifiedMessageReceiver, BLSVerifiedMessageSender},
     },
     solana_sdk::{clock::Slot, signature::Keypair, signer::Signer},
+    solana_vote::alpenglow::bls_message::CertificateMessage,
     std::{
         collections::HashMap,
         sync::{

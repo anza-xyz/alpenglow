@@ -1,5 +1,4 @@
 use {
-    alpenglow_vote::vote::Vote as AlpenglowVote,
     rand::{CryptoRng, Rng, RngCore},
     solana_clock::Slot,
     solana_hash::Hash,
@@ -9,7 +8,7 @@ use {
     solana_signer::Signer,
     solana_system_interface::instruction::SystemInstruction,
     solana_transaction::Transaction,
-    solana_vote::vote_transaction,
+    solana_vote::{alpenglow::vote::Vote as AlpenglowVote, vote_transaction},
     solana_vote_program::vote_state::TowerSync,
 };
 

@@ -1,7 +1,7 @@
 use {
     crate::VoteType,
-    alpenglow_vote::certificate::CertificateType,
     solana_metrics::datapoint_info,
+    solana_vote::alpenglow::certificate::CertificateType,
     std::time::{Duration, Instant},
 };
 

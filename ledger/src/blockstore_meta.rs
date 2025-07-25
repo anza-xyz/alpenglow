@@ -3,13 +3,13 @@ use {
         blockstore::MAX_DATA_SHREDS_PER_SLOT,
         shred::{self, Shred, ShredType},
     },
-    alpenglow_vote::bls_message::CertificateMessage,
     bitflags::bitflags,
     serde::{Deserialize, Deserializer, Serialize, Serializer},
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         hash::Hash,
     },
+    solana_vote::alpenglow::bls_message::CertificateMessage,
     std::{
         collections::{BTreeSet, HashMap},
         ops::{Bound, Range, RangeBounds},
