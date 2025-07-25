@@ -234,7 +234,7 @@ impl From<SkipFallbackVote> for Vote {
 pub struct NotarizationVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot,
+    replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
     replayed_bank_hash: Hash,
 }
 
@@ -243,17 +243,17 @@ impl NotarizationVote {
         Self {
             slot: Slot::from(notarization_vote.slot),
             block_id: notarization_vote.block_id,
-            _replayed_slot: 0,
+            replayed_slot: 0,
             replayed_bank_hash: notarization_vote.replayed_bank_hash,
         }
     }
 
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, _replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
+    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
         Self {
             slot,
             block_id,
-            _replayed_slot,
+            replayed_slot,
             replayed_bank_hash,
         }
     }
@@ -344,7 +344,7 @@ impl SkipVote {
 pub struct NotarizationFallbackVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot,
+    replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
     replayed_bank_hash: Hash,
 }
 
@@ -353,17 +353,17 @@ impl NotarizationFallbackVote {
         Self {
             slot: Slot::from(notarization_vote.slot),
             block_id: notarization_vote.block_id,
-            _replayed_slot: 0,
+            replayed_slot: 0,
             replayed_bank_hash: notarization_vote.replayed_bank_hash,
         }
     }
 
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, _replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
+    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
         Self {
             slot,
             block_id,
-            _replayed_slot,
+            replayed_slot,
             replayed_bank_hash,
         }
     }

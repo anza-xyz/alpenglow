@@ -65,13 +65,13 @@ impl BLSMessage {
         })
     }
 
-    /// Deserialize a BLS message from bytes
-    pub fn deserialize(bls_message_in_bytes: &[u8]) -> Self {
-        bincode::deserialize(bls_message_in_bytes).unwrap()
-    }
+    // /// Deserialize a BLS message from bytes
+    // pub fn deserialize(bls_message_in_bytes: &[u8]) -> Self {
+    //     bincode::deserialize(bls_message_in_bytes).unwrap()
+    // }
 
-    /// Serialize a BLS message to bytes
-    pub fn serialize(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
-    }
+    // /// Serialize a BLS message to bytes
+    // pub fn serialize(&self) -> Vec<u8> {
+    //     bincode::serialize(self).unwrap()
+    // }
 }
