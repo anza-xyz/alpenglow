@@ -4026,13 +4026,12 @@ impl Blockstore {
         &self,
         slot: Slot,
         block_id: Hash,
-        bank_hash: Hash,
         certificate: CertificateMessage,
     ) -> Result<()> {
         let mut certificates = self
             .slot_certificates(slot)?
             .unwrap_or(SlotCertificates::default());
-        certificates.add_notarization_fallback_certificate(block_id, bank_hash, certificate);
+        certificates.add_notarization_fallback_certificate(block_id, certificate);
         self.slot_certificates_cf.put(slot, &certificates)
     }
 

@@ -207,11 +207,7 @@ impl CertificatePoolService {
 
         // Kick off parent ready
         let root_bank = ctx.root_bank_cache.root_bank();
-        let root_block = (
-            root_bank.slot(),
-            root_bank.block_id().unwrap_or_default(),
-            root_bank.hash(),
-        );
+        let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
             slot: root_bank.slot().checked_add(1).unwrap(),
