@@ -18,7 +18,7 @@ use crate::alpenglow::vote_processor::NotarizationVoteInstructionData;
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample, AbiEnumVisitor),
-    frozen_abi(digest = "6iDQpLRkL8NzahPf124tqizctfL4EGGXa8LDTekXvFcR")
+    frozen_abi(digest = "CSKLGPPbBibWP9rptpJyWSJ4vELSoUkA8MLqrRdLhYr8")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Vote {
@@ -228,7 +228,7 @@ impl From<SkipFallbackVote> for Vote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "AfTX2mg2e3L433SgswtskptGYXLpWGXYDcR4QcgSzRC5")
+    frozen_abi(digest = "Hi27FUrTftp2qjyZ96pqYYVyAofVqcZDWSQL4ZgLFpBF")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationVote {
@@ -338,7 +338,7 @@ impl SkipVote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "2eD1FTtZb6e86j3WEYCkzG9Yer36jA98B4RiuvFgwZ7d")
+    frozen_abi(digest = "91HNr78MNiTLAW5JioukfYBUgfPtch3aNgsYVgBJH6dC")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationFallbackVote {
