@@ -1,6 +1,5 @@
 use {
-    crate::alpenglow::state::VoteState as AlpenglowVoteState,
-    crate::vote_state_view::VoteStateView,
+    crate::{alpenglow::state::VoteState as AlpenglowVoteState, vote_state_view::VoteStateView},
     itertools::Itertools,
     serde::{
         de::{MapAccess, Visitor},

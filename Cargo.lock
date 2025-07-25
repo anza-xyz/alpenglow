@@ -8277,7 +8277,6 @@ dependencies = [
 name = "solana-keygen"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "bs58",
  "clap 3.2.23",
  "dirs-next",
@@ -8295,6 +8294,7 @@ dependencies = [
  "solana-seed-derivable",
  "solana-signer",
  "solana-version",
+ "solana-vote",
  "tempfile",
  "tiny-bip39",
 ]
@@ -8500,7 +8500,6 @@ dependencies = [
 name = "solana-local-cluster"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "assert_matches",
  "bincode",
  "crossbeam-channel",

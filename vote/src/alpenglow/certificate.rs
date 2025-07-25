@@ -1,7 +1,9 @@
 //! Define BLS certificate to be sent all to all in Alpenglow
-use serde::{Deserialize, Serialize};
-
-use {solana_hash::Hash, solana_program::clock::Slot};
+use {
+    serde::{Deserialize, Serialize},
+    solana_hash::Hash,
+    solana_program::clock::Slot,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 /// Certificate Type in Alpenglow

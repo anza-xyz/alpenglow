@@ -1,17 +1,17 @@
 //! Vote data types for use by clients
 
-use serde::{Deserialize, Serialize};
-use solana_hash::Hash;
-use solana_program::clock::Slot;
-use solana_program::instruction::Instruction;
-use solana_program::program_error::ProgramError;
-use solana_program::pubkey::Pubkey;
-
-use crate::alpenglow::instruction::{
-    self, decode_instruction_data, decode_instruction_type, VoteInstruction,
+use {
+    crate::alpenglow::{
+        instruction::{self, decode_instruction_data, decode_instruction_type, VoteInstruction},
+        state::PodSlot,
+        vote_processor::NotarizationVoteInstructionData,
+    },
+    serde::{Deserialize, Serialize},
+    solana_hash::Hash,
+    solana_program::{
+        clock::Slot, instruction::Instruction, program_error::ProgramError, pubkey::Pubkey,
+    },
 };
-use crate::alpenglow::state::PodSlot;
-use crate::alpenglow::vote_processor::NotarizationVoteInstructionData;
 
 /// Enum that clients can use to parse and create the vote
 /// structures expected by the program

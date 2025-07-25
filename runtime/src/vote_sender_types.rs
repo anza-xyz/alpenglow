@@ -1,8 +1,10 @@
 use {
     crossbeam_channel::{Receiver, Sender},
     solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction},
-    solana_vote::alpenglow::{bls_message::BLSMessage, vote::Vote as AlpenglowVote},
-    solana_vote::vote_parser::ParsedVote,
+    solana_vote::{
+        alpenglow::{bls_message::BLSMessage, vote::Vote as AlpenglowVote},
+        vote_parser::ParsedVote,
+    },
 };
 
 pub type ReplayVoteSender = Sender<ParsedVote>;

@@ -1,20 +1,22 @@
 //! Accounting related operations on the Vote Account
 
-use bytemuck::{Pod, PodInOption, Zeroable, ZeroableInOption};
-use solana_program::account_info::AccountInfo;
-use solana_program::clock::Clock;
-use solana_program::clock::Epoch;
-use solana_program::clock::Slot;
-use solana_program::epoch_schedule::EpochSchedule;
-use solana_program::program_error::ProgramError;
-use solana_program::pubkey::Pubkey;
-use solana_program::rent::Rent;
-use spl_pod::bytemuck::pod_from_bytes_mut;
-use spl_pod::primitives::PodU64;
-
-use crate::alpenglow::error::VoteError;
-use crate::alpenglow::instruction::AuthorityType;
-use crate::alpenglow::state::{PodEpoch, VoteState};
+use {
+    crate::alpenglow::{
+        error::VoteError,
+        instruction::AuthorityType,
+        state::{PodEpoch, VoteState},
+    },
+    bytemuck::{Pod, PodInOption, Zeroable, ZeroableInOption},
+    solana_program::{
+        account_info::AccountInfo,
+        clock::{Clock, Epoch, Slot},
+        epoch_schedule::EpochSchedule,
+        program_error::ProgramError,
+        pubkey::Pubkey,
+        rent::Rent,
+    },
+    spl_pod::{bytemuck::pod_from_bytes_mut, primitives::PodU64},
+};
 
 /// Authorized Signer for vote instructions
 #[repr(C)]

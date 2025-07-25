@@ -1,9 +1,8 @@
 //! Put BLS message here so all clients can agree on the format
-use serde::{Deserialize, Serialize};
-
 use {
     crate::alpenglow::{certificate::Certificate, vote::Vote},
     bitvec::prelude::*,
+    serde::{Deserialize, Serialize},
     solana_bls_signatures::Signature as BLSSignature,
 };
 

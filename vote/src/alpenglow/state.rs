@@ -1,21 +1,22 @@
 //! Program state
 
-use bytemuck::{Pod, Zeroable};
-use solana_bls_signatures::Pubkey as BlsPubkey;
-use solana_program::account_info::AccountInfo;
-use solana_program::clock::Clock;
-use solana_program::clock::Epoch;
-use solana_program::clock::Slot;
-use solana_program::clock::UnixTimestamp;
-use solana_program::hash::Hash;
-use solana_program::program_error::ProgramError;
-use solana_program::pubkey::Pubkey;
-use solana_program::rent::Rent;
-use spl_pod::primitives::{PodI64, PodU64};
-
-use crate::alpenglow::accounting::{AuthorizedVoter, EpochCredit};
-use crate::alpenglow::instruction::InitializeAccountInstructionData;
-
+use {
+    crate::alpenglow::{
+        accounting::{AuthorizedVoter, EpochCredit},
+        instruction::InitializeAccountInstructionData,
+    },
+    bytemuck::{Pod, Zeroable},
+    solana_bls_signatures::Pubkey as BlsPubkey,
+    solana_program::{
+        account_info::AccountInfo,
+        clock::{Clock, Epoch, Slot, UnixTimestamp},
+        hash::Hash,
+        program_error::ProgramError,
+        pubkey::Pubkey,
+        rent::Rent,
+    },
+    spl_pod::primitives::{PodI64, PodU64},
+};
 #[cfg(not(target_os = "solana"))]
 use {
     solana_account::AccountSharedData, solana_account::WritableAccount,

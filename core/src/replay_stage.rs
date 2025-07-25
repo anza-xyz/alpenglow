@@ -83,8 +83,7 @@ use {
         transaction::Transaction,
     },
     solana_timings::ExecuteTimings,
-    solana_vote::alpenglow::bls_message::CertificateMessage,
-    solana_vote::vote_transaction::VoteTransaction,
+    solana_vote::{alpenglow::bls_message::CertificateMessage, vote_transaction::VoteTransaction},
     solana_votor::{
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
