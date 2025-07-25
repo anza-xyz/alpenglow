@@ -207,8 +207,8 @@ pub(crate) fn calculate_stake_points_and_credits(
 mod tests {
     use {
         super::*,
-        alpenglow_vote::{accounting::EpochCredit, state::VoteState as AlpenglowVoteState},
         solana_sdk::native_token::sol_to_lamports,
+        solana_vote::alpenglow::{accounting::EpochCredit, state::VoteState as AlpenglowVoteState},
         solana_vote_program::vote_state::VoteState,
     };
 

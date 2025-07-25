@@ -1,8 +1,8 @@
 use {
     crate::{certificate_pool::vote_certificate::VoteCertificate, Stake},
-    alpenglow_vote::bls_message::VoteMessage,
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
+    solana_vote::alpenglow::bls_message::VoteMessage,
     std::collections::{HashMap, HashSet},
 };
 
@@ -230,8 +230,8 @@ impl VotePool for DuplicateBlockVotePool {
 mod test {
     use {
         super::*,
-        alpenglow_vote::{bls_message::VoteMessage, vote::Vote},
         solana_bls_signatures::Signature as BLSSignature,
+        solana_vote::alpenglow::{bls_message::VoteMessage, vote::Vote},
     };
 
     #[test]

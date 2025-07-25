@@ -2,7 +2,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use {
-    alpenglow_vote::state::VoteState as AlpenglowVoteState,
     base64::{prelude::BASE64_STANDARD, Engine},
     clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg, ArgMatches},
     itertools::Itertools,
@@ -46,6 +45,7 @@ use {
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
+    solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
     solana_vote_program::vote_state::{self, VoteState},
     std::{
         collections::HashMap,
