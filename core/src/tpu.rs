@@ -42,6 +42,7 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks,
+        bank_service::BankService,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
         vote_sender_types::{
@@ -54,7 +55,7 @@ use {
         streamer::StakedNodes,
     },
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
-    solana_votor::event::CompletedBlockSender,
+    solana_votor::event::VotorEventSender,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -124,7 +125,7 @@ impl Tpu {
         bls_verified_message_sender: BLSVerifiedMessageSender,
         connection_cache: &Arc<ConnectionCache>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
-        completed_block_sender: CompletedBlockSender,
+        votor_event_sender: VotorEventSender,
         keypair: &Keypair,
         log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
@@ -263,8 +264,12 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
+            let (tx, rx) = unbounded();
+            bank_forks.write().unwrap().register_new_bank_subscriber(tx);
+            let bank = bank_forks.read().unwrap().root_bank();
+            let bank_service = Arc::new(BankService::new(bank, rx));
             let verifier = BLSSigVerifier::new(
-                bank_forks.clone(),
+                bank_service,
                 verified_vote_sender.clone(),
                 bls_verified_message_sender,
             );
@@ -340,7 +345,7 @@ impl Tpu {
             bank_forks,
             shred_version,
             turbine_quic_endpoint_sender,
-            completed_block_sender,
+            votor_event_sender,
         );
 
         (

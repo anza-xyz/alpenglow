@@ -10,7 +10,7 @@ use {
         signature::{Keypair, Signature, Signer},
         system_transaction,
     },
-    solana_votor::event::CompletedBlockSender,
+    solana_votor::event::VotorEventSender,
     std::collections::HashSet,
 };
 
@@ -83,7 +83,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         receiver: &Receiver<WorkingBankEntry>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
-        _completed_block_sender: &CompletedBlockSender,
+        _votor_event_sender: &VotorEventSender,
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let mut receive_results = broadcast_utils::recv_slot_entries(receiver)?;

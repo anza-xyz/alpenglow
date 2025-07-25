@@ -12,8 +12,6 @@ pub struct CompletedBlock {
     // TODO: once we have the async execution changes this can be (block_id, parent_block_id) instead
     pub bank: Arc<Bank>,
 }
-pub type CompletedBlockSender = Sender<CompletedBlock>;
-pub type CompletedBlockReceiver = Receiver<CompletedBlock>;
 
 /// Context for the block creation loop to start a leader window
 #[derive(Copy, Clone, Debug)]
@@ -23,6 +21,9 @@ pub struct LeaderWindowInfo {
     pub parent_block: Block,
     pub skip_timer: Instant,
 }
+
+pub type VotorEventSender = Sender<VotorEvent>;
+pub type VotorEventReceiver = Receiver<VotorEvent>;
 
 /// Events that trigger actions in Votor
 /// TODO: remove bank hash once we update votes

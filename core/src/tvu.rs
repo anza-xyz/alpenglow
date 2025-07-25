@@ -45,12 +45,15 @@ use {
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{AlpenglowVoteSender, BLSVerifiedMessageReceiver, ReplayVoteSender},
+        vote_sender_types::{
+            AlpenglowVoteSender, BLSVerifiedMessageReceiver, BLSVerifiedMessageSender,
+            ReplayVoteSender,
+        },
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     solana_turbine::retransmit_stage::RetransmitStage,
     solana_votor::{
-        event::{CompletedBlockReceiver, CompletedBlockSender},
+        event::{VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         votor::LeaderWindowNotifier,
@@ -153,6 +156,7 @@ impl Tvu {
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slots_receiver: DuplicateConfirmedSlotsReceiver,
         alpenglow_vote_sender: AlpenglowVoteSender,
+        own_vote_sender: BLSVerifiedMessageSender,
         bls_verified_message_receiver: BLSVerifiedMessageReceiver,
         tvu_config: TvuConfig,
         max_slots: &Arc<MaxSlots>,
@@ -177,8 +181,8 @@ impl Tvu {
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
         voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
-        completed_block_sender: CompletedBlockSender,
-        completed_block_receiver: CompletedBlockReceiver,
+        votor_event_sender: VotorEventSender,
+        votor_event_receiver: VotorEventReceiver,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -323,7 +327,8 @@ impl Tvu {
             dumped_slots_sender,
             alpenglow_vote_sender,
             certificate_sender,
-            completed_block_sender,
+            votor_event_sender,
+            own_vote_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -334,7 +339,7 @@ impl Tvu {
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
             bls_verified_message_receiver,
-            completed_block_receiver,
+            votor_event_receiver,
         };
 
         let replay_stage_config = ReplayStageConfig {
@@ -546,7 +551,7 @@ pub mod tests {
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
         let (alpenglow_vote_sender, _alpenglow_vote_receiver) = unbounded();
         let (_, gossip_confirmed_slots_receiver) = unbounded();
-        let (_, alpenglow_vote_receiver) = unbounded();
+        let (bls_verified_message_sender, bls_verified_message_receiver) = unbounded();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
         let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let ignored_prioritization_fee_cache = Arc::new(PrioritizationFeeCache::new(0u64));
@@ -568,7 +573,7 @@ pub mod tests {
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
         };
-        let (completed_block_sender, completed_block_receiver) = unbounded();
+        let (votor_event_sender, votor_event_receiver) = unbounded();
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -614,7 +619,8 @@ pub mod tests {
             None,
             gossip_confirmed_slots_receiver,
             alpenglow_vote_sender,
-            alpenglow_vote_receiver,
+            bls_verified_message_sender,
+            bls_verified_message_receiver,
             TvuConfig::default(),
             &Arc::new(MaxSlots::default()),
             None,
@@ -638,8 +644,8 @@ pub mod tests {
             Arc::new(ReplayHighestFrozen::default()),
             Arc::new(LeaderWindowNotifier::default()),
             None,
-            completed_block_sender,
-            completed_block_receiver,
+            votor_event_sender,
+            votor_event_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {

@@ -44,7 +44,7 @@ use {
     crate::{
         certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
-        event::{CompletedBlockReceiver, LeaderWindowInfo},
+        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
         skip_timer::SkipTimerService,
@@ -54,7 +54,7 @@ use {
         CertificateId,
     },
     alpenglow_vote::bls_message::CertificateMessage,
-    crossbeam_channel::{bounded, Sender},
+    crossbeam_channel::Sender,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_pubkey::Pubkey,
@@ -63,9 +63,11 @@ use {
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
-        accounts_background_service::AbsRequestSender, bank_forks::BankForks,
-        installed_scheduler_pool::BankWithScheduler, root_bank_cache::RootBankCache,
-        vote_sender_types::BLSVerifiedMessageReceiver,
+        accounts_background_service::AbsRequestSender,
+        bank_forks::BankForks,
+        installed_scheduler_pool::BankWithScheduler,
+        root_bank_cache::RootBankCache,
+        vote_sender_types::{BLSVerifiedMessageReceiver, BLSVerifiedMessageSender},
     },
     solana_sdk::{clock::Slot, signature::Keypair, signer::Signer},
     std::{
@@ -112,9 +114,11 @@ pub struct VotorConfig {
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub event_sender: VotorEventSender,
+    pub own_vote_sender: BLSVerifiedMessageSender,
 
     // Receivers
-    pub completed_block_receiver: CompletedBlockReceiver,
+    pub event_receiver: VotorEventReceiver,
     pub bls_receiver: BLSVerifiedMessageReceiver,
 }
 
@@ -161,7 +165,9 @@ impl Votor {
             bank_notification_sender,
             leader_window_notifier,
             certificate_sender,
-            completed_block_receiver,
+            event_sender,
+            event_receiver,
+            own_vote_sender,
             bls_receiver,
         } = config;
 
@@ -170,11 +176,6 @@ impl Votor {
         let identity_keypair = cluster_info.keypair().clone();
         let my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
-
-        // These should not backup, TODO: add metrics for length
-        let (event_sender, event_receiver) = bounded(1000);
-        let (skip_timeout_sender, skip_timeout_receiver) = bounded(1000);
-        let (own_vote_sender, own_vote_receiver) = bounded(1000);
 
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -208,14 +209,12 @@ impl Votor {
         };
 
         let (skip_timer_service, skip_timer) =
-            SkipTimerService::new(exit.clone(), 100, skip_timeout_sender);
+            SkipTimerService::new(exit.clone(), 100, event_sender.clone());
 
         let event_handler_context = EventHandlerContext {
             exit: exit.clone(),
             start: start.clone(),
-            completed_block_receiver,
             event_receiver,
-            skip_timeout_receiver,
             skip_timer,
             shared_context,
             voting_context,
@@ -230,7 +229,6 @@ impl Votor {
             blockstore,
             root_bank_cache: RootBankCache::new(bank_forks.clone()),
             leader_schedule_cache,
-            own_vote_receiver,
             bls_receiver,
             bls_sender,
             event_sender,

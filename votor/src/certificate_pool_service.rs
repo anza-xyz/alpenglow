@@ -1,14 +1,19 @@
 //! Service in charge of ingesting new messages into the certificate pool
 //! and notifying votor of new events that occur
 
+mod stats;
+
 use {
     crate::{
         certificate_pool::{
             self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
         },
-        commitment::AlpenglowCommitmentAggregationData,
-        event::{LeaderWindowInfo, VotorEvent},
-        voting_utils::{self, BLSOp},
+        commitment::{
+            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
+            AlpenglowCommitmentType,
+        },
+        event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
+        voting_utils::BLSOp,
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
     },
@@ -23,6 +28,7 @@ use {
         root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::clock::Slot,
+    stats::CertificatePoolServiceStats,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -48,10 +54,10 @@ pub(crate) struct CertificatePoolContext {
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
-    pub(crate) own_vote_receiver: BLSVerifiedMessageReceiver,
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+
     pub(crate) bls_sender: Sender<BLSOp>,
-    pub(crate) event_sender: Sender<VotorEvent>,
+    pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
 }
@@ -85,6 +91,7 @@ impl CertificatePoolService {
         current_root: &mut Slot,
         highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
+        stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
         if let Some(new_finalized_slot) = new_finalized_slot {
@@ -92,25 +99,31 @@ impl CertificatePoolService {
             debug_assert!(new_finalized_slot > *highest_finalized_slot);
             *highest_finalized_slot = new_finalized_slot;
             *standstill_timer = Instant::now();
+            CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
             let root_bank = root_bank_cache.root_bank();
             if root_bank.slot() > *current_root {
+                CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
                 *current_root = root_bank.slot();
                 cert_pool.handle_new_root(root_bank);
             }
         }
         // Send new certificates to peers
-        for certificate in new_certificates_to_send {
+        for (i, certificate) in new_certificates_to_send.iter().enumerate() {
             // The buffer should normally be large enough, so we don't handle
             // certificate re-send here.
             match bls_sender.try_send(BLSOp::PushCertificate {
                 certificate: certificate.clone(),
             }) {
-                Ok(_) => (),
+                Ok(_) => {
+                    CertificatePoolServiceStats::incr_u16(&mut stats.certificates_sent);
+                }
                 Err(TrySendError::Disconnected(_)) => {
                     return Err(AddVoteError::VotingServiceSenderDisconnected);
                 }
                 Err(TrySendError::Full(_)) => {
+                    let dropped = new_certificates_to_send.len().saturating_sub(i) as u16;
+                    stats.certificates_dropped = stats.certificates_dropped.saturating_add(dropped);
                     return Err(AddVoteError::VotingServiceQueueFull);
                 }
             }
@@ -126,8 +139,17 @@ impl CertificatePoolService {
         current_root: &mut Slot,
         highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
+        stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
-        match voting_utils::add_message_and_maybe_update_commitment(
+        match message {
+            BLSMessage::Certificate(_) => {
+                CertificatePoolServiceStats::incr_u32(&mut stats.received_certificates);
+            }
+            BLSMessage::Vote(_) => {
+                CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
+            }
+        }
+        match Self::add_message_and_maybe_update_commitment(
             &ctx.my_pubkey,
             &ctx.my_vote_pubkey,
             message,
@@ -145,6 +167,7 @@ impl CertificatePoolService {
                     current_root,
                     highest_finalized_slot,
                     standstill_timer,
+                    stats,
                 )?;
             }
             Err(e) => {
@@ -153,6 +176,7 @@ impl CertificatePoolService {
                 } else {
                     // This is a non critical error, a duplicate vote for example
                     trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                    CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
                 }
             }
         };
@@ -175,6 +199,7 @@ impl CertificatePoolService {
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
         info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
         let mut current_root = ctx.root_bank_cache.root_bank().slot();
+        let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
@@ -201,10 +226,12 @@ impl CertificatePoolService {
                 &cert_pool,
                 &mut ctx,
                 &mut events,
+                &mut stats,
             );
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
                 events.push(VotorEvent::Standstill(highest_finalized_slot));
+                stats.standstill = true;
                 standstill_timer = Instant::now();
             }
 
@@ -223,9 +250,6 @@ impl CertificatePoolService {
             }
 
             let bls_messages: Vec<BLSMessage> = select! {
-                recv(ctx.own_vote_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.own_vote_receiver.try_iter()).collect()
-                },
                 recv(ctx.bls_receiver) -> msg => {
                     std::iter::once(msg?).chain(ctx.bls_receiver.try_iter()).collect()
                 },
@@ -241,6 +265,7 @@ impl CertificatePoolService {
                     &mut current_root,
                     &mut highest_finalized_slot,
                     &mut standstill_timer,
+                    &mut stats,
                 ) {
                     info!(
                         "{}: Unable to process BLS message: {e}. Exiting.",
@@ -250,8 +275,34 @@ impl CertificatePoolService {
                     return Ok(());
                 }
             }
+            stats.maybe_report();
         }
         Ok(())
+    }
+
+    /// Adds a vote to the certificate pool and updates the commitment cache if necessary
+    ///
+    /// If a new finalization slot was recognized, returns the slot
+    fn add_message_and_maybe_update_commitment(
+        my_pubkey: &Pubkey,
+        my_vote_pubkey: &Pubkey,
+        message: &BLSMessage,
+        cert_pool: &mut CertificatePool,
+        votor_events: &mut Vec<VotorEvent>,
+        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+    ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
+        let (new_finalized_slot, new_certificates_to_send) =
+            cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
+        let Some(new_finalized_slot) = new_finalized_slot else {
+            return Ok((None, new_certificates_to_send));
+        };
+        trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
+        alpenglow_update_commitment_cache(
+            AlpenglowCommitmentType::Finalized,
+            new_finalized_slot,
+            commitment_sender,
+        );
+        Ok((Some(new_finalized_slot), new_certificates_to_send))
     }
 
     fn add_produce_block_event(
@@ -259,6 +310,7 @@ impl CertificatePoolService {
         cert_pool: &CertificatePool,
         ctx: &mut CertificatePoolContext,
         events: &mut Vec<VotorEvent>,
+        stats: &mut CertificatePoolServiceStats,
     ) {
         let Some(new_highest_parent_ready) = events
             .iter()
@@ -304,6 +356,7 @@ impl CertificatePoolService {
                     skipping production of {start_slot}-{end_slot}",
                     ctx.my_pubkey,
                 );
+                CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
             }
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
@@ -320,7 +373,8 @@ impl CertificatePoolService {
                     parent_block,
                     // TODO: we can just remove this
                     skip_timer: Instant::now(),
-                }))
+                }));
+                CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready_produce_window);
             }
         }
     }

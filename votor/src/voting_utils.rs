@@ -1,11 +1,6 @@
 use {
     crate::{
-        certificate_pool::{AddVoteError, CertificatePool},
-        commitment::{
-            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
-            AlpenglowCommitmentType,
-        },
-        event::VotorEvent,
+        commitment::AlpenglowCommitmentAggregationData,
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
@@ -280,29 +275,4 @@ pub(crate) fn insert_vote_and_create_bls_message(
         slot: vote.slot(),
         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
     })
-}
-
-/// Adds a vote to the certificate pool and updates the commitment cache if necessary
-///
-/// If a new finalization slot was recognized, returns the slot
-pub fn add_message_and_maybe_update_commitment(
-    my_pubkey: &Pubkey,
-    my_vote_pubkey: &Pubkey,
-    message: &BLSMessage,
-    cert_pool: &mut CertificatePool,
-    votor_events: &mut Vec<VotorEvent>,
-    commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
-) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
-    let (new_finalized_slot, new_certificates_to_send) =
-        cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
-    let Some(new_finalized_slot) = new_finalized_slot else {
-        return Ok((None, new_certificates_to_send));
-    };
-    trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
-    alpenglow_update_commitment_cache(
-        AlpenglowCommitmentType::Finalized,
-        new_finalized_slot,
-        commitment_sender,
-    );
-    Ok((Some(new_finalized_slot), new_certificates_to_send))
 }
