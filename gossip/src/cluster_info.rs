@@ -785,50 +785,16 @@ impl ClusterInfo {
         Ok(())
     }
 
-    pub fn push_vote_at_index(&self, vote: Transaction, vote_index: u8, is_alpenglow: bool) {
+    pub fn push_vote_at_index(&self, vote: Transaction, vote_index: u8) {
         assert!(vote_index < MAX_VOTES);
         let self_pubkey = self.id();
         let now = timestamp();
-        let vote = if is_alpenglow {
-            Vote::new_alpenglow(self_pubkey, vote, now).unwrap()
-        } else {
-            Vote::new(self_pubkey, vote, now).unwrap()
-        };
+        let vote = Vote::new(self_pubkey, vote, now).unwrap();
         let vote = CrdsData::Vote(vote_index, vote);
         let vote = CrdsValue::new(vote, &self.keypair());
         let mut gossip_crds = self.gossip.crds.write().unwrap();
         if let Err(err) = gossip_crds.insert(vote, now, GossipRoute::LocalMessage) {
             error!("push_vote failed: {:?}", err);
-        }
-    }
-
-    /// Evict the oldest vote if gossip is full
-    fn find_alpenglow_vote_index_to_evict(&self) -> u8 {
-        let self_pubkey = self.id();
-        let mut num_crds_votes = 0;
-        let vote_index = {
-            let gossip_crds = self.time_gossip_read_lock(
-                "alpenglow_gossip_read_push_vote",
-                &self.stats.push_vote_read,
-            );
-            (0..MAX_VOTES)
-                .filter_map(|ix| {
-                    let vote = CrdsValueLabel::Vote(ix, self_pubkey);
-                    let vote: &CrdsData = gossip_crds.get(&vote)?;
-                    num_crds_votes += 1;
-                    match &vote {
-                        CrdsData::Vote(_, vote) => Some((vote.wallclock, ix)),
-                        _ => panic!("this should not happen!"),
-                    }
-                })
-                .min() // Boot the oldest evicted vote by wallclock.
-                .map(|(_ /*wallclock*/, ix)| ix)
-        };
-        if num_crds_votes < MAX_VOTES {
-            // Do not evict if there is space in crds
-            num_crds_votes
-        } else {
-            vote_index.expect("must exist unless CrdsValueLabel was deleted")
         }
     }
 
@@ -876,11 +842,6 @@ impl ClusterInfo {
         }
     }
 
-    pub fn push_alpenglow_vote(&self, vote: Transaction) {
-        let vote_index = self.find_alpenglow_vote_index_to_evict();
-        self.push_vote_at_index(vote, vote_index, true);
-    }
-
     pub fn push_vote(&self, tower: &[Slot], vote: Transaction) {
         debug_assert!(tower.iter().tuple_windows().all(|(a, b)| a < b));
         // Find the oldest crds vote by wallclock that has a lower slot than `tower`
@@ -899,15 +860,10 @@ impl ClusterInfo {
             );
         };
         debug_assert!(vote_index < MAX_VOTES);
-        self.push_vote_at_index(vote, vote_index, false);
+        self.push_vote_at_index(vote, vote_index);
     }
 
-    pub fn refresh_vote(
-        &self,
-        refresh_vote: Transaction,
-        refresh_vote_slot: Slot,
-        is_alpenglow: bool,
-    ) {
+    pub fn refresh_vote(&self, refresh_vote: Transaction, refresh_vote_slot: Slot) {
         let vote_index = {
             let self_pubkey = self.id();
             let gossip_crds =
@@ -933,7 +889,7 @@ impl ClusterInfo {
         // We don't write to an arbitrary index, because it may replace one of this validator's
         // existing votes on the network.
         if let Some(vote_index) = vote_index {
-            self.push_vote_at_index(refresh_vote, vote_index, is_alpenglow);
+            self.push_vote_at_index(refresh_vote, vote_index);
         } else {
             // If you don't see a vote with the same slot yet, this means you probably
             // restarted, and need to repush and evict the oldest vote
@@ -945,7 +901,7 @@ impl ClusterInfo {
                 return;
             };
             debug_assert!(vote_index < MAX_VOTES);
-            self.push_vote_at_index(refresh_vote, vote_index, is_alpenglow);
+            self.push_vote_at_index(refresh_vote, vote_index);
         }
     }
 
@@ -3558,7 +3514,7 @@ mod tests {
             &[refresh_ix], // instructions
             None,          // payer
         );
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
         let current_votes = cluster_info.get_votes(&mut Cursor::default());
         assert_eq!(initial_votes, current_votes);
         assert!(!current_votes.contains(&refresh_tx));
@@ -3575,7 +3531,7 @@ mod tests {
             &[refresh_ix], // instructions
             None,          // payer
         );
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
 
         // This should evict the latest vote since it's for a slot less than refresh_slot
         let votes = cluster_info.get_votes(&mut Cursor::default());
@@ -3624,7 +3580,7 @@ mod tests {
 
         // Trying to refresh vote when it doesn't yet exist in gossip
         // should add the vote without eviction if there is room in the gossip table.
-        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot, false);
+        cluster_info.refresh_vote(refresh_tx.clone(), refresh_slot);
 
         // Should be two votes in gossip
         cursor = Cursor::default();
@@ -3649,7 +3605,7 @@ mod tests {
                 &[&new_signer],
                 latest_refreshed_recent_blockhash,
             );
-            cluster_info.refresh_vote(latest_refresh_tx.clone(), refresh_slot, false);
+            cluster_info.refresh_vote(latest_refresh_tx.clone(), refresh_slot);
             // Sleep to avoid votes with same timestamp causing later vote to not override prior vote
             std::thread::sleep(Duration::from_millis(1));
         }
