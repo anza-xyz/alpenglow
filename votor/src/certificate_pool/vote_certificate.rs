@@ -1,14 +1,14 @@
 use {
     crate::CertificateId,
-    alpenglow_vote::{
-        bls_message::{CertificateMessage, VoteMessage},
-        certificate::{Certificate, CertificateType},
-    },
     bitvec::prelude::*,
     solana_bls_signatures::{
         BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective,
     },
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
+    solana_vote::alpenglow::{
+        bls_message::{CertificateMessage, VoteMessage},
+        certificate::{Certificate, CertificateType},
+    },
     thiserror::Error,
 };
 

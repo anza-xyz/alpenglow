@@ -8,12 +8,12 @@ use {
         cluster_info_vote_listener::VerifiedVoteSender,
         sigverify_stage::{SigVerifier, SigVerifyServiceError},
     },
-    alpenglow_vote::bls_message::BLSMessage,
     crossbeam_channel::{Sender, TrySendError},
     solana_pubkey::Pubkey,
     solana_runtime::epoch_stakes_service::EpochStakesService,
     solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
+    solana_vote::alpenglow::bls_message::BLSMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
     std::{collections::HashMap, sync::Arc},
 };

@@ -32,7 +32,6 @@ use {
         voting_service::VoteOp,
         window_service::DuplicateSlotReceiver,
     },
-    alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
@@ -84,6 +83,7 @@ use {
         transaction::Transaction,
     },
     solana_timings::ExecuteTimings,
+    solana_vote::alpenglow::bls_message::CertificateMessage,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},

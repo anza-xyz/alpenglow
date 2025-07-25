@@ -2061,7 +2061,7 @@ where
     // generate some rewards
     if is_alpenglow {
         let mut vote_state =
-            *alpenglow_vote::state::VoteState::deserialize(vote_account.data()).unwrap();
+            *solana_vote::alpenglow::state::VoteState::deserialize(vote_account.data()).unwrap();
         for _ in 0..MAX_LOCKOUT_HISTORY + 42 {
             let mut epoch_credits = *vote_state.epoch_credits();
             epoch_credits.set_credits(epoch_credits.credits() + 16);

@@ -487,10 +487,7 @@ dependencies = [
  "serde_derive",
  "solana-account",
  "solana-bls-signatures",
- "solana-frozen-abi",
- "solana-frozen-abi-macro",
  "solana-hash",
- "solana-logger",
  "solana-program",
  "solana-signature",
  "solana-vote-interface",
@@ -7434,7 +7431,6 @@ dependencies = [
  "agave-banking-stage-ingress-types",
  "agave-transaction-view",
  "ahash 0.8.11",
- "alpenglow-vote",
  "anyhow",
  "arrayvec",
  "assert_matches",
@@ -8352,7 +8348,6 @@ dependencies = [
 name = "solana-ledger"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bitflags 2.9.0",
@@ -9571,7 +9566,6 @@ version = "2.3.0"
 dependencies = [
  "agave-transaction-view",
  "ahash 0.8.11",
- "alpenglow-vote",
  "aquamarine",
  "arrayref",
  "assert_matches",
@@ -11059,7 +11053,6 @@ dependencies = [
 name = "solana-vote"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "arbitrary",
  "bincode",
  "bitvec",
@@ -11172,7 +11165,6 @@ dependencies = [
 name = "solana-votor"
 version = "2.3.0"
 dependencies = [
- "alpenglow-vote",
  "anyhow",
  "bincode",
  "bitvec",

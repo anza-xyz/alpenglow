@@ -3,8 +3,8 @@ use {
         Result, SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
     },
     crate::Block,
-    alpenglow_vote::vote::Vote,
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
+    solana_vote::alpenglow::vote::Vote,
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };

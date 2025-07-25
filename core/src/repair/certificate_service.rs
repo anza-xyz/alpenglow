@@ -5,9 +5,9 @@
 
 use {
     crate::result::{Error, Result},
-    alpenglow_vote::bls_message::CertificateMessage,
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
+    solana_vote::alpenglow::bls_message::CertificateMessage,
     solana_votor::CertificateId,
     std::{
         sync::{
