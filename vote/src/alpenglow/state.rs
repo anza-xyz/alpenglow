@@ -2,8 +2,7 @@
 use {
     crate::alpenglow::accounting::{AuthorizedVoter, EpochCredit},
     bytemuck::{Pod, Zeroable},
-    solana_account::AccountSharedData,
-    solana_account::WritableAccount,
+    solana_account::{AccountSharedData, WritableAccount},
     solana_bls_signatures::Pubkey as BlsPubkey,
     solana_program::{
         clock::{Epoch, Slot, UnixTimestamp},
