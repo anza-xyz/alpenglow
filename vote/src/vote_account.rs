@@ -1,6 +1,5 @@
 use {
-    crate::vote_state_view::VoteStateView,
-    alpenglow_vote::state::VoteState as AlpenglowVoteState,
+    crate::{alpenglow::state::VoteState as AlpenglowVoteState, vote_state_view::VoteStateView},
     itertools::Itertools,
     serde::{
         de::{MapAccess, Visitor},
@@ -256,7 +255,7 @@ impl VoteAccount {
         let mut account = AccountSharedData::new(
             100, // lamports
             AlpenglowVoteState::size(),
-            &alpenglow_vote::id(),
+            &crate::alpenglow::id(),
         );
         vote_state.serialize_into(account.data_as_mut_slice());
 
@@ -467,7 +466,7 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                 ),
                 account,
             })))
-        } else if alpenglow_vote::check_id(account.owner()) {
+        } else if crate::alpenglow::check_id(account.owner()) {
             // Even though we don't copy data, should verify we can successfully deserialize.
             let _ = AlpenglowVoteState::deserialize(account.data())?;
             Ok(Self(Arc::new(VoteAccountInner {
@@ -642,7 +641,7 @@ mod tests {
         let mut account = AccountSharedData::new(
             rng.gen(), // lamports
             AlpenglowVoteState::size(),
-            &alpenglow_vote::id(),
+            &crate::alpenglow::id(),
         );
         alpenglow_vote_state.serialize_into(account.data_as_mut_slice());
         (account, alpenglow_vote_state)
@@ -729,7 +728,7 @@ mod tests {
     #[should_panic(expected = "InvalidArgument")]
     fn test_vote_account_try_from_invalid_alpenglow_account() {
         let mut account = AccountSharedData::default();
-        account.set_owner(alpenglow_vote::id());
+        account.set_owner(crate::alpenglow::id());
         VoteAccount::try_from(account).unwrap();
     }
 

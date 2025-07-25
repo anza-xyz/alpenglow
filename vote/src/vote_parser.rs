@@ -1,6 +1,8 @@
 use {
-    crate::vote_transaction::VoteTransaction,
-    alpenglow_vote::{self, vote::Vote as AlpenglowVote},
+    crate::{
+        alpenglow::{self, vote::Vote as AlpenglowVote},
+        vote_transaction::VoteTransaction,
+    },
     solana_bincode::limited_deserialize,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -98,7 +100,7 @@ impl From<VoteTransaction> for ParsedVoteTransaction {
 }
 
 impl From<AlpenglowVote> for ParsedVoteTransaction {
-    fn from(value: alpenglow_vote::vote::Vote) -> Self {
+    fn from(value: crate::alpenglow::vote::Vote) -> Self {
         ParsedVoteTransaction::Alpenglow(value)
     }
 }
@@ -150,7 +152,7 @@ pub fn parse_vote_transaction(tx: &Transaction) -> Option<ParsedVote> {
 pub fn parse_sanitized_alpenglow_vote_transaction(tx: &impl SVMTransaction) -> Option<ParsedVote> {
     // Check first instruction for a vote
     let (program_id, first_instruction) = tx.program_instructions_iter().next()?;
-    if program_id != &alpenglow_vote::id() {
+    if program_id != &alpenglow::id() {
         return None;
     }
     let first_account = usize::from(*first_instruction.accounts.first()?);
@@ -174,7 +176,7 @@ pub fn is_alpenglow_vote_transaction(tx: &Transaction) -> bool {
     let Some(program_id) = message.account_keys.get(program_id_index) else {
         return false;
     };
-    program_id == &alpenglow_vote::id()
+    program_id == &alpenglow::id()
 }
 
 pub fn parse_alpenglow_vote_transaction_from_sanitized(
@@ -184,7 +186,7 @@ pub fn parse_alpenglow_vote_transaction_from_sanitized(
     let message = tx.get_message();
     let first_instruction = message.instructions().first()?;
     for (program_id, _) in message.program_instructions_iter() {
-        if program_id != &alpenglow_vote::id() {
+        if program_id != &alpenglow::id() {
             return None;
         }
     }
@@ -208,7 +210,7 @@ pub fn parse_alpenglow_vote_transaction(tx: &Transaction) -> Option<ParsedVote> 
     let first_instruction = message.instructions.first()?;
     let program_id_index = usize::from(first_instruction.program_id_index);
     let program_id = message.account_keys.get(program_id_index)?;
-    if program_id != &alpenglow_vote::id() {
+    if program_id != &alpenglow::id() {
         return None;
     }
     let first_account = usize::from(*first_instruction.accounts.first()?);

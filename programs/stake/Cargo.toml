@@ -10,7 +10,6 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alpenglow-vote = { workspace = true }
 bincode = { workspace = true }
 log = { workspace = true }
 solana-account = { workspace = true }
@@ -31,6 +30,7 @@ solana-stake-interface = { workspace = true }
 solana-sysvar = { workspace = true }
 solana-transaction-context = { workspace = true, features = ["bincode"] }
 solana-type-overrides = { workspace = true }
+solana-vote = { workspace = true }
 solana-vote-interface = { workspace = true, features = ["bincode"] }
 
 [dev-dependencies]
