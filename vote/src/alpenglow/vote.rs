@@ -1,16 +1,8 @@
 //! Vote data types for use by clients
-
 use {
-    crate::alpenglow::{
-        instruction::{self, decode_instruction_data, decode_instruction_type, VoteInstruction},
-        state::PodSlot,
-        vote_processor::NotarizationVoteInstructionData,
-    },
     serde::{Deserialize, Serialize},
     solana_hash::Hash,
-    solana_program::{
-        clock::Slot, instruction::Instruction, program_error::ProgramError, pubkey::Pubkey,
-    },
+    solana_program::clock::Slot,
 };
 
 /// Enum that clients can use to parse and create the vote
@@ -64,74 +56,6 @@ impl Vote {
     /// Create a new skip fallback vote
     pub fn new_skip_fallback_vote(slot: Slot) -> Self {
         Self::from(SkipFallbackVote::new(slot))
-    }
-
-    /// If this instruction represented by `instruction_data` is a vote
-    pub fn is_simple_vote(instruction_data: &[u8]) -> Result<bool, ProgramError> {
-        let instruction_type = decode_instruction_type(instruction_data)?;
-        Ok(matches!(
-            instruction_type,
-            VoteInstruction::Notarize
-                | VoteInstruction::Finalize
-                | VoteInstruction::Skip
-                | VoteInstruction::NotarizeFallback
-                | VoteInstruction::SkipFallback
-        ))
-    }
-
-    /// Deserializes instruction represented by `instruction_data` into a `Vote`
-    /// Must be guarded by `is_simple_vote`
-    pub fn deserialize_simple_vote(instruction_data: &[u8]) -> Result<Vote, ProgramError> {
-        debug_assert!(Self::is_simple_vote(instruction_data)?);
-        let instruction_type = decode_instruction_type(instruction_data)?;
-        match instruction_type {
-            VoteInstruction::Notarize => {
-                let notarization_vote =
-                    decode_instruction_data::<NotarizationVoteInstructionData>(instruction_data)?;
-                Ok(Vote::from(NotarizationVote::new_internal(
-                    notarization_vote,
-                )))
-            }
-            VoteInstruction::Finalize => {
-                let finalization_slot = decode_instruction_data::<PodSlot>(instruction_data)?;
-                Ok(Vote::from(FinalizationVote::new_internal(
-                    finalization_slot,
-                )))
-            }
-            VoteInstruction::Skip => {
-                let skip_slot = decode_instruction_data::<PodSlot>(instruction_data)?;
-                Ok(Vote::from(SkipVote::new_internal(skip_slot)))
-            }
-            VoteInstruction::NotarizeFallback => {
-                let notarization_fallback_vote =
-                    decode_instruction_data::<NotarizationVoteInstructionData>(instruction_data)?;
-                Ok(Vote::from(NotarizationFallbackVote::new_internal(
-                    notarization_fallback_vote,
-                )))
-            }
-            VoteInstruction::SkipFallback => {
-                let skip_fallback_slot = decode_instruction_data::<PodSlot>(instruction_data)?;
-                Ok(Vote::from(SkipFallbackVote::new_internal(
-                    skip_fallback_slot,
-                )))
-            }
-            _ => panic!("Programmer error"),
-        }
-    }
-
-    /// Generate a vote instruction from this vote
-    pub fn to_vote_instruction(&self, vote_pubkey: Pubkey, vote_authority: Pubkey) -> Instruction {
-        match self {
-            Self::Notarize(vote) => instruction::notarize(vote_pubkey, vote_authority, vote),
-            Self::Finalize(vote) => instruction::finalize(vote_pubkey, vote_authority, vote),
-            Self::Skip(vote) => instruction::skip(vote_pubkey, vote_authority, vote),
-            Self::NotarizeFallback(vote) => {
-                instruction::notarize_fallback(vote_pubkey, vote_authority, vote)
-            }
-            Self::SkipFallback(vote) => {
-                instruction::skip_fallback(vote_pubkey, vote_authority, vote)
-            }
-        }
     }
 
     /// The slot which was voted for
@@ -239,15 +163,6 @@ pub struct NotarizationVote {
 }
 
 impl NotarizationVote {
-    fn new_internal(notarization_vote: &NotarizationVoteInstructionData) -> Self {
-        Self {
-            slot: Slot::from(notarization_vote.slot),
-            block_id: notarization_vote.block_id,
-            replayed_slot: 0,
-            replayed_bank_hash: notarization_vote.replayed_bank_hash,
-        }
-    }
-
     /// Construct a notarization vote for `slot`
     pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
         Self {
@@ -286,12 +201,6 @@ pub struct FinalizationVote {
 }
 
 impl FinalizationVote {
-    fn new_internal(finalization_slot: &PodSlot) -> Self {
-        Self {
-            slot: Slot::from(*finalization_slot),
-        }
-    }
-
     /// Construct a finalization vote for `slot`
     pub fn new(slot: Slot) -> Self {
         Self { slot }
@@ -317,12 +226,6 @@ pub struct SkipVote {
 }
 
 impl SkipVote {
-    fn new_internal(slot: &PodSlot) -> Self {
-        Self {
-            slot: Slot::from(*slot),
-        }
-    }
-
     /// Construct a skip vote for `slot`
     pub fn new(slot: Slot) -> Self {
         Self { slot }
@@ -349,15 +252,6 @@ pub struct NotarizationFallbackVote {
 }
 
 impl NotarizationFallbackVote {
-    fn new_internal(notarization_vote: &NotarizationVoteInstructionData) -> Self {
-        Self {
-            slot: Slot::from(notarization_vote.slot),
-            block_id: notarization_vote.block_id,
-            replayed_slot: 0,
-            replayed_bank_hash: notarization_vote.replayed_bank_hash,
-        }
-    }
-
     /// Construct a notarization vote for `slot`
     pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
         Self {
@@ -396,12 +290,6 @@ pub struct SkipFallbackVote {
 }
 
 impl SkipFallbackVote {
-    fn new_internal(slot: &PodSlot) -> Self {
-        Self {
-            slot: Slot::from(*slot),
-        }
-    }
-
     /// Construct a skip fallback vote for `slot`
     pub fn new(slot: Slot) -> Self {
         Self { slot }

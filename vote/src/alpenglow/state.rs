@@ -1,26 +1,19 @@
 //! Program state
-
 use {
-    crate::alpenglow::{
-        accounting::{AuthorizedVoter, EpochCredit},
-        instruction::InitializeAccountInstructionData,
-    },
+    crate::alpenglow::accounting::{AuthorizedVoter, EpochCredit},
     bytemuck::{Pod, Zeroable},
+    solana_account::AccountSharedData,
+    solana_account::WritableAccount,
     solana_bls_signatures::Pubkey as BlsPubkey,
     solana_program::{
-        account_info::AccountInfo,
-        clock::{Clock, Epoch, Slot, UnixTimestamp},
+        clock::{Epoch, Slot, UnixTimestamp},
         hash::Hash,
         program_error::ProgramError,
         pubkey::Pubkey,
         rent::Rent,
     },
-    spl_pod::primitives::{PodI64, PodU64},
-};
-#[cfg(not(target_os = "solana"))]
-use {
-    solana_account::AccountSharedData, solana_account::WritableAccount,
     solana_vote_interface::state::BlockTimestamp as LegacyBlockTimestamp,
+    spl_pod::primitives::{PodI64, PodU64},
 };
 
 pub(crate) type PodEpoch = PodU64;
@@ -86,7 +79,6 @@ impl BlockTimestamp {
     }
 }
 
-#[cfg(not(target_os = "solana"))]
 impl From<&BlockTimestamp> for LegacyBlockTimestamp {
     fn from(ts: &BlockTimestamp) -> Self {
         LegacyBlockTimestamp {
@@ -98,22 +90,6 @@ impl From<&BlockTimestamp> for LegacyBlockTimestamp {
 
 impl VoteState {
     const VOTE_STATE_VERSION: u8 = 1;
-
-    pub(crate) fn new(init_data: &InitializeAccountInstructionData, clock: &Clock) -> Self {
-        Self {
-            version: Self::VOTE_STATE_VERSION,
-            node_pubkey: init_data.node_pubkey,
-            authorized_voter: AuthorizedVoter {
-                epoch: PodU64::from(clock.epoch),
-                voter: init_data.authorized_voter,
-            },
-            next_authorized_voter: None,
-            authorized_withdrawer: init_data.authorized_withdrawer,
-            commission: init_data.commission,
-            bls_pubkey: init_data.bls_pubkey,
-            ..VoteState::default()
-        }
-    }
 
     /// Create a new vote state for tests
     pub fn new_for_tests(
@@ -139,7 +115,6 @@ impl VoteState {
     }
 
     /// Create a new vote state and wrap it in an account
-    #[cfg(not(target_os = "solana"))]
     pub fn create_account_with_authorized(
         node_pubkey: &Pubkey,
         authorized_voter: &Pubkey,
@@ -166,16 +141,6 @@ impl VoteState {
         self.version > 0
     }
 
-    pub(crate) fn set_vote_account_state(
-        vote_account: &AccountInfo,
-        vote_state: &VoteState,
-    ) -> Result<(), ProgramError> {
-        vote_account
-            .try_borrow_mut_data()?
-            .copy_from_slice(bytemuck::bytes_of(vote_state));
-        Ok(())
-    }
-
     /// Deserialize a vote state from input data.
     /// Callers can use this with the `data` field from an `AccountInfo`
     pub fn deserialize(vote_account_data: &[u8]) -> Result<&VoteState, ProgramError> {
@@ -185,7 +150,6 @@ impl VoteState {
     /// Serializes a vote state into an output buffer
     /// Callers can use this with the mutable reference to `data` from
     /// an `AccountInfo`
-    #[cfg(not(target_os = "solana"))]
     pub fn serialize_into(&self, vote_account_data: &mut [u8]) {
         vote_account_data.copy_from_slice(bytemuck::bytes_of(self))
     }
@@ -250,7 +214,6 @@ impl VoteState {
     }
 
     /// Most recent timestamp submitted with a vote
-    #[cfg(not(target_os = "solana"))]
     pub fn latest_timestamp_legacy_format(&self) -> LegacyBlockTimestamp {
         // TODO: fix once we figure out how to do timestamps in BLS
         LegacyBlockTimestamp::from(&BlockTimestamp::default())
