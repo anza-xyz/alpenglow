@@ -8784,7 +8784,6 @@ name = "solana-perf"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
- "alpenglow-vote",
  "assert_matches",
  "bincode",
  "bv",
