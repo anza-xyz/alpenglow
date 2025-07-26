@@ -255,14 +255,10 @@ fn commission_split(commission: u8, on: u64) -> (u64, u64, bool) {
 #[cfg(test)]
 mod tests {
     use {
-        self::points::null_tracer,
-        super::*,
-        solana_program::stake::state::Delegation,
-        solana_pubkey::Pubkey,
-        solana_sdk::native_token::sol_to_lamports,
-        solana_vote::alpenglow::{accounting::EpochCredit, state::VoteState as AlpenglowVoteState},
-        solana_vote_program::vote_state::VoteState,
-        test_case::test_case,
+        self::points::null_tracer, super::*, solana_program::stake::state::Delegation,
+        solana_pubkey::Pubkey, solana_sdk::native_token::sol_to_lamports,
+        solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
+        solana_vote_program::vote_state::VoteState, test_case::test_case,
     };
 
     fn new_stake(
@@ -277,21 +273,15 @@ mod tests {
         }
     }
 
-    #[test_case(true; "alpenglow")]
-    #[test_case(false; "towerbft")]
-    fn test_stake_state_redeem_rewards(is_alpenglow: bool) {
+    #[test]
+    fn test_stake_state_redeem_rewards() {
         let mut vote_state = VoteState::default();
-        let mut alpenglow_vote_state = AlpenglowVoteState::default();
         // assume stake.stake() is right
         // bootstrap means fully-vested stake at epoch 0
         let stake_lamports = 1;
         let mut stake = new_stake(stake_lamports, &Pubkey::default(), 0, u64::MAX);
 
-        let vote_account = if is_alpenglow {
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        let vote_account = { VoteAccount::new_from_vote_state(&vote_state) };
         // this one can't collect now, credits_observed == vote_state.credits()
         assert_eq!(
             None,
@@ -310,10 +300,7 @@ mod tests {
         );
 
         // put 2 credits in at epoch 0
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_epoch_credits(EpochCredit::new(0, 2, 0));
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.increment_credits(0, 1);
             vote_state.increment_credits(0, 1);
             VoteAccount::new_from_vote_state(&vote_state)
@@ -343,21 +330,15 @@ mod tests {
         assert_eq!(stake.credits_observed, 2);
     }
 
-    //TODO(wen): the alpenglow test cases don't work yet because we only keep credits for one Epoch
-    #[test_case(false; "towerbft")]
-    fn test_stake_state_calculate_rewards(is_alpenglow: bool) {
+    #[test]
+    fn test_stake_state_calculate_rewards() {
         let mut vote_state = VoteState::default();
-        let mut alpenglow_vote_state = AlpenglowVoteState::default();
 
         // assume stake.stake() is right
         // bootstrap means fully-vested stake at epoch 0
         let mut stake = new_stake(1, &Pubkey::default(), 0, u64::MAX);
 
-        let vote_account = if is_alpenglow {
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        let vote_account = VoteAccount::new_from_vote_state(&vote_state);
 
         // this one can't collect now, credits_observed == vote_state.credits()
         assert_eq!(
@@ -377,10 +358,7 @@ mod tests {
         );
 
         // put 2 credits in at epoch 0
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_epoch_credits(EpochCredit::new(0, 2, 0));
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.increment_credits(0, 1);
             vote_state.increment_credits(0, 1);
             VoteAccount::new_from_vote_state(&vote_state)
@@ -430,10 +408,7 @@ mod tests {
         );
 
         // put 1 credit in epoch 1
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_epoch_credits(EpochCredit::new(1, 1, 2));
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.increment_credits(1, 1);
             VoteAccount::new_from_vote_state(&vote_state)
         };
@@ -461,10 +436,7 @@ mod tests {
         );
 
         // put 1 credit in epoch 2
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_epoch_credits(EpochCredit::new(2, 1, 1));
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.increment_credits(2, 1);
             VoteAccount::new_from_vote_state(&vote_state)
         };
@@ -516,10 +488,7 @@ mod tests {
 
         // same as above, but is a really small commission out of 32 bits,
         //  verify that None comes back on small redemptions where no one gets paid
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_commission(1);
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.commission = 1;
             VoteAccount::new_from_vote_state(&vote_state)
         };
@@ -538,10 +507,7 @@ mod tests {
                 None,
             )
         );
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_commission(99);
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.commission = 99;
             VoteAccount::new_from_vote_state(&vote_state)
         };
@@ -658,10 +624,7 @@ mod tests {
         );
 
         // get rewards and credits observed when not the activation epoch
-        let vote_account = if is_alpenglow {
-            alpenglow_vote_state.set_commission(0);
-            VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state)
-        } else {
+        let vote_account = {
             vote_state.commission = 0;
             VoteAccount::new_from_vote_state(&vote_state)
         };
