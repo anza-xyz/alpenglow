@@ -42,7 +42,6 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks,
-        epoch_stakes_service::EpochStakesService,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
         vote_sender_types::{BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender},
@@ -260,14 +259,16 @@ impl Tpu {
             )
         };
 
-        let alpenglow_sigverify_stage = {
+        let root_bank_cache = {
             let (tx, rx) = unbounded();
             bank_forks.write().unwrap().register_new_bank_subscriber(tx);
             let bank = bank_forks.read().unwrap().root_bank();
-            let epoch = bank.epoch();
-            let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+            Arc::new(RwLock::new(RootBankCache::new(bank, rx)))
+        };
+
+        let alpenglow_sigverify_stage = {
             let verifier = BLSSigVerifier::new(
-                epoch_stakes_service,
+                root_bank_cache.clone(),
                 verified_vote_sender.clone(),
                 bls_verified_message_sender,
             );
@@ -285,6 +286,7 @@ impl Tpu {
             gossip_vote_sender,
             vote_tracker,
             bank_forks.clone(),
+            root_bank_cache.clone(),
             subscriptions.clone(),
             verified_vote_sender,
             gossip_verified_vote_hash_sender,
@@ -312,7 +314,7 @@ impl Tpu {
         let forwarding_stage = ForwardingStage::spawn(
             forward_stage_receiver,
             connection_cache.clone(),
-            RootBankCache::new(bank_forks.clone()),
+            root_bank_cache,
             (cluster_info.clone(), poh_recorder.clone()),
             DataBudget::default(),
         );

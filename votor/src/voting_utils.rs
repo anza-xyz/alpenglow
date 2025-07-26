@@ -19,7 +19,10 @@ use {
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        sync::{Arc, RwLock},
+    },
     thiserror::Error,
 };
 
@@ -88,7 +91,7 @@ pub struct VotingContext {
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
     pub voted_signatures: Vec<Signature>,
-    pub root_bank_cache: RootBankCache,
+    pub root_bank_cache: Arc<RwLock<RootBankCache>>,
 }
 
 pub fn get_bls_keypair(
@@ -244,7 +247,7 @@ pub(crate) fn insert_vote_and_create_bls_message(
         context.vote_history.add_vote(vote);
     }
 
-    let bank = context.root_bank_cache.root_bank();
+    let bank = context.root_bank_cache.read().unwrap().root_bank();
     let bls_message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
         e => {

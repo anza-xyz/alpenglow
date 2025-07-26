@@ -1,6 +1,7 @@
 //! The `validator` module hosts all the validator microservices.
 
 pub use solana_perf::report_target_features;
+use solana_runtime::root_bank_cache::RootBankCache;
 use {
     crate::{
         accounts_hash_verifier::AccountsHashVerifier,
@@ -1329,10 +1330,17 @@ impl Validator {
             Some(stats_reporter_sender.clone()),
             exit.clone(),
         );
+        let root_bank_cache = {
+            let (tx, rx) = unbounded();
+            bank_forks.write().unwrap().register_new_bank_subscriber(tx);
+            let bank = bank_forks.read().unwrap().root_bank();
+            Arc::new(RwLock::new(RootBankCache::new(bank, rx)))
+        };
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
             bank_forks.clone(),
+            root_bank_cache.clone(),
             config.repair_whitelist.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
@@ -1546,6 +1554,7 @@ impl Validator {
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
+            root_bank_cache,
             &bank_forks,
             &cluster_info,
             TvuSockets {

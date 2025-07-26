@@ -1,47 +1,46 @@
-//! A wrapper around a root `Bank` that only loads from bank forks if the root has been updated.
-//! This can be useful to avoid read-locking the bank forks until the root has been updated.
-//!
-
 use {
-    crate::{
-        bank::Bank,
-        bank_forks::{BankForks, ReadOnlyAtomicSlot},
+    crate::bank::Bank,
+    crossbeam_channel::Receiver,
+    log::warn,
+    parking_lot::RwLock,
+    std::{
+        sync::{Arc, Weak},
+        thread,
     },
-    std::sync::{Arc, RwLock, Weak},
 };
 
-/// Cached root bank that only loads from bank forks if the root has been updated.
 #[derive(Clone)]
 pub struct RootBankCache {
-    bank_forks: Arc<RwLock<BankForks>>,
-    cached_root_bank: Weak<Bank>,
-    root_slot: ReadOnlyAtomicSlot,
+    bank: Arc<RwLock<Arc<Bank>>>,
+    weak_bank: Arc<RwLock<Weak<Bank>>>,
 }
 
 impl RootBankCache {
-    pub fn new(bank_forks: Arc<RwLock<BankForks>>) -> Self {
-        let (cached_root_bank, root_slot) = {
-            let lock = bank_forks.read().unwrap();
-            (Arc::downgrade(&lock.root_bank()), lock.get_atomic_root())
-        };
-        Self {
-            bank_forks,
-            cached_root_bank,
-            root_slot,
+    pub fn new(bank: Arc<Bank>, new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
+        let weak_bank = Arc::new(RwLock::new(Arc::downgrade(&bank)));
+        let bank = Arc::new(RwLock::new(bank));
+        {
+            let bank = bank.clone();
+            thread::spawn(move || loop {
+                match new_bank_receiver.recv() {
+                    Ok(b) => *bank.write() = b,
+                    Err(e) => {
+                        warn!("recv() returned {e:?}.  Exiting.");
+                        break;
+                    }
+                }
+            });
         }
+        Self { bank, weak_bank }
     }
 
-    pub fn root_bank(&mut self) -> Arc<Bank> {
-        match self.cached_root_bank.upgrade() {
-            Some(cached_root_bank) if cached_root_bank.slot() == self.root_slot.get() => {
-                cached_root_bank
-            }
-            _ => {
-                let root_bank = self.bank_forks.read().unwrap().root_bank();
-                self.cached_root_bank = Arc::downgrade(&root_bank);
-                root_bank
-            }
+    pub fn root_bank(&self) -> Arc<Bank> {
+        if let Some(b) = self.weak_bank.read().upgrade() {
+            return b;
         }
+        let bank = self.bank.read().clone();
+        *self.weak_bank.write() = Arc::downgrade(&bank);
+        bank
     }
 }
 

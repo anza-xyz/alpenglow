@@ -17,7 +17,7 @@ use {
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler},
     solana_pubkey::Pubkey,
-    solana_runtime::bank_forks::BankForks,
+    solana_runtime::{bank_forks::BankForks, root_bank_cache::RootBankCache},
     solana_sdk::clock::Slot,
     std::{
         collections::HashSet,
@@ -142,11 +142,13 @@ impl RepairHandlerType {
         blockstore: Arc<Blockstore>,
         cluster_info: Arc<ClusterInfo>,
         bank_forks: Arc<RwLock<BankForks>>,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         serve_repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
     ) -> ServeRepair {
         ServeRepair::new(
             cluster_info,
             bank_forks,
+            root_bank_cache,
             serve_repair_whitelist,
             self.to_handler(blockstore),
         )

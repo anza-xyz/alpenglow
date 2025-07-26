@@ -45,6 +45,7 @@ use {
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache,
+        root_bank_cache::RootBankCache,
         vote_sender_types::{
             BLSVerifiedMessageReceiver, BLSVerifiedMessageSender, ReplayVoteSender,
         },
@@ -128,6 +129,7 @@ impl Tvu {
     pub fn new(
         vote_account: &Pubkey,
         authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         bank_forks: &Arc<RwLock<BankForks>>,
         cluster_info: &Arc<ClusterInfo>,
         sockets: TvuSockets,
@@ -250,6 +252,7 @@ impl Tvu {
                 .clone();
             let repair_info = RepairInfo {
                 bank_forks: bank_forks.clone(),
+                root_bank_cache: root_bank_cache.clone(),
                 epoch_schedule,
                 ancestor_duplicate_slots_sender,
                 repair_validators: tvu_config.repair_validators,
@@ -275,6 +278,7 @@ impl Tvu {
                 repair_service_channels,
             );
             WindowService::new(
+                root_bank_cache.clone(),
                 blockstore.clone(),
                 repair_socket,
                 ancestor_hashes_socket,
@@ -340,6 +344,7 @@ impl Tvu {
         };
 
         let replay_stage_config = ReplayStageConfig {
+            root_bank_cache,
             vote_account: *vote_account,
             authorized_voter_keypairs,
             exit: exit.clone(),

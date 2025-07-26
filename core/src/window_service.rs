@@ -26,7 +26,7 @@ use {
     solana_measure::measure::Measure,
     solana_metrics::inc_new_counter_error,
     solana_rayon_threadlimit::get_thread_count,
-    solana_runtime::bank_forks::BankForks,
+    solana_runtime::{bank_forks::BankForks, root_bank_cache::RootBankCache},
     solana_sdk::clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_turbine::cluster_nodes,
     std::{
@@ -286,6 +286,7 @@ pub(crate) struct WindowService {
 
 impl WindowService {
     pub(crate) fn new(
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         blockstore: Arc<Blockstore>,
         repair_socket: Arc<UdpSocket>,
         ancestor_hashes_socket: Arc<UdpSocket>,
@@ -312,6 +313,7 @@ impl WindowService {
         } = window_service_channels;
 
         let repair_service = RepairService::new(
+            root_bank_cache,
             blockstore.clone(),
             exit.clone(),
             repair_socket,

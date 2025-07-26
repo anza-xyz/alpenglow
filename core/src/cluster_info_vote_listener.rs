@@ -194,6 +194,7 @@ impl ClusterInfoVoteListener {
         verified_packets_sender: BankingPacketSender,
         vote_tracker: Arc<VoteTracker>,
         bank_forks: Arc<RwLock<BankForks>>,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         subscriptions: Arc<RpcSubscriptions>,
         verified_vote_sender: VerifiedVoteSender,
         gossip_verified_vote_hash_sender: GossipVerifiedVoteHashSender,
@@ -205,14 +206,14 @@ impl ClusterInfoVoteListener {
         let (verified_vote_transactions_sender, verified_vote_transactions_receiver) = unbounded();
         let listen_thread = {
             let exit = exit.clone();
-            let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
+            let root_bank_cache = root_bank_cache.clone();
             Builder::new()
                 .name("solCiVoteLstnr".to_string())
                 .spawn(move || {
                     let _ = Self::recv_loop(
                         exit,
                         &cluster_info,
-                        &mut root_bank_cache,
+                        root_bank_cache,
                         verified_packets_sender,
                         verified_vote_transactions_sender,
                     );
@@ -223,7 +224,7 @@ impl ClusterInfoVoteListener {
         let process_thread = Builder::new()
             .name("solCiProcVotes".to_string())
             .spawn(move || {
-                let mut bank_hash_cache = BankHashCache::new(bank_forks);
+                let mut bank_hash_cache = BankHashCache::new(bank_forks, root_bank_cache);
                 let dumped_slot_subscription = bank_hash_cache.dumped_slot_subscription();
                 let _ = Self::process_votes_loop(
                     exit,
@@ -254,7 +255,7 @@ impl ClusterInfoVoteListener {
     fn recv_loop(
         exit: Arc<AtomicBool>,
         cluster_info: &ClusterInfo,
-        root_bank_cache: &mut RootBankCache,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         verified_packets_sender: BankingPacketSender,
         verified_vote_transactions_sender: VerifiedVoteTransactionsSender,
     ) -> Result<()> {
@@ -263,7 +264,7 @@ impl ClusterInfoVoteListener {
             let votes = cluster_info.get_votes(&mut cursor);
             inc_new_counter_debug!("cluster_info_vote_listener-recv_count", votes.len());
             if !votes.is_empty() {
-                let (vote_txs, packets) = Self::verify_votes(votes, root_bank_cache);
+                let (vote_txs, packets) = Self::verify_votes(votes, root_bank_cache.clone());
                 verified_vote_transactions_sender.send(vote_txs)?;
                 verified_packets_sender.send(BankingPacketBatch::new(packets))?;
             }
@@ -275,7 +276,7 @@ impl ClusterInfoVoteListener {
     #[allow(clippy::type_complexity)]
     fn verify_votes(
         votes: Vec<Transaction>,
-        root_bank_cache: &mut RootBankCache,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
     ) -> (Vec<Transaction>, Vec<PacketBatch>) {
         let mut packet_batches = packet::to_packet_batches(&votes, 1);
 
@@ -285,7 +286,7 @@ impl ClusterInfoVoteListener {
             /*reject_non_vote=*/ false,
             votes.len(),
         );
-        let root_bank = root_bank_cache.root_bank();
+        let root_bank = root_bank_cache.read().unwrap().root_bank();
         let first_alpenglow_slot = root_bank
             .feature_set
             .activated_slot(&solana_feature_set::secp256k1_program_enabled::id())

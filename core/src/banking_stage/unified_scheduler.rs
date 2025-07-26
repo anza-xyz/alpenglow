@@ -44,12 +44,12 @@ use {
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(crate) fn ensure_banking_stage_setup(
     pool: &DefaultSchedulerPool,
-    bank_forks: &Arc<RwLock<BankForks>>,
+    _bank_forks: &Arc<RwLock<BankForks>>,
+    root_bank_cache: Arc<RwLock<RootBankCache>>,
     channels: &Channels,
     cluster_info: &impl LikeClusterInfo,
     poh_recorder: &Arc<RwLock<PohRecorder>>,
 ) {
-    let mut root_bank_cache = RootBankCache::new(bank_forks.clone());
     let unified_receiver = channels.unified_receiver().clone();
     let mut decision_maker = DecisionMaker::new(cluster_info.id(), poh_recorder.clone());
     let transaction_recorder = poh_recorder.read().unwrap().new_recorder();
@@ -60,7 +60,7 @@ pub(crate) fn ensure_banking_stage_setup(
             if matches!(decision, BufferedPacketsDecision::Forward) {
                 return;
             }
-            let bank = root_bank_cache.root_bank();
+            let bank = root_bank_cache.read().unwrap().root_bank();
             for batch in batches.iter() {
                 // over-provision nevertheless some of packets could be invalid.
                 let task_id_base = helper.generate_task_ids(batch.len());
