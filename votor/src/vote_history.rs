@@ -44,7 +44,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "4weZDM6uKNGzT7SgQMqFrqXCuZ5uG9WJg2ZHRCJBTdZu")
+    frozen_abi(digest = "7QmUC3jXK8MKohy4Ez7pfT2MtYheFSaQb7L3YQRcjHyv")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct VoteHistory {
