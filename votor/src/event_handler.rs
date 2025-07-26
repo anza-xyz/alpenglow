@@ -291,10 +291,10 @@ impl EventHandler {
                 )?;
             }
 
-            // We have not observed a finalization certificate in a while, refresh our votes and certs
+            // We have not observed a finalization certificate in a while, refresh our votes
             VotorEvent::Standstill(highest_finalized_slot) => {
                 info!("{my_pubkey}: Standstill {highest_finalized_slot}");
-                // TODO: once we have certificate broadcast, we should also refresh certs
+                // certs refresh happens in CertificatePoolService
                 Self::refresh_votes(my_pubkey, highest_finalized_slot, vctx, &mut votes);
             }
 
