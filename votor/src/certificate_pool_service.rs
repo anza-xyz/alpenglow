@@ -17,7 +17,7 @@ use {
         votor::Votor,
         CertificateId, STANDSTILL_TIMEOUT,
     },
-    crossbeam_channel::{select, RecvError, Sender, TrySendError},
+    crossbeam_channel::{select, Sender, TrySendError},
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -68,13 +68,11 @@ pub(crate) struct CertificatePoolService {
 
 impl CertificatePoolService {
     pub(crate) fn new(ctx: CertificatePoolContext) -> Self {
-        let exit = ctx.exit.clone();
         let t_ingest = Builder::new()
             .name("solCertPoolIngest".to_string())
             .spawn(move || {
-                if let Err(e) = Self::certificate_pool_ingest(ctx) {
+                if let Err(e) = Self::certificate_pool_ingest_loop(ctx) {
                     info!("Certificate pool service exited: {e:?}. Shutting down");
-                    exit.store(true, Ordering::Relaxed);
                 }
             })
             .unwrap();
@@ -119,7 +117,9 @@ impl CertificatePoolService {
                     CertificatePoolServiceStats::incr_u16(&mut stats.certificates_sent);
                 }
                 Err(TrySendError::Disconnected(_)) => {
-                    return Err(AddVoteError::VotingServiceSenderDisconnected);
+                    return Err(AddVoteError::ChannelDisconnected(
+                        "VotingService".to_string(),
+                    ));
                 }
                 Err(TrySendError::Full(_)) => {
                     let dropped = new_certificates_to_send.len().saturating_sub(i) as u16;
@@ -149,42 +149,39 @@ impl CertificatePoolService {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
-        match Self::add_message_and_maybe_update_commitment(
-            &ctx.my_pubkey,
-            &ctx.my_vote_pubkey,
-            message,
+        let (new_finalized_slot, new_certificates_to_send) =
+            Self::add_message_and_maybe_update_commitment(
+                &ctx.my_pubkey,
+                &ctx.my_vote_pubkey,
+                message,
+                cert_pool,
+                events,
+                &ctx.commitment_sender,
+            )?;
+        Self::maybe_update_root_and_send_new_certificates(
             cert_pool,
-            events,
-            &ctx.commitment_sender,
-        ) {
-            Ok((new_finalized_slot, new_certificates_to_send)) => {
-                Self::maybe_update_root_and_send_new_certificates(
-                    cert_pool,
-                    &mut ctx.root_bank_cache,
-                    &ctx.bls_sender,
-                    new_finalized_slot,
-                    new_certificates_to_send,
-                    current_root,
-                    highest_finalized_slot,
-                    standstill_timer,
-                    stats,
-                )?;
-            }
-            Err(e) => {
-                if e == AddVoteError::CertificateSenderError {
-                    return Err(e);
-                } else {
-                    // This is a non critical error, a duplicate vote for example
-                    trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
-                    CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
-                }
-            }
-        };
-        Ok(())
+            &mut ctx.root_bank_cache,
+            &ctx.bls_sender,
+            new_finalized_slot,
+            new_certificates_to_send,
+            current_root,
+            highest_finalized_slot,
+            standstill_timer,
+            stats,
+        )
     }
 
-    // TODO: properly bubble up errors
-    fn certificate_pool_ingest(mut ctx: CertificatePoolContext) -> Result<(), RecvError> {
+    fn handle_channel_disconnected(
+        ctx: &mut CertificatePoolContext,
+        channel_name: &str,
+    ) -> Result<(), ()> {
+        info!("{}: {} disconnected. Exiting", ctx.my_pubkey, channel_name);
+        ctx.exit.store(true, Ordering::Relaxed);
+        Err(())
+    }
+
+    // Main loop for the certificate pool service, it only exits when any channel is disconnected
+    fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &ctx.my_pubkey,
@@ -236,24 +233,21 @@ impl CertificatePoolService {
                 .try_for_each(|event| ctx.event_sender.send(event))
                 .is_err()
             {
-                // Shutdown
-                info!(
-                    "{}: Votor event receiver disconnected. Exiting.",
-                    ctx.my_pubkey
-                );
-                ctx.exit.store(true, Ordering::Relaxed);
-                return Ok(());
+                return Self::handle_channel_disconnected(&mut ctx, "Votor event receiver");
             }
 
             let bls_messages: Vec<BLSMessage> = select! {
                 recv(ctx.bls_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.bls_receiver.try_iter()).collect()
+                    let Ok(first) = msg else {
+                        return Self::handle_channel_disconnected(&mut ctx, "BLS receiver");
+                    };
+                    std::iter::once(first).chain(ctx.bls_receiver.try_iter()).collect()
                 },
                 default(Duration::from_secs(1)) => continue
             };
 
             for message in bls_messages {
-                if let Err(e) = Self::process_bls_message(
+                match Self::process_bls_message(
                     &mut ctx,
                     &message,
                     &mut cert_pool,
@@ -263,12 +257,15 @@ impl CertificatePoolService {
                     &mut standstill_timer,
                     &mut stats,
                 ) {
-                    info!(
-                        "{}: Unable to process BLS message: {e}. Exiting.",
-                        ctx.my_pubkey
-                    );
-                    ctx.exit.store(true, Ordering::Relaxed);
-                    return Ok(());
+                    Ok(()) => {}
+                    Err(AddVoteError::ChannelDisconnected(channel_name)) => {
+                        return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str())
+                    }
+                    Err(e) => {
+                        // This is a non critical error, a duplicate vote for example
+                        trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                        CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
+                    }
                 }
             }
             stats.maybe_report();
@@ -298,7 +295,7 @@ impl CertificatePoolService {
             AlpenglowCommitmentType::Finalized,
             new_finalized_slot,
             commitment_sender,
-        );
+        )?;
         Ok((Some(new_finalized_slot), new_certificates_to_send))
     }
 

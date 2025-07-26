@@ -401,7 +401,7 @@ impl EventHandler {
             false,
             voting_context,
         ));
-        alpenglow_update_commitment_cache(
+        let _ = alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
             slot,
             &voting_context.commitment_sender,
