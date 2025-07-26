@@ -10,7 +10,7 @@ use {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample, AbiEnumVisitor),
-    frozen_abi(digest = "CSKLGPPbBibWP9rptpJyWSJ4vELSoUkA8MLqrRdLhYr8")
+    frozen_abi(digest = "9LBQSptrSydT3MwtfHo7qU9J3u6ep9wFyqJiDtYzDqVF")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Vote {
@@ -152,13 +152,13 @@ impl From<SkipFallbackVote> for Vote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "Hi27FUrTftp2qjyZ96pqYYVyAofVqcZDWSQL4ZgLFpBF")
+    frozen_abi(digest = "AfTX2mg2e3L433SgswtskptGYXLpWGXYDcR4QcgSzRC5")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationVote {
     slot: Slot,
     block_id: Hash,
-    replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
+    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
     replayed_bank_hash: Hash,
 }
 
@@ -168,7 +168,7 @@ impl NotarizationVote {
         Self {
             slot,
             block_id,
-            replayed_slot,
+            _replayed_slot: replayed_slot,
             replayed_bank_hash,
         }
     }
@@ -241,13 +241,13 @@ impl SkipVote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "91HNr78MNiTLAW5JioukfYBUgfPtch3aNgsYVgBJH6dC")
+    frozen_abi(digest = "2eD1FTtZb6e86j3WEYCkzG9Yer36jA98B4RiuvFgwZ7d")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationFallbackVote {
     slot: Slot,
     block_id: Hash,
-    replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
+    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
     replayed_bank_hash: Hash,
 }
 
@@ -257,7 +257,7 @@ impl NotarizationFallbackVote {
         Self {
             slot,
             block_id,
-            replayed_slot,
+            _replayed_slot: replayed_slot,
             replayed_bank_hash,
         }
     }
