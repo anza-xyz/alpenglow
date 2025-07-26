@@ -206,9 +206,7 @@ pub(crate) fn calculate_stake_points_and_credits(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        solana_sdk::native_token::sol_to_lamports,
-        solana_vote::alpenglow::{accounting::EpochCredit, state::VoteState as AlpenglowVoteState},
+        super::*, solana_sdk::native_token::sol_to_lamports,
         solana_vote_program::vote_state::VoteState,
     };
 
@@ -227,7 +225,6 @@ mod tests {
     #[test]
     fn test_stake_state_calculate_points_with_typical_values() {
         let mut vote_state = VoteState::default();
-        let mut alpenglow_vote_state = AlpenglowVoteState::default();
 
         // bootstrap means fully-vested stake at epoch 0 with
         //  10_000_000 SOL is a big but not unreasonable stake
@@ -244,8 +241,6 @@ mod tests {
         for _ in 0..epoch_slots {
             vote_state.increment_credits(0, 1);
         }
-        // We give one credit for notarization and one for finalization, so we have 2 credits each slot.
-        alpenglow_vote_state.set_epoch_credits(EpochCredit::new(0, vote_state.credits() * 2, 0));
 
         // no overflow on points
         assert_eq!(
@@ -253,16 +248,6 @@ mod tests {
             calculate_stake_points(
                 &stake,
                 &VoteAccount::new_from_vote_state(&vote_state),
-                &StakeHistory::default(),
-                null_tracer(),
-                None
-            )
-        );
-        assert_eq!(
-            u128::from(stake.delegation.stake) * epoch_slots * 2,
-            calculate_stake_points(
-                &stake,
-                &VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state),
                 &StakeHistory::default(),
                 null_tracer(),
                 None
