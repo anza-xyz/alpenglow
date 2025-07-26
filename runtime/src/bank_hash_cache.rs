@@ -22,14 +22,16 @@ pub type DumpedSlotSubscription = Arc<Mutex<bool>>;
 pub struct BankHashCache {
     hashes: BTreeMap<Slot, Hash>,
     bank_forks: Arc<RwLock<BankForks>>,
-    root_bank_cache: RootBankCache,
+    root_bank_cache: Arc<RwLock<RootBankCache>>,
     last_root: Slot,
     dumped_slot_subscription: DumpedSlotSubscription,
 }
 
 impl BankHashCache {
-    pub fn new(bank_forks: Arc<RwLock<BankForks>>) -> Self {
-        let root_bank_cache = RootBankCache::new(bank_forks.clone());
+    pub fn new(
+        bank_forks: Arc<RwLock<BankForks>>,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
+    ) -> Self {
         let dumped_slot_subscription = DumpedSlotSubscription::default();
         bank_forks
             .write()
@@ -90,7 +92,7 @@ impl BankHashCache {
 
     /// Returns the root bank and also prunes cache of any slots < root
     pub fn get_root_bank_and_prune_cache(&mut self) -> Arc<Bank> {
-        let root_bank = self.root_bank_cache.root_bank();
+        let root_bank = self.root_bank_cache.read().unwrap().root_bank();
         if root_bank.slot() != self.last_root {
             self.last_root = root_bank.slot();
             self.hashes = self.hashes.split_off(&self.last_root);

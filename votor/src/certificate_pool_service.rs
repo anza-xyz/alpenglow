@@ -32,7 +32,7 @@ use {
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex,
+            Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -47,7 +47,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) my_pubkey: Pubkey,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
-    pub(crate) root_bank_cache: RootBankCache,
+    pub(crate) root_bank_cache: Arc<RwLock<RootBankCache>>,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     // TODO: for now we ingest our own votes into the certificate pool
@@ -84,7 +84,7 @@ impl CertificatePoolService {
 
     fn maybe_update_root_and_send_new_certificates(
         cert_pool: &mut CertificatePool,
-        root_bank_cache: &mut RootBankCache,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
@@ -101,7 +101,7 @@ impl CertificatePoolService {
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
-            let root_bank = root_bank_cache.root_bank();
+            let root_bank = root_bank_cache.read().unwrap().root_bank();
             if root_bank.slot() > *current_root {
                 CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
                 *current_root = root_bank.slot();
@@ -160,7 +160,7 @@ impl CertificatePoolService {
             Ok((new_finalized_slot, new_certificates_to_send)) => {
                 Self::maybe_update_root_and_send_new_certificates(
                     cert_pool,
-                    &mut ctx.root_bank_cache,
+                    ctx.root_bank_cache.clone(),
                     &ctx.bls_sender,
                     new_finalized_slot,
                     new_certificates_to_send,
@@ -188,7 +188,7 @@ impl CertificatePoolService {
         let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &ctx.my_pubkey,
-            &ctx.root_bank_cache.root_bank(),
+            &ctx.root_bank_cache.read().unwrap().root_bank(),
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
             &mut events,
@@ -198,7 +198,7 @@ impl CertificatePoolService {
         info!("{}: Certificate pool loop initialized", &ctx.my_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
         info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
-        let mut current_root = ctx.root_bank_cache.root_bank().slot();
+        let mut current_root = ctx.root_bank_cache.read().unwrap().root_bank().slot();
         let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
@@ -206,7 +206,7 @@ impl CertificatePoolService {
         let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
 
         // Kick off parent ready
-        let root_bank = ctx.root_bank_cache.root_bank();
+        let root_bank = ctx.root_bank_cache.read().unwrap().root_bank();
         let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
@@ -329,7 +329,7 @@ impl CertificatePoolService {
         // TODO: Add blockstore check
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
             *highest_parent_ready,
-            Some(&ctx.root_bank_cache.root_bank()),
+            Some(&ctx.root_bank_cache.read().unwrap().root_bank()),
         ) else {
             error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
             ctx.exit.store(true, Ordering::Relaxed);

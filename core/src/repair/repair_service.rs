@@ -354,6 +354,7 @@ pub const MAX_CLOSEST_COMPLETION_REPAIRS: usize = 100;
 #[derive(Clone)]
 pub struct RepairInfo {
     pub bank_forks: Arc<RwLock<BankForks>>,
+    pub root_bank_cache: Arc<RwLock<RootBankCache>>,
     pub cluster_info: Arc<ClusterInfo>,
     pub cluster_slots: Arc<ClusterSlots>,
     pub epoch_schedule: EpochSchedule,
@@ -419,7 +420,7 @@ impl RepairServiceChannels {
 }
 
 struct RepairTracker {
-    root_bank_cache: RootBankCache,
+    root_bank_cache: Arc<RwLock<RootBankCache>>,
     repair_weight: RepairWeight,
     serve_repair: ServeRepair,
     repair_metrics: RepairMetrics,
@@ -436,6 +437,7 @@ pub struct RepairService {
 
 impl RepairService {
     pub fn new(
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         blockstore: Arc<Blockstore>,
         exit: Arc<AtomicBool>,
         repair_socket: Arc<UdpSocket>,
@@ -452,6 +454,7 @@ impl RepairService {
                 .name("solRepairSvc".to_string())
                 .spawn(move || {
                     Self::run(
+                        root_bank_cache,
                         blockstore,
                         &exit,
                         &repair_socket,
@@ -701,7 +704,7 @@ impl RepairService {
             popular_pruned_forks_requests,
             outstanding_repairs,
         } = repair_tracker;
-        let root_bank = root_bank_cache.root_bank();
+        let root_bank = root_bank_cache.read().unwrap().root_bank();
 
         Self::update_weighting_heuristic(
             blockstore,
@@ -749,6 +752,7 @@ impl RepairService {
     }
 
     fn run(
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         blockstore: Arc<Blockstore>,
         exit: &AtomicBool,
         repair_socket: &UdpSocket,
@@ -756,8 +760,7 @@ impl RepairService {
         repair_info: RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
     ) {
-        let mut root_bank_cache = RootBankCache::new(repair_info.bank_forks.clone());
-        let root_bank_slot = root_bank_cache.root_bank().slot();
+        let root_bank_slot = root_bank_cache.read().unwrap().root_bank().slot();
         let mut repair_tracker = RepairTracker {
             root_bank_cache,
             repair_weight: RepairWeight::new(root_bank_slot),
@@ -765,6 +768,7 @@ impl RepairService {
                 ServeRepair::new(
                     repair_info.cluster_info.clone(),
                     repair_info.bank_forks.clone(),
+                    repair_info.root_bank_cache.clone(),
                     repair_info.repair_whitelist.clone(),
                     Box::new(StandardRepairHandler::new(blockstore.clone())),
                 )

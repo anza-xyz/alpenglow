@@ -102,6 +102,7 @@ pub struct VotorConfig {
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
     pub blockstore: Arc<Blockstore>,
     pub bank_forks: Arc<RwLock<BankForks>>,
+    pub root_bank_cache: Arc<RwLock<RootBankCache>>,
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Arc<RpcSubscriptions>,
@@ -155,6 +156,7 @@ impl Votor {
             authorized_voter_keypairs,
             blockstore,
             bank_forks,
+            root_bank_cache,
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
@@ -198,7 +200,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             voted_signatures: vec![],
-            root_bank_cache: RootBankCache::new(bank_forks.clone()),
+            root_bank_cache: root_bank_cache.clone(),
         };
 
         let root_context = RootContext {
@@ -227,7 +229,7 @@ impl Votor {
             my_pubkey,
             my_vote_pubkey: vote_account,
             blockstore,
-            root_bank_cache: RootBankCache::new(bank_forks.clone()),
+            root_bank_cache,
             leader_schedule_cache,
             bls_receiver,
             bls_sender,
