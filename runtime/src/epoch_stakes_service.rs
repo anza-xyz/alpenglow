@@ -1,42 +1,21 @@
 use {
-    crate::{
-        bank::Bank,
-        epoch_stakes::{BLSPubkeyToRankMap, EpochStakes},
-    },
+    crate::{bank::Bank, epoch_stakes::BLSPubkeyToRankMap, epoch_state::EpochState},
     crossbeam_channel::Receiver,
     log::warn,
     parking_lot::RwLock as PlRwLock,
-    solana_sdk::{
-        clock::{Epoch, Slot},
-        epoch_schedule::EpochSchedule,
-    },
-    std::{collections::HashMap, sync::Arc, thread},
+    solana_sdk::clock::Slot,
+    std::{sync::Arc, thread},
 };
-
-struct State {
-    stakes: HashMap<Epoch, EpochStakes>,
-    epoch_schedule: EpochSchedule,
-}
-
-impl State {
-    fn new(bank: Arc<Bank>) -> Self {
-        Self {
-            stakes: bank.epoch_stakes_map().clone(),
-            epoch_schedule: bank.epoch_schedule().clone(),
-        }
-    }
-}
 
 /// A service that regularly updates the epoch stakes state from `Bank`s
 /// and exposes various methods to access the state.
 pub struct EpochStakesService {
-    state: Arc<PlRwLock<State>>,
+    state: Arc<PlRwLock<EpochState>>,
 }
 
 impl EpochStakesService {
-    pub fn new(bank: Arc<Bank>, epoch: Epoch, new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
-        let mut prev_epoch = epoch;
-        let state = Arc::new(PlRwLock::new(State::new(bank)));
+    pub fn new(bank: &Bank, new_bank_receiver: Receiver<Arc<Bank>>) -> Self {
+        let state = Arc::new(PlRwLock::new(EpochState::new(bank)));
         {
             let state = state.clone();
             thread::spawn(move || loop {
@@ -47,10 +26,9 @@ impl EpochStakesService {
                         break;
                     }
                 };
-                let new_epoch = bank.epoch();
-                if new_epoch > prev_epoch {
-                    prev_epoch = new_epoch;
-                    *state.write() = State::new(bank)
+                let can_update = state.read().can_update(&bank);
+                if can_update {
+                    state.write().update(&bank);
                 }
             });
         }
@@ -59,9 +37,9 @@ impl EpochStakesService {
 
     pub fn get_key_to_rank_map(&self, slot: Slot) -> Option<Arc<BLSPubkeyToRankMap>> {
         let guard = self.state.read();
-        let epoch = guard.epoch_schedule.get_epoch(slot);
+        let epoch = guard.schedule.get_epoch(slot);
         guard
-            .stakes
+            .stakes_map
             .get(&epoch)
             .map(|stake| Arc::clone(stake.bls_pubkey_to_rank_map()))
     }

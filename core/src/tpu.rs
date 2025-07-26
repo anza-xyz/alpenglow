@@ -264,8 +264,7 @@ impl Tpu {
             let (tx, rx) = unbounded();
             bank_forks.write().unwrap().register_new_bank_subscriber(tx);
             let bank = bank_forks.read().unwrap().root_bank();
-            let epoch = bank.epoch();
-            let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+            let epoch_stakes_service = Arc::new(EpochStakesService::new(&bank, rx));
             let verifier = BLSSigVerifier::new(
                 epoch_stakes_service,
                 verified_vote_sender.clone(),

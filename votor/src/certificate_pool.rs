@@ -18,20 +18,16 @@ use {
     crossbeam_channel::Sender,
     solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, epoch_stakes::EpochStakes},
+    solana_runtime::{bank::Bank, epoch_state::EpochState},
     solana_sdk::{
         clock::{Epoch, Slot},
-        epoch_schedule::EpochSchedule,
         hash::Hash,
     },
     solana_vote::alpenglow::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage},
         vote::Vote,
     },
-    std::{
-        collections::{BTreeMap, HashMap},
-        sync::Arc,
-    },
+    std::{collections::BTreeMap, sync::Arc},
     thiserror::Error,
 };
 
@@ -84,7 +80,6 @@ pub enum AddVoteError {
     InvalidRank(u16),
 }
 
-#[derive(Default)]
 pub struct CertificatePool {
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePoolType>,
@@ -98,18 +93,13 @@ pub struct CertificatePool {
     highest_notarized_fallback: Option<(Slot, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
     highest_finalized_slot: Option<Slot>,
-    // Cached epoch_schedule
-    epoch_schedule: EpochSchedule,
-    // Cached epoch_stakes_map
-    epoch_stakes_map: Arc<HashMap<Epoch, EpochStakes>>,
     // The current root, no need to save anything before this slot.
     root: Slot,
-    // The epoch of current root.
-    root_epoch: Epoch,
     /// The certificate sender, if set, newly created certificates will be sent here
     certificate_sender: Option<Sender<(CertificateId, CertificateMessage)>>,
     /// Stats for the certificate pool
     stats: CertificatePoolStats,
+    epoch_state: EpochState,
 }
 
 impl CertificatePool {
@@ -123,38 +113,21 @@ impl CertificatePool {
         let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
         let parent_ready_tracker = ParentReadyTracker::new(my_pubkey, root_block);
 
-        let mut pool = Self {
+        Self {
             vote_pools: BTreeMap::new(),
             completed_certificates: BTreeMap::new(),
             highest_notarized_fallback: None,
             highest_finalized_slot: None,
-            epoch_schedule: EpochSchedule::default(),
-            epoch_stakes_map: Arc::new(HashMap::new()),
+            epoch_state: EpochState::new(bank),
             root: bank.slot(),
-            root_epoch: Epoch::default(),
             certificate_sender,
             parent_ready_tracker,
             stats: CertificatePoolStats::new(),
-        };
-
-        // Update the epoch_stakes_map and root
-        pool.update_epoch_stakes_map(bank);
-        pool.root = bank.slot();
-
-        pool
+        }
     }
 
     pub fn root(&self) -> Slot {
         self.root
-    }
-
-    fn update_epoch_stakes_map(&mut self, bank: &Bank) {
-        let epoch = bank.epoch();
-        if self.epoch_stakes_map.is_empty() || epoch > self.root_epoch {
-            self.epoch_stakes_map = Arc::new(bank.epoch_stakes_map().clone());
-            self.root_epoch = epoch;
-            self.epoch_schedule = bank.epoch_schedule().clone();
-        }
     }
 
     fn new_vote_pool(vote_type: VoteType) -> VotePoolType {
@@ -352,9 +325,10 @@ impl CertificatePool {
         slot: Slot,
         rank: u16,
     ) -> Result<(Pubkey, Stake, Stake), AddVoteError> {
-        let epoch = self.epoch_schedule.get_epoch(slot);
+        let epoch = self.epoch_state.schedule.get_epoch(slot);
         let epoch_stakes = self
-            .epoch_stakes_map
+            .epoch_state
+            .stakes_map
             .get(&epoch)
             .ok_or(AddVoteError::EpochStakesNotFound(epoch))?;
         let Some((vote_key, _)) = epoch_stakes
@@ -606,8 +580,9 @@ impl CertificatePool {
     /// If all the above hold, return the block ids `Vec<block_id>` for all such `b`
     pub fn safe_to_notar(&self, my_vote_pubkey: &Pubkey, slot: Slot) -> Vec<Hash> {
         let Some(epoch_stakes) = self
-            .epoch_stakes_map
-            .get(&self.epoch_schedule.get_epoch(slot))
+            .epoch_state
+            .stakes_map
+            .get(&self.epoch_state.schedule.get_epoch(slot))
         else {
             return vec![];
         };
@@ -664,8 +639,8 @@ impl CertificatePool {
     /// - votedStake(s) is the cumulative stake of all nodes who voted notarize or skip on s
     /// - topNotarStake(s) the highest of cumulative notarize stake per block in s
     pub fn safe_to_skip(&self, my_vote_pubkey: &Pubkey, slot: Slot) -> bool {
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
+        let epoch = self.epoch_state.schedule.get_epoch(slot);
+        let Some(epoch_stakes) = self.epoch_state.stakes_map.get(&epoch) else {
             return false;
         };
         let total_stake = epoch_stakes.total_stake();
@@ -744,7 +719,7 @@ impl CertificatePool {
             });
         self.vote_pools = self.vote_pools.split_off(&(new_root, VoteType::Finalize));
         self.parent_ready_tracker.set_root(new_root);
-        self.update_epoch_stakes_map(&bank);
+        self.epoch_state.update(&bank);
     }
 
     /// Updates the pubkey used for logging purposes only.
