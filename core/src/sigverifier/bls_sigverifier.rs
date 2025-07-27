@@ -257,7 +257,7 @@ mod tests {
 
         let vote_rank: usize = 3;
         let messages = vec![BLSMessage::Vote(VoteMessage {
-            vote: Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()),
+            vote: Vote::new_notarization_vote(6, Hash::new_unique()),
             signature: Signature::default(),
             rank: vote_rank as u16,
         })];
@@ -275,7 +275,7 @@ mod tests {
         verifier.stats.last_stats_logged = Instant::now() - STATS_INTERVAL_DURATION;
         let vote_rank: usize = 9;
         let messages = vec![BLSMessage::Vote(VoteMessage {
-            vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()),
+            vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique()),
             signature: Signature::default(),
             rank: vote_rank as u16,
         })];
@@ -352,11 +352,7 @@ mod tests {
                 rank: 0,
             }),
             BLSMessage::Vote(VoteMessage {
-                vote: Vote::new_notarization_fallback_vote(
-                    6,
-                    Hash::new_unique(),
-                    Hash::new_unique(),
-                ),
+                vote: Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
                 signature: Signature::default(),
                 rank: 2,
             }),

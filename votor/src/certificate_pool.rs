@@ -1081,7 +1081,7 @@ mod tests {
         add_certificate(
             &mut pool,
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
+            Vote::new_notarization_vote(5, Hash::default()),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1105,7 +1105,7 @@ mod tests {
         add_certificate(
             &mut pool,
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
+            Vote::new_notarization_vote(5, Hash::default()),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1124,7 +1124,7 @@ mod tests {
         add_certificate(
             &mut pool,
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
+            Vote::new_notarization_vote(5, Hash::default()),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1147,7 +1147,7 @@ mod tests {
         add_certificate(
             &mut pool,
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default(), Hash::default()),
+            Vote::new_notarization_vote(5, Hash::default()),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1169,8 +1169,8 @@ mod tests {
     }
 
     #[test_case(Vote::new_finalization_vote(5), vec![CertificateType::Finalize])]
-    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique()), vec![CertificateType::Notarize, CertificateType::NotarizeFallback])]
-    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique()), vec![CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique()), vec![CertificateType::Notarize, CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique()), vec![CertificateType::NotarizeFallback])]
     #[test_case(Vote::new_skip_vote(8), vec![CertificateType::Skip])]
     #[test_case(Vote::new_skip_fallback_vote(9), vec![CertificateType::Skip])]
     fn test_add_vote_and_create_new_certificate_with_types(
@@ -1251,15 +1251,15 @@ mod tests {
     #[test_case(CertificateType::Finalize, Vote::new_finalization_vote(5))]
     #[test_case(
         CertificateType::FinalizeFast,
-        Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique())
+        Vote::new_notarization_vote(6, Hash::new_unique())
     )]
     #[test_case(
         CertificateType::Notarize,
-        Vote::new_notarization_vote(6, Hash::new_unique(), Hash::new_unique())
+        Vote::new_notarization_vote(6, Hash::new_unique())
     )]
     #[test_case(
         CertificateType::NotarizeFallback,
-        Vote::new_notarization_fallback_vote(7, Hash::new_unique(), Hash::new_unique())
+        Vote::new_notarization_fallback_vote(7, Hash::new_unique())
     )]
     #[test_case(CertificateType::Skip, Vote::new_skip_vote(8))]
     fn test_add_certificate_with_types(certificate_type: CertificateType, vote: Vote) {
@@ -1268,7 +1268,7 @@ mod tests {
             slot: vote.slot(),
             certificate_type,
             block_id: vote.block_id().copied(),
-            replayed_bank_hash: vote.replayed_bank_hash().copied(),
+            replayed_bank_hash: None,
         };
         let certificate_message = CertificateMessage {
             certificate: certificate.clone(),
@@ -1564,7 +1564,7 @@ mod tests {
             .is_ok());
         // 40% notarized, should succeed
         for rank in 1..5 {
-            let vote = Vote::new_notarization_vote(2, block_id, Hash::default());
+            let vote = Vote::new_notarization_vote(2, block_id);
             assert!(pool
                 .add_message(
                     &Pubkey::new_unique(),
@@ -1581,7 +1581,7 @@ mod tests {
 
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
-            let vote = Vote::new_notarization_vote(3, block_id, Hash::default());
+            let vote = Vote::new_notarization_vote(3, block_id);
             assert!(pool
                 .add_message(
                     &Pubkey::new_unique(),
@@ -1593,7 +1593,7 @@ mod tests {
         assert!(pool.safe_to_notar(&my_vote_key, slot).is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
-        let vote = Vote::new_notarization_vote(3, Hash::new_unique(), Hash::default());
+        let vote = Vote::new_notarization_vote(3, Hash::new_unique());
         assert!(pool
             .add_message(
                 &Pubkey::new_unique(),
@@ -1619,7 +1619,7 @@ mod tests {
         // Add 20% notarization for another block, we should notify on both
         let duplicate_block_id = Hash::new_unique();
         for rank in 7..9 {
-            let vote = Vote::new_notarization_vote(3, duplicate_block_id, Hash::default());
+            let vote = Vote::new_notarization_vote(3, duplicate_block_id);
             assert!(pool
                 .add_message(
                     &Pubkey::new_unique(),
@@ -1651,8 +1651,7 @@ mod tests {
 
         // Add a notarize from myself.
         let block_id = Hash::new_unique();
-        let bank_hash = Hash::default();
-        let vote = Vote::new_notarization_vote(2, block_id, bank_hash);
+        let vote = Vote::new_notarization_vote(2, block_id);
         assert!(pool
             .add_message(
                 &Pubkey::new_unique(),
@@ -1675,7 +1674,7 @@ mod tests {
         }
         assert!(pool.safe_to_skip(&my_vote_key, slot));
         // Add 10% more notarize, still safe to skip any more because total voted increased.
-        let vote = Vote::new_notarization_vote(2, block_id, bank_hash);
+        let vote = Vote::new_notarization_vote(2, block_id);
         assert!(pool
             .add_message(
                 &Pubkey::new_unique(),
@@ -1688,11 +1687,9 @@ mod tests {
 
     fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
         match vote_type {
-            VoteType::Notarize => {
-                Vote::new_notarization_vote(slot, Hash::default(), Hash::default())
-            }
+            VoteType::Notarize => Vote::new_notarization_vote(slot, Hash::default()),
             VoteType::NotarizeFallback => {
-                Vote::new_notarization_fallback_vote(slot, Hash::default(), Hash::default())
+                Vote::new_notarization_fallback_vote(slot, Hash::default())
             }
             VoteType::Skip => Vote::new_skip_vote(slot),
             VoteType::SkipFallback => Vote::new_skip_fallback_vote(slot),
