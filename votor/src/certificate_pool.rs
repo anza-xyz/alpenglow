@@ -1268,7 +1268,6 @@ mod tests {
             slot: vote.slot(),
             certificate_type,
             block_id: vote.block_id().copied(),
-            replayed_bank_hash: None,
         };
         let certificate_message = CertificateMessage {
             certificate: certificate.clone(),
@@ -1779,7 +1778,6 @@ mod tests {
                 slot: 2,
                 certificate_type: CertificateType::Notarize,
                 block_id: Some(Hash::new_unique()),
-                replayed_bank_hash: Some(Hash::new_unique()),
             },
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),

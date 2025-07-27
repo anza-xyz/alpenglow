@@ -239,7 +239,6 @@ mod tests {
                     slot: 4,
                     certificate_type: CertificateType::Finalize,
                     block_id: None,
-                    replayed_bank_hash: None,
                 },
                 signature: Signature::default(),
                 bitmap,
