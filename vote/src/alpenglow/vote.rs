@@ -29,9 +29,7 @@ pub enum Vote {
 impl Vote {
     /// Create a new notarization vote
     pub fn new_notarization_vote(slot: Slot, block_id: Hash) -> Self {
-        Self::from(NotarizationVote::new(
-            slot, block_id, 0, /*_replayed_slot not used */
-        ))
+        Self::from(NotarizationVote::new(slot, block_id))
     }
 
     /// Create a new finalization vote
@@ -46,9 +44,7 @@ impl Vote {
 
     /// Create a new notarization fallback vote
     pub fn new_notarization_fallback_vote(slot: Slot, block_id: Hash) -> Self {
-        Self::from(NotarizationFallbackVote::new(
-            slot, block_id, 0, /*_replayed_slot not used */
-        ))
+        Self::from(NotarizationFallbackVote::new(slot, block_id))
     }
 
     /// Create a new skip fallback vote
@@ -147,17 +143,12 @@ impl From<SkipFallbackVote> for Vote {
 pub struct NotarizationVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
 }
 
 impl NotarizationVote {
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot) -> Self {
-        Self {
-            slot,
-            block_id,
-            _replayed_slot: replayed_slot,
-        }
+    pub fn new(slot: Slot, block_id: Hash) -> Self {
+        Self { slot, block_id }
     }
 
     /// The slot to notarize
@@ -229,17 +220,12 @@ impl SkipVote {
 pub struct NotarizationFallbackVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
 }
 
 impl NotarizationFallbackVote {
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot) -> Self {
-        Self {
-            slot,
-            block_id,
-            _replayed_slot: replayed_slot,
-        }
+    pub fn new(slot: Slot, block_id: Hash) -> Self {
+        Self { slot, block_id }
     }
 
     /// The slot to notarize
