@@ -68,7 +68,9 @@ impl ParentReadyTracker {
             },
         );
         slot_statuses.insert(
-            root_slot.saturating_add(1),
+            root_slot
+                .checked_add(1)
+                .expect("root slot should not overflow"),
             ParentReadyStatus {
                 skip: false,
                 notar_fallbacks: vec![],
@@ -79,7 +81,9 @@ impl ParentReadyTracker {
             my_pubkey,
             slot_statuses,
             root: root_slot,
-            highest_with_parent_ready: root_slot.saturating_add(1),
+            highest_with_parent_ready: root_slot
+                .checked_add(1)
+                .expect("root slot should not overflow"),
         }
     }
 
@@ -105,7 +109,7 @@ impl ParentReadyTracker {
         assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE);
 
         // Add this block as valid parent to skip connected future blocks
-        for s in slot.saturating_add(1).. {
+        for s in slot.checked_add(1).expect("slot should not overflow").. {
             trace!(
                 "{}: Adding new parent ready for {s} parent {block:?}",
                 self.my_pubkey
@@ -143,7 +147,7 @@ impl ParentReadyTracker {
 
         // Get newly connected future slots
         let mut future_slots = vec![];
-        for s in slot.saturating_add(1).. {
+        for s in slot.checked_add(1).expect("slot should not overflow").. {
             future_slots.push(s);
             if !self.slot_statuses.get(&s).is_some_and(|ss| ss.skip) {
                 break;
@@ -152,7 +156,10 @@ impl ParentReadyTracker {
 
         // Find possible parents using the previous slot
         let mut potential_parents = vec![];
-        let Some(status) = self.slot_statuses.get(&(slot.saturating_sub(1))) else {
+        let Some(status) = self
+            .slot_statuses
+            .get(&slot.checked_sub(1).expect("slot should not underflow"))
+        else {
             return;
         };
         for nf in &status.notar_fallbacks {

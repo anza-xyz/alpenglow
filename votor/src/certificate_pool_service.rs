@@ -210,7 +210,11 @@ impl CertificatePoolService {
         let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
-            slot: root_bank.slot().checked_add(1).unwrap(),
+            slot: root_bank
+                .slot()
+                .checked_add(1)
+                .expect("root bank slot should not overflow"),
+
             parent_block: root_block,
         });
 

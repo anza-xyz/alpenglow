@@ -427,7 +427,12 @@ impl CertificatePool {
             return Err(AddVoteError::UnrootedSlot);
         }
         // We only allow votes
-        if slot > self.root.saturating_add(MAX_SLOT_AGE) {
+        if slot
+            > self
+                .root
+                .checked_add(MAX_SLOT_AGE)
+                .expect("root slot should not overflow")
+        {
             self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::SlotInFuture);
         }
@@ -711,10 +716,16 @@ impl CertificatePool {
             // handles cases where we are entering the alpenglow epoch, where the first
             // slot in the epoch will pass my_leader_slot == parent_slot
             my_leader_slot != first_alpenglow_slot &&
-            my_leader_slot != parent_slot.saturating_add(1);
+            my_leader_slot != parent_slot
+                .checked_add(1)
+                .expect("parent slot should not overflow");
 
         if needs_skip_certificate {
-            let begin_skip_slot = first_alpenglow_slot.max(parent_slot.saturating_add(1));
+            let begin_skip_slot = first_alpenglow_slot.max(
+                parent_slot
+                    .checked_add(1)
+                    .expect("parent slot should not overflow"),
+            );
             for slot in begin_skip_slot..my_leader_slot {
                 if !self.skip_certified(slot) {
                     error!(
