@@ -166,9 +166,9 @@ impl CertificatePoolService {
             cert_pool,
             &mut ctx.root_bank_cache,
             &ctx.bls_sender,
+            new_finalized_slot,
             new_certificates_to_send,
             current_root,
-            highest_finalized_slot,
             standstill_timer,
             stats,
         )
@@ -228,19 +228,22 @@ impl CertificatePoolService {
                 events.push(VotorEvent::Standstill(cert_pool.highest_finalized_slot()));
                 stats.standstill = true;
                 standstill_timer = Instant::now();
-                if Err(AddVoteError::VotingServiceSenderDisconnected)
-                    == Self::send_certificates(
-                        &ctx.bls_sender,
-                        cert_pool.get_certs_for_standstill(),
-                        &mut stats,
-                    )
-                {
-                    info!(
-                        "{}: Voting service sender disconnected. Exiting.",
-                        ctx.my_pubkey
-                    );
-                    ctx.exit.store(true, Ordering::Relaxed);
-                    return Ok(());
+                match Self::send_certificates(
+                    &ctx.bls_sender,
+                    cert_pool.get_certs_for_standstill(),
+                    &mut stats,
+                ) {
+                    Ok(()) => (),
+                    Err(AddVoteError::ChannelDisconnected(channel_name)) => {
+                        return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str());
+                    }
+                    Err(e) => {
+                        trace!(
+                            "{}: unable to push standstill certificates into pool {}",
+                            &ctx.my_pubkey,
+                            e
+                        );
+                    }
                 }
             }
 
