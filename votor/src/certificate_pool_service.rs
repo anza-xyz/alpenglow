@@ -87,15 +87,12 @@ impl CertificatePoolService {
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
         current_root: &mut Slot,
-        highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
-        if let Some(new_finalized_slot) = new_finalized_slot {
+        if new_finalized_slot.is_some() {
             // Reset standstill timer
-            debug_assert!(new_finalized_slot > *highest_finalized_slot);
-            *highest_finalized_slot = new_finalized_slot;
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
@@ -107,7 +104,15 @@ impl CertificatePoolService {
             }
         }
         // Send new certificates to peers
-        for (i, certificate) in new_certificates_to_send.iter().enumerate() {
+        Self::send_certificates(bls_sender, new_certificates_to_send, stats)
+    }
+
+    fn send_certificates(
+        bls_sender: &Sender<BLSOp>,
+        certificates_to_send: Vec<Arc<CertificateMessage>>,
+        stats: &mut CertificatePoolServiceStats,
+    ) -> Result<(), AddVoteError> {
+        for (i, certificate) in certificates_to_send.iter().enumerate() {
             // The buffer should normally be large enough, so we don't handle
             // certificate re-send here.
             match bls_sender.try_send(BLSOp::PushCertificate {
@@ -122,7 +127,7 @@ impl CertificatePoolService {
                     ));
                 }
                 Err(TrySendError::Full(_)) => {
-                    let dropped = new_certificates_to_send.len().saturating_sub(i) as u16;
+                    let dropped = certificates_to_send.len().saturating_sub(i) as u16;
                     stats.certificates_dropped = stats.certificates_dropped.saturating_add(dropped);
                     return Err(AddVoteError::VotingServiceQueueFull);
                 }
@@ -137,7 +142,6 @@ impl CertificatePoolService {
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
         current_root: &mut Slot,
-        highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -162,7 +166,6 @@ impl CertificatePoolService {
             cert_pool,
             &mut ctx.root_bank_cache,
             &ctx.bls_sender,
-            new_finalized_slot,
             new_certificates_to_send,
             current_root,
             highest_finalized_slot,
@@ -200,7 +203,6 @@ impl CertificatePoolService {
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
-        let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
 
         // Kick off parent ready
         let root_bank = ctx.root_bank_cache.root_bank();
@@ -223,9 +225,23 @@ impl CertificatePoolService {
             );
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
-                events.push(VotorEvent::Standstill(highest_finalized_slot));
+                events.push(VotorEvent::Standstill(cert_pool.highest_finalized_slot()));
                 stats.standstill = true;
                 standstill_timer = Instant::now();
+                if Err(AddVoteError::VotingServiceSenderDisconnected)
+                    == Self::send_certificates(
+                        &ctx.bls_sender,
+                        cert_pool.get_certs_for_standstill(),
+                        &mut stats,
+                    )
+                {
+                    info!(
+                        "{}: Voting service sender disconnected. Exiting.",
+                        ctx.my_pubkey
+                    );
+                    ctx.exit.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
             }
 
             if events
@@ -253,7 +269,6 @@ impl CertificatePoolService {
                     &mut cert_pool,
                     &mut events,
                     &mut current_root,
-                    &mut highest_finalized_slot,
                     &mut standstill_timer,
                     &mut stats,
                 ) {

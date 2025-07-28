@@ -1,9 +1,7 @@
 use {
     crate::CertificateId,
     bitvec::prelude::*,
-    solana_bls_signatures::{
-        BlsError, Pubkey as BlsPubkey, PubkeyProjective, Signature, SignatureProjective,
-    },
+    solana_bls_signatures::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_vote::alpenglow::{
         bls_message::{CertificateMessage, VoteMessage},
@@ -29,70 +27,56 @@ pub enum CertificateError {
     ValidatorDoesNotExist(usize),
 }
 
-//TODO(wen): Maybe we can merge all the below functions into CertificateMessage.
+/// A builder for creating a `CertificateMessage` by efficiently aggregating BLS signatures.
 #[derive(Clone)]
-pub struct VoteCertificate(CertificateMessage);
+pub struct VoteCertificateBuilder {
+    certificate: Certificate,
+    signature: SignatureProjective,
+    bitmap: BitVec<u8, Lsb0>,
+}
 
-impl From<CertificateMessage> for VoteCertificate {
-    fn from(certificate_message: CertificateMessage) -> Self {
-        Self(certificate_message)
+impl TryFrom<CertificateMessage> for VoteCertificateBuilder {
+    type Error = CertificateError;
+
+    fn try_from(message: CertificateMessage) -> Result<Self, Self::Error> {
+        let projective_signature = SignatureProjective::try_from(message.signature)?;
+        Ok(VoteCertificateBuilder {
+            certificate: message.certificate,
+            signature: projective_signature,
+            bitmap: message.bitmap,
+        })
     }
 }
 
-impl VoteCertificate {
+impl VoteCertificateBuilder {
     pub fn new(certificate_id: CertificateId) -> Self {
-        VoteCertificate(CertificateMessage {
+        Self {
             certificate: certificate_id.into(),
-            signature: Signature::default(),
+            signature: SignatureProjective::identity(),
             bitmap: BitVec::<u8, Lsb0>::repeat(false, MAXIMUM_VALIDATORS),
-        })
-    }
-
-    pub fn aggregate<'a, 'b, T>(&mut self, messages: T)
-    where
-        T: Iterator<Item = &'a VoteMessage>,
-        Self: 'b,
-        'b: 'a,
-    {
-        let signature = &mut self.0.signature;
-        // TODO: signature aggregation can be done out-of-order;
-        // consider aggregating signatures separately in parallel
-        let mut current_signature = if signature == &Signature::default() {
-            SignatureProjective::identity()
-        } else {
-            SignatureProjective::try_from(*signature).expect("Invalid signature")
-        };
-
-        // aggregate the votes
-        let bitmap = &mut self.0.bitmap;
-        for vote_message in messages {
-            // set bit-vector for the validator
-            //
-            // TODO: This only accounts for one type of vote. Update this after
-            // we have a base3 encoding implementation.
-            assert!(
-                bitmap.len() > vote_message.rank as usize,
-                "Vote rank {} exceeds bitmap length {}",
-                vote_message.rank,
-                bitmap.len()
-            );
-            assert!(
-                bitmap.get(vote_message.rank as usize).as_deref() != Some(&true),
-                "Conflicting vote check should make this unreachable {vote_message:?}"
-            );
-            bitmap.set(vote_message.rank as usize, true);
-            // aggregate the signature
-            current_signature
-                .aggregate_with([&vote_message.signature])
-                .expect(
-                    "Failed to aggregate signature: {vote_message.signature:?} into {current_signature:?}"
-                );
         }
-        *signature = Signature::from(current_signature);
     }
 
-    pub fn certificate(self) -> CertificateMessage {
-        self.0
+    /// Aggregates a slice of `VoteMessage`s into the builder.
+    pub fn aggregate(&mut self, messages: &[VoteMessage]) -> Result<(), CertificateError> {
+        for vote_message in messages {
+            if self.bitmap.len() <= vote_message.rank as usize {
+                return Err(CertificateError::ValidatorDoesNotExist(
+                    vote_message.rank as usize,
+                ));
+            }
+            self.bitmap.set(vote_message.rank as usize, true);
+        }
+        let signature_iter = messages.iter().map(|vote_message| &vote_message.signature);
+        Ok(self.signature.aggregate_with(signature_iter)?)
+    }
+
+    pub fn build(self) -> CertificateMessage {
+        CertificateMessage {
+            certificate: self.certificate,
+            signature: self.signature.into(),
+            bitmap: self.bitmap,
+        }
     }
 }
 
