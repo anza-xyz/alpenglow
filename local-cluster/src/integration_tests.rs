@@ -22,6 +22,7 @@ use {
     solana_core::{
         consensus::{tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD},
         validator::{is_snapshot_config_valid, ValidatorConfig},
+        voting_service::VotingServiceOverride,
     },
     solana_gossip::gossip_service::discover_cluster,
     solana_ledger::{
@@ -47,7 +48,7 @@ use {
     solana_turbine::broadcast_stage::BroadcastStageType,
     static_assertions,
     std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         fs, iter,
         num::NonZeroUsize,
         path::{Path, PathBuf},
@@ -446,10 +447,20 @@ pub fn run_cluster_partition<C>(
     };
 
     let slots_per_epoch = 2048;
+    let validator_configs = make_identical_validator_configs(&validator_config, num_nodes)
+        .into_iter()
+        .map(|mut config| {
+            config.voting_service_test_override = Some(VotingServiceOverride {
+                additional_listeners: vec![],
+                alpenglow_port_override: Arc::new(HashMap::new()),
+            });
+            config
+        })
+        .collect();
     let mut config = ClusterConfig {
         mint_lamports,
         node_stakes,
-        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_configs,
         validator_keys: Some(
             validator_keys
                 .into_iter()

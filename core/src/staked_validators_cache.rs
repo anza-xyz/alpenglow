@@ -45,6 +45,9 @@ pub struct StakedValidatorsCache {
 
     /// Whether to include the running validator's socket address in cache entries
     include_self: bool,
+
+    /// Optional override for Alpenglow port, used for testing purposes
+    alpenglow_port_override: Option<Arc<HashMap<Pubkey, SocketAddr>>>,
 }
 
 enum PortsToUse {
@@ -59,6 +62,7 @@ impl StakedValidatorsCache {
         ttl: Duration,
         max_cache_size: usize,
         include_self: bool,
+        alpenglow_port_override: Option<Arc<HashMap<Pubkey, SocketAddr>>>,
     ) -> Self {
         Self {
             cache: LruCache::new(max_cache_size),
@@ -66,6 +70,7 @@ impl StakedValidatorsCache {
             bank_forks,
             protocol,
             include_self,
+            alpenglow_port_override,
         }
     }
 
@@ -96,6 +101,7 @@ impl StakedValidatorsCache {
         });
 
         struct Node {
+            pubkey: Pubkey,
             stake: u64,
             tpu_socket: SocketAddr,
             // TODO(wen): this should not be an Option after BLS all-to-all is submitted.
@@ -118,6 +124,7 @@ impl StakedValidatorsCache {
                     // TPU socket, and ignore nodes that only have an Alpenglow socket.
                     // TODO(wen): tpu_socket is no longer needed after Alpenglow migration.
                     tpu_socket.map(|tpu_socket| Node {
+                        pubkey: *pubkey,
                         stake: *stake,
                         tpu_socket,
                         alpenglow_socket,
@@ -135,11 +142,18 @@ impl StakedValidatorsCache {
 
         for node in nodes {
             validator_sockets.push(node.tpu_socket);
+
             if let Some(alpenglow_socket) = node.alpenglow_socket {
-                alpenglow_sockets.push(alpenglow_socket);
+                let socket = self
+                    .alpenglow_port_override
+                    .as_ref()
+                    .and_then(|m| m.get(&node.pubkey))
+                    .copied() // replaces `cloned()` for Copy types like `SocketAddr`
+                    .unwrap_or(alpenglow_socket);
+
+                alpenglow_sockets.push(socket);
             }
         }
-
         self.cache.push(
             epoch,
             StakedValidatorsCacheEntry {
@@ -451,7 +465,7 @@ mod tests {
 
         // Create our staked validators cache
         let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
@@ -557,8 +571,14 @@ mod tests {
                 .bank_forks();
 
         // Create our staked validators cache
-        let mut svc =
-            StakedValidatorsCache::new(bank_forks, Protocol::UDP, Duration::from_secs(5), 5, true);
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks,
+            Protocol::UDP,
+            Duration::from_secs(5),
+            5,
+            true,
+            None,
+        );
 
         assert_eq!(0, svc.len());
         assert!(svc.is_empty());
@@ -666,7 +686,7 @@ mod tests {
 
         // Create our staked validators cache
         let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
@@ -736,6 +756,7 @@ mod tests {
             Duration::from_secs(5),
             5,
             true,
+            None,
         );
 
         let (sockets, _) = if use_alpenglow_socket {
@@ -761,6 +782,7 @@ mod tests {
             Duration::from_secs(5),
             5,
             false,
+            None,
         );
 
         let (sockets, _) = if use_alpenglow_socket {

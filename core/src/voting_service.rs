@@ -14,12 +14,14 @@ use {
     solana_runtime::bank_forks::BankForks,
     solana_sdk::{
         clock::{Slot, FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET},
+        pubkey::Pubkey,
         transaction::Transaction,
         transport::TransportError,
     },
     solana_vote::alpenglow::bls_message::BLSMessage,
     solana_votor::{vote_history_storage::VoteHistoryStorage, voting_utils::BLSOp},
     std::{
+        collections::HashMap,
         net::SocketAddr,
         sync::{Arc, RwLock},
         thread::{self, Builder, JoinHandle},
@@ -89,6 +91,12 @@ pub struct VotingService {
     thread_hdl: JoinHandle<()>,
 }
 
+#[derive(Clone)]
+pub struct VotingServiceOverride {
+    pub additional_listeners: Vec<SocketAddr>,
+    pub alpenglow_port_override: Arc<HashMap<Pubkey, SocketAddr>>,
+}
+
 impl VotingService {
     pub fn new(
         vote_receiver: Receiver<VoteOp>,
@@ -99,8 +107,17 @@ impl VotingService {
         vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
-        additional_listeners: Option<Vec<SocketAddr>>,
+        test_override: Option<VotingServiceOverride>,
     ) -> Self {
+        let (additional_listeners, alpenglow_port_override) =
+            if let Some(test_override) = test_override {
+                (
+                    Some(test_override.additional_listeners),
+                    Some(test_override.alpenglow_port_override),
+                )
+            } else {
+                (None, None)
+            };
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
@@ -110,6 +127,7 @@ impl VotingService {
                     Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
                     STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
                     false,
+                    alpenglow_port_override,
                 );
 
                 loop {
@@ -405,7 +423,10 @@ mod tests {
             Arc::new(NullVoteHistoryStorage::default()),
             Arc::new(ConnectionCache::with_udp("TestConnectionCache", 10)),
             bank_forks,
-            Some(vec![listener]),
+            Some(VotingServiceOverride {
+                additional_listeners: vec![listener],
+                alpenglow_port_override: Arc::new(HashMap::new()),
+            }),
         )
     }
 
