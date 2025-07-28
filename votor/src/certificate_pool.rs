@@ -1,8 +1,15 @@
 use {
     crate::{
         certificate_limits_and_vote_types,
-        certificate_pool::parent_ready_tracker::ParentReadyTracker, conflicting_types,
-        event::VotorEvent, vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
+        certificate_pool::{
+            parent_ready_tracker::ParentReadyTracker,
+            stats::CertificatePoolStats,
+            vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
+            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
+        },
+        conflicting_types,
+        event::VotorEvent,
+        vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,

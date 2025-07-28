@@ -1,5 +1,5 @@
 use {
-    crate::{certificate_pool::vote_certificate::VoteCertificatebuilder, Stake},
+    crate::{certificate_pool::vote_certificate_builder::VoteCertificateBuilder, Stake},
     solana_pubkey::Pubkey,
     solana_sdk::hash::Hash,
     solana_vote::alpenglow::bls_message::VoteMessage,
@@ -177,7 +177,7 @@ impl DuplicateBlockVotePool {
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificate) {
+    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificateBuilder) {
         if let Some(vote_entries) = self.votes.get(block_id) {
             output
                 .aggregate(&vote_entries.transactions)
