@@ -10,18 +10,27 @@ use {
     },
     crossbeam_channel::{Sender, TrySendError},
     solana_pubkey::Pubkey,
-    solana_runtime::epoch_stakes_service::EpochStakesService,
+    solana_runtime::{
+        bank::Bank, epoch_stakes::BLSPubkeyToRankMap, root_bank_cache::RootBankCache,
+    },
     solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
     solana_vote::alpenglow::bls_message::BLSMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        sync::{Arc, RwLock},
+    },
 };
+
+fn get_key_to_rank_map(_bank: &Bank, _slot: Slot) -> Option<Arc<BLSPubkeyToRankMap>> {
+    unimplemented!()
+}
 
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<BLSMessage>,
-    epoch_stakes_service: Arc<EpochStakesService>,
+    root_bank_cache: Arc<RwLock<RootBankCache>>,
     stats: BLSSigVerifierStats,
 }
 
@@ -60,8 +69,8 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let Some(rank_to_pubkey_map) = self.epoch_stakes_service.get_key_to_rank_map(slot)
-            else {
+            let bank = self.root_bank_cache.read().unwrap().root_bank();
+            let Some(rank_to_pubkey_map) = get_key_to_rank_map(&bank, slot) else {
                 stats_updater.received_no_epoch_stakes += 1;
                 continue;
             };
@@ -102,12 +111,12 @@ impl SigVerifier for BLSSigVerifier {
 
 impl BLSSigVerifier {
     pub fn new(
-        epoch_stakes_service: Arc<EpochStakesService>,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<BLSMessage>,
     ) -> Self {
         Self {
-            epoch_stakes_service,
+            root_bank_cache,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),

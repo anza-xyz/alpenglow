@@ -83,7 +83,7 @@ pub struct ForwardingStage<F: ForwardAddressGetter> {
     receiver: Receiver<(BankingPacketBatch, bool)>,
     packet_container: PacketContainer,
 
-    root_bank_cache: RootBankCache,
+    root_bank_cache: Arc<RwLock<RootBankCache>>,
     forward_address_getter: F,
     connection_cache: Arc<ConnectionCache>,
     vote_client: VoteClient,
@@ -96,7 +96,7 @@ impl<F: ForwardAddressGetter> ForwardingStage<F> {
     pub fn spawn(
         receiver: Receiver<(BankingPacketBatch, bool)>,
         connection_cache: Arc<ConnectionCache>,
-        root_bank_cache: RootBankCache,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         forward_address_getter: F,
         data_budget: DataBudget,
     ) -> JoinHandle<()> {
@@ -116,7 +116,7 @@ impl<F: ForwardAddressGetter> ForwardingStage<F> {
     fn new(
         receiver: Receiver<(BankingPacketBatch, bool)>,
         connection_cache: Arc<ConnectionCache>,
-        root_bank_cache: RootBankCache,
+        root_bank_cache: Arc<RwLock<RootBankCache>>,
         forward_address_getter: F,
         data_budget: DataBudget,
     ) -> Self {
@@ -135,7 +135,7 @@ impl<F: ForwardAddressGetter> ForwardingStage<F> {
     /// Runs `ForwardingStage`'s main loop, to receive, order, and forward packets.
     fn run(mut self) {
         loop {
-            let root_bank = self.root_bank_cache.root_bank();
+            let root_bank = self.root_bank_cache.read().unwrap().root_bank();
             if !self.receive_and_buffer(&root_bank) {
                 break;
             }
