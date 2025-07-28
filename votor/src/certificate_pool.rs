@@ -98,6 +98,8 @@ pub struct CertificatePool {
     highest_notarized_fallback: Option<(Slot, Hash)>,
     /// Highest slot that has a Finalized variant certificate, for use in notifying RPC
     highest_finalized_slot: Option<Slot>,
+    /// Highest slot that has Finalize+Notarize or FinalizeFast, for use in standstill
+    highest_finalized_with_notarize: Option<Slot>,
     // Cached epoch_schedule
     epoch_schedule: EpochSchedule,
     // Cached epoch_stakes_map
@@ -128,6 +130,7 @@ impl CertificatePool {
             completed_certificates: BTreeMap::new(),
             highest_notarized_fallback: None,
             highest_finalized_slot: None,
+            highest_finalized_with_notarize: None,
             epoch_schedule: EpochSchedule::default(),
             epoch_stakes_map: Arc::new(HashMap::new()),
             root: bank.slot(),
@@ -328,11 +331,23 @@ impl CertificatePool {
                 events.push(VotorEvent::BlockNotarized((slot, block_id)));
                 if self.is_finalized(slot) {
                     events.push(VotorEvent::Finalized((slot, block_id)));
+                    if self
+                        .highest_finalized_with_notarize
+                        .map_or(true, |s| s < slot)
+                    {
+                        self.highest_finalized_with_notarize = Some(slot);
+                    }
                 }
             }
             CertificateId::Finalize(slot) => {
                 if let Some(block) = self.get_notarized_block(slot) {
                     events.push(VotorEvent::Finalized(block));
+                    if self
+                        .highest_finalized_with_notarize
+                        .map_or(true, |s| s < slot)
+                    {
+                        self.highest_finalized_with_notarize = Some(slot);
+                    }
                 }
                 if self.highest_finalized_slot.map_or(true, |s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
@@ -342,6 +357,12 @@ impl CertificatePool {
                 events.push(VotorEvent::Finalized((slot, block_id)));
                 if self.highest_finalized_slot.map_or(true, |s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
+                }
+                if self
+                    .highest_finalized_with_notarize
+                    .map_or(true, |s| s < slot)
+                {
+                    self.highest_finalized_with_notarize = Some(slot);
                 }
             }
         }
@@ -756,6 +777,19 @@ impl CertificatePool {
 
     pub fn maybe_report(&mut self) {
         self.stats.maybe_report();
+    }
+
+    pub fn get_certs_for_standstill(&self) -> Vec<Arc<CertificateMessage>> {
+        self.completed_certificates
+            .iter()
+            .filter_map(|(_, cert)| {
+                if Some(cert.certificate.slot) >= self.highest_finalized_with_notarize {
+                    Some(cert.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -1757,5 +1791,162 @@ mod tests {
         assert!(pool
             .add_message(&Pubkey::new_unique(), &cert, &mut vec![])
             .is_err());
+    }
+
+    #[test]
+    fn test_get_certs_for_standstill() {
+        let (_, mut pool) = create_keypairs_and_pool();
+
+        // Should return empty vector if no certificates
+        assert!(pool.get_certs_for_standstill().is_empty());
+
+        // Add notar-fallback cert on 3 and finalize cert on 4
+        let cert_3 = CertificateMessage {
+            certificate: Certificate {
+                slot: 3,
+                certificate_type: CertificateType::NotarizeFallback,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_3.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        let cert_4 = CertificateMessage {
+            certificate: Certificate {
+                slot: 4,
+                certificate_type: CertificateType::Finalize,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_4.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        // Should return both certificates
+        let certs = pool.get_certs_for_standstill();
+        assert_eq!(certs.len(), 2);
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 3
+            && cert.certificate.certificate_type == CertificateType::NotarizeFallback));
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 4
+            && cert.certificate.certificate_type == CertificateType::Finalize));
+
+        // Add FinalizeFast cert on 5
+        let cert_5 = CertificateMessage {
+            certificate: Certificate {
+                slot: 5,
+                certificate_type: CertificateType::FinalizeFast,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_5.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        // Should return only cert on 5
+        let certs = pool.get_certs_for_standstill();
+        assert_eq!(certs.len(), 1);
+        assert!(
+            certs[0].certificate.slot == 5
+                && certs[0].certificate.certificate_type == CertificateType::FinalizeFast
+        );
+
+        // Now add Notarize cert on 6
+        let cert_6 = CertificateMessage {
+            certificate: Certificate {
+                slot: 6,
+                certificate_type: CertificateType::Notarize,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_6.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        // Should return certs on 5 and 6
+        let certs = pool.get_certs_for_standstill();
+        assert_eq!(certs.len(), 2);
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 5
+            && cert.certificate.certificate_type == CertificateType::FinalizeFast));
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 6
+            && cert.certificate.certificate_type == CertificateType::Notarize));
+
+        // Add another Finalize cert on 6
+        let cert_6_finalize = CertificateMessage {
+            certificate: Certificate {
+                slot: 6,
+                certificate_type: CertificateType::Finalize,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_6_finalize.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        // Should only return both certs on 6
+        let certs = pool.get_certs_for_standstill();
+        assert_eq!(certs.len(), 2);
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 6
+            && cert.certificate.certificate_type == CertificateType::Finalize));
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 6
+            && cert.certificate.certificate_type == CertificateType::Notarize));
+
+        // Add another skip on 7
+        let cert_7 = CertificateMessage {
+            certificate: Certificate {
+                slot: 7,
+                certificate_type: CertificateType::Skip,
+                block_id: Some(Hash::new_unique()),
+                replayed_bank_hash: Some(Hash::new_unique()),
+            },
+            signature: BLSSignature::default(),
+            bitmap: BitVec::new(),
+        };
+        assert!(pool
+            .add_message(
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert_7.clone()),
+                &mut vec![]
+            )
+            .is_ok());
+        // Should return certs on 6 and 7
+        let certs = pool.get_certs_for_standstill();
+        assert_eq!(certs.len(), 3);
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 6
+            && cert.certificate.certificate_type == CertificateType::Finalize));
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 6
+            && cert.certificate.certificate_type == CertificateType::Notarize));
+        assert!(certs.iter().any(|cert| cert.certificate.slot == 7
+            && cert.certificate.certificate_type == CertificateType::Skip));
     }
 }
