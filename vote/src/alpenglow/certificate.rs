@@ -29,6 +29,4 @@ pub struct Certificate {
     pub slot: Slot,
     /// The block id of the block
     pub block_id: Option<Hash>,
-    /// The bank hash of the block
-    pub replayed_bank_hash: Option<Hash>,
 }
