@@ -107,7 +107,7 @@ use {
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            Arc, Mutex, RwLock,
         },
         thread::{sleep, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -6186,7 +6186,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_test_override = Some(VotingServiceOverride {
         additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
-        alpenglow_port_override: Arc::new(HashMap::new()),
+        alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
     });
 
     // Collect node pubkeys
@@ -6338,7 +6338,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_test_override = Some(VotingServiceOverride {
         additional_listeners: vec![vote_listener.local_addr().unwrap()],
-        alpenglow_port_override: Arc::new(HashMap::new()),
+        alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
     });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
@@ -6525,7 +6525,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_test_override = Some(VotingServiceOverride {
         additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
-        alpenglow_port_override: Arc::new(HashMap::new()),
+        alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
     });
 
     let mut validator_configs =
@@ -6871,7 +6871,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_test_override = Some(VotingServiceOverride {
         additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
-        alpenglow_port_override: Arc::new(HashMap::new()),
+        alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
     });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
@@ -7140,7 +7140,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     validator_config.fixed_leader_schedule = Some(leader_schedule);
     validator_config.voting_service_test_override = Some(VotingServiceOverride {
         additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
-        alpenglow_port_override: Arc::new(HashMap::new()),
+        alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
     });
 
     let mut validator_configs =

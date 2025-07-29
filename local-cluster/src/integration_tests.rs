@@ -54,7 +54,7 @@ use {
         path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, RwLock,
         },
         thread::sleep,
         time::Duration,
@@ -447,12 +447,13 @@ pub fn run_cluster_partition<C>(
     };
 
     let slots_per_epoch = 2048;
+    let alpenglow_port_override = Arc::new(RwLock::new(HashMap::new()));
     let validator_configs = make_identical_validator_configs(&validator_config, num_nodes)
         .into_iter()
         .map(|mut config| {
             config.voting_service_test_override = Some(VotingServiceOverride {
                 additional_listeners: vec![],
-                alpenglow_port_override: Arc::new(HashMap::new()),
+                alpenglow_port_override: alpenglow_port_override.clone(),
             });
             config
         })
@@ -515,12 +516,25 @@ pub fn run_cluster_partition<C>(
     info!("PARTITION_TEST start partition");
     on_partition_start(&mut cluster, &mut context);
     turbine_disabled.store(true, Ordering::Relaxed);
+    // Make all to all votes/certs not able to reach each other by overriding the
+    // alpenglow port override to SocketAddr which no one is listening on.
+    let blackhole_addr = solana_net_utils::bind_to_localhost()
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let mut write_guard = alpenglow_port_override.write().unwrap();
+    cluster_nodes.iter().for_each(|node| {
+        write_guard.insert(*node.pubkey(), blackhole_addr);
+    });
+    drop(write_guard);
 
     sleep(partition_duration);
 
     on_before_partition_resolved(&mut cluster, &mut context);
     info!("PARTITION_TEST remove partition");
     turbine_disabled.store(false, Ordering::Relaxed);
+    // Restore the alpenglow port override to the default, so that the nodes can communicate again.
+    alpenglow_port_override.write().unwrap().clear();
 
     // Give partitions time to propagate their blocks from during the partition
     // after the partition resolves

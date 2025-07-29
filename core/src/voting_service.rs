@@ -94,7 +94,7 @@ pub struct VotingService {
 #[derive(Clone)]
 pub struct VotingServiceOverride {
     pub additional_listeners: Vec<SocketAddr>,
-    pub alpenglow_port_override: Arc<HashMap<Pubkey, SocketAddr>>,
+    pub alpenglow_port_override: Arc<RwLock<HashMap<Pubkey, SocketAddr>>>,
 }
 
 impl VotingService {
@@ -425,7 +425,7 @@ mod tests {
             bank_forks,
             Some(VotingServiceOverride {
                 additional_listeners: vec![listener],
-                alpenglow_port_override: Arc::new(HashMap::new()),
+                alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
             }),
         )
     }

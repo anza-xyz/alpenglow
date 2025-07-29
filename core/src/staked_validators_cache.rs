@@ -47,7 +47,7 @@ pub struct StakedValidatorsCache {
     include_self: bool,
 
     /// Optional override for Alpenglow port, used for testing purposes
-    alpenglow_port_override: Option<Arc<HashMap<Pubkey, SocketAddr>>>,
+    alpenglow_port_override: Option<Arc<RwLock<HashMap<Pubkey, SocketAddr>>>>,
 }
 
 enum PortsToUse {
@@ -62,7 +62,7 @@ impl StakedValidatorsCache {
         ttl: Duration,
         max_cache_size: usize,
         include_self: bool,
-        alpenglow_port_override: Option<Arc<HashMap<Pubkey, SocketAddr>>>,
+        alpenglow_port_override: Option<Arc<RwLock<HashMap<Pubkey, SocketAddr>>>>,
     ) -> Self {
         Self {
             cache: LruCache::new(max_cache_size),
@@ -139,19 +139,25 @@ impl StakedValidatorsCache {
 
         let mut validator_sockets = Vec::new();
         let mut alpenglow_sockets = Vec::new();
+        {
+            let alpenglow_port_override = self
+                .alpenglow_port_override
+                .as_ref()
+                .map(|m| m.read().unwrap());
+            for node in nodes {
+                validator_sockets.push(node.tpu_socket);
 
-        for node in nodes {
-            validator_sockets.push(node.tpu_socket);
+                if let Some(alpenglow_socket) = node.alpenglow_socket {
+                    let socket = if let Some(alpenglow_port_override) = &alpenglow_port_override {
+                        *alpenglow_port_override
+                            .get(&node.pubkey)
+                            .unwrap_or(&alpenglow_socket)
+                    } else {
+                        alpenglow_socket
+                    };
 
-            if let Some(alpenglow_socket) = node.alpenglow_socket {
-                let socket = self
-                    .alpenglow_port_override
-                    .as_ref()
-                    .and_then(|m| m.get(&node.pubkey))
-                    .copied() // replaces `cloned()` for Copy types like `SocketAddr`
-                    .unwrap_or(alpenglow_socket);
-
-                alpenglow_sockets.push(socket);
+                    alpenglow_sockets.push(socket);
+                }
             }
         }
         self.cache.push(
