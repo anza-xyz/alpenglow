@@ -236,7 +236,7 @@ impl EventHandler {
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
                 votes.push(voting_utils::insert_vote_and_create_bls_message(
                     my_pubkey,
-                    Vote::new_notarization_fallback_vote(slot, block_id, Hash::default()),
+                    Vote::new_notarization_fallback_vote(slot, block_id),
                     false,
                     vctx,
                 ));
@@ -397,7 +397,7 @@ impl EventHandler {
         info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
         votes.push(voting_utils::insert_vote_and_create_bls_message(
             my_pubkey,
-            Vote::new_notarization_vote(slot, block_id, Hash::default()),
+            Vote::new_notarization_vote(slot, block_id),
             false,
             voting_context,
         ));
