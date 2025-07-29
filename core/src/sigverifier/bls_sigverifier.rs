@@ -13,7 +13,7 @@ use {
     solana_runtime::epoch_stakes_service::EpochStakesService,
     solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
-    solana_vote::alpenglow::bls_message::BLSMessage,
+    solana_votor_messages::bls_message::BLSMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
     std::{collections::HashMap, sync::Arc},
 };
@@ -56,7 +56,7 @@ impl SigVerifier for BLSSigVerifier {
             let slot = match &message {
                 BLSMessage::Vote(vote_message) => vote_message.vote.slot(),
                 BLSMessage::Certificate(certificate_message) => {
-                    certificate_message.certificate.slot
+                    certificate_message.certificate.slot()
                 }
             };
 
@@ -148,9 +148,10 @@ mod tests {
             },
         },
         solana_sdk::{hash::Hash, signer::Signer},
-        solana_vote::alpenglow::{
-            bls_message::{BLSMessage, CertificateMessage, VoteMessage},
-            certificate::{Certificate, CertificateType},
+        solana_votor_messages::{
+            bls_message::{
+                BLSMessage, Certificate, CertificateMessage, CertificateType, VoteMessage,
+            },
             vote::Vote,
         },
         stats::STATS_INTERVAL_DURATION,
@@ -228,6 +229,9 @@ mod tests {
         bitmap.set(3, true);
         bitmap.set(5, true);
         let vote_rank: usize = 2;
+
+        let certificate = Certificate::new(CertificateType::Finalize, Some(4), None);
+
         let messages = vec![
             BLSMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
@@ -235,11 +239,7 @@ mod tests {
                 rank: vote_rank as u16,
             }),
             BLSMessage::Certificate(CertificateMessage {
-                certificate: Certificate {
-                    slot: 4,
-                    certificate_type: CertificateType::Finalize,
-                    block_id: None,
-                },
+                certificate,
                 signature: Signature::default(),
                 bitmap,
             }),

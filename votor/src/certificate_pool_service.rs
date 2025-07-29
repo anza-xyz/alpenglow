@@ -15,7 +15,7 @@ use {
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::BLSOp,
         votor::Votor,
-        CertificateId, STANDSTILL_TIMEOUT,
+        Certificate, STANDSTILL_TIMEOUT,
     },
     crossbeam_channel::{select, Sender, TrySendError},
     solana_ledger::{
@@ -27,7 +27,7 @@ use {
         root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::clock::Slot,
-    solana_vote::alpenglow::bls_message::{BLSMessage, CertificateMessage},
+    solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
     stats::CertificatePoolServiceStats,
     std::{
         sync::{
@@ -59,7 +59,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
-    pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub(crate) certificate_sender: Sender<(Certificate, CertificateMessage)>,
 }
 
 pub(crate) struct CertificatePoolService {

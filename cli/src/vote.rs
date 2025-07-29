@@ -40,10 +40,6 @@ use {
     solana_rpc_client_nonce_utils::blockhash_query::BlockhashQuery,
     solana_system_interface::error::SystemError,
     solana_transaction::Transaction,
-    solana_vote::alpenglow::{
-        bls_message::BLS_KEYPAIR_DERIVE_SEED, instruction::InitializeAccountInstructionData,
-        state::VoteState as AlpenglowVoteState,
-    },
     solana_vote_program::{
         authorized_voters::AuthorizedVoters,
         vote_error::VoteError,
@@ -52,6 +48,10 @@ use {
             BlockTimestamp, VoteAuthorize, VoteInit, VoteState, VoteStateVersions,
             VOTE_CREDITS_MAXIMUM_PER_SLOT,
         },
+    },
+    solana_votor_messages::{
+        bls_message::BLS_KEYPAIR_DERIVE_SEED, instruction::InitializeAccountInstructionData,
+        state::VoteState as AlpenglowVoteState,
     },
     std::rc::Rc,
 };
@@ -849,7 +849,7 @@ pub fn process_create_vote_account(
 
     let required_balance = rpc_client
         .get_minimum_balance_for_rent_exemption(if is_alpenglow {
-            solana_vote::alpenglow::state::VoteState::size()
+            solana_votor_messages::state::VoteState::size()
         } else {
             VoteState::size_of()
         })?
@@ -887,11 +887,11 @@ pub fn process_create_vote_account(
                 from_pubkey,
                 to_pubkey,
                 lamports,
-                solana_vote::alpenglow::state::VoteState::size() as u64,
-                &solana_vote::alpenglow::id(),
+                solana_votor_messages::state::VoteState::size() as u64,
+                &solana_votor_messages::id(),
             );
 
-            let init_ix = solana_vote::alpenglow::instruction::initialize_account(
+            let init_ix = solana_votor_messages::instruction::initialize_account(
                 *to_pubkey,
                 &initialize_account_ixn_meta,
             );
@@ -1374,7 +1374,7 @@ impl VoteStateWrapper {
 }
 
 const SOLANA_VOTE_PROGRAM_ID: Pubkey = solana_vote_program::id();
-const ALPENGLOW_VOTE_PROGRAM_ID: Pubkey = solana_vote::alpenglow::id();
+const ALPENGLOW_VOTE_PROGRAM_ID: Pubkey = solana_votor_messages::id();
 
 pub(crate) fn get_vote_account(
     rpc_client: &RpcClient,

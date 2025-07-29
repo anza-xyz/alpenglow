@@ -1,12 +1,9 @@
 use {
-    crate::CertificateId,
+    crate::Certificate,
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, Pubkey as BlsPubkey, PubkeyProjective, SignatureProjective},
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
-    solana_vote::alpenglow::{
-        bls_message::{CertificateMessage, VoteMessage},
-        certificate::{Certificate, CertificateType},
-    },
+    solana_votor_messages::bls_message::{CertificateMessage, VoteMessage},
     thiserror::Error,
 };
 
@@ -49,9 +46,9 @@ impl TryFrom<CertificateMessage> for VoteCertificateBuilder {
 }
 
 impl VoteCertificateBuilder {
-    pub fn new(certificate_id: CertificateId) -> Self {
+    pub fn new(certificate_id: Certificate) -> Self {
         Self {
-            certificate: certificate_id.into(),
+            certificate: certificate_id,
             signature: SignatureProjective::identity(),
             bitmap: BitVec::<u8, Lsb0>::repeat(false, MAXIMUM_VALIDATORS),
         }
@@ -102,36 +99,4 @@ pub fn aggregate_pubkey(
     }
 
     Ok(aggregate_pubkey.into())
-}
-
-impl From<CertificateId> for Certificate {
-    fn from(certificate_id: CertificateId) -> Certificate {
-        match certificate_id {
-            CertificateId::Finalize(slot) => Certificate {
-                certificate_type: CertificateType::Finalize,
-                slot,
-                block_id: None,
-            },
-            CertificateId::FinalizeFast(slot, block_id) => Certificate {
-                slot,
-                certificate_type: CertificateType::FinalizeFast,
-                block_id: Some(block_id),
-            },
-            CertificateId::Notarize(slot, block_id) => Certificate {
-                certificate_type: CertificateType::Notarize,
-                slot,
-                block_id: Some(block_id),
-            },
-            CertificateId::NotarizeFallback(slot, block_id) => Certificate {
-                certificate_type: CertificateType::NotarizeFallback,
-                slot,
-                block_id: Some(block_id),
-            },
-            CertificateId::Skip(slot) => Certificate {
-                certificate_type: CertificateType::Skip,
-                slot,
-                block_id: None,
-            },
-        }
-    }
 }

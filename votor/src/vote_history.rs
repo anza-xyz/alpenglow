@@ -2,9 +2,8 @@ use {
     super::vote_history_storage::{
         Result, SavedVoteHistory, SavedVoteHistoryVersions, VoteHistoryStorage,
     },
-    crate::Block,
     solana_sdk::{clock::Slot, hash::Hash, pubkey::Pubkey, signature::Keypair},
-    solana_vote::alpenglow::vote::Vote,
+    solana_votor_messages::{bls_message::Block, vote::Vote},
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
@@ -44,7 +43,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "AkQfYJRmicSiDDk73bp6PZERug1JatHu8VwkwkheKRMK")
+    frozen_abi(digest = "HXFwK3gjN9hcFxJL2gZ9rNxZcrwV7GirQBPBZK4qkrow")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct VoteHistory {
