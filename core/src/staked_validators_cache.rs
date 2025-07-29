@@ -48,6 +48,9 @@ pub struct StakedValidatorsCache {
 
     /// Optional override for Alpenglow port, used for testing purposes
     alpenglow_port_override: Option<Arc<RwLock<HashMap<Pubkey, SocketAddr>>>>,
+
+    /// size of alpenglow_port_override, used to determine if we need to refresh the cache
+    alpenglow_port_override_size: usize,
 }
 
 enum PortsToUse {
@@ -64,6 +67,10 @@ impl StakedValidatorsCache {
         include_self: bool,
         alpenglow_port_override: Option<Arc<RwLock<HashMap<Pubkey, SocketAddr>>>>,
     ) -> Self {
+        let alpenglow_port_override_size = alpenglow_port_override
+            .as_ref()
+            .map(|m| m.read().unwrap().len())
+            .unwrap_or(0);
         Self {
             cache: LruCache::new(max_cache_size),
             ttl,
@@ -71,6 +78,7 @@ impl StakedValidatorsCache {
             protocol,
             include_self,
             alpenglow_port_override,
+            alpenglow_port_override_size,
         }
     }
 
@@ -139,25 +147,21 @@ impl StakedValidatorsCache {
 
         let mut validator_sockets = Vec::new();
         let mut alpenglow_sockets = Vec::new();
-        {
-            let alpenglow_port_override = self
-                .alpenglow_port_override
-                .as_ref()
-                .map(|m| m.read().unwrap());
-            for node in nodes {
-                validator_sockets.push(node.tpu_socket);
+        let alpenglow_port_override = self
+            .alpenglow_port_override
+            .as_ref()
+            .map(|m| m.read().unwrap());
+        for node in nodes {
+            validator_sockets.push(node.tpu_socket);
 
-                if let Some(alpenglow_socket) = node.alpenglow_socket {
-                    let socket = if let Some(alpenglow_port_override) = &alpenglow_port_override {
-                        *alpenglow_port_override
-                            .get(&node.pubkey)
-                            .unwrap_or(&alpenglow_socket)
-                    } else {
-                        alpenglow_socket
-                    };
+            if let Some(alpenglow_socket) = node.alpenglow_socket {
+                let socket = alpenglow_port_override
+                    .as_ref()
+                    .and_then(|m| m.get(&node.pubkey))
+                    .cloned()
+                    .unwrap_or(alpenglow_socket);
 
-                    alpenglow_sockets.push(socket);
-                }
+                alpenglow_sockets.push(socket);
             }
         }
         self.cache.push(
@@ -190,6 +194,20 @@ impl StakedValidatorsCache {
         cluster_info: &ClusterInfo,
         access_time: Instant,
     ) -> (&[SocketAddr], bool) {
+        // Check if self.alpenglow_port_override has a different size.
+        // Immediately refresh the cache if it does.
+        if let Some(alpenglow_port_override) = &self.alpenglow_port_override {
+            let alpenglow_port_override_size = alpenglow_port_override.read().unwrap().len();
+            if alpenglow_port_override_size != self.alpenglow_port_override_size {
+                self.alpenglow_port_override_size = alpenglow_port_override_size;
+                trace!(
+                        "refreshing cache entry for epoch {} due to alpenglow port override size change",
+                        self.cur_epoch(slot)
+                    );
+                self.refresh_cache_entry(self.cur_epoch(slot), cluster_info, access_time);
+            }
+        }
+
         self.get_staked_validators_by_epoch(
             self.cur_epoch(slot),
             cluster_info,
