@@ -12,9 +12,8 @@ use {
         event::VotorEvent,
         vote_to_certificate_ids, Block, CertificateId, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
-        MAX_SLOT_AGE, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
-        SAFE_TO_SKIP_THRESHOLD,
+        SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
+        SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
     },
     crossbeam_channel::Sender,
     solana_ledger::blockstore::Blockstore,
@@ -453,12 +452,6 @@ impl CertificatePool {
             self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
-        // We only allow votes
-        if slot > self.root.saturating_add(MAX_SLOT_AGE) {
-            self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
-            return Err(AddVoteError::SlotInFuture);
-        }
-
         let block_id = vote.block_id().map(|block_id| {
             if !matches!(vote, Vote::Notarize(_) | Vote::NotarizeFallback(_)) {
                 panic!("expected Notarize or NotarizeFallback vote");
