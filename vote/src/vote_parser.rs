@@ -36,11 +36,9 @@ impl ParsedVoteTransaction {
         match self {
             ParsedVoteTransaction::Tower(tx) => tx.last_voted_slot_hash(),
             ParsedVoteTransaction::Alpenglow(tx) => match tx {
-                AlpenglowVote::Notarize(vote) => Some((vote.slot(), *vote.replayed_bank_hash())),
+                AlpenglowVote::Notarize(vote) => Some((vote.slot(), Hash::default())),
                 AlpenglowVote::Finalize(_vote) => None,
-                AlpenglowVote::NotarizeFallback(vote) => {
-                    Some((vote.slot(), *vote.replayed_bank_hash()))
-                }
+                AlpenglowVote::NotarizeFallback(vote) => Some((vote.slot(), Hash::default())),
                 AlpenglowVote::Skip(_vote) => None,
                 AlpenglowVote::SkipFallback(_vote) => None,
             },
