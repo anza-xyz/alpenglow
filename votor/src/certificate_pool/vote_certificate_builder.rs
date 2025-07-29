@@ -111,31 +111,26 @@ impl From<CertificateId> for Certificate {
                 certificate_type: CertificateType::Finalize,
                 slot,
                 block_id: None,
-                replayed_bank_hash: None,
             },
             CertificateId::FinalizeFast(slot, block_id) => Certificate {
                 slot,
                 certificate_type: CertificateType::FinalizeFast,
                 block_id: Some(block_id),
-                replayed_bank_hash: None,
             },
             CertificateId::Notarize(slot, block_id) => Certificate {
                 certificate_type: CertificateType::Notarize,
                 slot,
                 block_id: Some(block_id),
-                replayed_bank_hash: None,
             },
             CertificateId::NotarizeFallback(slot, block_id) => Certificate {
                 certificate_type: CertificateType::NotarizeFallback,
                 slot,
                 block_id: Some(block_id),
-                replayed_bank_hash: None,
             },
             CertificateId::Skip(slot) => Certificate {
                 certificate_type: CertificateType::Skip,
                 slot,
                 block_id: None,
-                replayed_bank_hash: None,
             },
         }
     }
