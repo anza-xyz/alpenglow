@@ -384,7 +384,11 @@ impl EventHandler {
                 return false;
             }
         } else {
-            if parent_slot.checked_add(1) != Some(slot) {
+            if parent_slot
+                .checked_add(1)
+                .expect("parent slot should not overflow")
+                != slot
+            {
                 // Non consecutive
                 return false;
             }
