@@ -10,7 +10,7 @@ use {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample, AbiEnumVisitor),
-    frozen_abi(digest = "9LBQSptrSydT3MwtfHo7qU9J3u6ep9wFyqJiDtYzDqVF")
+    frozen_abi(digest = "8P7UXFSeHtCXarbBMK4Nf5akFQA8JcP5FfYGYHR5nwBA")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Vote {
@@ -28,11 +28,8 @@ pub enum Vote {
 
 impl Vote {
     /// Create a new notarization vote
-    pub fn new_notarization_vote(slot: Slot, block_id: Hash, bank_hash: Hash) -> Self {
-        Self::from(NotarizationVote::new(
-            slot, block_id, 0, /*_replayed_slot not used */
-            bank_hash,
-        ))
+    pub fn new_notarization_vote(slot: Slot, block_id: Hash) -> Self {
+        Self::from(NotarizationVote::new(slot, block_id))
     }
 
     /// Create a new finalization vote
@@ -46,11 +43,8 @@ impl Vote {
     }
 
     /// Create a new notarization fallback vote
-    pub fn new_notarization_fallback_vote(slot: Slot, block_id: Hash, bank_hash: Hash) -> Self {
-        Self::from(NotarizationFallbackVote::new(
-            slot, block_id, 0, /*_replayed_slot not used */
-            bank_hash,
-        ))
+    pub fn new_notarization_fallback_vote(slot: Slot, block_id: Hash) -> Self {
+        Self::from(NotarizationFallbackVote::new(slot, block_id))
     }
 
     /// Create a new skip fallback vote
@@ -74,15 +68,6 @@ impl Vote {
         match self {
             Self::Notarize(vote) => Some(vote.block_id()),
             Self::NotarizeFallback(vote) => Some(vote.block_id()),
-            Self::Finalize(_) | Self::Skip(_) | Self::SkipFallback(_) => None,
-        }
-    }
-
-    /// The replayed bank hash associated with the block which was voted for
-    pub fn replayed_bank_hash(&self) -> Option<&Hash> {
-        match self {
-            Self::Notarize(vote) => Some(vote.replayed_bank_hash()),
-            Self::NotarizeFallback(vote) => Some(vote.replayed_bank_hash()),
             Self::Finalize(_) | Self::Skip(_) | Self::SkipFallback(_) => None,
         }
     }
@@ -152,25 +137,18 @@ impl From<SkipFallbackVote> for Vote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "AfTX2mg2e3L433SgswtskptGYXLpWGXYDcR4QcgSzRC5")
+    frozen_abi(digest = "5AdwChAjsj5QUXLdpDnGGK2L2nA8y8EajVXi6jsmTv1m")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
-    replayed_bank_hash: Hash,
 }
 
 impl NotarizationVote {
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
-        Self {
-            slot,
-            block_id,
-            _replayed_slot: replayed_slot,
-            replayed_bank_hash,
-        }
+    pub fn new(slot: Slot, block_id: Hash) -> Self {
+        Self { slot, block_id }
     }
 
     /// The slot to notarize
@@ -181,11 +159,6 @@ impl NotarizationVote {
     /// The block_id of the notarization slot
     pub fn block_id(&self) -> &Hash {
         &self.block_id
-    }
-
-    /// The bank hash of the latest replayed slot
-    pub fn replayed_bank_hash(&self) -> &Hash {
-        &self.replayed_bank_hash
     }
 }
 
@@ -241,25 +214,18 @@ impl SkipVote {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "2eD1FTtZb6e86j3WEYCkzG9Yer36jA98B4RiuvFgwZ7d")
+    frozen_abi(digest = "7j5ZPwwyz1FaG3fpyQv5PVnQXicdSmqSk8NvqzkG1Eqz")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct NotarizationFallbackVote {
     slot: Slot,
     block_id: Hash,
-    _replayed_slot: Slot, // NOTE: replayed_slot will be unused until we support APE
-    replayed_bank_hash: Hash,
 }
 
 impl NotarizationFallbackVote {
     /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash, replayed_slot: Slot, replayed_bank_hash: Hash) -> Self {
-        Self {
-            slot,
-            block_id,
-            _replayed_slot: replayed_slot,
-            replayed_bank_hash,
-        }
+    pub fn new(slot: Slot, block_id: Hash) -> Self {
+        Self { slot, block_id }
     }
 
     /// The slot to notarize
@@ -270,11 +236,6 @@ impl NotarizationFallbackVote {
     /// The block_id of the notarization slot
     pub fn block_id(&self) -> &Hash {
         &self.block_id
-    }
-
-    /// The bank hash of the latest replayed slot
-    pub fn replayed_bank_hash(&self) -> &Hash {
-        &self.replayed_bank_hash
     }
 }
 

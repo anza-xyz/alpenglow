@@ -6640,8 +6640,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             let vote = &vote_message.vote;
             let vote_b = if self.a_equivocates && vote.is_notarization() {
                 let new_block_id = Hash::new_unique();
-                let new_bank_hash = Hash::new_unique();
-                Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
+                Vote::new_notarization_vote(vote.slot(), new_block_id)
             } else {
                 *vote
             };
