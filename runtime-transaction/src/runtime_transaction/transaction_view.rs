@@ -23,7 +23,6 @@ use {
         versioned::VersionedTransaction,
     },
     solana_transaction_error::{TransactionError, TransactionResult as Result},
-    solana_vote::alpenglow::ID as alpenglowID,
     std::{borrow::Cow, collections::HashSet},
 };
 
@@ -53,7 +52,7 @@ fn is_alpenglow_simple_vote_transaction<D: TransactionData>(
         && instruction_programs
             .next()
             .xor(instruction_programs.next())
-            .map(|program_id| program_id == &alpenglowID)
+            .map(|program_id| program_id == &solana_votor_messages::ID)
             .unwrap_or(false)
 }
 

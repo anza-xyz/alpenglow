@@ -1,6 +1,5 @@
 //! Program instructions
 use {
-    crate::alpenglow::id,
     bytemuck::{Pod, Zeroable},
     num_enum::{IntoPrimitive, TryFromPrimitive},
     solana_bls_signatures::Pubkey as BlsPubkey,
@@ -90,7 +89,7 @@ pub(crate) fn encode_instruction_with_seed<D: Pod>(
         data.extend_from_slice(&[pod_bytes_of(&seed_len), seed.as_bytes()].concat());
     }
     Instruction {
-        program_id: id(),
+        program_id: crate::id(),
         accounts,
         data,
     }

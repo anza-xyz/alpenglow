@@ -1,6 +1,7 @@
 //! Program state
 use {
-    crate::alpenglow::accounting::{AuthorizedVoter, EpochCredit},
+    // crate::alpenglow::accounting::{AuthorizedVoter, EpochCredit},
+    crate::accounting::{AuthorizedVoter, EpochCredit},
     bytemuck::{Pod, Zeroable},
     solana_account::{AccountSharedData, WritableAccount},
     solana_bls_signatures::Pubkey as BlsPubkey,
@@ -122,7 +123,7 @@ impl VoteState {
         lamports: u64,
         bls_pubkey: BlsPubkey,
     ) -> AccountSharedData {
-        let mut account = AccountSharedData::new(lamports, Self::size(), &crate::alpenglow::id());
+        let mut account = AccountSharedData::new(lamports, Self::size(), &crate::id());
         let vote_state = Self::new_for_tests(
             *node_pubkey,
             *authorized_voter,

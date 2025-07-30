@@ -32,6 +32,7 @@ solana-transaction-context = { workspace = true, features = ["bincode"] }
 solana-type-overrides = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-interface = { workspace = true, features = ["bincode"] }
+solana-votor-messages = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }

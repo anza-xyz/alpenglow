@@ -82,7 +82,7 @@ use {
         transaction::Transaction,
     },
     solana_timings::ExecuteTimings,
-    solana_vote::{alpenglow::bls_message::CertificateMessage, vote_transaction::VoteTransaction},
+    solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
@@ -90,8 +90,8 @@ use {
         vote_history_storage::VoteHistoryStorage,
         voting_utils::{BLSOp, GenerateVoteTxResult},
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
-        CertificateId,
     },
+    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
     std::{
         collections::{HashMap, HashSet},
         num::NonZeroUsize,
@@ -300,7 +300,7 @@ pub struct ReplaySenders {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
-    pub certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: BLSVerifiedMessageSender,
 }
