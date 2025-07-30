@@ -92,9 +92,46 @@ pub struct VotingService {
 }
 
 #[derive(Clone)]
+pub struct AlpenglowPortOverride {
+    override_map_with_timetamp: Arc<RwLock<(HashMap<Pubkey, SocketAddr>, Instant)>>,
+}
+
+impl Default for AlpenglowPortOverride {
+    fn default() -> Self {
+        Self {
+            override_map_with_timetamp: Arc::new(RwLock::new((HashMap::new(), Instant::now()))),
+        }
+    }
+}
+
+impl AlpenglowPortOverride {
+    pub fn update_override(&mut self, new_override: HashMap<Pubkey, SocketAddr>) {
+        *self.override_map_with_timetamp.write().unwrap() = (new_override, Instant::now());
+    }
+
+    pub fn has_new_override(&self, previous: Instant) -> bool {
+        self.override_map_with_timetamp.read().unwrap().1 != previous
+    }
+
+    pub fn timestamp(&self) -> Instant {
+        self.override_map_with_timetamp.read().unwrap().1
+    }
+
+    pub fn get_overridden_socket(&self, pubkey: &Pubkey, real_socket: &SocketAddr) -> SocketAddr {
+        self.override_map_with_timetamp
+            .read()
+            .unwrap()
+            .0
+            .get(pubkey)
+            .cloned()
+            .unwrap_or(*real_socket)
+    }
+}
+
+#[derive(Clone)]
 pub struct VotingServiceOverride {
     pub additional_listeners: Vec<SocketAddr>,
-    pub alpenglow_port_override: Arc<RwLock<HashMap<Pubkey, SocketAddr>>>,
+    pub alpenglow_port_override: AlpenglowPortOverride,
 }
 
 impl VotingService {
@@ -109,15 +146,14 @@ impl VotingService {
         bank_forks: Arc<RwLock<BankForks>>,
         test_override: Option<VotingServiceOverride>,
     ) -> Self {
-        let (additional_listeners, alpenglow_port_override) =
-            if let Some(test_override) = test_override {
+        let (additional_listeners, alpenglow_port_override) = test_override
+            .map(|test_override| {
                 (
                     Some(test_override.additional_listeners),
                     Some(test_override.alpenglow_port_override),
                 )
-            } else {
-                (None, None)
-            };
+            })
+            .unwrap_or((None, None));
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
@@ -425,7 +461,7 @@ mod tests {
             bank_forks,
             Some(VotingServiceOverride {
                 additional_listeners: vec![listener],
-                alpenglow_port_override: Arc::new(RwLock::new(HashMap::new())),
+                alpenglow_port_override: AlpenglowPortOverride::default(),
             }),
         )
     }
