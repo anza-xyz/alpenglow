@@ -52,7 +52,10 @@ use {
         },
     },
     solana_streamer::evicting_sender::EvictingSender,
-    solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
+    solana_turbine::{
+        block_location_lookup::BlockLocationLookup, retransmit_stage::RetransmitStage,
+        xdp::XdpSender,
+    },
     solana_votor::{
         event::{VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
@@ -207,6 +210,7 @@ impl Tvu {
         let repair_socket = Arc::new(repair_socket);
         let ancestor_hashes_socket = Arc::new(ancestor_hashes_socket);
         let fetch_sockets: Vec<Arc<UdpSocket>> = fetch_sockets.into_iter().map(Arc::new).collect();
+        let block_location_lookup = BlockLocationLookup::new_arc();
         let fetch_stage = ShredFetchStage::new(
             fetch_sockets,
             turbine_quic_endpoint_receiver,
@@ -217,6 +221,7 @@ impl Tvu {
             bank_forks.clone(),
             cluster_info.clone(),
             outstanding_repair_requests.clone(),
+            block_location_lookup.clone(),
             turbine_disabled,
             exit.clone(),
         );
@@ -233,6 +238,7 @@ impl Tvu {
             fetch_receiver,
             retransmit_sender.clone(),
             verified_sender,
+            block_location_lookup,
             tvu_config.shred_sigverify_threads,
         );
 

@@ -33,7 +33,10 @@ use {
     },
     solana_hash::{Hash, HASH_BYTES},
     solana_keypair::{signable::Signable, Keypair},
-    solana_ledger::shred::{self, Nonce, ShredFetchStats, SIZE_OF_NONCE},
+    solana_ledger::{
+        blockstore_meta::BlockLocation,
+        shred::{self, Nonce, ShredFetchStats, SIZE_OF_NONCE},
+    },
     solana_packet::PACKET_DATA_SIZE,
     solana_perf::{
         data_budget::DataBudget,
@@ -117,6 +120,19 @@ impl ShredRepairType {
             | ShredRepairType::OrphanForBlockId(slot, _)
             | ShredRepairType::HighestShredForBlockId(slot, _, _)
             | ShredRepairType::ShredForBlockId(slot, _, _) => *slot,
+        }
+    }
+
+    pub fn location_to_insert_response(&self) -> BlockLocation {
+        match self {
+            ShredRepairType::OrphanForBlockId(_, bid)
+            | ShredRepairType::HighestShredForBlockId(_, _, bid)
+            | ShredRepairType::ShredForBlockId(_, _, bid) => {
+                BlockLocation::Repair { block_id: *bid }
+            }
+            ShredRepairType::Orphan(_)
+            | ShredRepairType::HighestShred(_, _)
+            | ShredRepairType::Shred(_, _) => BlockLocation::Turbine,
         }
     }
 }

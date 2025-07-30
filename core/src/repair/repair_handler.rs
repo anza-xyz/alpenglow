@@ -81,6 +81,7 @@ pub trait RepairHandler {
             .meta_from_location(slot, location)
             .expect("Unable to fetch slot meta from blockstore")
             .expect("Slot meta is missing");
+
         if meta.received > highest_index {
             // meta.received must be at least 1 by this point
             let packet =
