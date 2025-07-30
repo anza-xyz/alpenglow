@@ -1,5 +1,6 @@
 use {
     crate::{
+        block_location_lookup::BlockLocationLookup,
         cluster_nodes::{self, check_feature_activation, ClusterNodesCache},
         retransmit_stage::RetransmitStage,
     },
@@ -11,6 +12,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
     solana_ledger::{
+        blockstore_meta::BlockLocation,
         leader_schedule_cache::LeaderScheduleCache,
         shred::{
             self,
@@ -81,7 +83,8 @@ pub fn spawn_shred_sigverify(
     leader_schedule_cache: Arc<LeaderScheduleCache>,
     shred_fetch_receiver: Receiver<PacketBatch>,
     retransmit_sender: EvictingSender<Vec<shred::Payload>>,
-    verified_sender: Sender<Vec<(shred::Payload, /*is_repaired:*/ bool)>>,
+    verified_sender: Sender<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
+    block_location_lookup: Arc<BlockLocationLookup>,
     num_sigverify_threads: NonZeroUsize,
 ) -> JoinHandle<()> {
     let recycler_cache = RecyclerCache::warmed();
@@ -119,6 +122,7 @@ pub fn spawn_shred_sigverify(
                 &retransmit_sender,
                 &verified_sender,
                 &cluster_nodes_cache,
+                &block_location_lookup,
                 &cache,
                 &mut stats,
                 &mut shred_buffer,
@@ -148,8 +152,9 @@ fn run_shred_sigverify<const K: usize>(
     deduper: &Deduper<K, [u8]>,
     shred_fetch_receiver: &Receiver<PacketBatch>,
     retransmit_sender: &EvictingSender<Vec<shred::Payload>>,
-    verified_sender: &Sender<Vec<(shred::Payload, /*is_repaired:*/ bool)>>,
+    verified_sender: &Sender<Vec<(shred::Payload, /*is_repaired:*/ bool, BlockLocation)>>,
     cluster_nodes_cache: &ClusterNodesCache<RetransmitStage>,
+    block_location_lookup: &BlockLocationLookup,
     cache: &RwLock<LruCache>,
     stats: &mut ShredSigVerifyStats,
     shred_buffer: &mut Vec<PacketBatch>,
@@ -243,14 +248,19 @@ fn run_shred_sigverify<const K: usize>(
         .flat_map(|batch| batch.iter())
         .filter(|packet| !packet.meta().discard())
         .filter_map(|packet| {
-            let shred = shred::layout::get_shred(packet)?.to_vec();
-            Some((shred, packet.meta().repair()))
+            let (shred, nonce) = shred::layout::get_shred_and_repair_nonce(packet)?;
+            Some((shred.to_vec(), nonce))
         })
-        .partition_map(|(shred, repair)| {
-            if repair {
+        .partition_map(|(shred, nonce)| {
+            if let Some(nonce) = nonce {
+                // Only block id repair needs to insert shreds in a special column,
+                // Regular repair will insert in the Turbine column
+                let location = block_location_lookup
+                    .get_location(nonce)
+                    .unwrap_or(BlockLocation::Turbine);
                 // No need for Arc overhead here because repaired shreds are
                 // not retranmitted.
-                Either::Right(shred::Payload::from(shred))
+                Either::Right((shred::Payload::from(shred), location))
             } else {
                 // Share the payload between the retransmit-stage and the
                 // window-service.
@@ -270,10 +280,10 @@ fn run_shred_sigverify<const K: usize>(
     // Send all shreds to window service to be inserted into blockstore.
     let shreds = shreds
         .into_iter()
-        .map(|shred| (shred, /*is_repaired:*/ false));
-    let repairs = repairs
-        .into_iter()
-        .map(|shred| (shred, /*is_repaired:*/ true));
+        .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Turbine));
+    let repairs = repairs.into_iter().map(|(shred, location)| {
+        (shred, /*is_repaired:*/ true, location)
+    });
     verified_sender.send(shreds.chain(repairs).collect())?;
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     shred_buffer.clear();
