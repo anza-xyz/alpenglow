@@ -38,11 +38,11 @@ use {
     solana_streamer::socket::SocketAddrSpace,
     solana_tpu_client::tpu_client::{TpuClient, TpuClientConfig, TpuSenderError},
     solana_vote::{
-        alpenglow::bls_message::BLSMessage,
         vote_parser::ParsedVoteTransaction,
         vote_transaction::{self},
     },
     solana_vote_program::vote_state::TowerSync,
+    solana_votor_messages::bls_message::BLSMessage,
     std::{
         collections::{HashMap, HashSet, VecDeque},
         net::{SocketAddr, TcpListener, UdpSocket},

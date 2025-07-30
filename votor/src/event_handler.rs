@@ -10,7 +10,6 @@ use {
         vote_history::{VoteHistory, VoteHistoryError},
         voting_utils::{self, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
-        Block,
     },
     crossbeam_channel::{select, RecvError, SendError},
     solana_ledger::leader_schedule_utils::{
@@ -19,7 +18,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_sdk::{clock::Slot, hash::Hash, signature::Signer},
-    solana_vote::alpenglow::vote::Vote,
+    solana_votor_messages::{bls_message::Block, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{

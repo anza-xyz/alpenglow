@@ -15,7 +15,7 @@ use {
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
     },
-    solana_vote::alpenglow::{
+    solana_votor_messages::{
         bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },

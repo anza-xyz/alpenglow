@@ -299,10 +299,9 @@ pub(crate) mod tests {
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_sdk::{account::AccountSharedData, rent::Rent},
         solana_stake_program::stake_state::{self, Delegation, Stake},
-        solana_vote::{
-            alpenglow::state::VoteState as AlpenglowVoteState, vote_account::VoteAccount,
-        },
+        solana_vote::vote_account::VoteAccount,
         solana_vote_program::vote_state::{self, create_account_with_authorized},
+        solana_votor_messages::state::VoteState as AlpenglowVoteState,
         std::iter,
         test_case::test_case,
     };
