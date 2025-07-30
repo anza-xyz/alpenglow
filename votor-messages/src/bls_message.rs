@@ -56,17 +56,16 @@ pub enum CertificateType {
 
 impl Certificate {
     /// Create a new certificate ID from a CertificateType, Option<Slot>, and Option<Hash>
-    pub fn new(certificate_type: CertificateType, slot: Option<Slot>, hash: Option<Hash>) -> Self {
-        match certificate_type {
-            CertificateType::Finalize => Certificate::Finalize(slot.unwrap()),
-            CertificateType::FinalizeFast => {
-                Certificate::FinalizeFast(slot.unwrap(), hash.unwrap())
+    pub fn new(certificate_type: CertificateType, slot: Slot, hash: Option<Hash>) -> Self {
+        match (certificate_type, hash) {
+            (CertificateType::Finalize, None) => Certificate::Finalize(slot),
+            (CertificateType::FinalizeFast, Some(hash)) => Certificate::FinalizeFast(slot, hash),
+            (CertificateType::Notarize, Some(hash)) => Certificate::Notarize(slot, hash),
+            (CertificateType::NotarizeFallback, Some(hash)) => {
+                Certificate::NotarizeFallback(slot, hash)
             }
-            CertificateType::Notarize => Certificate::Notarize(slot.unwrap(), hash.unwrap()),
-            CertificateType::NotarizeFallback => {
-                Certificate::NotarizeFallback(slot.unwrap(), hash.unwrap())
-            }
-            CertificateType::Skip => Certificate::Skip(slot.unwrap()),
+            (CertificateType::Skip, None) => Certificate::Skip(slot),
+            _ => panic!("Invalid certificate type and hash combination"),
         }
     }
 

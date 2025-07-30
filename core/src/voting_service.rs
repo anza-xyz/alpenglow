@@ -425,12 +425,12 @@ mod tests {
     }))]
     #[test_case(BLSOp::PushCertificate {
         certificate: Arc::new(CertificateMessage {
-            certificate: Certificate::new(CertificateType::Skip, Some(5), None),
+            certificate: Certificate::new(CertificateType::Skip, 5, None),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         }),
     }, BLSMessage::Certificate(CertificateMessage {
-        certificate: Certificate::new(CertificateType::Skip, Some(5), None),
+        certificate: Certificate::new(CertificateType::Skip, 5, None),
         signature: BLSSignature::default(),
         bitmap: BitVec::new(),
     }))]

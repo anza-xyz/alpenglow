@@ -1263,11 +1263,7 @@ mod tests {
     fn test_add_certificate_with_types(certificate_type: CertificateType, vote: Vote) {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool();
 
-        let certificate = Certificate::new(
-            certificate_type,
-            Some(vote.slot()),
-            vote.block_id().copied(),
-        );
+        let certificate = Certificate::new(certificate_type, vote.slot(), vote.block_id().copied());
 
         let certificate_message = CertificateMessage {
             certificate,
@@ -1774,8 +1770,7 @@ mod tests {
             .is_err());
 
         // Send a cert on slot 2, it should be rejected
-        let certificate =
-            Certificate::new(CertificateType::Notarize, Some(2), Some(Hash::new_unique()));
+        let certificate = Certificate::new(CertificateType::Notarize, 2, Some(Hash::new_unique()));
 
         let cert = BLSMessage::Certificate(CertificateMessage {
             certificate,
@@ -1798,7 +1793,7 @@ mod tests {
         let cert_3 = CertificateMessage {
             certificate: Certificate::new(
                 CertificateType::NotarizeFallback,
-                Some(3),
+                3,
                 Some(Hash::new_unique()),
             ),
             signature: BLSSignature::default(),
@@ -1812,11 +1807,7 @@ mod tests {
             )
             .is_ok());
         let cert_4 = CertificateMessage {
-            certificate: Certificate::new(
-                CertificateType::Finalize,
-                Some(4),
-                Some(Hash::new_unique()),
-            ),
+            certificate: Certificate::new(CertificateType::Finalize, 4, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -1839,7 +1830,7 @@ mod tests {
         let cert_5 = CertificateMessage {
             certificate: Certificate::new(
                 CertificateType::FinalizeFast,
-                Some(5),
+                5,
                 Some(Hash::new_unique()),
             ),
             signature: BLSSignature::default(),
@@ -1862,11 +1853,7 @@ mod tests {
 
         // Now add Notarize cert on 6
         let cert_6 = CertificateMessage {
-            certificate: Certificate::new(
-                CertificateType::Notarize,
-                Some(6),
-                Some(Hash::new_unique()),
-            ),
+            certificate: Certificate::new(CertificateType::Notarize, 6, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -1887,11 +1874,7 @@ mod tests {
 
         // Add another Finalize cert on 6
         let cert_6_finalize = CertificateMessage {
-            certificate: Certificate::new(
-                CertificateType::Finalize,
-                Some(6),
-                Some(Hash::new_unique()),
-            ),
+            certificate: Certificate::new(CertificateType::Finalize, 6, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -1912,7 +1895,7 @@ mod tests {
 
         // Add another skip on 7
         let cert_7 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Skip, Some(7), Some(Hash::new_unique())),
+            certificate: Certificate::new(CertificateType::Skip, 7, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };

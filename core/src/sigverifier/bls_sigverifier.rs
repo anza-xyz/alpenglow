@@ -230,7 +230,7 @@ mod tests {
         bitmap.set(5, true);
         let vote_rank: usize = 2;
 
-        let certificate = Certificate::new(CertificateType::Finalize, Some(4), None);
+        let certificate = Certificate::new(CertificateType::Finalize, 4, None);
 
         let messages = vec![
             BLSMessage::Vote(VoteMessage {
