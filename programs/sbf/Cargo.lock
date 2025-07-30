@@ -9399,6 +9399,7 @@ dependencies = [
  "solana-account",
  "solana-bls-signatures",
  "solana-hash",
+ "solana-logger",
  "solana-program",
  "solana-sdk",
  "solana-vote-interface",
