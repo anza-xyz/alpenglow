@@ -7200,6 +7200,7 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "spl-memo",
  "tempfile",
  "test-case",
@@ -7624,6 +7625,7 @@ dependencies = [
  "solana-vote",
  "solana-vote-program",
  "solana-votor",
+ "solana-votor-messages",
  "solana-wen-restart",
  "spl-memo",
  "static_assertions",
@@ -8120,6 +8122,7 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "tempfile",
 ]
 
@@ -8396,6 +8399,7 @@ dependencies = [
  "solana-signer",
  "solana-version",
  "solana-vote",
+ "solana-votor-messages",
  "tempfile",
  "tiny-bip39",
 ]
@@ -8511,6 +8515,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "spl-pod",
  "spl-token",
  "spl-token-2022 7.0.0",
@@ -8641,6 +8646,7 @@ dependencies = [
  "solana-vote",
  "solana-vote-program",
  "solana-votor",
+ "solana-votor-messages",
  "static_assertions",
  "strum",
  "tempfile",
@@ -8921,6 +8927,7 @@ dependencies = [
  "solana-transaction",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "test-case",
 ]
 
@@ -9765,6 +9772,7 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "static_assertions",
  "strum",
  "strum_macros",
@@ -9805,6 +9813,7 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-error",
  "solana-vote",
+ "solana-votor-messages",
  "thiserror 2.0.12",
 ]
 
@@ -10215,6 +10224,7 @@ dependencies = [
  "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
+ "solana-votor-messages",
  "test-case",
 ]
 
@@ -11201,6 +11211,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-transaction",
  "solana-vote-interface",
+ "solana-votor-messages",
  "spl-pod",
  "static_assertions",
  "test-case",
@@ -11309,8 +11320,29 @@ dependencies = [
  "solana-sdk",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "test-case",
  "thiserror 2.0.12",
+]
+
+[[package]]
+name = "solana-votor-messages"
+version = "2.3.0"
+dependencies = [
+ "bitvec",
+ "bytemuck",
+ "num_enum",
+ "serde",
+ "solana-account",
+ "solana-bls-signatures",
+ "solana-frozen-abi",
+ "solana-frozen-abi-macro",
+ "solana-hash",
+ "solana-logger",
+ "solana-program",
+ "solana-sdk",
+ "solana-vote-interface",
+ "spl-pod",
 ]
 
 [[package]]

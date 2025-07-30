@@ -32,7 +32,6 @@ use {
         stake::state::Delegation,
         sysvar::epoch_rewards::EpochRewards,
     },
-    solana_vote::alpenglow,
     std::sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
 
@@ -371,7 +370,7 @@ impl Bank {
                     let vote_pubkey = stake_account.delegation().voter_pubkey;
                     let vote_account = get_vote_account(&vote_pubkey)?;
                     if vote_account.owner() != &solana_vote_program
-                        && !alpenglow::check_id(vote_account.owner())
+                        && !solana_votor_messages::check_id(vote_account.owner())
                     {
                         return None;
                     }
@@ -481,7 +480,7 @@ impl Bank {
                         return 0;
                     };
                     if vote_account.owner() != &solana_vote_program
-                        && !alpenglow::check_id(vote_account.owner())
+                        && !solana_votor_messages::check_id(vote_account.owner())
                     {
                         return 0;
                     }

@@ -45,8 +45,8 @@ use {
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
-    solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
     solana_vote_program::vote_state::{self, VoteState},
+    solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{
         collections::HashMap,
         error,
