@@ -1,13 +1,9 @@
 use {
-    crate::{alpenglow::vote::Vote as AlpenglowVote, vote_transaction::VoteTransaction},
-    solana_bincode::limited_deserialize,
-    solana_clock::Slot,
-    solana_hash::Hash,
-    solana_pubkey::Pubkey,
-    solana_signature::Signature,
-    solana_svm_transaction::svm_transaction::SVMTransaction,
-    solana_transaction::Transaction,
+    crate::vote_transaction::VoteTransaction, solana_bincode::limited_deserialize,
+    solana_clock::Slot, solana_hash::Hash, solana_pubkey::Pubkey, solana_signature::Signature,
+    solana_svm_transaction::svm_transaction::SVMTransaction, solana_transaction::Transaction,
     solana_vote_interface::instruction::VoteInstruction,
+    solana_votor_messages::vote::Vote as AlpenglowVote,
 };
 
 /// Represents a parsed vote transaction, which can be either a traditional Tower
@@ -92,7 +88,7 @@ impl From<VoteTransaction> for ParsedVoteTransaction {
 }
 
 impl From<AlpenglowVote> for ParsedVoteTransaction {
-    fn from(value: crate::alpenglow::vote::Vote) -> Self {
+    fn from(value: solana_votor_messages::vote::Vote) -> Self {
         ParsedVoteTransaction::Alpenglow(value)
     }
 }

@@ -1,5 +1,5 @@
 use {
-    crate::{alpenglow::state::VoteState as AlpenglowVoteState, vote_state_view::VoteStateView},
+    crate::vote_state_view::VoteStateView,
     itertools::Itertools,
     serde::{
         de::{MapAccess, Visitor},
@@ -11,6 +11,7 @@ use {
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
     solana_vote_interface::state::BlockTimestamp,
+    solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{
         cmp::Ordering,
         collections::{hash_map::Entry, HashMap},
@@ -255,7 +256,7 @@ impl VoteAccount {
         let mut account = AccountSharedData::new(
             100, // lamports
             AlpenglowVoteState::size(),
-            &crate::alpenglow::id(),
+            &solana_votor_messages::id(),
         );
         vote_state.serialize_into(account.data_as_mut_slice());
 
@@ -466,7 +467,7 @@ impl TryFrom<AccountSharedData> for VoteAccount {
                 ),
                 account,
             })))
-        } else if crate::alpenglow::check_id(account.owner()) {
+        } else if solana_votor_messages::check_id(account.owner()) {
             // Even though we don't copy data, should verify we can successfully deserialize.
             let _ = AlpenglowVoteState::deserialize(account.data())?;
             Ok(Self(Arc::new(VoteAccountInner {
@@ -641,7 +642,7 @@ mod tests {
         let mut account = AccountSharedData::new(
             rng.gen(), // lamports
             AlpenglowVoteState::size(),
-            &crate::alpenglow::id(),
+            &solana_votor_messages::id(),
         );
         alpenglow_vote_state.serialize_into(account.data_as_mut_slice());
         (account, alpenglow_vote_state)
@@ -728,7 +729,7 @@ mod tests {
     #[should_panic(expected = "InvalidArgument")]
     fn test_vote_account_try_from_invalid_alpenglow_account() {
         let mut account = AccountSharedData::default();
-        account.set_owner(crate::alpenglow::id());
+        account.set_owner(solana_votor_messages::id());
         VoteAccount::try_from(account).unwrap();
     }
 

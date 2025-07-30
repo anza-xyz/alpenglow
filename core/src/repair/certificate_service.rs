@@ -7,8 +7,7 @@ use {
     crate::result::{Error, Result},
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
-    solana_vote::alpenglow::bls_message::CertificateMessage,
-    solana_votor::CertificateId,
+    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -19,7 +18,7 @@ use {
     },
 };
 
-pub(crate) type CertificateReceiver = Receiver<(CertificateId, CertificateMessage)>;
+pub(crate) type CertificateReceiver = Receiver<(Certificate, CertificateMessage)>;
 pub struct CertificateService {
     t_cert_insert: JoinHandle<()>,
 }
@@ -73,8 +72,8 @@ impl CertificateService {
     }
 
     fn receive_new_certificates(
-        certificate_receiver: &Receiver<(CertificateId, CertificateMessage)>,
-    ) -> Result<Vec<(CertificateId, CertificateMessage)>> {
+        certificate_receiver: &Receiver<(Certificate, CertificateMessage)>,
+    ) -> Result<Vec<(Certificate, CertificateMessage)>> {
         const RECV_TIMEOUT: Duration = Duration::from_millis(200);
         Ok(
             std::iter::once(certificate_receiver.recv_timeout(RECV_TIMEOUT)?)
@@ -85,18 +84,18 @@ impl CertificateService {
 
     fn insert_certificate(
         blockstore: &Blockstore,
-        cert_id: CertificateId,
+        cert_id: Certificate,
         vote_certificate: CertificateMessage,
     ) -> Result<()> {
         match cert_id {
-            CertificateId::NotarizeFallback(slot, block_id) => blockstore
+            Certificate::NotarizeFallback(slot, block_id) => blockstore
                 .insert_new_notarization_fallback_certificate(slot, block_id, vote_certificate)?,
-            CertificateId::Skip(slot) => {
+            Certificate::Skip(slot) => {
                 blockstore.insert_new_skip_certificate(slot, vote_certificate)?
             }
-            CertificateId::Finalize(_)
-            | CertificateId::FinalizeFast(_, _)
-            | CertificateId::Notarize(_, _) => {
+            Certificate::Finalize(_)
+            | Certificate::FinalizeFast(_, _)
+            | Certificate::Notarize(_, _) => {
                 panic!("Programmer error, certificate pool should not notify for {cert_id:?}")
             }
         }

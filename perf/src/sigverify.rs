@@ -17,7 +17,6 @@ use {
     solana_rayon_threadlimit::get_thread_count,
     solana_short_vec::decode_shortu16_len,
     solana_signature::Signature,
-    solana_vote::alpenglow::id as alpenglow_vote_id,
     std::{convert::TryFrom, mem::size_of},
 };
 
@@ -382,7 +381,7 @@ fn check_for_simple_vote_transaction(
         .ok_or(PacketError::InvalidLen)?;
 
     if program_id == solana_sdk_ids::vote::id().as_ref()
-        || program_id == alpenglow_vote_id().as_ref()
+        || program_id == solana_votor_messages::id().as_ref()
     {
         packet.meta_mut().flags |= PacketFlags::SIMPLE_VOTE_TX;
     }
