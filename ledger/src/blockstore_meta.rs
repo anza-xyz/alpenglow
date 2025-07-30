@@ -9,7 +9,7 @@ use {
         clock::{Slot, UnixTimestamp},
         hash::Hash,
     },
-    solana_vote::alpenglow::bls_message::CertificateMessage,
+    solana_votor_messages::bls_message::CertificateMessage,
     std::{
         collections::{BTreeSet, HashMap},
         ops::{Bound, Range, RangeBounds},
