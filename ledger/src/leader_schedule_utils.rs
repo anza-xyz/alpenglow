@@ -84,6 +84,15 @@ pub fn leader_slot_index(slot: Slot) -> usize {
     (slot % NUM_CONSECUTIVE_LEADER_SLOTS) as usize
 }
 
+/// Returns the number of slots left after `slot` in the leader window
+/// that contains `slot`
+#[inline]
+pub fn remaining_slots_in_window(slot: Slot) -> u64 {
+    NUM_CONSECUTIVE_LEADER_SLOTS
+        .checked_sub(leader_slot_index(slot) as u64)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use {
