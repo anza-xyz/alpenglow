@@ -60,6 +60,7 @@ solana-runtime = { workspace = true }
 solana-sdk = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

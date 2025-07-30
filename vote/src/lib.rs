@@ -1,7 +1,6 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![allow(clippy::arithmetic_side_effects)]
 
-pub mod alpenglow;
 pub mod vote_account;
 pub mod vote_parser;
 pub mod vote_state_view;
