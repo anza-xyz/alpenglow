@@ -448,7 +448,7 @@ pub fn run_cluster_partition<C>(
     };
 
     let slots_per_epoch = 2048;
-    let mut alpenglow_port_override = AlpenglowPortOverride::default();
+    let alpenglow_port_override = AlpenglowPortOverride::default();
     let validator_configs = make_identical_validator_configs(&validator_config, num_nodes)
         .into_iter()
         .map(|mut config| {
@@ -535,7 +535,7 @@ pub fn run_cluster_partition<C>(
     info!("PARTITION_TEST remove partition");
     turbine_disabled.store(false, Ordering::Relaxed);
     // Restore the alpenglow port override to the default, so that the nodes can communicate again.
-    alpenglow_port_override.update_override(HashMap::new());
+    alpenglow_port_override.clear();
 
     // Give partitions time to propagate their blocks from during the partition
     // after the partition resolves

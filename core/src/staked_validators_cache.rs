@@ -50,8 +50,8 @@ pub struct StakedValidatorsCache {
     /// Optional override for Alpenglow port, used for testing purposes
     alpenglow_port_override: Option<AlpenglowPortOverride>,
 
-    /// timestamp of the last alpenglow port override
-    alpenglow_port_override_timestamp: Instant,
+    /// timestamp of the last alpenglow port override we read
+    alpenglow_port_override_last_modified: Instant,
 }
 
 enum PortsToUse {
@@ -75,7 +75,7 @@ impl StakedValidatorsCache {
             protocol,
             include_self,
             alpenglow_port_override,
-            alpenglow_port_override_timestamp: Instant::now(),
+            alpenglow_port_override_last_modified: Instant::now(),
         }
     }
 
@@ -187,13 +187,15 @@ impl StakedValidatorsCache {
         cluster_info: &ClusterInfo,
         access_time: Instant,
     ) -> (&[SocketAddr], bool) {
-        // Check if self.alpenglow_port_override has a different size.
+        // Check if self.alpenglow_port_override has a different last_modified.
         // Immediately refresh the cache if it does.
         if let Some(alpenglow_port_override) = &self.alpenglow_port_override {
-            if alpenglow_port_override.has_new_override(self.alpenglow_port_override_timestamp) {
-                self.alpenglow_port_override_timestamp = alpenglow_port_override.timestamp();
+            if alpenglow_port_override.has_new_override(self.alpenglow_port_override_last_modified)
+            {
+                self.alpenglow_port_override_last_modified =
+                    alpenglow_port_override.last_modified();
                 trace!(
-                        "refreshing cache entry for epoch {} due to alpenglow port override size change",
+                        "refreshing cache entry for epoch {} due to alpenglow port override last_modified change",
                         self.cur_epoch(slot)
                     );
                 self.refresh_cache_entry(self.cur_epoch(slot), cluster_info, access_time);
@@ -258,6 +260,7 @@ impl StakedValidatorsCache {
 mod tests {
     use {
         super::StakedValidatorsCache,
+        crate::voting_service::AlpenglowPortOverride,
         solana_gossip::{
             cluster_info::{ClusterInfo, Node},
             contact_info::{ContactInfo, Protocol},
@@ -282,7 +285,7 @@ mod tests {
         std::{
             collections::HashMap,
             iter::{repeat, repeat_with},
-            net::Ipv4Addr,
+            net::{Ipv4Addr, SocketAddr},
             sync::{Arc, RwLock},
             time::{Duration, Instant},
         },
@@ -817,5 +820,60 @@ mod tests {
         // We should have num_nodes - 1 sockets, since we exclude our own socket address.
         assert_eq!(sockets.len(), num_nodes - 1);
         assert!(!sockets.contains(&my_socket_addr));
+    }
+
+    #[test]
+    fn test_alpenglow_port_override() {
+        let (keypair_map, vahm) = build_epoch_stakes(3, 0, 3);
+        let pubkey_b = *keypair_map.keys().nth(1).unwrap();
+        let keypair = keypair_map.values().next().unwrap().insecure_clone();
+
+        let alpenglow_port_override = AlpenglowPortOverride::default();
+        let blackhole_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(100);
+
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
+                .with_vote_accounts(0, keypair_map, vahm, Protocol::UDP)
+                .bank_forks();
+
+        // Create our staked validators cache - set include_self to false
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            Protocol::UDP,
+            Duration::from_secs(5),
+            5,
+            false,
+            Some(alpenglow_port_override.clone()),
+        );
+        // Nothing in the override, so we should get the original socket addresses.
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        assert!(!sockets.contains(&blackhole_addr));
+
+        // Add an override for pubkey_B, and check that we get the overridden socket address.
+        alpenglow_port_override.update_override(HashMap::from([(pubkey_b, blackhole_addr)]));
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        assert_eq!(sockets[0], blackhole_addr);
+        assert_ne!(sockets[1], blackhole_addr);
+
+        // Now clear the override, and check that we get the original socket addresses.
+        alpenglow_port_override.clear();
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        assert!(!sockets.contains(&blackhole_addr));
     }
 }

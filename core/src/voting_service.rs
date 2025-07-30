@@ -91,37 +91,61 @@ pub struct VotingService {
     thread_hdl: JoinHandle<()>,
 }
 
-#[derive(Clone)]
+/// Override for Alpenglow ports to allow testing with different ports
+/// The last_modified is used to determine if the override has changed so
+/// StakedValidatorsCache can refresh its cache.
+/// Inside the map, the key is the validator's vote pubkey and the value
+/// is the overridden socket address.
+/// For example, if you want validator A to send messages for validator B's
+/// Alpenglow port to a new_address, you would insert an entry into the A's
+/// map like this: (B will not get the message as a result):
+/// `override_map.insert(validator_b_pubkey, new_address);`
+#[derive(Clone, Default)]
 pub struct AlpenglowPortOverride {
-    override_map_with_timetamp: Arc<RwLock<(HashMap<Pubkey, SocketAddr>, Instant)>>,
+    inner: Arc<RwLock<AlpenglowPortOverrideInner>>,
 }
 
-impl Default for AlpenglowPortOverride {
+#[derive(Clone)]
+struct AlpenglowPortOverrideInner {
+    override_map: HashMap<Pubkey, SocketAddr>,
+    last_modified: Instant,
+}
+
+impl Default for AlpenglowPortOverrideInner {
     fn default() -> Self {
         Self {
-            override_map_with_timetamp: Arc::new(RwLock::new((HashMap::new(), Instant::now()))),
+            override_map: HashMap::new(),
+            last_modified: Instant::now(),
         }
     }
 }
 
 impl AlpenglowPortOverride {
-    pub fn update_override(&mut self, new_override: HashMap<Pubkey, SocketAddr>) {
-        *self.override_map_with_timetamp.write().unwrap() = (new_override, Instant::now());
+    pub fn update_override(&self, new_override: HashMap<Pubkey, SocketAddr>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.override_map = new_override;
+        inner.last_modified = Instant::now();
     }
 
     pub fn has_new_override(&self, previous: Instant) -> bool {
-        self.override_map_with_timetamp.read().unwrap().1 != previous
+        self.inner.read().unwrap().last_modified != previous
     }
 
-    pub fn timestamp(&self) -> Instant {
-        self.override_map_with_timetamp.read().unwrap().1
+    pub fn last_modified(&self) -> Instant {
+        self.inner.read().unwrap().last_modified
+    }
+
+    pub fn clear(&self) {
+        let mut inner = self.inner.write().unwrap();
+        inner.override_map.clear();
+        inner.last_modified = Instant::now();
     }
 
     pub fn get_overridden_socket(&self, pubkey: &Pubkey, real_socket: &SocketAddr) -> SocketAddr {
-        self.override_map_with_timetamp
+        self.inner
             .read()
             .unwrap()
-            .0
+            .override_map
             .get(pubkey)
             .cloned()
             .unwrap_or(*real_socket)
