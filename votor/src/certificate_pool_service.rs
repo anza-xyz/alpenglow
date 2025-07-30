@@ -341,7 +341,6 @@ impl CertificatePoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
-        // TODO: Add blockstore check
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
             *highest_parent_ready,
             Some(&ctx.root_bank_cache.root_bank()),
@@ -357,6 +356,15 @@ impl CertificatePoolService {
 
         let start_slot = *highest_parent_ready;
         let end_slot = last_of_consecutive_leader_slots(start_slot);
+
+        if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
+            warn!(
+                "{}: We have already produced shreds in the window {start_slot}-{end_slot}, \
+                    skipping production of our leader window",
+                ctx.my_pubkey
+            );
+            return;
+        }
 
         match cert_pool
             .parent_ready_tracker
