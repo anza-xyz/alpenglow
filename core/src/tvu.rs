@@ -17,7 +17,7 @@ use {
         repair::repair_service::{OutstandingShredRepairs, RepairInfo, RepairServiceChannels},
         replay_stage::{ReplayReceivers, ReplaySenders, ReplayStage, ReplayStageConfig},
         shred_fetch_stage::ShredFetchStage,
-        voting_service::VotingService,
+        voting_service::{VotingService, VotingServiceOverride},
         warm_quic_cache_service::WarmQuicCacheService,
         window_service::{WindowService, WindowServiceChannels},
     },
@@ -178,7 +178,7 @@ impl Tvu {
         vote_connection_cache: Arc<ConnectionCache>,
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
-        voting_service_additional_listeners: Option<&Vec<SocketAddr>>,
+        voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
     ) -> Result<Self, String> {
@@ -375,7 +375,7 @@ impl Tvu {
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
             bank_forks.clone(),
-            voting_service_additional_listeners.cloned(),
+            voting_service_test_override,
         );
 
         let warm_quic_cache_service = create_cache_warmer_if_needed(
