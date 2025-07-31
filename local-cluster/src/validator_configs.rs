@@ -76,7 +76,7 @@ pub fn safe_clone_config(config: &ValidatorConfig) -> ValidatorConfig {
         tvu_shred_sigverify_threads: config.tvu_shred_sigverify_threads,
         delay_leader_block_for_pending_fork: config.delay_leader_block_for_pending_fork,
         use_tpu_client_next: config.use_tpu_client_next,
-        voting_service_additional_listeners: config.voting_service_additional_listeners.clone(),
+        voting_service_test_override: config.voting_service_test_override.clone(),
         repair_handler_type: config.repair_handler_type.clone(),
     }
 }
