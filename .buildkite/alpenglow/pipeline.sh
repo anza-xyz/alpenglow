@@ -23,7 +23,7 @@ steps:
         timeout_in_minutes: 40
         agents:
           queue: "default"
-        parallelism: 2
+        parallelism: 3
         retry:
           automatic:
             - limit: 3
