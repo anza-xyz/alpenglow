@@ -21,6 +21,7 @@ use {
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         validator::{BlockVerificationMethod, ValidatorConfig},
+        voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
@@ -6182,8 +6183,10 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
 
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_addr.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     // Collect node pubkeys
     let node_pubkeys = validator_keys
@@ -6332,8 +6335,10 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
     validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
@@ -6517,8 +6522,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs =
         make_identical_validator_configs(&validator_config, node_stakes.len());
@@ -6861,8 +6868,10 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     // Configure validators
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
     // Node A (index 0) will have its turbine disabled during the experiment
@@ -7128,8 +7137,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs =
         make_identical_validator_configs(&validator_config, node_stakes.len());

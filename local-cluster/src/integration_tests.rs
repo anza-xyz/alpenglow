@@ -22,6 +22,7 @@ use {
     solana_core::{
         consensus::{tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD},
         validator::{is_snapshot_config_valid, ValidatorConfig},
+        voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     },
     solana_gossip::gossip_service::discover_cluster,
     solana_ledger::{
@@ -47,8 +48,9 @@ use {
     solana_turbine::broadcast_stage::BroadcastStageType,
     static_assertions,
     std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         fs, iter,
+        net::SocketAddr,
         num::NonZeroUsize,
         path::{Path, PathBuf},
         sync::{
@@ -446,10 +448,21 @@ pub fn run_cluster_partition<C>(
     };
 
     let slots_per_epoch = 2048;
+    let alpenglow_port_override = AlpenglowPortOverride::default();
+    let validator_configs = make_identical_validator_configs(&validator_config, num_nodes)
+        .into_iter()
+        .map(|mut config| {
+            config.voting_service_test_override = Some(VotingServiceOverride {
+                additional_listeners: vec![],
+                alpenglow_port_override: alpenglow_port_override.clone(),
+            });
+            config
+        })
+        .collect();
     let mut config = ClusterConfig {
         mint_lamports,
         node_stakes,
-        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_configs,
         validator_keys: Some(
             validator_keys
                 .into_iter()
@@ -504,12 +517,25 @@ pub fn run_cluster_partition<C>(
     info!("PARTITION_TEST start partition");
     on_partition_start(&mut cluster, &mut context);
     turbine_disabled.store(true, Ordering::Relaxed);
-
+    // Make all to all votes/certs not able to reach each other by overriding the
+    // alpenglow port override to SocketAddr which no one is listening on.
+    let blackhole_addr: SocketAddr = solana_net_utils::bind_to_localhost()
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let new_override = HashMap::from_iter(
+        cluster_nodes
+            .iter()
+            .map(|node| (*node.pubkey(), blackhole_addr)),
+    );
+    alpenglow_port_override.update_override(new_override);
     sleep(partition_duration);
 
     on_before_partition_resolved(&mut cluster, &mut context);
     info!("PARTITION_TEST remove partition");
     turbine_disabled.store(false, Ordering::Relaxed);
+    // Restore the alpenglow port override to the default, so that the nodes can communicate again.
+    alpenglow_port_override.clear();
 
     // Give partitions time to propagate their blocks from during the partition
     // after the partition resolves
