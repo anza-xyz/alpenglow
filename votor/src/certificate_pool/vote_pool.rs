@@ -36,34 +36,6 @@ pub(crate) enum VotePoolType {
     DuplicateBlockVotePool(DuplicateBlockVotePool),
 }
 
-impl VotePoolType {
-    pub(crate) fn total_stake(&self) -> Stake {
-        match self {
-            VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
-            VotePoolType::DuplicateBlockVotePool(pool) => pool.total_stake(),
-        }
-    }
-
-    pub(crate) fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool {
-        match self {
-            VotePoolType::SimpleVotePool(pool) => pool.has_prev_validator_vote(validator_vote_key),
-            VotePoolType::DuplicateBlockVotePool(pool) => {
-                pool.has_prev_validator_vote(validator_vote_key)
-            }
-        }
-    }
-
-    pub(crate) fn unwrap_duplicate_block_vote_pool(
-        &self,
-        error_message: &str,
-    ) -> &DuplicateBlockVotePool {
-        match self {
-            VotePoolType::SimpleVotePool(_pool) => panic!("{}", error_message),
-            VotePoolType::DuplicateBlockVotePool(pool) => pool,
-        }
-    }
-}
-
 pub(crate) struct SimpleVotePool {
     /// Tracks all votes of a specfic vote type made by validators for some slot N.
     pub(crate) vote_entry: VoteEntry,
@@ -83,9 +55,9 @@ impl SimpleVotePool {
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
         transaction: &VoteMessage,
-    ) -> bool {
+    ) -> Option<Stake> {
         if self.prev_voted_validators.contains(validator_vote_key) {
-            return false;
+            return None;
         }
         self.prev_voted_validators.insert(*validator_vote_key);
         self.vote_entry.transactions.push(*transaction);
@@ -93,7 +65,7 @@ impl SimpleVotePool {
             .vote_entry
             .total_stake_by_key
             .saturating_add(validator_stake);
-        true
+        Some(self.vote_entry.total_stake_by_key)
     }
 
     pub fn add_to_certificate(&self, output: &mut VoteCertificateBuilder) {
@@ -117,7 +89,6 @@ pub(crate) struct DuplicateBlockVotePool {
     pub(crate) votes: HashMap<Hash, VoteEntry>,
     total_stake: Stake,
     prev_voted_block_ids: HashMap<Pubkey, Vec<Hash>>,
-    top_entry_stake: Stake,
 }
 
 impl DuplicateBlockVotePool {
@@ -127,7 +98,6 @@ impl DuplicateBlockVotePool {
             votes: HashMap::new(),
             total_stake: 0,
             prev_voted_block_ids: HashMap::new(),
-            top_entry_stake: 0,
         }
     }
 
@@ -137,7 +107,7 @@ impl DuplicateBlockVotePool {
         voted_block_id: Hash,
         transaction: &VoteMessage,
         validator_stake: Stake,
-    ) -> bool {
+    ) -> Option<Stake> {
         // Check whether the validator_vote_key already used the same voted_block_id or exceeded max_entries_per_pubkey
         // If so, return false, otherwise add the voted_block_id to the prev_votes
         let prev_voted_block_ids = self
@@ -145,11 +115,11 @@ impl DuplicateBlockVotePool {
             .entry(*validator_vote_key)
             .or_default();
         if prev_voted_block_ids.contains(&voted_block_id) {
-            return false;
+            return None;
         }
         let inserted_first_time = prev_voted_block_ids.is_empty();
         if prev_voted_block_ids.len() >= self.max_entries_per_pubkey {
-            return false;
+            return None;
         }
         prev_voted_block_ids.push(voted_block_id);
 
@@ -165,10 +135,7 @@ impl DuplicateBlockVotePool {
         if inserted_first_time {
             self.total_stake = self.total_stake.saturating_add(validator_stake);
         }
-        if vote_entry.total_stake_by_key > self.top_entry_stake {
-            self.top_entry_stake = vote_entry.total_stake_by_key;
-        }
-        true
+        Some(vote_entry.total_stake_by_key)
     }
 
     pub fn total_stake_by_block_id(&self, block_id: &Hash) -> Stake {
@@ -185,13 +152,6 @@ impl DuplicateBlockVotePool {
         }
     }
 
-    // Get the previous notarization vote, only used for safe to notar to figure out previous notar vote
-    pub(crate) fn get_prev_voted_block_id(&self, validator_vote_key: &Pubkey) -> Option<Hash> {
-        self.prev_voted_block_ids
-            .get(validator_vote_key)
-            .and_then(|vs| vs.first().cloned())
-    }
-
     pub fn has_prev_validator_vote_for_block(
         &self,
         validator_vote_key: &Pubkey,
@@ -200,10 +160,6 @@ impl DuplicateBlockVotePool {
         self.prev_voted_block_ids
             .get(validator_vote_key)
             .is_some_and(|vs| vs.contains(block_id))
-    }
-
-    pub fn top_entry_stake(&self) -> Stake {
-        self.top_entry_stake
     }
 }
 
@@ -235,16 +191,16 @@ mod test {
         };
         let my_pubkey = Pubkey::new_unique();
 
-        assert!(vote_pool.add_vote(&my_pubkey, 10, &transaction));
+        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, &transaction), Some(10));
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding the same key again should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, 10, &transaction));
+        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, &transaction), None);
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        assert!(vote_pool.add_vote(&new_pubkey, 60, &transaction),);
+        assert_eq!(vote_pool.add_vote(&new_pubkey, 60, &transaction), Some(70));
         assert_eq!(vote_pool.total_stake(), 70);
     }
 
@@ -259,21 +215,33 @@ mod test {
             signature: BLSSignature::default(),
             rank: 1,
         };
-        assert!(vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10,));
+        assert_eq!(
+            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            Some(10)
+        );
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_block_id(&block_id), 10);
 
         // Adding the same key again should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10));
+        assert_eq!(
+            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            None
+        );
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different bankhash should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10));
+        assert_eq!(
+            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            None
+        );
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        assert!(vote_pool.add_vote(&new_pubkey, block_id, &transaction, 60),);
+        assert_eq!(
+            vote_pool.add_vote(&new_pubkey, block_id, &transaction, 60),
+            Some(70)
+        );
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_block_id(&block_id), 70);
     }
@@ -294,29 +262,44 @@ mod test {
 
         // Adding the first 3 votes should succeed, but total_stake should remain at 10
         for block_id in &block_ids[0..3] {
-            assert!(vote_pool.add_vote(&my_pubkey, *block_id, &transaction, 10));
+            assert_eq!(
+                vote_pool.add_vote(&my_pubkey, *block_id, &transaction, 10),
+                Some(10)
+            );
             assert_eq!(vote_pool.total_stake(), 10);
             assert_eq!(vote_pool.total_stake_by_block_id(block_id), 10);
         }
         // Adding the 4th vote should fail
-        assert!(!vote_pool.add_vote(&my_pubkey, block_ids[3], &transaction, 10));
+        assert_eq!(
+            vote_pool.add_vote(&my_pubkey, block_ids[3], &transaction, 10),
+            None
+        );
         assert_eq!(vote_pool.total_stake(), 10);
         assert_eq!(vote_pool.total_stake_by_block_id(&block_ids[3]), 0);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
         for block_id in &block_ids[1..3] {
-            assert!(vote_pool.add_vote(&new_pubkey, *block_id, &transaction, 60));
+            assert_eq!(
+                vote_pool.add_vote(&new_pubkey, *block_id, &transaction, 60),
+                Some(70)
+            );
             assert_eq!(vote_pool.total_stake(), 70);
             assert_eq!(vote_pool.total_stake_by_block_id(block_id), 70);
         }
 
         // The new key only added 2 votes, so adding block_ids[3] should succeed
-        assert!(vote_pool.add_vote(&new_pubkey, block_ids[3], &transaction, 60));
+        assert_eq!(
+            vote_pool.add_vote(&new_pubkey, block_ids[3], &transaction, 60),
+            Some(60)
+        );
         assert_eq!(vote_pool.total_stake(), 70);
         assert_eq!(vote_pool.total_stake_by_block_id(&block_ids[3]), 60);
 
         // Now if adding the same key again, it should fail
-        assert!(!vote_pool.add_vote(&new_pubkey, block_ids[0], &transaction, 60));
+        assert_eq!(
+            vote_pool.add_vote(&new_pubkey, block_ids[0], &transaction, 60),
+            None
+        );
     }
 }

@@ -87,6 +87,105 @@ impl From<AlpenglowCommitmentError> for AddVoteError {
     }
 }
 
+#[derive(Debug, Default)]
+struct FallbackVoteCounters {
+    my_first_vote: Option<Vote>,
+    total_stake: Stake,
+    skip_total: Stake,
+    notarize_total: Stake,
+    notarize_entry_total: BTreeMap<Hash, Stake>,
+    top_notarized_stake: Stake,
+    safe_to_notar_sent: Vec<Hash>,
+    safe_to_skip_sent: bool,
+}
+
+impl FallbackVoteCounters {
+    pub fn add_vote(
+        &mut self,
+        vote: &Vote,
+        total_stake: Stake,
+        entry_stake: Stake,
+        is_my_own_vote: bool,
+        events: &mut Vec<VotorEvent>,
+    ) -> (usize, bool) {
+        match vote {
+            Vote::Skip(_) => self.skip_total = entry_stake,
+            Vote::Notarize(vote) => {
+                self.notarize_entry_total
+                    .insert(*vote.block_id(), entry_stake);
+                self.notarize_total = self.notarize_entry_total.values().sum();
+                self.top_notarized_stake = self.top_notarized_stake.max(entry_stake);
+            }
+            _ => return (0, false), // Not interested in other vote types
+        }
+        if self.my_first_vote.is_none() && is_my_own_vote {
+            self.my_first_vote = Some(*vote);
+            self.total_stake = total_stake;
+        }
+        if self.my_first_vote.is_some() {
+            let slot = vote.slot();
+            let old_safe_to_notar_sent = self.safe_to_notar_sent.len();
+            let mut new_safe_to_skip = false;
+            // Check safe to notar
+            for (block_id, stake) in &self.notarize_entry_total {
+                if !self.safe_to_notar_sent.contains(block_id)
+                    && self.is_safe_to_notar(block_id, stake)
+                {
+                    events.push(VotorEvent::SafeToNotar((slot, *block_id)));
+                    self.safe_to_notar_sent.push(*block_id);
+                }
+            }
+            // Check safe to skip
+            if !self.safe_to_skip_sent && self.is_safe_to_skip() {
+                events.push(VotorEvent::SafeToSkip(slot));
+                new_safe_to_skip = true;
+                self.safe_to_skip_sent = true;
+            }
+            (
+                self.safe_to_notar_sent
+                    .len()
+                    .saturating_sub(old_safe_to_notar_sent),
+                new_safe_to_skip,
+            )
+        } else {
+            (0, false) // No new safe to notar or skip
+        }
+    }
+
+    fn is_safe_to_notar(&self, block_id: &Hash, stake: &Stake) -> bool {
+        // White paper v1.1 page 22: The event is only issued if the node voted in slot s already,
+        // but not to notarize b. Moreover:
+        // notar(b) >= 40% or (skip(s) + notar(b) >= 60% and notar(b) >= 20%)
+        if let Some(Vote::Notarize(my_vote)) = self.my_first_vote.as_ref() {
+            if my_vote.block_id() == block_id {
+                return false; // I voted for the same block, no need to send NotarizeFallback
+            }
+        }
+        let skip_ratio = self.skip_total as f64 / self.total_stake as f64;
+        let notarized_ratio = *stake as f64 / self.total_stake as f64;
+        // Check if the block fits condition (i) 40% of stake holders voted notarize
+        notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
+            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+            || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
+                && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP)
+    }
+
+    fn is_safe_to_skip(&self) -> bool {
+        // White paper v1.1 page 22: The event is only issued if the node voted in slot s already,
+        // but not to skip s. Moreover:
+        // skip(s) + Sum of all notarize - (max in notarize(b)) >= 40%
+        if let Some(Vote::Notarize(_)) = self.my_first_vote.as_ref() {
+            self.skip_total
+                .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake))
+                as f64
+                / self.total_stake as f64
+                >= SAFE_TO_SKIP_THRESHOLD
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CertificatePool {
     // Vote pools to do bean counting for votes.
@@ -115,6 +214,8 @@ pub struct CertificatePool {
     certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
     /// Stats for the certificate pool
     stats: CertificatePoolStats,
+    /// Fallback vote counters, used to calculate safe_to_notar and safe_to_skip
+    fallback_vote_counters_map: BTreeMap<Slot, FallbackVoteCounters>,
 }
 
 impl CertificatePool {
@@ -141,6 +242,7 @@ impl CertificatePool {
             certificate_sender,
             parent_ready_tracker,
             stats: CertificatePoolStats::new(),
+            fallback_vote_counters_map: BTreeMap::new(),
         };
 
         // Update the epoch_stakes_map and root
@@ -183,7 +285,7 @@ impl CertificatePool {
         transaction: &VoteMessage,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
-    ) -> bool {
+    ) -> Option<Stake> {
         let pool = self
             .vote_pools
             .entry((slot, vote_type))
@@ -470,7 +572,7 @@ impl CertificatePool {
                 validator_vote_key,
             ));
         }
-        if !self.update_vote_pool(
+        match self.update_vote_pool(
             slot,
             vote_type,
             block_id,
@@ -478,22 +580,32 @@ impl CertificatePool {
             &validator_vote_key,
             validator_stake,
         ) {
-            self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
-            return Ok(vec![]);
+            None => {
+                // No new vote pool entry was created, just return empty vec
+                self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
+                return Ok(vec![]);
+            }
+            Some(entry_stake) => {
+                let fallback_vote_counters =
+                    self.fallback_vote_counters_map.entry(slot).or_default();
+                let (new_safe_to_notar, new_safe_to_skip) = fallback_vote_counters.add_vote(
+                    vote,
+                    total_stake,
+                    entry_stake,
+                    my_vote_pubkey == &validator_vote_key,
+                    events,
+                );
+                if new_safe_to_notar > 0 {
+                    self.stats.event_safe_to_notarize = self
+                        .stats
+                        .event_safe_to_notarize
+                        .saturating_add(new_safe_to_notar as u32);
+                }
+                if new_safe_to_skip {
+                    self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
+                }
+            }
         }
-        // Check if this new vote generated a safe to notar or safe to skip
-        // TODO: we should just handle this when adding the vote rather than
-        // calling out here again. Also deal with duplicate events, don't notify
-        // everytime.
-        if self.safe_to_skip(my_vote_pubkey, slot) {
-            events.push(VotorEvent::SafeToSkip(slot));
-            self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
-        }
-        for block_id in self.safe_to_notar(my_vote_pubkey, slot) {
-            events.push(VotorEvent::SafeToNotar((slot, block_id)));
-            self.stats.event_safe_to_notarize = self.stats.event_safe_to_notarize.saturating_add(1);
-        }
-
         self.stats.incr_ingested_vote_type(vote_type);
 
         self.update_certificates(vote, block_id, events, total_stake)
@@ -617,97 +729,6 @@ impl CertificatePool {
             .contains_key(&Certificate::Skip(slot))
     }
 
-    /// Checks if we have voted to skip `slot` or already notarized some block `b` in `slot`
-    /// Additionally check if there exists blocks `b` in `slot` such that:
-    /// (i) At least 40% of stake has voted to notarize `b`
-    /// (ii) At least 20% of stake voted to notarize `b` and at least 60% of stake voted to either notarize `b` or skip `slot`
-    /// and we have not already cast a notarize fallback for this `b` in `slot`
-    /// If all the above hold, return the block ids `Vec<block_id>` for all such `b`
-    pub fn safe_to_notar(&self, my_vote_pubkey: &Pubkey, slot: Slot) -> Vec<Hash> {
-        let Some(epoch_stakes) = self
-            .epoch_stakes_map
-            .get(&self.epoch_schedule.get_epoch(slot))
-        else {
-            return vec![];
-        };
-        let total_stake = epoch_stakes.total_stake();
-
-        let skip_ratio = self
-            .vote_pools
-            .get(&(slot, VoteType::Skip))
-            .map_or(0, |pool| pool.total_stake()) as f64
-            / total_stake as f64;
-
-        let voted_skip = self
-            .vote_pools
-            .get(&(slot, VoteType::Skip))
-            .is_some_and(|pool| pool.has_prev_validator_vote(my_vote_pubkey));
-
-        let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
-            return vec![];
-        };
-        let notarize_pool = notarize_pool.unwrap_duplicate_block_vote_pool(
-            "Notarize vote pool should be a DuplicateBlockVotePool",
-        );
-        let my_prev_voted_block_id = notarize_pool.get_prev_voted_block_id(my_vote_pubkey);
-
-        let mut safe_to_notar = vec![];
-        for (block_id, votes) in notarize_pool.votes.iter() {
-            if !voted_skip
-                && my_prev_voted_block_id
-                    .as_ref()
-                    .is_none_or(|prev_block_id| *prev_block_id == *block_id)
-            {
-                // We either have not voted for the slot or we voted notarize on this block.
-                // Not eligble for safe to notar
-                continue;
-            }
-
-            let notarized_ratio = votes.total_stake_by_key as f64 / total_stake as f64;
-            let qualifies =
-                // Check if the block fits condition (i) 40% of stake holders voted notarize
-                notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
-                // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-                || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
-                    && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP);
-
-            if qualifies {
-                safe_to_notar.push(*block_id);
-            }
-        }
-        safe_to_notar
-    }
-
-    /// Checks if we have already voted to notarize some block in `slot` and additionally that
-    /// votedStake(s) - topNotarStake(s) >= 40% where:
-    /// - votedStake(s) is the cumulative stake of all nodes who voted notarize or skip on s
-    /// - topNotarStake(s) the highest of cumulative notarize stake per block in s
-    pub fn safe_to_skip(&self, my_vote_pubkey: &Pubkey, slot: Slot) -> bool {
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let Some(epoch_stakes) = self.epoch_stakes_map.get(&epoch) else {
-            return false;
-        };
-        let total_stake = epoch_stakes.total_stake();
-
-        let Some(notarize_pool) = self.vote_pools.get(&(slot, VoteType::Notarize)) else {
-            return false;
-        };
-        let notarize_pool = notarize_pool.unwrap_duplicate_block_vote_pool(
-            "Notarize vote pool should be a DuplicateBlockVotePool",
-        );
-        if !notarize_pool.has_prev_validator_vote(my_vote_pubkey) {
-            return false;
-        }
-        let voted_stake = notarize_pool.total_stake().saturating_add(
-            self.vote_pools
-                .get(&(slot, VoteType::Skip))
-                .map_or(0, |pool| pool.total_stake()),
-        );
-        let top_notarized_stake = notarize_pool.top_entry_stake();
-        (voted_stake.saturating_sub(top_notarized_stake)) as f64 / total_stake as f64
-            >= SAFE_TO_SKIP_THRESHOLD
-    }
-
     #[cfg(test)]
     fn make_start_leader_decision(
         &self,
@@ -762,6 +783,7 @@ impl CertificatePool {
                 | Certificate::Skip(s) => *s >= self.root,
             });
         self.vote_pools = self.vote_pools.split_off(&(new_root, VoteType::Finalize));
+        self.fallback_vote_counters_map = self.fallback_vote_counters_map.split_off(&new_root);
         self.parent_ready_tracker.set_root(new_root);
         self.update_epoch_stakes_map(&bank);
     }
@@ -829,7 +851,6 @@ mod tests {
     use {
         super::*,
         bitvec::prelude::*,
-        itertools::Itertools,
         solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_runtime::{
             bank::{Bank, NewBankOptions},
@@ -1538,6 +1559,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_notar() {
+        solana_logger::setup();
         let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         let (my_vote_key, _, _) = pool.get_key_and_stakes(0, 0).unwrap();
 
@@ -1545,18 +1567,18 @@ mod tests {
         let slot = 2;
         let block_id = Hash::new_unique();
 
-        // With no votes, this should fail.
-        assert!(pool.safe_to_notar(&my_vote_key, slot).is_empty());
-
         // Add a skip from myself.
         let vote = Vote::new_skip_vote(2);
+        let mut new_events = vec![];
         assert!(pool
             .add_message(
-                &Pubkey::new_unique(),
+                &my_vote_key,
                 &dummy_transaction(&validator_keypairs, &vote, 0),
-                &mut vec![]
+                &mut new_events
             )
             .is_ok());
+        assert!(new_events.is_empty());
+
         // 40% notarized, should succeed
         for rank in 1..5 {
             let vote = Vote::new_notarization_vote(2, block_id);
@@ -1564,11 +1586,18 @@ mod tests {
                 .add_message(
                     &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
-                    &mut vec![]
+                    &mut new_events
                 )
                 .is_ok());
         }
-        assert_eq!(pool.safe_to_notar(&my_vote_key, slot), vec![block_id]);
+        assert_eq!(new_events.len(), 1);
+        if let VotorEvent::SafeToNotar((event_slot, event_block_id)) = new_events[0] {
+            assert_eq!(block_id, event_block_id);
+            assert_eq!(slot, event_slot);
+        } else {
+            panic!("Expected SafeToNotar event");
+        }
+        new_events.clear();
 
         // Create bank 3
         let slot = 3;
@@ -1581,37 +1610,51 @@ mod tests {
                 .add_message(
                     &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
-                    &mut vec![]
+                    &mut new_events
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_notar(&my_vote_key, slot).is_empty());
+        assert!(new_events.is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
         let vote = Vote::new_notarization_vote(3, Hash::new_unique());
         assert!(pool
             .add_message(
-                &Pubkey::new_unique(),
+                &my_vote_key,
                 &dummy_transaction(&validator_keypairs, &vote, 0),
-                &mut vec![]
+                &mut new_events
             )
             .is_ok());
-        assert!(pool.safe_to_notar(&my_vote_key, slot).is_empty());
+        assert!(new_events.is_empty());
 
         // Now add 40% skip, should succeed
+        // Funny thing is in this case we will also get SafeToSkip(3)
         for rank in 3..7 {
             let vote = Vote::new_skip_vote(3);
             assert!(pool
                 .add_message(
                     &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
-                    &mut vec![]
+                    &mut new_events
                 )
                 .is_ok());
         }
-        assert_eq!(pool.safe_to_notar(&my_vote_key, slot), vec![block_id]);
+        assert_eq!(new_events.len(), 2);
+        if let VotorEvent::SafeToSkip(event_slot) = new_events[0] {
+            assert_eq!(slot, event_slot);
+        } else {
+            panic!("Expected SafeToSkip event");
+        }
+        if let VotorEvent::SafeToNotar((event_slot, event_block_id)) = new_events[1] {
+            assert_eq!(block_id, event_block_id);
+            assert_eq!(slot, event_slot);
+        } else {
+            panic!("Expected SafeToNotar event");
+        }
+        new_events.clear();
 
-        // Add 20% notarization for another block, we should notify on both
+        // Add 20% notarization for another block, we should notify on new block_id
+        // but not on the same block_id because we already sent the event
         let duplicate_block_id = Hash::new_unique();
         for rank in 7..9 {
             let vote = Vote::new_notarization_vote(3, duplicate_block_id);
@@ -1619,21 +1662,18 @@ mod tests {
                 .add_message(
                     &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
-                    &mut vec![]
+                    &mut new_events
                 )
                 .is_ok());
         }
 
-        assert_eq!(
-            pool.safe_to_notar(&my_vote_key, slot)
-                .into_iter()
-                .sorted()
-                .collect::<Vec<_>>(),
-            vec![block_id, duplicate_block_id,]
-                .into_iter()
-                .sorted()
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(new_events.len(), 1);
+        if let VotorEvent::SafeToNotar((event_slot, event_block_id)) = new_events[0] {
+            assert_eq!(duplicate_block_id, event_block_id);
+            assert_eq!(slot, event_slot);
+        } else {
+            panic!("Expected SafeToNotar event");
+        }
     }
 
     #[test]
@@ -1641,21 +1681,20 @@ mod tests {
         let (validator_keypairs, mut pool) = create_keypairs_and_pool();
         let (my_vote_key, _, _) = pool.get_key_and_stakes(0, 0).unwrap();
         let slot = 2;
-        // No vote from myself, should fail.
-        assert!(!pool.safe_to_skip(&my_vote_key, slot));
+        let mut new_events = vec![];
 
         // Add a notarize from myself.
         let block_id = Hash::new_unique();
         let vote = Vote::new_notarization_vote(2, block_id);
         assert!(pool
             .add_message(
-                &Pubkey::new_unique(),
+                &my_vote_key,
                 &dummy_transaction(&validator_keypairs, &vote, 0),
-                &mut vec![]
+                &mut new_events
             )
             .is_ok());
         // Should still fail because there are no other votes.
-        assert!(!pool.safe_to_skip(&my_vote_key, slot));
+        assert!(new_events.is_empty());
         // Add 50% skip, should succeed
         for rank in 1..6 {
             let vote = Vote::new_skip_vote(2);
@@ -1663,21 +1702,27 @@ mod tests {
                 .add_message(
                     &Pubkey::new_unique(),
                     &dummy_transaction(&validator_keypairs, &vote, rank),
-                    &mut vec![]
+                    &mut new_events
                 )
                 .is_ok());
         }
-        assert!(pool.safe_to_skip(&my_vote_key, slot));
-        // Add 10% more notarize, still safe to skip any more because total voted increased.
+        assert_eq!(new_events.len(), 1);
+        if let VotorEvent::SafeToSkip(event_slot) = new_events[0] {
+            assert_eq!(slot, event_slot);
+        } else {
+            panic!("Expected SafeToSkip event");
+        }
+        new_events.clear();
+        // Add 10% more notarize, will not send new SafeToSkip because the event was already sent
         let vote = Vote::new_notarization_vote(2, block_id);
         assert!(pool
             .add_message(
                 &Pubkey::new_unique(),
                 &dummy_transaction(&validator_keypairs, &vote, 6),
-                &mut vec![]
+                &mut new_events
             )
             .is_ok());
-        assert!(pool.safe_to_skip(&my_vote_key, slot));
+        assert!(new_events.is_empty());
     }
 
     fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
