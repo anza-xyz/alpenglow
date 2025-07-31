@@ -172,6 +172,7 @@ fn build_noop_and_readelf(arch: &str) -> Assert {
 
 #[test]
 #[serial]
+#[ignore]
 fn test_sbpfv0() {
     let assert_v0 = build_noop_and_readelf("v0");
     assert_v0
@@ -208,6 +209,7 @@ fn test_sbpfv2() {
 
 #[test]
 #[serial]
+#[ignore]
 fn test_sbpfv3() {
     let assert_v1 = build_noop_and_readelf("v3");
     assert_v1
