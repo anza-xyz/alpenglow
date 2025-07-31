@@ -14,12 +14,14 @@ use {
     solana_runtime::bank_forks::BankForks,
     solana_sdk::{
         clock::{Slot, FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET},
+        pubkey::Pubkey,
         transaction::Transaction,
         transport::TransportError,
     },
     solana_votor::{vote_history_storage::VoteHistoryStorage, voting_utils::BLSOp},
     solana_votor_messages::bls_message::BLSMessage,
     std::{
+        collections::HashMap,
         net::SocketAddr,
         sync::{Arc, RwLock},
         thread::{self, Builder, JoinHandle},
@@ -89,6 +91,67 @@ pub struct VotingService {
     thread_hdl: JoinHandle<()>,
 }
 
+/// Override for Alpenglow ports to allow testing with different ports
+/// The last_modified is used to determine if the override has changed so
+/// StakedValidatorsCache can refresh its cache.
+/// Inside the map, the key is the validator's vote pubkey and the value
+/// is the overridden socket address.
+/// For example, if you want validator A to send messages for validator B's
+/// Alpenglow port to a new_address, you would insert an entry into the A's
+/// map like this: (B will not get the message as a result):
+/// `override_map.insert(validator_b_pubkey, new_address);`
+#[derive(Clone, Default)]
+pub struct AlpenglowPortOverride {
+    inner: Arc<RwLock<AlpenglowPortOverrideInner>>,
+}
+
+#[derive(Clone)]
+struct AlpenglowPortOverrideInner {
+    override_map: HashMap<Pubkey, SocketAddr>,
+    last_modified: Instant,
+}
+
+impl Default for AlpenglowPortOverrideInner {
+    fn default() -> Self {
+        Self {
+            override_map: HashMap::new(),
+            last_modified: Instant::now(),
+        }
+    }
+}
+
+impl AlpenglowPortOverride {
+    pub fn update_override(&self, new_override: HashMap<Pubkey, SocketAddr>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.override_map = new_override;
+        inner.last_modified = Instant::now();
+    }
+
+    pub fn has_new_override(&self, previous: Instant) -> bool {
+        self.inner.read().unwrap().last_modified != previous
+    }
+
+    pub fn last_modified(&self) -> Instant {
+        self.inner.read().unwrap().last_modified
+    }
+
+    pub fn clear(&self) {
+        let mut inner = self.inner.write().unwrap();
+        inner.override_map.clear();
+        inner.last_modified = Instant::now();
+    }
+
+    pub fn get_override_map(&self) -> HashMap<Pubkey, SocketAddr> {
+        self.inner.read().unwrap().override_map.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct VotingServiceOverride {
+    pub additional_listeners: Vec<SocketAddr>,
+    pub alpenglow_port_override: AlpenglowPortOverride,
+}
+
 impl VotingService {
     pub fn new(
         vote_receiver: Receiver<VoteOp>,
@@ -99,8 +162,16 @@ impl VotingService {
         vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
-        additional_listeners: Option<Vec<SocketAddr>>,
+        test_override: Option<VotingServiceOverride>,
     ) -> Self {
+        let (additional_listeners, alpenglow_port_override) = test_override
+            .map(|test_override| {
+                (
+                    Some(test_override.additional_listeners),
+                    Some(test_override.alpenglow_port_override),
+                )
+            })
+            .unwrap_or((None, None));
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
@@ -110,6 +181,7 @@ impl VotingService {
                     Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
                     STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
                     false,
+                    alpenglow_port_override,
                 );
 
                 loop {
@@ -406,7 +478,10 @@ mod tests {
             Arc::new(NullVoteHistoryStorage::default()),
             Arc::new(ConnectionCache::with_udp("TestConnectionCache", 10)),
             bank_forks,
-            Some(vec![listener]),
+            Some(VotingServiceOverride {
+                additional_listeners: vec![listener],
+                alpenglow_port_override: AlpenglowPortOverride::default(),
+            }),
         )
     }
 
