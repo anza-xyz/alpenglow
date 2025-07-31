@@ -1807,7 +1807,7 @@ mod tests {
             )
             .is_ok());
         let cert_4 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Finalize, 4, Some(Hash::new_unique())),
+            certificate: Certificate::new(CertificateType::Finalize, 4, None),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -1874,7 +1874,7 @@ mod tests {
 
         // Add another Finalize cert on 6
         let cert_6_finalize = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Finalize, 6, Some(Hash::new_unique())),
+            certificate: Certificate::new(CertificateType::Finalize, 6, None),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -1895,7 +1895,7 @@ mod tests {
 
         // Add another skip on 7
         let cert_7 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Skip, 7, Some(Hash::new_unique())),
+            certificate: Certificate::new(CertificateType::Skip, 7, None),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
