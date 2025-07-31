@@ -141,14 +141,8 @@ impl AlpenglowPortOverride {
         inner.last_modified = Instant::now();
     }
 
-    pub fn get_overridden_socket(&self, pubkey: &Pubkey, real_socket: &SocketAddr) -> SocketAddr {
-        self.inner
-            .read()
-            .unwrap()
-            .override_map
-            .get(pubkey)
-            .cloned()
-            .unwrap_or(*real_socket)
+    pub fn get_override_map(&self) -> HashMap<Pubkey, SocketAddr> {
+        self.inner.read().unwrap().override_map.clone()
     }
 }
 

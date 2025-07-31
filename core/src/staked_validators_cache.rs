@@ -144,13 +144,20 @@ impl StakedValidatorsCache {
 
         let mut validator_sockets = Vec::new();
         let mut alpenglow_sockets = Vec::new();
+        let override_map = self
+            .alpenglow_port_override
+            .as_ref()
+            .map(|x| x.get_override_map());
         for node in nodes {
             validator_sockets.push(node.tpu_socket);
 
             if let Some(alpenglow_socket) = node.alpenglow_socket {
-                let socket = if let Some(alpenglow_port_override) = &self.alpenglow_port_override {
+                let socket = if let Some(override_map) = &override_map {
                     // If we have an override, use it.
-                    alpenglow_port_override.get_overridden_socket(&node.pubkey, &alpenglow_socket)
+                    override_map
+                        .get(&node.pubkey)
+                        .cloned()
+                        .unwrap_or(alpenglow_socket)
                 } else {
                     alpenglow_socket
                 };
