@@ -31,6 +31,7 @@ ARGS=(
   --partition hash:"$CURRENT/$TOTAL"
   --verbose
   --exclude solana-local-cluster
+  --exclude solana-cargo-build-sbf
   --no-tests=warn
 )
 
