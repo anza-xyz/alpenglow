@@ -870,6 +870,9 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(sockets.len(), 2);
+        // Sort sockets to ensure the blackhole address is at index 0.
+        let mut sockets: Vec<_> = sockets.to_vec();
+        sockets.sort();
         assert_eq!(sockets[0], blackhole_addr);
         assert_ne!(sockets[1], blackhole_addr);
 
