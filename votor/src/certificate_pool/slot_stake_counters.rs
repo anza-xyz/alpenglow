@@ -40,9 +40,14 @@ impl SlotStakeCounters {
         match vote {
             Vote::Skip(_) => self.skip_total = entry_stake,
             Vote::Notarize(vote) => {
-                self.notarize_entry_total
-                    .insert(*vote.block_id(), entry_stake);
-                self.notarize_total = self.notarize_entry_total.values().sum();
+                let old_entry_stake = self
+                    .notarize_entry_total
+                    .insert(*vote.block_id(), entry_stake)
+                    .unwrap_or(0);
+                self.notarize_total = self
+                    .notarize_total
+                    .saturating_sub(old_entry_stake)
+                    .saturating_add(entry_stake);
                 self.top_notarized_stake = self.top_notarized_stake.max(entry_stake);
             }
             _ => return, // Not interested in other vote types
@@ -50,24 +55,25 @@ impl SlotStakeCounters {
         if self.my_first_vote.is_none() && is_my_own_vote {
             self.my_first_vote = Some(*vote);
         }
-        if self.my_first_vote.is_some() {
-            let slot = vote.slot();
-            // Check safe to notar
-            for (block_id, stake) in &self.notarize_entry_total {
-                if !self.safe_to_notar_sent.contains(block_id)
-                    && self.is_safe_to_notar(block_id, stake)
-                {
-                    events.push(VotorEvent::SafeToNotar((slot, *block_id)));
-                    stats.event_safe_to_notarize = stats.event_safe_to_notarize.saturating_add(1);
-                    self.safe_to_notar_sent.push(*block_id);
-                }
+        if self.my_first_vote.is_none() {
+            // We have not voted yet, no need to check safe to notarize or skip
+            return;
+        }
+        let slot = vote.slot();
+        // Check safe to notar
+        for (block_id, stake) in &self.notarize_entry_total {
+            if !self.safe_to_notar_sent.contains(block_id) && self.is_safe_to_notar(block_id, stake)
+            {
+                events.push(VotorEvent::SafeToNotar((slot, *block_id)));
+                stats.event_safe_to_notarize = stats.event_safe_to_notarize.saturating_add(1);
+                self.safe_to_notar_sent.push(*block_id);
             }
-            // Check safe to skip
-            if !self.safe_to_skip_sent && self.is_safe_to_skip() {
-                events.push(VotorEvent::SafeToSkip(slot));
-                self.safe_to_skip_sent = true;
-                stats.event_safe_to_skip = stats.event_safe_to_skip.saturating_add(1);
-            }
+        }
+        // Check safe to skip
+        if !self.safe_to_skip_sent && self.is_safe_to_skip() {
+            events.push(VotorEvent::SafeToSkip(slot));
+            self.safe_to_skip_sent = true;
+            stats.event_safe_to_skip = stats.event_safe_to_skip.saturating_add(1);
         }
     }
 
