@@ -22,10 +22,16 @@ pub(crate) struct SlotStakeCounters {
 }
 
 impl SlotStakeCounters {
+    pub fn new(total_stake: Stake) -> Self {
+        Self {
+            total_stake,
+            ..Default::default()
+        }
+    }
+
     pub fn add_vote(
         &mut self,
         vote: &Vote,
-        total_stake: Stake,
         entry_stake: Stake,
         is_my_own_vote: bool,
         events: &mut Vec<VotorEvent>,
@@ -43,7 +49,6 @@ impl SlotStakeCounters {
         }
         if self.my_first_vote.is_none() && is_my_own_vote {
             self.my_first_vote = Some(*vote);
-            self.total_stake = total_stake;
         }
         if self.my_first_vote.is_some() {
             let slot = vote.slot();
@@ -77,6 +82,12 @@ impl SlotStakeCounters {
         }
         let skip_ratio = self.skip_total as f64 / self.total_stake as f64;
         let notarized_ratio = *stake as f64 / self.total_stake as f64;
+        trace!(
+            "safe_to_notar {:?} {} {}",
+            block_id,
+            skip_ratio,
+            notarized_ratio,
+        );
         // Check if the block fits condition (i) 40% of stake holders voted notarize
         notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
             // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
@@ -89,9 +100,13 @@ impl SlotStakeCounters {
         // but not to skip s. Moreover:
         // skip(s) + Sum of all notarize - (max in notarize(b)) >= 40%
         if let Some(Vote::Notarize(_)) = self.my_first_vote.as_ref() {
-            error!(
-                "{} {} {}",
-                self.skip_total, self.notarize_total, self.top_notarized_stake
+            trace!(
+                "safe_to_skip {} {:?} {} {} {}",
+                self.my_first_vote.unwrap().slot(),
+                self.my_first_vote.unwrap().block_id(),
+                self.skip_total,
+                self.notarize_total,
+                self.top_notarized_stake
             );
             self.skip_total
                 .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake))
@@ -110,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_notar() {
-        let mut counters = SlotStakeCounters::default();
+        let mut counters = SlotStakeCounters::new(100);
 
         let mut events = vec![];
         let mut stats = CertificatePoolStats::default();
@@ -118,7 +133,6 @@ mod tests {
         // I voted for skip
         counters.add_vote(
             &Vote::new_skip_vote(slot),
-            100,
             10,
             true,
             &mut events,
@@ -130,7 +144,6 @@ mod tests {
         // 40% of stake holders voted notarize
         counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
-            100,
             40,
             false,
             &mut events,
@@ -146,7 +159,6 @@ mod tests {
         // Adding more notarizations does not trigger more events
         counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
-            100,
             20,
             false,
             &mut events,
@@ -156,7 +168,7 @@ mod tests {
         assert_eq!(stats.event_safe_to_notarize, 1);
 
         // Reset counters
-        counters = SlotStakeCounters::default();
+        counters = SlotStakeCounters::new(100);
         events.clear();
         stats = CertificatePoolStats::default();
 
@@ -164,7 +176,6 @@ mod tests {
         let hash_1 = Hash::new_unique();
         counters.add_vote(
             &Vote::new_notarization_vote(slot, hash_1),
-            100,
             1,
             true,
             &mut events,
@@ -177,7 +188,6 @@ mod tests {
         let hash_2 = Hash::new_unique();
         counters.add_vote(
             &Vote::new_notarization_vote(slot, hash_2),
-            100,
             25,
             false,
             &mut events,
@@ -189,7 +199,6 @@ mod tests {
         // 35% more of stake holders voted skip
         counters.add_vote(
             &Vote::new_skip_vote(slot),
-            100,
             35,
             false,
             &mut events,
@@ -204,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_skip() {
-        let mut counters = SlotStakeCounters::default();
+        let mut counters = SlotStakeCounters::new(100);
 
         let mut events = vec![];
         let mut stats = CertificatePoolStats::default();
@@ -212,7 +221,6 @@ mod tests {
         // I voted for notarize b
         counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
-            100,
             10,
             true,
             &mut events,
@@ -224,7 +232,6 @@ mod tests {
         // 40% of stake holders voted skip
         counters.add_vote(
             &Vote::new_skip_vote(slot),
-            100,
             40,
             false,
             &mut events,
@@ -238,7 +245,6 @@ mod tests {
         // Adding more skips does not trigger more events
         counters.add_vote(
             &Vote::new_skip_vote(slot),
-            100,
             20,
             false,
             &mut events,
@@ -248,7 +254,7 @@ mod tests {
         assert_eq!(stats.event_safe_to_skip, 1);
 
         // Reset counters
-        counters = SlotStakeCounters::default();
+        counters = SlotStakeCounters::new(100);
         events.clear();
         stats = CertificatePoolStats::default();
 
@@ -256,7 +262,6 @@ mod tests {
         let hash_1 = Hash::new_unique();
         counters.add_vote(
             &Vote::new_notarization_vote(slot, hash_1),
-            100,
             10,
             true,
             &mut events,
@@ -266,7 +271,6 @@ mod tests {
         let hash_2 = Hash::new_unique();
         counters.add_vote(
             &Vote::new_notarization_vote(slot, hash_2),
-            100,
             20,
             false,
             &mut events,
@@ -275,7 +279,6 @@ mod tests {
         // 30% of stake holders voted skip
         counters.add_vote(
             &Vote::new_skip_vote(slot),
-            100,
             30,
             false,
             &mut events,
@@ -289,7 +292,6 @@ mod tests {
         // Adding more notarization on b does not trigger more events
         counters.add_vote(
             &Vote::new_notarization_vote(slot, hash_1),
-            100,
             10,
             false,
             &mut events,

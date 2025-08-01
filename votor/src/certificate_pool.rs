@@ -487,10 +487,12 @@ impl CertificatePool {
                 return Ok(vec![]);
             }
             Some(entry_stake) => {
-                let fallback_vote_counters = self.slot_stake_counters_map.entry(slot).or_default();
+                let fallback_vote_counters = self
+                    .slot_stake_counters_map
+                    .entry(slot)
+                    .or_insert_with(|| SlotStakeCounters::new(total_stake));
                 fallback_vote_counters.add_vote(
                     vote,
-                    total_stake,
                     entry_stake,
                     my_vote_pubkey == &validator_vote_key,
                     events,
