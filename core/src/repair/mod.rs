@@ -16,4 +16,5 @@ pub mod request_response;
 pub mod result;
 pub mod serve_repair;
 pub mod serve_repair_service;
+pub mod shred_resolver_service;
 pub(crate) mod standard_repair_handler;
