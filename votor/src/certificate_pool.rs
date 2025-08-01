@@ -3,6 +3,7 @@ use {
         certificate_limits_and_vote_types,
         certificate_pool::{
             parent_ready_tracker::ParentReadyTracker,
+            slot_stake_counters::SlotStakeCounters,
             stats::CertificatePoolStats,
             vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
@@ -12,8 +13,6 @@ use {
         event::VotorEvent,
         vote_to_certificate_ids, Certificate, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
     },
     crossbeam_channel::Sender,
     solana_ledger::blockstore::Blockstore,
@@ -36,6 +35,7 @@ use {
 };
 
 pub mod parent_ready_tracker;
+mod slot_stake_counters;
 mod stats;
 mod vote_certificate_builder;
 mod vote_pool;
@@ -87,105 +87,6 @@ impl From<AlpenglowCommitmentError> for AddVoteError {
     }
 }
 
-#[derive(Debug, Default)]
-struct FallbackVoteCounters {
-    my_first_vote: Option<Vote>,
-    total_stake: Stake,
-    skip_total: Stake,
-    notarize_total: Stake,
-    notarize_entry_total: BTreeMap<Hash, Stake>,
-    top_notarized_stake: Stake,
-    safe_to_notar_sent: Vec<Hash>,
-    safe_to_skip_sent: bool,
-}
-
-impl FallbackVoteCounters {
-    pub fn add_vote(
-        &mut self,
-        vote: &Vote,
-        total_stake: Stake,
-        entry_stake: Stake,
-        is_my_own_vote: bool,
-        events: &mut Vec<VotorEvent>,
-    ) -> (usize, bool) {
-        match vote {
-            Vote::Skip(_) => self.skip_total = entry_stake,
-            Vote::Notarize(vote) => {
-                self.notarize_entry_total
-                    .insert(*vote.block_id(), entry_stake);
-                self.notarize_total = self.notarize_entry_total.values().sum();
-                self.top_notarized_stake = self.top_notarized_stake.max(entry_stake);
-            }
-            _ => return (0, false), // Not interested in other vote types
-        }
-        if self.my_first_vote.is_none() && is_my_own_vote {
-            self.my_first_vote = Some(*vote);
-            self.total_stake = total_stake;
-        }
-        if self.my_first_vote.is_some() {
-            let slot = vote.slot();
-            let old_safe_to_notar_sent = self.safe_to_notar_sent.len();
-            let mut new_safe_to_skip = false;
-            // Check safe to notar
-            for (block_id, stake) in &self.notarize_entry_total {
-                if !self.safe_to_notar_sent.contains(block_id)
-                    && self.is_safe_to_notar(block_id, stake)
-                {
-                    events.push(VotorEvent::SafeToNotar((slot, *block_id)));
-                    self.safe_to_notar_sent.push(*block_id);
-                }
-            }
-            // Check safe to skip
-            if !self.safe_to_skip_sent && self.is_safe_to_skip() {
-                events.push(VotorEvent::SafeToSkip(slot));
-                new_safe_to_skip = true;
-                self.safe_to_skip_sent = true;
-            }
-            (
-                self.safe_to_notar_sent
-                    .len()
-                    .saturating_sub(old_safe_to_notar_sent),
-                new_safe_to_skip,
-            )
-        } else {
-            (0, false) // No new safe to notar or skip
-        }
-    }
-
-    fn is_safe_to_notar(&self, block_id: &Hash, stake: &Stake) -> bool {
-        // White paper v1.1 page 22: The event is only issued if the node voted in slot s already,
-        // but not to notarize b. Moreover:
-        // notar(b) >= 40% or (skip(s) + notar(b) >= 60% and notar(b) >= 20%)
-        if let Some(Vote::Notarize(my_vote)) = self.my_first_vote.as_ref() {
-            if my_vote.block_id() == block_id {
-                return false; // I voted for the same block, no need to send NotarizeFallback
-            }
-        }
-        let skip_ratio = self.skip_total as f64 / self.total_stake as f64;
-        let notarized_ratio = *stake as f64 / self.total_stake as f64;
-        // Check if the block fits condition (i) 40% of stake holders voted notarize
-        notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
-            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-            || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
-                && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP)
-    }
-
-    fn is_safe_to_skip(&self) -> bool {
-        // White paper v1.1 page 22: The event is only issued if the node voted in slot s already,
-        // but not to skip s. Moreover:
-        // skip(s) + Sum of all notarize - (max in notarize(b)) >= 40%
-        if let Some(Vote::Notarize(_)) = self.my_first_vote.as_ref() {
-            self.skip_total
-                .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake))
-                as f64
-                / self.total_stake as f64
-                >= SAFE_TO_SKIP_THRESHOLD
-        } else {
-            false
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct CertificatePool {
     // Vote pools to do bean counting for votes.
@@ -214,8 +115,8 @@ pub struct CertificatePool {
     certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
     /// Stats for the certificate pool
     stats: CertificatePoolStats,
-    /// Fallback vote counters, used to calculate safe_to_notar and safe_to_skip
-    fallback_vote_counters_map: BTreeMap<Slot, FallbackVoteCounters>,
+    /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
+    slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
 }
 
 impl CertificatePool {
@@ -242,7 +143,7 @@ impl CertificatePool {
             certificate_sender,
             parent_ready_tracker,
             stats: CertificatePoolStats::new(),
-            fallback_vote_counters_map: BTreeMap::new(),
+            slot_stake_counters_map: BTreeMap::new(),
         };
 
         // Update the epoch_stakes_map and root
@@ -586,24 +487,15 @@ impl CertificatePool {
                 return Ok(vec![]);
             }
             Some(entry_stake) => {
-                let fallback_vote_counters =
-                    self.fallback_vote_counters_map.entry(slot).or_default();
-                let (new_safe_to_notar, new_safe_to_skip) = fallback_vote_counters.add_vote(
+                let fallback_vote_counters = self.slot_stake_counters_map.entry(slot).or_default();
+                fallback_vote_counters.add_vote(
                     vote,
                     total_stake,
                     entry_stake,
                     my_vote_pubkey == &validator_vote_key,
                     events,
+                    &mut self.stats,
                 );
-                if new_safe_to_notar > 0 {
-                    self.stats.event_safe_to_notarize = self
-                        .stats
-                        .event_safe_to_notarize
-                        .saturating_add(new_safe_to_notar as u32);
-                }
-                if new_safe_to_skip {
-                    self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
-                }
             }
         }
         self.stats.incr_ingested_vote_type(vote_type);
@@ -783,7 +675,7 @@ impl CertificatePool {
                 | Certificate::Skip(s) => *s >= self.root,
             });
         self.vote_pools = self.vote_pools.split_off(&(new_root, VoteType::Finalize));
-        self.fallback_vote_counters_map = self.fallback_vote_counters_map.split_off(&new_root);
+        self.slot_stake_counters_map = self.slot_stake_counters_map.split_off(&new_root);
         self.parent_ready_tracker.set_root(new_root);
         self.update_epoch_stakes_map(&bank);
     }
