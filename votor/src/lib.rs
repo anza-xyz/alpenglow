@@ -119,17 +119,10 @@ pub const DELTA: Duration = Duration::from_millis(200);
 /// As a conservative global constant we set this to 3 * DELTA
 pub const DELTA_TIMEOUT: Duration = DELTA.saturating_mul(3);
 
-/// The timeout in ms for the leader block index within the leader window
-#[inline]
-pub fn skip_timeout(leader_block_index: usize) -> Duration {
-    DELTA_TIMEOUT
-        .saturating_add(
-            BLOCKTIME
-                .saturating_mul(leader_block_index as u32)
-                .saturating_add(BLOCKTIME),
-        )
-        .saturating_add(DELTA)
-}
+/// Timeout for generating the skip event.
+pub const SKIP_TIMOUT: Duration = DELTA_TIMEOUT
+    .saturating_add(BLOCKTIME)
+    .saturating_add(DELTA);
 
 /// Block timeout, when we should publish the final shred for the leader block index
 /// within the leader window

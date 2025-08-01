@@ -4,7 +4,7 @@
 use {
     crate::{
         event::{VotorEvent, VotorEventSender},
-        skip_timeout, BLOCKTIME,
+        BLOCKTIME, SKIP_TIMOUT,
     },
     solana_ledger::leader_schedule_utils::{
         last_of_consecutive_leader_slots, remaining_slots_in_window,
@@ -90,7 +90,7 @@ impl SkipTimerManager {
         // or from genesis, we compute the exact length of this leader window:
         let remaining = remaining_slots_in_window(start_slot);
         // TODO: should we change the first fire as well?
-        let next_fire = Instant::now().checked_add(skip_timeout(0)).unwrap();
+        let next_fire = Instant::now().checked_add(SKIP_TIMOUT).unwrap();
 
         let timer = SkipTimer {
             id,
