@@ -12,6 +12,7 @@ edition = { workspace = true }
 [dependencies]
 bincode = { workspace = true }
 libsecp256k1 = { workspace = true }
+num-traits = { workspace = true }
 qualifier_attr = { workspace = true }
 scopeguard = { workspace = true }
 solana-account = { workspace = true }
@@ -22,7 +23,6 @@ solana-blake3-hasher = { workspace = true }
 solana-bls12-381 = { workspace = true }
 solana-bn254 = { workspace = true }
 solana-clock = { workspace = true }
-solana-compute-budget = { workspace = true }
 solana-cpi = { workspace = true }
 solana-curve-traits = { workspace = true }
 solana-curve25519 = { workspace = true }
@@ -38,7 +38,6 @@ solana-packet = { workspace = true }
 solana-poseidon = { workspace = true }
 solana-precompiles = { workspace = true }
 solana-program-entrypoint = { workspace = true }
-solana-program-memory = { workspace = true }
 solana-program-runtime = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-sbpf = { workspace = true }

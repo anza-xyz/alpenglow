@@ -1274,8 +1274,8 @@ fn assert_instruction_count() {
             ("noop++", 6),
             ("relative_call", 212),
             ("return_data", 1027),
-            ("sanity", 2394),
-            ("sanity++", 2294),
+            ("sanity", 2396),
+            ("sanity++", 2296),
             ("secp256k1_recover", 25483),
             ("sha", 1447),
             ("struct_pass", 108),
@@ -1285,7 +1285,7 @@ fn assert_instruction_count() {
     #[cfg(feature = "sbf_rust")]
     {
         programs.extend_from_slice(&[
-            ("solana_sbf_rust_128bit", 955),
+            ("solana_sbf_rust_128bit", 967),
             ("solana_sbf_rust_alloc", 4940),
             ("solana_sbf_rust_custom_heap", 286),
             ("solana_sbf_rust_dep_crate", 2),
@@ -1461,13 +1461,10 @@ fn test_program_sbf_invoke_stable_genesis_and_bank() {
     solana_logger::setup();
 
     let GenesisConfigInfo {
-        mut genesis_config,
+        genesis_config,
         mint_keypair,
         ..
     } = get_stable_genesis_config();
-    genesis_config
-        .accounts
-        .remove(&feature_set::disable_new_loader_v3_deployments::id());
     let bank = Bank::new_for_tests(&genesis_config);
     let bank = Arc::new(bank);
     let bank_client = BankClient::new_shared(bank.clone());

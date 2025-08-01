@@ -1,15 +1,22 @@
+mod account_map_entry;
 pub(crate) mod in_mem_accounts_index;
+mod roots_tracker;
+mod secondary;
+pub use secondary::{
+    AccountIndex, AccountSecondaryIndexes, AccountSecondaryIndexesIncludeExclude, IndexKey,
+};
 use {
     crate::{
         accounts_index_storage::{AccountsIndexStorage, Startup},
         accounts_partition::RentPayingAccountsByPartition,
         ancestors::Ancestors,
-        bucket_map_holder::{Age, AtomicAge, BucketMapHolder},
+        bucket_map_holder::Age,
         contains::Contains,
         pubkey_bins::PubkeyBinCalculator24,
         rolling_bit_field::RollingBitField,
         secondary_index::*,
     },
+    account_map_entry::{AccountMapEntry, AccountMapEntryInner, PreAllocatedAccountMapEntry},
     in_mem_accounts_index::{InMemAccountsIndex, InsertNewEntryResults, StartupStats},
     log::*,
     rand::{thread_rng, Rng},
@@ -17,6 +24,7 @@ use {
         iter::{IntoParallelIterator, ParallelIterator},
         ThreadPool,
     },
+    roots_tracker::RootsTracker,
     solana_account::ReadableAccount,
     solana_clock::{BankId, Slot},
     solana_measure::measure::Measure,
@@ -67,7 +75,6 @@ pub type ScanResult<T> = Result<T, ScanError>;
 pub type SlotList<T> = Vec<(Slot, T)>;
 pub type SlotSlice<'s, T> = &'s [(Slot, T)];
 pub type RefCount = u64;
-pub type AccountMap<T, U> = Arc<InMemAccountsIndex<T, U>>;
 
 #[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct GenerateIndexResult<T: IndexValue> {
@@ -168,8 +175,6 @@ pub enum ScanOrder {
     Sorted,
 }
 
-pub(crate) type AccountMapEntry<T> = Arc<AccountMapEntryInner<T>>;
-
 pub trait IsCached {
     fn is_cached(&self) -> bool;
 }
@@ -192,26 +197,6 @@ pub enum ScanError {
 enum ScanTypes<R: RangeBounds<Pubkey>> {
     Unindexed(Option<R>),
     Indexed(IndexKey),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum IndexKey {
-    ProgramId(Pubkey),
-    SplTokenMint(Pubkey),
-    SplTokenOwner(Pubkey),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AccountIndex {
-    ProgramId,
-    SplTokenMint,
-    SplTokenOwner,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct AccountSecondaryIndexesIncludeExclude {
-    pub exclude: bool,
-    pub keys: HashSet<Pubkey>,
 }
 
 /// specification of how much memory in-mem portion of account index can use
@@ -241,237 +226,6 @@ pub fn default_num_flush_threads() -> NonZeroUsize {
     NonZeroUsize::new(std::cmp::max(2, num_cpus::get() / 4)).expect("non-zero system threads")
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct AccountSecondaryIndexes {
-    pub keys: Option<AccountSecondaryIndexesIncludeExclude>,
-    pub indexes: HashSet<AccountIndex>,
-}
-
-impl AccountSecondaryIndexes {
-    pub fn is_empty(&self) -> bool {
-        self.indexes.is_empty()
-    }
-    pub fn contains(&self, index: &AccountIndex) -> bool {
-        self.indexes.contains(index)
-    }
-    pub fn include_key(&self, key: &Pubkey) -> bool {
-        match &self.keys {
-            Some(options) => options.exclude ^ options.keys.contains(key),
-            None => true, // include all keys
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-/// data per entry in in-mem accounts index
-/// used to keep track of consistency with disk index
-pub struct AccountMapEntryMeta {
-    /// true if entry in in-mem idx has changes and needs to be written to disk
-    pub dirty: AtomicBool,
-    /// 'age' at which this entry should be purged from the cache (implements lru)
-    pub age: AtomicAge,
-}
-
-impl AccountMapEntryMeta {
-    pub fn new_dirty<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>>(
-        storage: &Arc<BucketMapHolder<T, U>>,
-        is_cached: bool,
-    ) -> Self {
-        AccountMapEntryMeta {
-            dirty: AtomicBool::new(true),
-            age: AtomicAge::new(storage.future_age_to_flush(is_cached)),
-        }
-    }
-    pub fn new_clean<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>>(
-        storage: &Arc<BucketMapHolder<T, U>>,
-    ) -> Self {
-        AccountMapEntryMeta {
-            dirty: AtomicBool::new(false),
-            age: AtomicAge::new(storage.future_age_to_flush(false)),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-/// one entry in the in-mem accounts index
-/// Represents the value for an account key in the in-memory accounts index
-pub struct AccountMapEntryInner<T> {
-    /// number of alive slots that contain >= 1 instances of account data for this pubkey
-    /// where alive represents a slot that has not yet been removed by clean via AccountsDB::clean_stored_dead_slots() for containing no up to date account information
-    ref_count: AtomicU64,
-    /// list of slots in which this pubkey was updated
-    /// Note that 'clean' removes outdated entries (ie. older roots) from this slot_list
-    /// purge_slot() also removes non-rooted slots from this list
-    pub slot_list: RwLock<SlotList<T>>,
-    /// synchronization metadata for in-memory state since last flush to disk accounts index
-    pub meta: AccountMapEntryMeta,
-}
-
-impl<T: IndexValue> AccountMapEntryInner<T> {
-    pub fn new(slot_list: SlotList<T>, ref_count: RefCount, meta: AccountMapEntryMeta) -> Self {
-        Self {
-            slot_list: RwLock::new(slot_list),
-            ref_count: AtomicU64::new(ref_count),
-            meta,
-        }
-    }
-    pub fn ref_count(&self) -> RefCount {
-        self.ref_count.load(Ordering::Acquire)
-    }
-
-    pub fn addref(&self) {
-        self.ref_count.fetch_add(1, Ordering::Release);
-        self.set_dirty(true);
-    }
-
-    /// decrement the ref count
-    /// return the refcount prior to subtracting 1
-    /// 0 indicates an under refcounting error in the system.
-    pub fn unref(&self) -> RefCount {
-        let previous = self.ref_count.fetch_sub(1, Ordering::Release);
-        self.set_dirty(true);
-        if previous == 0 {
-            inc_new_counter_info!("accounts_index-deref_from_0", 1);
-        }
-        previous
-    }
-
-    pub fn dirty(&self) -> bool {
-        self.meta.dirty.load(Ordering::Acquire)
-    }
-
-    pub fn set_dirty(&self, value: bool) {
-        self.meta.dirty.store(value, Ordering::Release)
-    }
-
-    /// set dirty to false, return true if was dirty
-    pub fn clear_dirty(&self) -> bool {
-        self.meta
-            .dirty
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-    }
-
-    pub fn age(&self) -> Age {
-        self.meta.age.load(Ordering::Acquire)
-    }
-
-    pub fn set_age(&self, value: Age) {
-        self.meta.age.store(value, Ordering::Release)
-    }
-
-    /// set age to 'next_age' if 'self.age' is 'expected_age'
-    pub fn try_exchange_age(&self, next_age: Age, expected_age: Age) {
-        let _ = self.meta.age.compare_exchange(
-            expected_age,
-            next_age,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        );
-    }
-}
-
-/// can be used to pre-allocate structures for insertion into accounts index outside of lock
-pub enum PreAllocatedAccountMapEntry<T: IndexValue> {
-    Entry(AccountMapEntry<T>),
-    Raw((Slot, T)),
-}
-
-impl<T: IndexValue> ZeroLamport for PreAllocatedAccountMapEntry<T> {
-    fn is_zero_lamport(&self) -> bool {
-        match self {
-            PreAllocatedAccountMapEntry::Entry(entry) => {
-                entry.slot_list.read().unwrap()[0].1.is_zero_lamport()
-            }
-            PreAllocatedAccountMapEntry::Raw(raw) => raw.1.is_zero_lamport(),
-        }
-    }
-}
-
-impl<T: IndexValue> From<PreAllocatedAccountMapEntry<T>> for (Slot, T) {
-    fn from(source: PreAllocatedAccountMapEntry<T>) -> (Slot, T) {
-        match source {
-            PreAllocatedAccountMapEntry::Entry(entry) => entry.slot_list.read().unwrap()[0],
-            PreAllocatedAccountMapEntry::Raw(raw) => raw,
-        }
-    }
-}
-
-impl<T: IndexValue> PreAllocatedAccountMapEntry<T> {
-    /// create an entry that is equivalent to this process:
-    /// 1. new empty (refcount=0, slot_list={})
-    /// 2. update(slot, account_info)
-    ///
-    /// This code is called when the first entry [ie. (slot,account_info)] for a pubkey is inserted into the index.
-    pub fn new<U: DiskIndexValue + From<T> + Into<T>>(
-        slot: Slot,
-        account_info: T,
-        storage: &Arc<BucketMapHolder<T, U>>,
-        store_raw: bool,
-    ) -> PreAllocatedAccountMapEntry<T> {
-        if store_raw {
-            Self::Raw((slot, account_info))
-        } else {
-            Self::Entry(Self::allocate(slot, account_info, storage))
-        }
-    }
-
-    fn allocate<U: DiskIndexValue + From<T> + Into<T>>(
-        slot: Slot,
-        account_info: T,
-        storage: &Arc<BucketMapHolder<T, U>>,
-    ) -> AccountMapEntry<T> {
-        let is_cached = account_info.is_cached();
-        let ref_count = u64::from(!is_cached);
-        let meta = AccountMapEntryMeta::new_dirty(storage, is_cached);
-        Arc::new(AccountMapEntryInner::new(
-            vec![(slot, account_info)],
-            ref_count,
-            meta,
-        ))
-    }
-
-    pub fn into_account_map_entry<U: DiskIndexValue + From<T> + Into<T>>(
-        self,
-        storage: &Arc<BucketMapHolder<T, U>>,
-    ) -> AccountMapEntry<T> {
-        match self {
-            Self::Entry(entry) => entry,
-            Self::Raw((slot, account_info)) => Self::allocate(slot, account_info, storage),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct RootsTracker {
-    /// Current roots where appendvecs or write cache has account data.
-    /// Constructed during load from snapshots.
-    /// Updated every time we add a new root or clean/shrink an append vec into irrelevancy.
-    /// Range is approximately the last N slots where N is # slots per epoch.
-    pub alive_roots: RollingBitField,
-}
-
-impl Default for RootsTracker {
-    fn default() -> Self {
-        // we expect to keep a rolling set of 400k slots around at a time
-        // 4M gives us plenty of extra(?!) room to handle a width 10x what we should need.
-        // cost is 4M bits of memory, which is .5MB
-        RootsTracker::new(4194304)
-    }
-}
-
-impl RootsTracker {
-    pub fn new(max_width: u64) -> Self {
-        Self {
-            alive_roots: RollingBitField::new(max_width),
-        }
-    }
-
-    pub fn min_alive_root(&self) -> Option<Slot> {
-        self.alive_roots.min()
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct AccountsIndexRootsStats {
     pub roots_len: Option<usize>,
@@ -484,7 +238,7 @@ pub struct AccountsIndexRootsStats {
 }
 
 pub struct AccountsIndexIterator<'a, T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> {
-    account_maps: &'a [AccountMap<T, U>],
+    account_maps: &'a [Arc<InMemAccountsIndex<T, U>>],
     bin_calculator: &'a PubkeyBinCalculator24,
     start_bound: Bound<Pubkey>,
     end_bound: Bound<Pubkey>,
@@ -494,7 +248,7 @@ pub struct AccountsIndexIterator<'a, T: IndexValue, U: DiskIndexValue + From<T> 
 
 impl<'a, T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndexIterator<'a, T, U> {
     fn range<R>(
-        map: &AccountMap<T, U>,
+        map: &InMemAccountsIndex<T, U>,
         range: R,
         returns_items: AccountsIndexIteratorReturnsItems,
     ) -> Vec<(Pubkey, AccountMapEntry<T>)>
@@ -644,21 +398,6 @@ pub trait ZeroLamport {
     fn is_zero_lamport(&self) -> bool;
 }
 
-#[derive(Debug, Default)]
-pub struct ScanSlotTracker {
-    is_removed: bool,
-}
-
-impl ScanSlotTracker {
-    pub fn is_removed(&self) -> bool {
-        self.is_removed
-    }
-
-    pub fn mark_removed(&mut self) {
-        self.is_removed = true;
-    }
-}
-
 #[derive(Copy, Clone)]
 pub enum AccountsIndexScanResult {
     /// if the entry is not in the in-memory index, do not add it unless the entry becomes dirty
@@ -677,7 +416,7 @@ pub enum AccountsIndexScanResult {
 /// T: account info type to interact in in-memory items
 /// U: account info type to be persisted to disk
 pub struct AccountsIndex<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> {
-    pub account_maps: Vec<AccountMap<T, U>>,
+    pub account_maps: Vec<Arc<InMemAccountsIndex<T, U>>>,
     pub bin_calculator: PubkeyBinCalculator24,
     program_id_index: SecondaryIndex<RwLockSecondaryIndexEntry>,
     spl_token_mint_index: SecondaryIndex<RwLockSecondaryIndexEntry>,
@@ -755,11 +494,12 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn allocate_accounts_index(
         config: Option<AccountsIndexConfig>,
         exit: Arc<AtomicBool>,
     ) -> (
-        Vec<AccountMap<T, U>>,
+        Vec<Arc<InMemAccountsIndex<T, U>>>,
         PubkeyBinCalculator24,
         AccountsIndexStorage<T, U>,
     ) {
@@ -1683,7 +1423,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
         );
     }
 
-    pub(crate) fn get_bin(&self, pubkey: &Pubkey) -> &AccountMap<T, U> {
+    pub(crate) fn get_bin(&self, pubkey: &Pubkey) -> &InMemAccountsIndex<T, U> {
         &self.account_maps[self.bin_calculator.bin_from_pubkey(pubkey)]
     }
 
@@ -2106,6 +1846,8 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
 pub mod tests {
     use {
         super::*,
+        crate::bucket_map_holder::{AtomicAge, BucketMapHolder},
+        account_map_entry::AccountMapEntryMeta,
         solana_account::{AccountSharedData, WritableAccount},
         solana_inline_spl::token::SPL_TOKEN_ACCOUNT_OWNER_OFFSET,
         solana_pubkey::PUBKEY_BYTES,
@@ -2531,7 +2273,7 @@ pub mod tests {
 
         for (i, key) in [key0, key1].iter().enumerate() {
             let entry = index.get_cloned(key).unwrap();
-            assert_eq!(entry.ref_count.load(Ordering::Relaxed), 1);
+            assert_eq!(entry.ref_count(), 1);
             assert_eq!(
                 entry.slot_list.read().unwrap().as_slice(),
                 &[(slot0, account_infos[i])],

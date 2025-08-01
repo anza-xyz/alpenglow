@@ -441,9 +441,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.87"
+version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d556ec1359574147ec0c4fc5eb525f3f23263a592b1a9c07e0a75b427de55c97"
+checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2112,7 +2112,7 @@ dependencies = [
  "indexmap 2.8.0",
  "slab",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
  "tracing",
 ]
 
@@ -2845,7 +2845,7 @@ dependencies = [
  "solana-version",
  "spl-token-2022 7.0.0",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
 ]
 
 [[package]]
@@ -3130,6 +3130,12 @@ name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db9c683daf087dc577b7506e9695b3d556a9f3849903fa28186283afd6809e9"
 
 [[package]]
 name = "litemap"
@@ -4167,9 +4173,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.39"
+version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1f1914ce909e1658d9907913b4b91947430c7d9be598b15a1912935b8c04801"
+checksum = "1885c039570dc00dcb4ff087a89e185fd56bae234ddc7f056a945bf36467248d"
 dependencies = [
  "proc-macro2",
 ]
@@ -4413,9 +4419,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.12"
+version = "0.12.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43e734407157c3c2034e0258f5e4473ddb361b1e85f95a66690d67264d7cd1da"
+checksum = "989e327e510263980e231de548a33e63d34962d29ae61b467389a1a09627a254"
 dependencies = [
  "async-compression",
  "base64 0.22.1",
@@ -4446,7 +4452,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-rustls 0.26.2",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
  "tower 0.5.2",
  "tower-service",
  "url 2.5.4",
@@ -4466,7 +4472,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "http 1.2.0",
- "reqwest 0.12.12",
+ "reqwest 0.12.14",
  "serde",
  "thiserror 1.0.69",
  "tower-service",
@@ -4571,7 +4577,20 @@ dependencies = [
  "bitflags 2.9.0",
  "errno",
  "libc",
- "linux-raw-sys",
+ "linux-raw-sys 0.4.15",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7178faa4b75a30e269c71e61c353ce2748cf3d76f0c44c393f4e60abf49b825"
+dependencies = [
+ "bitflags 2.9.0",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.9.2",
  "windows-sys 0.59.0",
 ]
 
@@ -4788,9 +4807,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.218"
+version = "1.0.219"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8dfc9d19bdbf6d17e22319da49161d5d0108e4188e8b680aef6299eed22df60"
+checksum = "5f0e2c6ed6606019b4e29e69dbaba95b11854410e5347d525002456dbbb786b6"
 dependencies = [
  "serde_derive",
 ]
@@ -4815,9 +4834,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.218"
+version = "1.0.219"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09503e191f4e797cb8aac08e9a4a4695c5edf6a2e70e376d961ddd5c969f82b"
+checksum = "5b0276cf7f2c73365f7157c8123c21cd9a50fbbd844757af28ca1f5925fc2a00"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5427,6 +5446,7 @@ version = "2.3.0"
 dependencies = [
  "bincode",
  "libsecp256k1",
+ "num-traits",
  "qualifier_attr",
  "scopeguard",
  "solana-account",
@@ -5437,7 +5457,6 @@ dependencies = [
  "solana-bls12-381",
  "solana-bn254",
  "solana-clock",
- "solana-compute-budget",
  "solana-cpi",
  "solana-curve-traits",
  "solana-curve25519",
@@ -5453,7 +5472,6 @@ dependencies = [
  "solana-poseidon",
  "solana-precompiles",
  "solana-program-entrypoint",
- "solana-program-memory",
  "solana-program-runtime",
  "solana-pubkey",
  "solana-sbpf",
@@ -5726,7 +5744,7 @@ name = "solana-compute-budget"
 version = "2.3.0"
 dependencies = [
  "solana-fee-structure",
- "solana-program-entrypoint",
+ "solana-program-runtime",
 ]
 
 [[package]]
@@ -6586,7 +6604,6 @@ dependencies = [
  "solana-account",
  "solana-bincode",
  "solana-bpf-loader-program",
- "solana-compute-budget",
  "solana-instruction",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
@@ -6665,7 +6682,7 @@ dependencies = [
  "gethostname",
  "lazy_static",
  "log",
- "reqwest 0.12.12",
+ "reqwest 0.12.14",
  "solana-clock",
  "solana-cluster-type",
  "solana-sha256-hasher",
@@ -7028,7 +7045,6 @@ dependencies = [
  "serde",
  "solana-account",
  "solana-clock",
- "solana-compute-budget",
  "solana-epoch-rewards",
  "solana-epoch-schedule",
  "solana-feature-set",
@@ -7329,7 +7345,7 @@ dependencies = [
  "stream-cancel",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
 ]
 
 [[package]]
@@ -7342,7 +7358,7 @@ dependencies = [
  "bs58",
  "indicatif",
  "log",
- "reqwest 0.12.12",
+ "reqwest 0.12.14",
  "reqwest-middleware",
  "semver",
  "serde",
@@ -7373,27 +7389,18 @@ name = "solana-rpc-client-api"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
- "bs58",
  "jsonrpc-core",
- "reqwest 0.12.12",
+ "reqwest 0.12.14",
  "reqwest-middleware",
- "semver",
  "serde",
  "serde_derive",
  "serde_json",
- "solana-account",
  "solana-account-decoder-client-types",
  "solana-clock",
- "solana-commitment-config",
- "solana-fee-calculator",
- "solana-inflation",
- "solana-inline-spl",
- "solana-pubkey",
+ "solana-rpc-client-types",
  "solana-signer",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
- "solana-version",
  "thiserror 2.0.12",
 ]
 
@@ -7409,6 +7416,30 @@ dependencies = [
  "solana-pubkey",
  "solana-rpc-client",
  "solana-sdk-ids",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "solana-rpc-client-types"
+version = "2.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "bs58",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "solana-account",
+ "solana-account-decoder-client-types",
+ "solana-clock",
+ "solana-commitment-config",
+ "solana-fee-calculator",
+ "solana-inflation",
+ "solana-inline-spl",
+ "solana-pubkey",
+ "solana-transaction-error",
+ "solana-transaction-status-client-types",
+ "solana-version",
  "thiserror 2.0.12",
 ]
 
@@ -7724,7 +7755,7 @@ dependencies = [
  "solana-sdk",
  "solana-tpu-client-next",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
 ]
 
 [[package]]
@@ -8003,7 +8034,7 @@ dependencies = [
  "solana-transaction-metrics-tracker",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
  "x509-parser",
 ]
 
@@ -8020,7 +8051,6 @@ dependencies = [
  "solana-account",
  "solana-bpf-loader-program",
  "solana-clock",
- "solana-compute-budget",
  "solana-feature-set",
  "solana-fee-structure",
  "solana-hash",
@@ -8327,7 +8357,7 @@ dependencies = [
  "solana-tpu-client",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
 ]
 
 [[package]]
@@ -9466,15 +9496,14 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.17.1"
+version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e5a0acb1f3f55f65cc4a866c361b2fb2a0ff6366785ae6fbb5f85df07ba230"
+checksum = "488960f40a3fd53d72c2a29a58722561dee8afdd175bd88e3db4677d7b2ba600"
 dependencies = [
- "cfg-if 1.0.0",
  "fastrand",
  "getrandom 0.3.1",
  "once_cell",
- "rustix",
+ "rustix 1.0.2",
  "windows-sys 0.59.0",
 ]
 
@@ -9764,9 +9793,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.13"
+version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7fcaa8d55a2bdd6b83ace262b016eca0d79ee02818c5c1bcdf0305114081078"
+checksum = "6b9590b93e6fcc1739458317cccd391ad3955e2bde8913edf6f95f9e65a8f034"
 dependencies = [
  "bytes",
  "futures-core",
@@ -9877,7 +9906,7 @@ dependencies = [
  "rand 0.8.5",
  "slab",
  "tokio",
- "tokio-util 0.7.13",
+ "tokio-util 0.7.14",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -10385,7 +10414,7 @@ dependencies = [
  "either",
  "home",
  "once_cell",
- "rustix",
+ "rustix 0.38.44",
 ]
 
 [[package]]
@@ -10448,32 +10477,31 @@ checksum = "6dccfd733ce2b1753b03b6d3c65edf020262ea35e20ccdf3e288043e6dd620e3"
 
 [[package]]
 name = "windows-registry"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e400001bb720a623c1c69032f8e3e4cf09984deec740f007dd2b03ec864804b0"
+checksum = "4286ad90ddb45071efd1a66dfa43eb02dd0dfbae1545ad6cc3c51cf34d7e8ba3"
 dependencies = [
  "windows-result",
  "windows-strings",
- "windows-targets 0.52.6",
+ "windows-targets 0.53.0",
 ]
 
 [[package]]
 name = "windows-result"
-version = "0.2.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d1043d8214f791817bab27572aaa8af63732e11bf84aa21a45a78d6c317ae0e"
+checksum = "06374efe858fab7e4f881500e6e86ec8bc28f9462c47e5a9941a0142ad86b189"
 dependencies = [
- "windows-targets 0.52.6",
+ "windows-link",
 ]
 
 [[package]]
 name = "windows-strings"
-version = "0.1.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd9b125c486025df0eabcb585e62173c6c9eddcec5d117d3b6e8c30e2ee4d10"
+checksum = "87fa48cc5d406560701792be122a10132491cff9d0aeb23583cc2dcafc847319"
 dependencies = [
- "windows-result",
- "windows-targets 0.52.6",
+ "windows-link",
 ]
 
 [[package]]
@@ -10527,11 +10555,27 @@ dependencies = [
  "windows_aarch64_gnullvm 0.52.6",
  "windows_aarch64_msvc 0.52.6",
  "windows_i686_gnu 0.52.6",
- "windows_i686_gnullvm",
+ "windows_i686_gnullvm 0.52.6",
  "windows_i686_msvc 0.52.6",
  "windows_x86_64_gnu 0.52.6",
  "windows_x86_64_gnullvm 0.52.6",
  "windows_x86_64_msvc 0.52.6",
+]
+
+[[package]]
+name = "windows-targets"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1e4c7e8ceaaf9cb7d7507c974735728ab453b67ef8f18febdd7c11fe59dca8b"
+dependencies = [
+ "windows_aarch64_gnullvm 0.53.0",
+ "windows_aarch64_msvc 0.53.0",
+ "windows_i686_gnu 0.53.0",
+ "windows_i686_gnullvm 0.53.0",
+ "windows_i686_msvc 0.53.0",
+ "windows_x86_64_gnu 0.53.0",
+ "windows_x86_64_gnullvm 0.53.0",
+ "windows_x86_64_msvc 0.53.0",
 ]
 
 [[package]]
@@ -10547,6 +10591,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
 
 [[package]]
+name = "windows_aarch64_gnullvm"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86b8d5f90ddd19cb4a147a5fa63ca848db3df085e25fee3cc10b39b6eebae764"
+
+[[package]]
 name = "windows_aarch64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10557,6 +10607,12 @@ name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
+
+[[package]]
+name = "windows_aarch64_msvc"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7651a1f62a11b8cbd5e0d42526e55f2c99886c77e007179efff86c2b137e66c"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -10571,10 +10627,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
 
 [[package]]
+name = "windows_i686_gnu"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1dc67659d35f387f5f6c479dc4e28f1d4bb90ddd1a5d3da2e5d97b42d6272c3"
+
+[[package]]
 name = "windows_i686_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
+
+[[package]]
+name = "windows_i686_gnullvm"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce6ccbdedbf6d6354471319e781c0dfef054c81fbc7cf83f338a4296c0cae11"
 
 [[package]]
 name = "windows_i686_msvc"
@@ -10589,6 +10657,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
 
 [[package]]
+name = "windows_i686_msvc"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "581fee95406bb13382d2f65cd4a908ca7b1e4c2f1917f143ba16efe98a589b5d"
+
+[[package]]
 name = "windows_x86_64_gnu"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10599,6 +10673,12 @@ name = "windows_x86_64_gnu"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e55b5ac9ea33f2fc1716d1742db15574fd6fc8dadc51caab1c16a3d3b4190ba"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
@@ -10613,6 +10693,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
 
 [[package]]
+name = "windows_x86_64_gnullvm"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a6e035dd0599267ce1ee132e51c27dd29437f63325753051e71dd9e42406c57"
+
+[[package]]
 name = "windows_x86_64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10623,6 +10709,12 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
@@ -10698,8 +10790,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e105d177a3871454f754b33bb0ee637ecaaac997446375fd3e5d43a2ed00c909"
 dependencies = [
  "libc",
- "linux-raw-sys",
- "rustix",
+ "linux-raw-sys 0.4.15",
+ "rustix 0.38.44",
 ]
 
 [[package]]

@@ -1437,7 +1437,7 @@ impl Bank {
             .prepare_program_cache_for_upcoming_feature_set(
                 &new,
                 &new.compute_active_feature_set(true).0,
-                &new.compute_budget.unwrap_or_default(),
+                &new.compute_budget.unwrap_or_default().to_budget(),
                 slot_index,
                 slots_in_epoch,
             ));
@@ -3235,7 +3235,6 @@ impl Bank {
             TransactionProcessingConfig {
                 account_overrides: Some(&account_overrides),
                 check_program_modification_slot: self.check_program_modification_slot,
-                compute_budget: self.compute_budget(),
                 log_messages_bytes_limit: None,
                 limit_to_load_programs: true,
                 recording_config: ExecutionRecordingConfig {
@@ -4582,7 +4581,6 @@ impl Bank {
             TransactionProcessingConfig {
                 account_overrides: None,
                 check_program_modification_slot: self.check_program_modification_slot,
-                compute_budget: self.compute_budget(),
                 log_messages_bytes_limit,
                 limit_to_load_programs: false,
                 recording_config,
@@ -4834,6 +4832,11 @@ impl Bank {
         additional_builtins: Option<&[BuiltinPrototype]>,
         debug_do_not_add_builtins: bool,
     ) {
+        if let Some(compute_budget) = self.compute_budget {
+            self.transaction_processor
+                .set_execution_cost(compute_budget.to_cost());
+        }
+
         self.rewards_pool_pubkeys =
             Arc::new(genesis_config.rewards_pools.keys().cloned().collect());
 
@@ -4902,14 +4905,14 @@ impl Bank {
                 Some(Arc::new(
                     create_program_runtime_environment_v1(
                         &self.feature_set,
-                        &self.compute_budget().unwrap_or_default(),
+                        &self.compute_budget().unwrap_or_default().to_budget(),
                         false, /* deployment */
                         false, /* debugging_features */
                     )
                     .unwrap(),
                 )),
                 Some(Arc::new(create_program_runtime_environment_v2(
-                    &self.compute_budget().unwrap_or_default(),
+                    &self.compute_budget().unwrap_or_default().to_budget(),
                     false, /* debugging_features */
                 ))),
             );
@@ -6917,6 +6920,9 @@ impl TransactionProcessingCallback for Bank {
             .unwrap_or(0)
     }
 
+    // Overrides default TransactionProcessingCallback::calculate_fee() to calculate actual transaction fee;
+    // Checking for `zero_fees_for_test` is done at callsite (eg. transaction_processor) where blockhash_queue's
+    // lamports_per_signature is checked ` == 0`.
     fn calculate_fee(
         &self,
         message: &impl SVMMessage,

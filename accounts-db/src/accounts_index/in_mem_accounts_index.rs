@@ -1,11 +1,15 @@
 use {
     crate::{
         accounts_index::{
-            AccountMapEntry, AccountMapEntryInner, AccountMapEntryMeta, DiskIndexValue, IndexValue,
-            PreAllocatedAccountMapEntry, RefCount, SlotList, UpsertReclaim, ZeroLamport,
+            account_map_entry::{
+                AccountMapEntry, AccountMapEntryInner, AccountMapEntryMeta,
+                PreAllocatedAccountMapEntry,
+            },
+            DiskIndexValue, IndexValue, RefCount, SlotList, UpsertReclaim, ZeroLamport,
         },
         bucket_map_holder::{Age, AtomicAge, BucketMapHolder},
         bucket_map_holder_stats::BucketMapHolderStats,
+        pubkey_bins::PubkeyBinCalculator24,
         waitable_condvar::WaitableCondvar,
     },
     rand::{thread_rng, Rng},
@@ -23,10 +27,6 @@ use {
         },
     },
 };
-type K = Pubkey;
-type CacheRangesHeld = RwLock<Vec<RangeInclusive<Pubkey>>>;
-
-type InMemMap<T> = HashMap<Pubkey, AccountMapEntry<T>, ahash::RandomState>;
 
 #[derive(Debug, Default)]
 pub struct StartupStats {
@@ -93,14 +93,16 @@ pub struct InMemAccountsIndex<T: IndexValue, U: DiskIndexValue + From<T> + Into<
     last_age_flushed: AtomicAge,
 
     // backing store
-    map_internal: RwLock<InMemMap<T>>,
+    map_internal: RwLock<HashMap<Pubkey, AccountMapEntry<T>, ahash::RandomState>>,
     storage: Arc<BucketMapHolder<T, U>>,
     bin: usize,
+    lowest_pubkey: Pubkey,
+    highest_pubkey: Pubkey,
 
     bucket: Option<Arc<BucketApi<(Slot, U)>>>,
 
     // pubkey ranges that this bin must hold in the cache while the range is present in this vec
-    pub cache_ranges_held: CacheRangesHeld,
+    pub cache_ranges_held: RwLock<Vec<RangeInclusive<Pubkey>>>,
     // incremented each time stop_evictions is changed
     stop_evictions_changes: AtomicU64,
     // true while ranges are being manipulated. Used to keep an async flush from removing things while a range is being held.
@@ -173,16 +175,21 @@ struct FlushScanResult<T> {
 impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T, U> {
     pub fn new(storage: &Arc<BucketMapHolder<T, U>>, bin: usize) -> Self {
         let num_ages_to_distribute_flushes = Age::MAX - storage.ages_to_stay_in_cache;
+        let bin_calc = PubkeyBinCalculator24::new(storage.bins);
+        let lowest_pubkey = bin_calc.lowest_pubkey_from_bin(bin);
+        let highest_pubkey = bin_calc.highest_pubkey_from_bin(bin);
         Self {
             map_internal: RwLock::default(),
             storage: Arc::clone(storage),
             bin,
+            lowest_pubkey,
+            highest_pubkey,
             bucket: storage
                 .disk
                 .as_ref()
                 .map(|disk| disk.get_bucket_from_index(bin))
                 .cloned(),
-            cache_ranges_held: CacheRangesHeld::default(),
+            cache_ranges_held: RwLock::new(Vec::default()),
             stop_evictions_changes: AtomicU64::default(),
             stop_evictions: AtomicU64::default(),
             flushing_active: AtomicBool::default(),
@@ -227,20 +234,46 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
         }
     }
 
-    pub fn items<R>(&self, range: &R) -> Vec<(K, AccountMapEntry<T>)>
+    pub fn items<R>(&self, range: &R) -> Vec<(Pubkey, AccountMapEntry<T>)>
     where
         R: RangeBounds<Pubkey> + std::fmt::Debug,
     {
+        let start = match range.start_bound() {
+            Bound::Included(bound) | Bound::Excluded(bound) => bound,
+            Bound::Unbounded => &Pubkey::from([0; 32]),
+        };
+
+        let end = match range.end_bound() {
+            Bound::Included(bound) | Bound::Excluded(bound) => bound,
+            Bound::Unbounded => &Pubkey::from([0xff; 32]),
+        };
+
+        if start > &self.highest_pubkey || end < &self.lowest_pubkey {
+            // range does not contain any of the keys in this bin. No need to
+            // load and scan the map.
+            // Example:
+            //    |-------------------|  |-------------------|  |-------------------|
+            //       start          end  low               high  start              end
+            return vec![];
+        }
+
         let m = Measure::start("items");
+
+        // For simplicity, we check the range for every pubkey in the map. This
+        // can be further optimized for case, such as the range contains lowest
+        // and highest pubkey for this bin. In such case, we can return all
+        // items in the map without range check on item's pubkey. Since the
+        // check is cheap when compared with the cost of reading from disk, we
+        // are not optimizing it for now.
         self.hold_range_in_memory(range, true);
-        let map = self.map_internal.read().unwrap();
-        let mut result = Vec::with_capacity(map.len());
-        map.iter().for_each(|(k, v)| {
-            if range.contains(k) {
-                result.push((*k, Arc::clone(v)));
-            }
-        });
-        drop(map);
+        let result = self
+            .map_internal
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|&(k, _v)| range.contains(k))
+            .map(|(k, v)| (*k, Arc::clone(v)))
+            .collect();
         self.hold_range_in_memory(range, false);
         Self::update_stat(&self.stats().items, 1);
         Self::update_time_stat(&self.stats().items_us, m);
@@ -289,7 +322,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
     /// callback is called whether pubkey is found or not
     pub(super) fn get_only_in_mem<RT>(
         &self,
-        pubkey: &K,
+        pubkey: &Pubkey,
         update_age: bool,
         callback: impl for<'a> FnOnce(Option<&'a AccountMapEntry<T>>) -> RT,
     ) -> RT {
@@ -334,7 +367,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
     /// call 'callback' whether found or not
     pub(super) fn get_internal_inner<RT>(
         &self,
-        pubkey: &K,
+        pubkey: &Pubkey,
         // return true if item should be added to in_mem cache
         callback: impl for<'a> FnOnce(Option<&AccountMapEntryInner<T>>) -> (bool, RT),
     ) -> RT {
@@ -347,7 +380,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
     /// call 'callback' whether found or not
     pub(super) fn get_internal_cloned<RT>(
         &self,
-        pubkey: &K,
+        pubkey: &Pubkey,
         callback: impl for<'a> FnOnce(Option<AccountMapEntry<T>>) -> RT,
     ) -> RT {
         // SAFETY: Since we're passing the entry Arc clone to `callback`, we must
@@ -367,7 +400,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
     /// Prefer `get_internal_inner()` or `get_internal_cloned()` for safe alternatives.
     pub(super) fn get_internal<RT>(
         &self,
-        pubkey: &K,
+        pubkey: &Pubkey,
         // return true if item should be added to in_mem cache
         callback: impl for<'a> FnOnce(Option<&AccountMapEntry<T>>) -> (bool, RT),
     ) -> RT {
@@ -420,7 +453,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> InMemAccountsIndex<T,
 
     /// return false if the entry is in the index (disk or memory) and has a slot list len > 0
     /// return true in all other cases, including if the entry is NOT in the index at all
-    fn remove_if_slot_list_empty_entry(&self, entry: Entry<K, AccountMapEntry<T>>) -> bool {
+    fn remove_if_slot_list_empty_entry(&self, entry: Entry<Pubkey, AccountMapEntry<T>>) -> bool {
         match entry {
             Entry::Occupied(occupied) => {
                 let result = self.remove_if_slot_list_empty_value(
