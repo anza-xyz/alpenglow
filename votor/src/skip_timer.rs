@@ -35,9 +35,9 @@ impl SkipTimer {
         let end_slot = last_of_consecutive_leader_slots(self.start_slot);
         end_slot
             .checked_sub(self.remaining)
-            .unwrap()
+            .expect("timer remaining should not exceed end slot")
             .checked_add(1)
-            .unwrap()
+            .expect("slot calculation should not overflow")
     }
 }
 
@@ -90,7 +90,9 @@ impl SkipTimerManager {
         // or from genesis, we compute the exact length of this leader window:
         let remaining = remaining_slots_in_window(start_slot);
         // TODO: should we change the first fire as well?
-        let next_fire = Instant::now().checked_add(skip_timeout(0)).unwrap();
+        let next_fire = Instant::now()
+            .checked_add(skip_timeout(0))
+            .expect("skip timeout should not cause time overflow");
 
         let timer = SkipTimer {
             id,
@@ -142,9 +144,17 @@ impl SkipTimerService {
                     let slot = timer.slot_to_fire();
                     event_sender.send(VotorEvent::Timeout(slot)).unwrap();
 
-                    timer.remaining = timer.remaining.checked_sub(1).unwrap();
+                    timer.remaining = timer
+                        .remaining
+                        .checked_sub(1)
+                        .expect("timer remaining should not underflow");
+
                     if timer.remaining > 0 {
-                        timer.next_fire = timer.next_fire.checked_add(timer.interval).unwrap();
+                        timer.next_fire = timer
+                            .next_fire
+                            .checked_add(timer.interval)
+                            .expect("timer interval should not cause time overflow");
+
                         manager_w.heap.push(timer);
                     } else {
                         // Remove from order list
