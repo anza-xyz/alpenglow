@@ -10366,6 +10366,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-svm-transaction",
+ "solana-system-interface 3.0.0",
  "solana-transaction",
  "solana-vote-interface",
  "thiserror 2.0.18",
