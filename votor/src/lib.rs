@@ -105,28 +105,26 @@ pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
 
 pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
 
-pub const STANDSTILL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time bound assumed on network transmission delays during periods of synchrony.
+const DELTA: Duration = Duration::from_millis(250);
 
-/// Alpenglow block constants
-/// The amount of time a leader has to build their block
-pub const BLOCKTIME: Duration = Duration::from_millis(400);
+/// Time the leader has for producing and sending the block.
+const DELTA_BLOCK: Duration = Duration::from_millis(400);
 
-/// The maximum message delay
-pub const DELTA: Duration = Duration::from_millis(200);
+/// Base timeout for when leader's first slice should arrive if they sent it immediately.
+const DELTA_TIMEOUT: Duration = DELTA.checked_mul(3).unwrap();
 
-/// The maximum delay a node can observe between entering the loop iteration
-/// for a window and receiving any shred of the first block of the leader.
-/// As a conservative global constant we set this to 3 * DELTA
-pub const DELTA_TIMEOUT: Duration = DELTA.saturating_mul(3);
+/// Timeout for standstill detection mechanism.
+const DELTA_STANDSTILL: Duration = Duration::from_millis(10_000);
 
-/// The timeout in ms for the leader block index within the leader window
+/// Returns the Duration for when the `SkipTimer` should be set for for the given slot in the leader window.
 #[inline]
 pub fn skip_timeout(leader_block_index: usize) -> Duration {
     DELTA_TIMEOUT
         .saturating_add(
-            BLOCKTIME
+            DELTA_BLOCK
                 .saturating_mul(leader_block_index as u32)
-                .saturating_add(BLOCKTIME),
+                .saturating_add(DELTA_TIMEOUT),
         )
         .saturating_add(DELTA)
 }
@@ -136,5 +134,5 @@ pub fn skip_timeout(leader_block_index: usize) -> Duration {
 #[inline]
 pub fn block_timeout(leader_block_index: usize) -> Duration {
     // TODO: based on testing, perhaps adjust this
-    BLOCKTIME.saturating_mul((leader_block_index as u32).saturating_add(1))
+    DELTA_BLOCK.saturating_mul((leader_block_index as u32).saturating_add(1))
 }

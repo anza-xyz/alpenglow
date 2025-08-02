@@ -15,7 +15,7 @@ use {
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::BLSOp,
         votor::Votor,
-        Certificate, STANDSTILL_TIMEOUT,
+        Certificate, DELTA_STANDSTILL,
     },
     crossbeam_channel::{select, Sender, TrySendError},
     solana_ledger::{
@@ -224,7 +224,7 @@ impl CertificatePoolService {
                 &mut stats,
             );
 
-            if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
+            if standstill_timer.elapsed() > DELTA_STANDSTILL {
                 events.push(VotorEvent::Standstill(cert_pool.highest_finalized_slot()));
                 stats.standstill = true;
                 standstill_timer = Instant::now();
