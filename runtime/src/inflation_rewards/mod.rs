@@ -257,8 +257,8 @@ mod tests {
     use {
         self::points::null_tracer, super::*, solana_program::stake::state::Delegation,
         solana_pubkey::Pubkey, solana_sdk::native_token::sol_to_lamports,
-        solana_vote::alpenglow::state::VoteState as AlpenglowVoteState,
-        solana_vote_program::vote_state::VoteState, test_case::test_case,
+        solana_vote_program::vote_state::VoteState,
+        solana_votor_messages::state::VoteState as AlpenglowVoteState, test_case::test_case,
     };
 
     fn new_stake(

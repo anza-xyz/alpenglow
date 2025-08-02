@@ -1,4 +1,5 @@
 use {
+    crate::voting_service::AlpenglowPortOverride,
     lru::LruCache,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::Protocol},
     solana_pubkey::Pubkey,
@@ -45,6 +46,12 @@ pub struct StakedValidatorsCache {
 
     /// Whether to include the running validator's socket address in cache entries
     include_self: bool,
+
+    /// Optional override for Alpenglow port, used for testing purposes
+    alpenglow_port_override: Option<AlpenglowPortOverride>,
+
+    /// timestamp of the last alpenglow port override we read
+    alpenglow_port_override_last_modified: Instant,
 }
 
 enum PortsToUse {
@@ -59,6 +66,7 @@ impl StakedValidatorsCache {
         ttl: Duration,
         max_cache_size: usize,
         include_self: bool,
+        alpenglow_port_override: Option<AlpenglowPortOverride>,
     ) -> Self {
         Self {
             cache: LruCache::new(max_cache_size),
@@ -66,6 +74,8 @@ impl StakedValidatorsCache {
             bank_forks,
             protocol,
             include_self,
+            alpenglow_port_override,
+            alpenglow_port_override_last_modified: Instant::now(),
         }
     }
 
@@ -96,6 +106,7 @@ impl StakedValidatorsCache {
         });
 
         struct Node {
+            pubkey: Pubkey,
             stake: u64,
             tpu_socket: SocketAddr,
             // TODO(wen): this should not be an Option after BLS all-to-all is submitted.
@@ -118,6 +129,7 @@ impl StakedValidatorsCache {
                     // TPU socket, and ignore nodes that only have an Alpenglow socket.
                     // TODO(wen): tpu_socket is no longer needed after Alpenglow migration.
                     tpu_socket.map(|tpu_socket| Node {
+                        pubkey: *pubkey,
                         stake: *stake,
                         tpu_socket,
                         alpenglow_socket,
@@ -132,14 +144,26 @@ impl StakedValidatorsCache {
 
         let mut validator_sockets = Vec::new();
         let mut alpenglow_sockets = Vec::new();
-
+        let override_map = self
+            .alpenglow_port_override
+            .as_ref()
+            .map(|x| x.get_override_map());
         for node in nodes {
             validator_sockets.push(node.tpu_socket);
+
             if let Some(alpenglow_socket) = node.alpenglow_socket {
-                alpenglow_sockets.push(alpenglow_socket);
+                let socket = if let Some(override_map) = &override_map {
+                    // If we have an override, use it.
+                    override_map
+                        .get(&node.pubkey)
+                        .cloned()
+                        .unwrap_or(alpenglow_socket)
+                } else {
+                    alpenglow_socket
+                };
+                alpenglow_sockets.push(socket);
             }
         }
-
         self.cache.push(
             epoch,
             StakedValidatorsCacheEntry {
@@ -170,6 +194,21 @@ impl StakedValidatorsCache {
         cluster_info: &ClusterInfo,
         access_time: Instant,
     ) -> (&[SocketAddr], bool) {
+        // Check if self.alpenglow_port_override has a different last_modified.
+        // Immediately refresh the cache if it does.
+        if let Some(alpenglow_port_override) = &self.alpenglow_port_override {
+            if alpenglow_port_override.has_new_override(self.alpenglow_port_override_last_modified)
+            {
+                self.alpenglow_port_override_last_modified =
+                    alpenglow_port_override.last_modified();
+                trace!(
+                        "refreshing cache entry for epoch {} due to alpenglow port override last_modified change",
+                        self.cur_epoch(slot)
+                    );
+                self.refresh_cache_entry(self.cur_epoch(slot), cluster_info, access_time);
+            }
+        }
+
         self.get_staked_validators_by_epoch(
             self.cur_epoch(slot),
             cluster_info,
@@ -228,6 +267,7 @@ impl StakedValidatorsCache {
 mod tests {
     use {
         super::StakedValidatorsCache,
+        crate::voting_service::AlpenglowPortOverride,
         solana_gossip::{
             cluster_info::{ClusterInfo, Node},
             contact_info::{ContactInfo, Protocol},
@@ -252,7 +292,7 @@ mod tests {
         std::{
             collections::HashMap,
             iter::{repeat, repeat_with},
-            net::Ipv4Addr,
+            net::{Ipv4Addr, SocketAddr},
             sync::{Arc, RwLock},
             time::{Duration, Instant},
         },
@@ -451,7 +491,7 @@ mod tests {
 
         // Create our staked validators cache
         let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
@@ -557,8 +597,14 @@ mod tests {
                 .bank_forks();
 
         // Create our staked validators cache
-        let mut svc =
-            StakedValidatorsCache::new(bank_forks, Protocol::UDP, Duration::from_secs(5), 5, true);
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks,
+            Protocol::UDP,
+            Duration::from_secs(5),
+            5,
+            true,
+            None,
+        );
 
         assert_eq!(0, svc.len());
         assert!(svc.is_empty());
@@ -666,7 +712,7 @@ mod tests {
 
         // Create our staked validators cache
         let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true);
+            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
@@ -736,6 +782,7 @@ mod tests {
             Duration::from_secs(5),
             5,
             true,
+            None,
         );
 
         let (sockets, _) = if use_alpenglow_socket {
@@ -761,6 +808,7 @@ mod tests {
             Duration::from_secs(5),
             5,
             false,
+            None,
         );
 
         let (sockets, _) = if use_alpenglow_socket {
@@ -779,5 +827,63 @@ mod tests {
         // We should have num_nodes - 1 sockets, since we exclude our own socket address.
         assert_eq!(sockets.len(), num_nodes - 1);
         assert!(!sockets.contains(&my_socket_addr));
+    }
+
+    #[test]
+    fn test_alpenglow_port_override() {
+        let (keypair_map, vahm) = build_epoch_stakes(3, 0, 3);
+        let pubkey_b = *keypair_map.keys().nth(1).unwrap();
+        let keypair = keypair_map.values().next().unwrap().insecure_clone();
+
+        let alpenglow_port_override = AlpenglowPortOverride::default();
+        let blackhole_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(100);
+
+        let (bank_forks, cluster_info) =
+            StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
+                .with_vote_accounts(0, keypair_map, vahm, Protocol::UDP)
+                .bank_forks();
+
+        // Create our staked validators cache - set include_self to false
+        let mut svc = StakedValidatorsCache::new(
+            bank_forks.clone(),
+            Protocol::UDP,
+            Duration::from_secs(5),
+            5,
+            false,
+            Some(alpenglow_port_override.clone()),
+        );
+        // Nothing in the override, so we should get the original socket addresses.
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        assert!(!sockets.contains(&blackhole_addr));
+
+        // Add an override for pubkey_B, and check that we get the overridden socket address.
+        alpenglow_port_override.update_override(HashMap::from([(pubkey_b, blackhole_addr)]));
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        // Sort sockets to ensure the blackhole address is at index 0.
+        let mut sockets: Vec<_> = sockets.to_vec();
+        sockets.sort();
+        assert_eq!(sockets[0], blackhole_addr);
+        assert_ne!(sockets[1], blackhole_addr);
+
+        // Now clear the override, and check that we get the original socket addresses.
+        alpenglow_port_override.clear();
+        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
+            0,
+            &cluster_info,
+            Instant::now(),
+        );
+        assert_eq!(sockets.len(), 2);
+        assert!(!sockets.contains(&blackhole_addr));
     }
 }

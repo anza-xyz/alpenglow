@@ -1,8 +1,8 @@
 use {
-    crate::Block,
     crossbeam_channel::{Receiver, Sender},
     solana_runtime::bank::Bank,
     solana_sdk::clock::Slot,
+    solana_votor_messages::bls_message::Block,
     std::{sync::Arc, time::Instant},
 };
 

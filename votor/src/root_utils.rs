@@ -1,7 +1,5 @@
 use {
-    crate::{
-        event_handler::PendingBlocks, voting_utils::VotingContext, votor::SharedContext, Block,
-    },
+    crate::{event_handler::PendingBlocks, voting_utils::VotingContext, votor::SharedContext},
     crossbeam_channel::Sender,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_rpc::{
@@ -16,6 +14,7 @@ use {
     solana_sdk::{
         clock::Slot, hash::Hash, pubkey::Pubkey, signature::Signature, timing::timestamp,
     },
+    solana_votor_messages::bls_message::Block,
     std::{
         collections::BTreeSet,
         sync::{Arc, RwLock},

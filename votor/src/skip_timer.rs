@@ -6,8 +6,10 @@ use {
         event::{VotorEvent, VotorEventSender},
         skip_timeout, BLOCKTIME,
     },
-    solana_ledger::leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
-    solana_sdk::clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+    solana_ledger::leader_schedule_utils::{
+        last_of_consecutive_leader_slots, remaining_slots_in_window,
+    },
+    solana_sdk::clock::Slot,
     std::{
         collections::{BinaryHeap, VecDeque},
         sync::{
@@ -86,11 +88,7 @@ impl SkipTimerManager {
 
         // To account for restarting from a snapshot in the middle of a leader window
         // or from genesis, we compute the exact length of this leader window:
-        let leader_window_offset = leader_slot_index(start_slot);
-        let remaining = NUM_CONSECUTIVE_LEADER_SLOTS
-            .checked_sub(leader_window_offset as u64)
-            .expect("leader window offset should not exceed consecutive leader slots");
-
+        let remaining = remaining_slots_in_window(start_slot);
         // TODO: should we change the first fire as well?
         let next_fire = Instant::now()
             .checked_add(skip_timeout(0))

@@ -21,6 +21,7 @@ use {
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         validator::{BlockVerificationMethod, ValidatorConfig},
+        voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
@@ -89,15 +90,14 @@ use {
         BroadcastStageType,
     },
     solana_vote::{
-        alpenglow::{
-            bls_message::{BLSMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
-            certificate::CertificateType,
-            vote::Vote,
-        },
         vote_parser::{self},
         vote_transaction,
     },
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
+    solana_votor_messages::{
+        bls_message::{BLSMessage, CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        vote::Vote,
+    },
     std::{
         collections::{BTreeSet, HashMap, HashSet},
         fs,
@@ -6183,8 +6183,10 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
 
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_addr.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     // Collect node pubkeys
     let node_pubkeys = validator_keys
@@ -6333,8 +6335,10 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
     validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
@@ -6518,8 +6522,10 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs =
         make_identical_validator_configs(&validator_config, node_stakes.len());
@@ -6633,8 +6639,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             let vote = &vote_message.vote;
             let vote_b = if self.a_equivocates && vote.is_notarization() {
                 let new_block_id = Hash::new_unique();
-                let new_bank_hash = Hash::new_unique();
-                Vote::new_notarization_vote(vote.slot(), new_block_id, new_bank_hash)
+                Vote::new_notarization_vote(vote.slot(), new_block_id)
             } else {
                 *vote
             };
@@ -6863,8 +6868,10 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     // Configure validators
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
     // Node A (index 0) will have its turbine disabled during the experiment
@@ -7033,9 +7040,9 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                         // Stage 3: Verify continued liveness after partition resolution
                         if experiment_state.stage == Stage::ObserveLiveness
                             && [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                .contains(&cert_message.certificate.certificate_type)
+                                .contains(&cert_message.certificate.certificate_type())
                         {
-                            experiment_state.record_certificate(cert_message.certificate.slot);
+                            experiment_state.record_certificate(cert_message.certificate.slot());
 
                             if experiment_state.sufficient_roots_created() {
                                 break;
@@ -7130,8 +7137,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     // Create validator configs
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
-    validator_config.voting_service_additional_listeners =
-        Some(vec![vote_listener_socket.local_addr().unwrap()]);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
 
     let mut validator_configs =
         make_identical_validator_configs(&validator_config, node_stakes.len());
@@ -7318,9 +7327,9 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                     BLSMessage::Certificate(cert_message) => {
                         // Check for finalization certificates to determine test completion
                         if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                            .contains(&cert_message.certificate.certificate_type)
+                            .contains(&cert_message.certificate.certificate_type())
                         {
-                            experiment_state.record_certificate(cert_message.certificate.slot);
+                            experiment_state.record_certificate(cert_message.certificate.slot());
 
                             if experiment_state.sufficient_roots_created() {
                                 break;

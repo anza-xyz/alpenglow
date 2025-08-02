@@ -50,6 +50,7 @@ solana-time-utils = { workspace = true }
 solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-votor-messages = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]

@@ -13,9 +13,10 @@
 //! a block with parent `b` in slot `s` will have their block finalized.
 
 use {
-    crate::{event::VotorEvent, Block, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
+    crate::{event::VotorEvent, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
     solana_pubkey::Pubkey,
     solana_sdk::clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+    solana_votor_messages::bls_message::Block,
     std::collections::HashMap,
 };
 

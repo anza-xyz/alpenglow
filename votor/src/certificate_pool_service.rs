@@ -15,9 +15,9 @@ use {
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::BLSOp,
         votor::Votor,
-        CertificateId, STANDSTILL_TIMEOUT,
+        Certificate, STANDSTILL_TIMEOUT,
     },
-    crossbeam_channel::{select, RecvError, Sender, TrySendError},
+    crossbeam_channel::{select, Sender, TrySendError},
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -27,7 +27,7 @@ use {
         root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_sdk::clock::Slot,
-    solana_vote::alpenglow::bls_message::{BLSMessage, CertificateMessage},
+    solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
     stats::CertificatePoolServiceStats,
     std::{
         sync::{
@@ -59,7 +59,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
-    pub(crate) certificate_sender: Sender<(CertificateId, CertificateMessage)>,
+    pub(crate) certificate_sender: Sender<(Certificate, CertificateMessage)>,
 }
 
 pub(crate) struct CertificatePoolService {
@@ -68,13 +68,11 @@ pub(crate) struct CertificatePoolService {
 
 impl CertificatePoolService {
     pub(crate) fn new(ctx: CertificatePoolContext) -> Self {
-        let exit = ctx.exit.clone();
         let t_ingest = Builder::new()
             .name("solCertPoolIngest".to_string())
             .spawn(move || {
-                if let Err(e) = Self::certificate_pool_ingest(ctx) {
+                if let Err(e) = Self::certificate_pool_ingest_loop(ctx) {
                     info!("Certificate pool service exited: {e:?}. Shutting down");
-                    exit.store(true, Ordering::Relaxed);
                 }
             })
             .unwrap();
@@ -89,15 +87,12 @@ impl CertificatePoolService {
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
         current_root: &mut Slot,
-        highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
-        if let Some(new_finalized_slot) = new_finalized_slot {
+        if new_finalized_slot.is_some() {
             // Reset standstill timer
-            debug_assert!(new_finalized_slot > *highest_finalized_slot);
-            *highest_finalized_slot = new_finalized_slot;
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
@@ -109,7 +104,15 @@ impl CertificatePoolService {
             }
         }
         // Send new certificates to peers
-        for (i, certificate) in new_certificates_to_send.iter().enumerate() {
+        Self::send_certificates(bls_sender, new_certificates_to_send, stats)
+    }
+
+    fn send_certificates(
+        bls_sender: &Sender<BLSOp>,
+        certificates_to_send: Vec<Arc<CertificateMessage>>,
+        stats: &mut CertificatePoolServiceStats,
+    ) -> Result<(), AddVoteError> {
+        for (i, certificate) in certificates_to_send.iter().enumerate() {
             // The buffer should normally be large enough, so we don't handle
             // certificate re-send here.
             match bls_sender.try_send(BLSOp::PushCertificate {
@@ -119,10 +122,12 @@ impl CertificatePoolService {
                     CertificatePoolServiceStats::incr_u16(&mut stats.certificates_sent);
                 }
                 Err(TrySendError::Disconnected(_)) => {
-                    return Err(AddVoteError::VotingServiceSenderDisconnected);
+                    return Err(AddVoteError::ChannelDisconnected(
+                        "VotingService".to_string(),
+                    ));
                 }
                 Err(TrySendError::Full(_)) => {
-                    let dropped = new_certificates_to_send.len().saturating_sub(i) as u16;
+                    let dropped = certificates_to_send.len().saturating_sub(i) as u16;
                     stats.certificates_dropped = stats.certificates_dropped.saturating_add(dropped);
                     return Err(AddVoteError::VotingServiceQueueFull);
                 }
@@ -137,7 +142,6 @@ impl CertificatePoolService {
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
         current_root: &mut Slot,
-        highest_finalized_slot: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -149,42 +153,38 @@ impl CertificatePoolService {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
-        match Self::add_message_and_maybe_update_commitment(
-            &ctx.my_pubkey,
-            &ctx.my_vote_pubkey,
-            message,
+        let (new_finalized_slot, new_certificates_to_send) =
+            Self::add_message_and_maybe_update_commitment(
+                &ctx.my_pubkey,
+                &ctx.my_vote_pubkey,
+                message,
+                cert_pool,
+                events,
+                &ctx.commitment_sender,
+            )?;
+        Self::maybe_update_root_and_send_new_certificates(
             cert_pool,
-            events,
-            &ctx.commitment_sender,
-        ) {
-            Ok((new_finalized_slot, new_certificates_to_send)) => {
-                Self::maybe_update_root_and_send_new_certificates(
-                    cert_pool,
-                    &mut ctx.root_bank_cache,
-                    &ctx.bls_sender,
-                    new_finalized_slot,
-                    new_certificates_to_send,
-                    current_root,
-                    highest_finalized_slot,
-                    standstill_timer,
-                    stats,
-                )?;
-            }
-            Err(e) => {
-                if e == AddVoteError::CertificateSenderError {
-                    return Err(e);
-                } else {
-                    // This is a non critical error, a duplicate vote for example
-                    trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
-                    CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
-                }
-            }
-        };
-        Ok(())
+            &mut ctx.root_bank_cache,
+            &ctx.bls_sender,
+            new_finalized_slot,
+            new_certificates_to_send,
+            current_root,
+            standstill_timer,
+            stats,
+        )
     }
 
-    // TODO: properly bubble up errors
-    fn certificate_pool_ingest(mut ctx: CertificatePoolContext) -> Result<(), RecvError> {
+    fn handle_channel_disconnected(
+        ctx: &mut CertificatePoolContext,
+        channel_name: &str,
+    ) -> Result<(), ()> {
+        info!("{}: {} disconnected. Exiting", ctx.my_pubkey, channel_name);
+        ctx.exit.store(true, Ordering::Relaxed);
+        Err(())
+    }
+
+    // Main loop for the certificate pool service, it only exits when any channel is disconnected
+    fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &ctx.my_pubkey,
@@ -203,7 +203,6 @@ impl CertificatePoolService {
 
         // Standstill tracking
         let mut standstill_timer = Instant::now();
-        let mut highest_finalized_slot = cert_pool.highest_finalized_slot();
 
         // Kick off parent ready
         let root_bank = ctx.root_bank_cache.root_bank();
@@ -230,9 +229,26 @@ impl CertificatePoolService {
             );
 
             if standstill_timer.elapsed() > STANDSTILL_TIMEOUT {
-                events.push(VotorEvent::Standstill(highest_finalized_slot));
+                events.push(VotorEvent::Standstill(cert_pool.highest_finalized_slot()));
                 stats.standstill = true;
                 standstill_timer = Instant::now();
+                match Self::send_certificates(
+                    &ctx.bls_sender,
+                    cert_pool.get_certs_for_standstill(),
+                    &mut stats,
+                ) {
+                    Ok(()) => (),
+                    Err(AddVoteError::ChannelDisconnected(channel_name)) => {
+                        return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str());
+                    }
+                    Err(e) => {
+                        trace!(
+                            "{}: unable to push standstill certificates into pool {}",
+                            &ctx.my_pubkey,
+                            e
+                        );
+                    }
+                }
             }
 
             if events
@@ -240,39 +256,38 @@ impl CertificatePoolService {
                 .try_for_each(|event| ctx.event_sender.send(event))
                 .is_err()
             {
-                // Shutdown
-                info!(
-                    "{}: Votor event receiver disconnected. Exiting.",
-                    ctx.my_pubkey
-                );
-                ctx.exit.store(true, Ordering::Relaxed);
-                return Ok(());
+                return Self::handle_channel_disconnected(&mut ctx, "Votor event receiver");
             }
 
             let bls_messages: Vec<BLSMessage> = select! {
                 recv(ctx.bls_receiver) -> msg => {
-                    std::iter::once(msg?).chain(ctx.bls_receiver.try_iter()).collect()
+                    let Ok(first) = msg else {
+                        return Self::handle_channel_disconnected(&mut ctx, "BLS receiver");
+                    };
+                    std::iter::once(first).chain(ctx.bls_receiver.try_iter()).collect()
                 },
                 default(Duration::from_secs(1)) => continue
             };
 
             for message in bls_messages {
-                if let Err(e) = Self::process_bls_message(
+                match Self::process_bls_message(
                     &mut ctx,
                     &message,
                     &mut cert_pool,
                     &mut events,
                     &mut current_root,
-                    &mut highest_finalized_slot,
                     &mut standstill_timer,
                     &mut stats,
                 ) {
-                    info!(
-                        "{}: Unable to process BLS message: {e}. Exiting.",
-                        ctx.my_pubkey
-                    );
-                    ctx.exit.store(true, Ordering::Relaxed);
-                    return Ok(());
+                    Ok(()) => {}
+                    Err(AddVoteError::ChannelDisconnected(channel_name)) => {
+                        return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str())
+                    }
+                    Err(e) => {
+                        // This is a non critical error, a duplicate vote for example
+                        trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                        CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
+                    }
                 }
             }
             stats.maybe_report();
@@ -302,7 +317,7 @@ impl CertificatePoolService {
             AlpenglowCommitmentType::Finalized,
             new_finalized_slot,
             commitment_sender,
-        );
+        )?;
         Ok((Some(new_finalized_slot), new_certificates_to_send))
     }
 
@@ -330,7 +345,6 @@ impl CertificatePoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
-        // TODO: Add blockstore check
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
             *highest_parent_ready,
             Some(&ctx.root_bank_cache.root_bank()),
@@ -346,6 +360,15 @@ impl CertificatePoolService {
 
         let start_slot = *highest_parent_ready;
         let end_slot = last_of_consecutive_leader_slots(start_slot);
+
+        if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
+            warn!(
+                "{}: We have already produced shreds in the window {start_slot}-{end_slot}, \
+                    skipping production of our leader window",
+                ctx.my_pubkey
+            );
+            return;
+        }
 
         match cert_pool
             .parent_ready_tracker
