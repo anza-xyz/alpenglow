@@ -11184,6 +11184,7 @@ dependencies = [
  "etcd-client",
  "itertools 0.12.1",
  "log",
+ "parking_lot 0.12.3",
  "qualifier_attr",
  "rayon",
  "serde",

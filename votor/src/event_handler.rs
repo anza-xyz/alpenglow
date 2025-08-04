@@ -6,12 +6,13 @@ use {
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
         root_utils::{self, RootContext},
-        skip_timer::SkipTimerManager,
+        timer_manager::TimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
         voting_utils::{self, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
     },
     crossbeam_channel::{select, RecvError, SendError},
+    parking_lot::RwLock,
     solana_ledger::leader_schedule_utils::{
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
@@ -23,7 +24,7 @@ use {
         collections::{BTreeMap, BTreeSet},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex, RwLock,
+            Arc, Condvar, Mutex,
         },
         thread::{self, Builder, JoinHandle},
         time::Duration,
@@ -41,7 +42,7 @@ pub(crate) struct EventHandlerContext {
     pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
 
     pub(crate) event_receiver: VotorEventReceiver,
-    pub(crate) skip_timer: Arc<RwLock<SkipTimerManager>>,
+    pub(crate) timer_manager: Arc<RwLock<TimerManager>>,
 
     // Contexts
     pub(crate) shared_context: SharedContext,
@@ -92,7 +93,7 @@ impl EventHandler {
             exit,
             start,
             event_receiver,
-            skip_timer,
+            timer_manager,
             shared_context: ctx,
             voting_context: mut vctx,
             root_context: rctx,
@@ -100,6 +101,7 @@ impl EventHandler {
         let mut my_pubkey = vctx.identity_keypair.pubkey();
         let mut pending_blocks = PendingBlocks::default();
         let mut finalized_blocks = BTreeSet::default();
+        let mut received_shred = BTreeSet::default();
 
         // Wait until migration has completed
         info!("{my_pubkey}: Event loop initialized");
@@ -137,12 +139,13 @@ impl EventHandler {
             let votes = Self::handle_event(
                 &mut my_pubkey,
                 event,
-                &skip_timer,
+                &timer_manager,
                 &ctx,
                 &mut vctx,
                 &rctx,
                 &mut pending_blocks,
                 &mut finalized_blocks,
+                &mut received_shred,
             )?;
 
             // TODO: properly bubble up error handling here and in call graph
@@ -157,12 +160,13 @@ impl EventHandler {
     fn handle_event(
         my_pubkey: &mut Pubkey,
         event: VotorEvent,
-        skip_timer: &RwLock<SkipTimerManager>,
+        timer_manager: &RwLock<TimerManager>,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         rctx: &RootContext,
         pending_blocks: &mut PendingBlocks,
         finalized_blocks: &mut BTreeSet<Block>,
+        received_shred: &mut BTreeSet<Slot>,
     ) -> Result<Vec<Result<BLSOp, VoteError>>, EventLoopError> {
         let mut votes = vec![];
         match event {
@@ -193,6 +197,7 @@ impl EventHandler {
                     rctx,
                     pending_blocks,
                     finalized_blocks,
+                    received_shred,
                 )?;
             }
 
@@ -203,14 +208,23 @@ impl EventHandler {
                 Self::try_final(my_pubkey, block, vctx, &mut votes);
             }
 
+            VotorEvent::FirstShred(slot) => {
+                received_shred.insert(slot);
+            }
+
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
                 info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
                 let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes);
                 if should_set_timeouts {
-                    skip_timer.write().unwrap().set_timeouts(slot);
+                    timer_manager.write().set_timeouts(slot);
                 }
+            }
+
+            VotorEvent::TimeoutCrashedLeader(slot) => {
+                info!("{my_pubkey}: TimeoutCrashedLeader {slot}");
+                unimplemented!()
             }
 
             // Skip timer for the slot has fired
@@ -287,6 +301,7 @@ impl EventHandler {
                     rctx,
                     pending_blocks,
                     finalized_blocks,
+                    received_shred,
                 )?;
             }
 
@@ -536,6 +551,7 @@ impl EventHandler {
         rctx: &RootContext,
         pending_blocks: &mut PendingBlocks,
         finalized_blocks: &mut BTreeSet<Block>,
+        received_shred: &mut BTreeSet<Slot>,
     ) -> Result<(), SetRootError> {
         let bank_forks_r = ctx.bank_forks.read().unwrap();
         let old_root = bank_forks_r.root();
@@ -563,6 +579,7 @@ impl EventHandler {
             rctx,
             pending_blocks,
             finalized_blocks,
+            received_shred,
         )
     }
 
