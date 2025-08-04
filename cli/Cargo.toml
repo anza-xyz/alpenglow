@@ -101,7 +101,8 @@ solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
 solana-votor-messages = { workspace = true }
-spl-memo = { workspace = true, features = ["no-entrypoint"] }
+# spl-memo = { workspace = true, features = ["no-entrypoint"] }
+spl-memo-interface = { version = "=1.0.0" }
 thiserror = { workspace = true }
 tiny-bip39 = { workspace = true }
 
