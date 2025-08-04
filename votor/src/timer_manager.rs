@@ -5,7 +5,7 @@
 mod timers;
 
 use {
-    crate::event::VotorEvent,
+    crate::{event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
     crossbeam_channel::Sender,
     parking_lot::RwLock,
     solana_sdk::clock::Slot,
@@ -29,7 +29,11 @@ pub(crate) struct TimerManager {
 
 impl TimerManager {
     pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
-        let timers = Arc::new(RwLock::new(Timers::new(event_sender)));
+        let timers = Arc::new(RwLock::new(Timers::new(
+            DELTA_TIMEOUT,
+            DELTA_BLOCK,
+            event_sender,
+        )));
         let handle = {
             let timers = Arc::clone(&timers);
             thread::spawn(move || {
