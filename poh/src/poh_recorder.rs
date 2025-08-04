@@ -505,6 +505,7 @@ impl PohRecorder {
                         num_hashes: poh_entry.num_hashes,
                         hash: poh_entry.hash,
                         transactions,
+                        updated_parent_block: None,
                     };
                     let bank_clone = working_bank.bank.clone();
                     self.working_bank_sender
@@ -555,6 +556,7 @@ impl PohRecorder {
                     num_hashes: poh_entry.num_hashes,
                     hash: poh_entry.hash,
                     transactions: vec![],
+                    updated_parent_block: None,
                 },
                 self.tick_height,
             ));
@@ -1145,6 +1147,7 @@ impl PohRecorder {
                     num_hashes: poh_entry.num_hashes,
                     hash: poh_entry.hash,
                     transactions: vec![],
+                    updated_parent_block: None,
                 },
                 self.tick_height,
             ));

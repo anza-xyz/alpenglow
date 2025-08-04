@@ -10,6 +10,7 @@ use {
     rand::{thread_rng, Rng},
     rayon::{prelude::*, ThreadPool},
     serde::{Deserialize, Serialize},
+    solana_clock::Slot,
     solana_hash::Hash,
     solana_measure::measure::Measure,
     solana_merkle_tree::MerkleTree,
@@ -130,6 +131,19 @@ pub struct Entry {
     /// generated. They may have been observed before a previous Entry ID but were
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
     pub transactions: Vec<VersionedTransaction>,
+
+    /// Alpenglow optimistic block production. This field will be set to None, unless it's a
+    /// validator's first leader slot. During a validator's first leader slot, updated_parent_block
+    /// is initially None, as we optimistically assume that a block that we receive but haven't yet
+    /// received a certificate for, will eventually be finalized. Most of the time, we expect this
+    /// to be the case. Occasionally, the disseminated block will be skipped - in this case, "parent
+    /// ready" in the Alpenglow algorithm will not be generated for the block that was just
+    /// disseminated, but rather to a previous block, at which point this field will be set to
+    /// Some((slot, hash)) where (slot, hash) refers to said previous block.
+    ///
+    /// TODO(karthik): should we instead turn Entry into an Enum with two variants: one for the
+    /// current Entry type and another for (Slot, Hash)?
+    pub updated_parent_block: Option<(Slot, Hash)>,
 }
 
 pub struct EntrySummary {
@@ -169,6 +183,7 @@ impl Entry {
             num_hashes,
             hash,
             transactions,
+            updated_parent_block: None,
         }
     }
 
@@ -190,6 +205,7 @@ impl Entry {
             num_hashes,
             hash: *hash,
             transactions: vec![],
+            updated_parent_block: None,
         }
     }
 
@@ -648,6 +664,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
+            updated_parent_block: None,
         }];
         let entry_pairs = genesis.par_iter().chain(self).zip(self);
         let res = thread_pool.install(|| {
@@ -688,6 +705,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
+            updated_parent_block: None,
         }];
 
         let aligned_len = self.len().div_ceil(simd_len) * simd_len;
@@ -802,6 +820,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
+            updated_parent_block: None,
         }];
 
         let hashes: Vec<Hash> = genesis
@@ -947,6 +966,7 @@ pub fn next_versioned_entry(
         num_hashes,
         hash: next_hash(prev_hash, num_hashes, &transactions),
         transactions,
+        updated_parent_block: None,
     }
 }
 

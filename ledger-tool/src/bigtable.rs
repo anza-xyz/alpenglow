@@ -308,6 +308,7 @@ async fn shreds(
                         num_hashes,
                         hash,
                         transactions,
+                        updated_parent_block: None,
                     })
                 })
                 .collect::<Result<Vec<Entry>, std::string::String>>()?,
@@ -358,6 +359,7 @@ async fn shreds(
                     num_hashes: 0,
                     hash: Hash::default(),
                     transactions: vec![tx_with_meta.get_transaction()],
+                    updated_parent_block: None,
                 });
                 entries.extend(transaction_entries.into_iter());
 
@@ -378,6 +380,7 @@ async fn shreds(
                         num_hashes: 0,
                         hash,
                         transactions: vec![],
+                        updated_parent_block: None,
                     }
                 });
                 entries.extend(tick_entries.into_iter());

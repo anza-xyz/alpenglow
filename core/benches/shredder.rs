@@ -20,6 +20,7 @@ fn make_test_entry(txs_per_entry: u64) -> Entry {
         num_hashes: 100_000,
         hash: Hash::default(),
         transactions: vec![test_tx::test_tx().into(); txs_per_entry as usize],
+        updated_parent_block: None,
     }
 }
 fn make_large_unchained_entries(txs_per_entry: u64, num_entries: u64) -> Vec<Entry> {
