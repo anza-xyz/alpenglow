@@ -6561,13 +6561,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
     assert_eq!(vote_pubkeys.len(), node_stakes.len());
 
-    // Phase 1: Take Node A offline to simulate Byzantine + offline stake
-    // This represents 40% - ε of total stake going offline
-    cluster.exit_node(&validator_keys[0].pubkey());
-
     // Vote listener state management
     #[derive(Debug, PartialEq, Eq)]
     enum Stage {
+        WaitForReady,
         Stability,
         ObserveNotarFallbacks,
         ObserveLiveness,
@@ -6576,6 +6573,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     impl Stage {
         fn timeout(&self) -> Duration {
             match self {
+                Stage::WaitForReady => Duration::from_secs(60),
                 Stage::Stability => Duration::from_secs(60),
                 Stage::ObserveNotarFallbacks => Duration::from_secs(120),
                 Stage::ObserveLiveness => Duration::from_secs(180),
@@ -6584,6 +6582,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
         fn all() -> Vec<Stage> {
             vec![
+                Stage::WaitForReady,
                 Stage::Stability,
                 Stage::ObserveNotarFallbacks,
                 Stage::ObserveLiveness,
@@ -6594,16 +6593,43 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     #[derive(Debug)]
     struct ExperimentState {
         stage: Stage,
+        number_of_nodes: usize,
+        initial_notar_votes: HashSet<usize>,
         notar_fallbacks: HashSet<Slot>,
         post_experiment_roots: HashSet<Slot>,
     }
 
     impl ExperimentState {
-        fn new() -> Self {
+        fn new(number_of_nodes: usize) -> Self {
             Self {
-                stage: Stage::Stability,
+                stage: Stage::WaitForReady,
+                number_of_nodes,
+                initial_notar_votes: HashSet::new(),
                 notar_fallbacks: HashSet::new(),
                 post_experiment_roots: HashSet::new(),
+            }
+        }
+
+        fn wait_for_nodes_ready(
+            &mut self,
+            vote: &Vote,
+            node_name: usize,
+            cluster: &mut LocalCluster,
+            node_a_pubkey: &Pubkey,
+        ) {
+            if self.stage != Stage::WaitForReady || !vote.is_notarization() {
+                return;
+            }
+
+            self.initial_notar_votes.insert(node_name);
+
+            // Wait until we have observed a notarization vote from all nodes.
+            if self.initial_notar_votes.len() >= self.number_of_nodes {
+                // Phase 1: Take Node A offline to simulate Byzantine + offline stake
+                // This represents 40% - ε of total stake going offline
+                cluster.exit_node(node_a_pubkey);
+                self.stage = Stage::Stability;
+                info!("Transitioning to stability phase");
             }
         }
 
@@ -6663,7 +6689,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     let vote_listener_thread = std::thread::spawn({
         let mut buf = [0u8; 65_535];
         let node_c_turbine_disabled = node_c_turbine_disabled.clone();
-        let mut experiment_state = ExperimentState::new();
+        let mut experiment_state = ExperimentState::new(vote_pubkeys.len());
         let timer = std::time::Instant::now();
 
         move || {
@@ -6693,6 +6719,12 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                         }
 
                         // Handle experiment phase transitions
+                        experiment_state.wait_for_nodes_ready(
+                            vote,
+                            node_name,
+                            &mut cluster,
+                            &validator_keys[0].pubkey(),
+                        );
                         experiment_state.handle_experiment_start(vote, &node_c_turbine_disabled);
                         experiment_state.handle_notar_fallback(
                             vote,
@@ -6702,7 +6734,11 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                     }
 
                     BLSMessage::Certificate(cert_message) => {
-                        // Check for finalization certificates to determine test completion
+                        // Wait until the final stage before looking for finalization certificates.
+                        if experiment_state.stage != Stage::ObserveLiveness {
+                            continue;
+                        }
+                        // Observing finalization certificates to ensure liveness.
                         if [CertificateType::Finalize, CertificateType::FinalizeFast]
                             .contains(&cert_message.certificate.certificate_type)
                         {
