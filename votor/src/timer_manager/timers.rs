@@ -143,7 +143,11 @@ impl Timers {
             match self.heap.pop() {
                 None => break,
                 Some(Reverse((next_fire, slot))) => {
-                    if next_fire < now {
+                    if now < next_fire {
+                        ret_timeout = Some(match ret_timeout {
+                            None => next_fire,
+                            Some(r) => std::cmp::min(r, next_fire),
+                        });
                         self.heap.push(Reverse((next_fire, slot)));
                         break;
                     }
@@ -169,7 +173,7 @@ impl Timers {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, std::thread};
+    use {super::*, crossbeam_channel::unbounded, std::thread};
 
     #[test]
     fn timer_state_machine() {
@@ -180,33 +184,104 @@ mod tests {
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 1);
-        matches!(events[0], VotorEvent::TimeoutCrashedLeader(0));
+        assert!(matches!(events[0], VotorEvent::TimeoutCrashedLeader(0)));
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 2);
-        matches!(events[0], VotorEvent::Timeout(0));
-        matches!(events[1], VotorEvent::TimeoutCrashedLeader(1));
+        assert!(matches!(events[0], VotorEvent::Timeout(0)));
+        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(1)));
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 2);
-        matches!(events[0], VotorEvent::Timeout(1));
-        matches!(events[1], VotorEvent::TimeoutCrashedLeader(2));
+        assert!(matches!(events[0], VotorEvent::Timeout(1)));
+        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(2)));
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 2);
-        matches!(events[0], VotorEvent::Timeout(2));
-        matches!(events[1], VotorEvent::TimeoutCrashedLeader(3));
+        assert!(matches!(events[0], VotorEvent::Timeout(2)));
+        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(3)));
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 1);
-        matches!(events[0], VotorEvent::Timeout(3));
+        assert!(matches!(events[0], VotorEvent::Timeout(3)));
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
         assert!(events.len() == 0);
+        assert!(timer_state.next_fire().is_none());
+    }
+
+    #[test]
+    fn timers_progress() {
+        let duration = Duration::from_millis(1);
+        let (sender, receiver) = unbounded();
+        let mut timers = Timers::new(duration, duration, sender);
+        assert!(timers.progress().is_none());
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        timers.set_timeouts(0);
+        let next_fire = timers.progress().unwrap();
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        let duration = next_fire.duration_since(Instant::now());
+        thread::sleep(duration);
+        let next_fire = timers.progress().unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::TimeoutCrashedLeader(0)
+        ));
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        let duration = next_fire.duration_since(Instant::now());
+        thread::sleep(duration);
+        let next_fire = timers.progress().unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::Timeout(0)
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::TimeoutCrashedLeader(1)
+        ));
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        let duration = next_fire.duration_since(Instant::now());
+        thread::sleep(duration);
+        let next_fire = timers.progress().unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::Timeout(1)
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::TimeoutCrashedLeader(2)
+        ));
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        let duration = next_fire.duration_since(Instant::now());
+        thread::sleep(duration);
+        let next_fire = timers.progress().unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::Timeout(2)
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::TimeoutCrashedLeader(3)
+        ));
+        assert!(receiver.try_recv().unwrap_err().is_empty());
+
+        let duration = next_fire.duration_since(Instant::now());
+        thread::sleep(duration);
+        assert!(timers.progress().is_none());
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            VotorEvent::Timeout(3)
+        ));
+        assert!(receiver.try_recv().unwrap_err().is_empty());
     }
 }
