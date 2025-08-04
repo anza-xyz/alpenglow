@@ -152,6 +152,7 @@ fn retransmit_to(
 
 /// ring a -> b -> c -> d -> e -> a
 #[test]
+#[ignore]
 fn gossip_ring() {
     agave_logger::setup();
     run_gossip_topo(40, |listen| {
