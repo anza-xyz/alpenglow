@@ -224,7 +224,10 @@ impl EventHandler {
 
             VotorEvent::TimeoutCrashedLeader(slot) => {
                 info!("{my_pubkey}: TimeoutCrashedLeader {slot}");
-                unimplemented!()
+                if vctx.vote_history.voted(slot) || received_shred.contains(&slot) {
+                    return Ok(votes);
+                }
+                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes);
             }
 
             // Skip timer for the slot has fired
