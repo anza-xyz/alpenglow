@@ -211,7 +211,7 @@ mod tests {
 
         thread::sleep(duration);
         let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 0);
+        assert!(!events.is_empty());
         assert!(timer_state.next_fire().is_none());
     }
 
