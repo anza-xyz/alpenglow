@@ -217,71 +217,48 @@ mod tests {
 
     #[test]
     fn timers_progress() {
-        let duration = Duration::from_millis(1);
+        // Ideally we could set this to a high value and test what would happen when
+        // the timer thread sleeps for long enough and we get only a subset of
+        // events.  However, that introduces flakiness in CI.  We could consider
+        // using a mock timer instead in the future.
+        let duration = Duration::from_nanos(1);
         let (sender, receiver) = unbounded();
         let mut timers = Timers::new(duration, duration, sender);
         assert!(timers.progress().is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
         timers.set_timeouts(0);
-        let next_fire = timers.progress().unwrap();
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        println!("calling progress");
+        while timers.progress().is_some() {
+            thread::sleep(duration);
+        }
+        println!("recving msgs");
+        let mut events = receiver.try_iter().collect::<Vec<_>>();
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        let next_fire = timers.progress().unwrap();
         assert!(matches!(
-            receiver.try_recv().unwrap(),
+            events.remove(0),
             VotorEvent::TimeoutCrashedLeader(0)
         ));
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        assert!(matches!(events.remove(0), VotorEvent::Timeout(0)));
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        let next_fire = timers.progress().unwrap();
         assert!(matches!(
-            receiver.try_recv().unwrap(),
-            VotorEvent::Timeout(0)
-        ));
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
+            events.remove(0),
             VotorEvent::TimeoutCrashedLeader(1)
         ));
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        assert!(matches!(events.remove(0), VotorEvent::Timeout(1)));
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        let next_fire = timers.progress().unwrap();
         assert!(matches!(
-            receiver.try_recv().unwrap(),
-            VotorEvent::Timeout(1)
-        ));
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
+            events.remove(0),
             VotorEvent::TimeoutCrashedLeader(2)
         ));
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        let next_fire = timers.progress().unwrap();
         assert!(matches!(
-            receiver.try_recv().unwrap(),
-            VotorEvent::Timeout(2)
-        ));
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
+            events.remove(0),
             VotorEvent::TimeoutCrashedLeader(3)
         ));
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        assert!(timers.progress().is_none());
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
-            VotorEvent::Timeout(3)
-        ));
-        assert!(receiver.try_recv().unwrap_err().is_empty());
+        assert!(events.is_empty());
     }
 }
