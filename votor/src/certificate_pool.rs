@@ -707,9 +707,7 @@ impl CertificatePool {
             .iter()
             .filter_map(|(cert_id, cert)| {
                 let cert_to_send = match (
-                    cert.certificate
-                        .slot()
-                        .cmp(&highest_finalized_with_notarize_slot),
+                    cert_id.slot().cmp(&highest_finalized_with_notarize_slot),
                     cert_id.certificate_type(),
                     has_fast_finalize,
                 ) {
@@ -719,7 +717,10 @@ impl CertificatePool {
                         CertificateType::Finalize | CertificateType::Notarize,
                         false,
                     )
-                    | (Ordering::Equal, CertificateType::FinalizeFast, _) => Some(cert.clone()),
+                    | (Ordering::Equal, CertificateType::FinalizeFast, true) => Some(cert.clone()),
+                    (Ordering::Equal, CertificateType::FinalizeFast, false) => {
+                        panic!("Should not happen while certificate pool is single threaded")
+                    }
                     _ => None,
                 };
                 if cert_to_send.is_some() {
