@@ -10,12 +10,9 @@
 //! For Entries:
 //! * recorded entry must be >= WorkingBank::min_tick_height && entry must be < WorkingBank::max_tick_height
 //!
-#[cfg(feature = "dev-context-only-utils")]
 use {
-    crate::transaction_recorder::TransactionRecorder, qualifier_attr::qualifiers, std::sync::RwLock,
-};
-use {
-    crate::{leader_bank_notifier::LeaderBankNotifier, poh_service::PohService},
+    crate::poh_service::PohService,
+    arc_swap::ArcSwapOption,
     crossbeam_channel::{unbounded, Receiver, SendError, Sender, TrySendError},
     log::*,
     solana_clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
@@ -32,10 +29,14 @@ use {
     solana_transaction::versioned::VersionedTransaction,
     std::{
         cmp,
-        sync::{atomic::AtomicBool, Arc, Mutex},
+        sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
         time::Instant,
     },
     thiserror::Error,
+};
+#[cfg(feature = "dev-context-only-utils")]
+use {
+    crate::transaction_recorder::TransactionRecorder, qualifier_attr::qualifiers, std::sync::RwLock,
 };
 
 pub const GRACE_TICKS_FACTOR: u64 = 2;
@@ -188,7 +189,14 @@ pub struct PohRecorder {
     start_bank_active_descendants: Vec<Slot>,
     start_tick_height: u64, // first tick_height this recorder will observe
     tick_cache: Vec<(Entry, u64)>, // cache of entry and its tick_height
+    /// This stores the current working bank + scheduler and other metadata,
+    /// if they exist.
+    /// This field MUST be kept consistent with the `shared_working_bank` field.
     working_bank: Option<WorkingBank>,
+    /// This is used to store the current working bank - just the Arc<Bank> without
+    /// schduler or any other metadata. It MUST be kept consistent with
+    /// the `working_bank` field of this struct.
+    shared_working_bank: SharedWorkingBank,
     working_bank_sender: Sender<WorkingBankEntry>,
     leader_first_tick_height: Option<u64>,
     leader_last_tick_height: u64, // zero if none
@@ -198,7 +206,6 @@ pub struct PohRecorder {
     ticks_per_slot: u64,
     target_ns_per_tick: u64,
     metrics: PohRecorderMetrics,
-    leader_bank_notifier: Arc<LeaderBankNotifier>,
     delay_leader_block_for_pending_fork: bool,
     last_reported_slot_for_pending_fork: Arc<Mutex<Slot>>,
     pub is_exited: Arc<AtomicBool>,
@@ -208,6 +215,7 @@ pub struct PohRecorder {
     track_transaction_indexes: bool,
     pub is_alpenglow_enabled: bool,
     pub use_alpenglow_tick_producer: bool,
+    pub bank_cleared_notifier: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl PohRecorder {
@@ -278,6 +286,7 @@ impl PohRecorder {
                 tick_height,
                 tick_cache: vec![],
                 working_bank: None,
+                shared_working_bank: SharedWorkingBank::empty(),
                 working_bank_sender,
                 clear_bank_signal,
                 start_bank,
@@ -291,7 +300,6 @@ impl PohRecorder {
                 ticks_per_slot,
                 target_ns_per_tick,
                 metrics: PohRecorderMetrics::default(),
-                leader_bank_notifier: Arc::default(),
                 delay_leader_block_for_pending_fork,
                 last_reported_slot_for_pending_fork: Arc::default(),
                 is_exited,
@@ -299,6 +307,7 @@ impl PohRecorder {
                 track_transaction_indexes: false,
                 is_alpenglow_enabled,
                 use_alpenglow_tick_producer: is_alpenglow_enabled,
+                bank_cleared_notifier: Arc::new((Mutex::new(false), Condvar::new())),
             },
             working_bank_receiver,
         )
@@ -452,7 +461,14 @@ impl PohRecorder {
 
     pub fn set_bank(&mut self, bank: BankWithScheduler) -> BankStart {
         assert!(self.working_bank.is_none());
-        self.leader_bank_notifier.set_in_progress(&bank);
+
+        // Reset the bank cleared flag for the new bank
+        {
+            let (lock, _cvar) = &*self.bank_cleared_notifier;
+            let mut cleared = lock.lock().unwrap();
+            *cleared = false;
+        }
+
         let working_bank = WorkingBank {
             min_tick_height: bank.tick_height(),
             max_tick_height: bank.max_tick_height(),
@@ -477,6 +493,9 @@ impl PohRecorder {
                 self.reset_poh(working_bank.bank.clone(), false);
             }
         }
+
+        // `shared_working_bank` and `working_bank` must be kept consistent.
+        self.shared_working_bank.store(working_bank.bank.clone());
         self.working_bank = Some(working_bank);
 
         // TODO: adjust the working_bank.start time based on number of ticks
@@ -487,7 +506,9 @@ impl PohRecorder {
 
     fn clear_bank(&mut self) {
         if let Some(WorkingBank { bank, start, .. }) = self.working_bank.take() {
-            self.leader_bank_notifier.set_completed(bank.slot());
+            // clear `shared_working_bank` to keep it consistent with `working_bank`
+            self.shared_working_bank.clear();
+
             let next_leader_slot = self.leader_schedule_cache.next_leader_slot(
                 bank.collector_id(),
                 bank.slot(),
@@ -507,6 +528,12 @@ impl PohRecorder {
                 ("slot", bank.slot(), i64),
                 ("elapsed", start.elapsed().as_millis(), i64),
             );
+
+            // Notify that bank has been cleared
+            let (lock, cvar) = &*self.bank_cleared_notifier;
+            let mut cleared = lock.lock().unwrap();
+            *cleared = true;
+            cvar.notify_all();
         }
 
         if let Some(ref signal) = self.clear_bank_signal {
@@ -683,8 +710,11 @@ impl PohRecorder {
         self.ticks_per_slot
     }
 
-    pub fn new_leader_bank_notifier(&self) -> Arc<LeaderBankNotifier> {
-        self.leader_bank_notifier.clone()
+    /// Returns a shared reference to the working bank, if it exists.
+    /// This allows for other threads to access the working bank
+    /// without needing to lock poh recorder.
+    pub fn shared_working_bank(&self) -> SharedWorkingBank {
+        self.shared_working_bank.clone()
     }
 
     pub fn start_slot(&self) -> Slot {
@@ -1035,6 +1065,29 @@ pub fn create_test_recorder_with_index_tracking(
     Receiver<WorkingBankEntry>,
 ) {
     do_create_test_recorder(bank, blockstore, poh_config, leader_schedule_cache, true)
+}
+
+/// Wrapper around an arc-swapped bank that prevents modifying outside
+/// of `PohRecorder`.
+#[derive(Clone)]
+pub struct SharedWorkingBank(Arc<ArcSwapOption<Bank>>);
+
+impl SharedWorkingBank {
+    pub fn load(&self) -> Option<Arc<Bank>> {
+        self.0.load_full()
+    }
+
+    fn store(&self, bank: Arc<Bank>) {
+        self.0.store(Some(bank));
+    }
+
+    fn clear(&self) {
+        self.0.store(None);
+    }
+
+    fn empty() -> Self {
+        Self(Arc::new(ArcSwapOption::empty()))
+    }
 }
 
 #[cfg(test)]
