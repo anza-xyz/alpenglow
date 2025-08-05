@@ -670,10 +670,8 @@ impl RetransmitStats {
                             slot_stats.outset,
                             rpc_subscriptions,
                             slot_status_notifier,
+                            votor_event_sender,
                         );
-                        votor_event_sender
-                            .send(VotorEvent::FirstShred(slot))
-                            .unwrap();
                     }
                     self.slot_stats.put(slot, slot_stats);
                 }
@@ -766,6 +764,7 @@ fn notify_subscribers(
     timestamp: u64, // When the first shred in the slot was received.
     rpc_subscriptions: Option<&RpcSubscriptions>,
     slot_status_notifier: Option<&SlotStatusNotifier>,
+    votor_event_sender: &Sender<VotorEvent>,
 ) {
     if let Some(rpc_subscriptions) = rpc_subscriptions {
         let slot_update = SlotUpdate::FirstShredReceived { slot, timestamp };
@@ -778,6 +777,9 @@ fn notify_subscribers(
             .unwrap()
             .notify_first_shred_received(slot);
     }
+    votor_event_sender
+        .send(VotorEvent::FirstShred(slot))
+        .unwrap();
 }
 
 #[cfg(test)]

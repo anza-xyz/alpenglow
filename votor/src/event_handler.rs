@@ -209,6 +209,7 @@ impl EventHandler {
             }
 
             VotorEvent::FirstShred(slot) => {
+                info!("{my_pubkey}: First shred {slot}");
                 received_shred.insert(slot);
             }
 
