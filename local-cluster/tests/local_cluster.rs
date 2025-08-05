@@ -6451,7 +6451,7 @@ fn test_alpenglow_migration_4() {
 /// - Node A (40% - ε stake) is taken offline, representing combined Byzantine and offline stake
 /// - This leaves Node B (30% + ε) and Node C (30%) as the active validators
 /// - Despite the significant offline stake, the remaining nodes can still achieve consensus
-/// - Network continues to fast finalize blocks with the remaining 60% + ε stake
+/// - Network continues to slow finalize blocks with the remaining 60% + ε stake
 ///
 /// ## Phase 2: Network Partition Triggers NotarizeFallback
 /// - Node C's turbine is disabled at slot 20, causing it to miss incoming blocks
@@ -6627,9 +6627,9 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             if self.initial_notar_votes.len() >= self.number_of_nodes {
                 // Phase 1: Take Node A offline to simulate Byzantine + offline stake
                 // This represents 40% - ε of total stake going offline
+                info!("Phase 1: Exiting Node A. Transitioning to stability phase.");
                 cluster.exit_node(node_a_pubkey);
                 self.stage = Stage::Stability;
-                info!("Transitioning to stability phase");
             }
         }
 
