@@ -38,7 +38,7 @@ impl TimerManager {
             let timers = Arc::clone(&timers);
             thread::spawn(move || {
                 while !exit.load(Ordering::Relaxed) {
-                    let duration = match timers.write().progress() {
+                    let duration = match timers.write().progress(Instant::now()) {
                         None => {
                             // No active timers, sleep for an arbitrary amount.
                             // This should be smaller than the minimum amount
@@ -56,7 +56,7 @@ impl TimerManager {
     }
 
     pub(crate) fn set_timeouts(&self, slot: Slot) {
-        self.timers.write().set_timeouts(slot);
+        self.timers.write().set_timeouts(slot, Instant::now());
     }
 
     pub(crate) fn join(self) {

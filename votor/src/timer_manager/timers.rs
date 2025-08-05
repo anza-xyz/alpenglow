@@ -5,7 +5,7 @@ use {
     solana_sdk::clock::Slot,
     std::{
         cmp::Reverse,
-        collections::{BinaryHeap, HashMap},
+        collections::{BinaryHeap, HashMap, VecDeque},
         time::{Duration, Instant},
     },
 };
@@ -16,14 +16,14 @@ enum TimerState {
     /// Waiting for the DELTA_TIMEOUT stage.
     WaitDeltaTimeout {
         /// The slots in the window.  Must not be empty.
-        window: Vec<Slot>,
+        window: VecDeque<Slot>,
         /// Time when this stage will end.
         timeout: Instant,
     },
     /// Waiting for the DELTA_BLOCK stage.
     WaitDeltaBlock {
         /// The slots in the window.  Must not be empty.
-        window: Vec<Slot>,
+        window: VecDeque<Slot>,
         /// Time when this stage will end.
         timeout: Instant,
     },
@@ -35,26 +35,24 @@ impl TimerState {
     /// Creates a new instance of the state machine.
     ///
     /// Also returns the next time the timer should fire.
-    fn new(slot: Slot, delta_timeout: Duration) -> (Self, Instant) {
-        let mut window = (slot..=last_of_consecutive_leader_slots(slot)).collect::<Vec<_>>();
+    fn new(slot: Slot, delta_timeout: Duration, now: Instant) -> (Self, Instant) {
+        let window = (slot..=last_of_consecutive_leader_slots(slot)).collect::<VecDeque<_>>();
         assert!(!window.is_empty());
-        window.reverse();
-        let timeout = Instant::now().checked_add(delta_timeout).unwrap();
+        let timeout = now.checked_add(delta_timeout).unwrap();
         (Self::WaitDeltaTimeout { window, timeout }, timeout)
     }
 
     /// Call to make progress on the state machine.
     ///
     /// Returns a potentially empty list of events that should be sent.
-    fn progress(&mut self, delta_block: Duration) -> Option<VotorEvent> {
-        let now = Instant::now();
+    fn progress(&mut self, delta_block: Duration, now: Instant) -> Option<VotorEvent> {
         match self {
             Self::WaitDeltaTimeout { window, timeout } => {
                 assert!(!window.is_empty());
                 if &now < timeout {
                     return None;
                 }
-                let slot = *window.last().unwrap();
+                let slot = *window.front().unwrap();
                 let timeout = now.checked_add(delta_block).unwrap();
                 *self = Self::WaitDeltaBlock {
                     window: window.to_owned(),
@@ -68,7 +66,7 @@ impl TimerState {
                     return None;
                 }
 
-                let ret = Some(VotorEvent::Timeout(window.pop().unwrap()));
+                let ret = Some(VotorEvent::Timeout(window.pop_front().unwrap()));
                 if window.is_empty() {
                     *self = Self::Done;
                 } else {
@@ -83,8 +81,8 @@ impl TimerState {
     /// When would this state machine next be able to make progress.
     fn next_fire(&self) -> Option<Instant> {
         match self {
-            Self::WaitDeltaTimeout { window: _, timeout } => Some(*timeout),
-            Self::WaitDeltaBlock { window: _, timeout } => Some(*timeout),
+            Self::WaitDeltaTimeout { window: _, timeout }
+            | Self::WaitDeltaBlock { window: _, timeout } => Some(*timeout),
             Self::Done => None,
         }
     }
@@ -118,9 +116,9 @@ impl Timers {
     }
 
     /// Call to set timeouts for a new window of slots.
-    pub(super) fn set_timeouts(&mut self, slot: Slot) {
+    pub(super) fn set_timeouts(&mut self, slot: Slot, now: Instant) {
         assert_eq!(self.heap.len(), self.timers.len());
-        let (timer, next_fire) = TimerState::new(slot, self.delta_timeout);
+        let (timer, next_fire) = TimerState::new(slot, self.delta_timeout, now);
         // It is possible that this slot already has a timer set e.g. if there
         // are multiple ParentReady for the same slot.  Do not insert new timer then.
         self.timers.entry(slot).or_insert_with(|| {
@@ -131,35 +129,30 @@ impl Timers {
 
     /// Call to make progress on the timer states.  If there are still active
     /// timer states, returns when the earliest one might become ready.
-    pub(super) fn progress(&mut self) -> Option<Instant> {
+    pub(super) fn progress(&mut self, now: Instant) -> Option<Instant> {
         assert_eq!(self.heap.len(), self.timers.len());
         let mut ret_timeout = None;
-        let now = Instant::now();
         loop {
             assert_eq!(self.heap.len(), self.timers.len());
             match self.heap.pop() {
                 None => break,
                 Some(Reverse((next_fire, slot))) => {
                     if now < next_fire {
-                        ret_timeout = Some(match ret_timeout {
-                            None => next_fire,
-                            Some(r) => std::cmp::min(r, next_fire),
-                        });
+                        ret_timeout =
+                            Some(ret_timeout.map_or(next_fire, |r| std::cmp::min(r, next_fire)));
                         self.heap.push(Reverse((next_fire, slot)));
                         break;
                     }
 
                     let mut timer = self.timers.remove(&slot).unwrap();
-                    if let Some(event) = timer.progress(self.delta_block) {
+                    if let Some(event) = timer.progress(self.delta_block, now) {
                         self.event_sender.send(event).unwrap();
                     }
                     if let Some(next_fire) = timer.next_fire() {
                         self.heap.push(Reverse((next_fire, slot)));
                         assert!(self.timers.insert(slot, timer).is_none());
-                        ret_timeout = Some(match ret_timeout {
-                            None => next_fire,
-                            Some(r) => std::cmp::min(r, next_fire),
-                        });
+                        ret_timeout =
+                            Some(ret_timeout.map_or(next_fire, |r| std::cmp::min(r, next_fire)));
                     }
                 }
             }
@@ -170,43 +163,45 @@ impl Timers {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crossbeam_channel::unbounded, std::thread};
+    use {super::*, crossbeam_channel::unbounded};
 
     #[test]
     fn timer_state_machine() {
+        let one_micro = Duration::from_micros(1);
+        let now = Instant::now();
         let slot = 0;
-        let (mut timer_state, next_fire) = TimerState::new(slot, Duration::from_micros(1));
+        let (mut timer_state, next_fire) = TimerState::new(slot, one_micro, now);
 
-        let next_fire = next_fire.duration_since(Instant::now());
-        let delta_block = Duration::from_micros(1);
-
-        thread::sleep(next_fire);
         assert!(matches!(
-            timer_state.progress(delta_block).unwrap(),
+            timer_state.progress(one_micro, next_fire).unwrap(),
             VotorEvent::TimeoutCrashedLeader(0)
         ));
 
-        thread::sleep(next_fire);
         assert!(matches!(
-            timer_state.progress(delta_block).unwrap(),
+            timer_state
+                .progress(one_micro, timer_state.next_fire().unwrap())
+                .unwrap(),
             VotorEvent::Timeout(0)
         ));
 
-        thread::sleep(next_fire);
         assert!(matches!(
-            timer_state.progress(delta_block).unwrap(),
+            timer_state
+                .progress(one_micro, timer_state.next_fire().unwrap())
+                .unwrap(),
             VotorEvent::Timeout(1)
         ));
 
-        thread::sleep(next_fire);
         assert!(matches!(
-            timer_state.progress(delta_block).unwrap(),
+            timer_state
+                .progress(one_micro, timer_state.next_fire().unwrap())
+                .unwrap(),
             VotorEvent::Timeout(2)
         ));
 
-        thread::sleep(next_fire);
         assert!(matches!(
-            timer_state.progress(delta_block).unwrap(),
+            timer_state
+                .progress(one_micro, timer_state.next_fire().unwrap())
+                .unwrap(),
             VotorEvent::Timeout(3)
         ));
         assert!(timer_state.next_fire().is_none());
@@ -214,19 +209,16 @@ mod tests {
 
     #[test]
     fn timers_progress() {
-        // Ideally we could set this to a high value and test what would happen when
-        // the timer thread sleeps for long enough and we get only a subset of
-        // events.  However, that introduces flakiness in CI.  We could consider
-        // using a mock timer instead in the future.
-        let duration = Duration::from_nanos(1);
+        let one_micro = Duration::from_micros(1);
+        let mut now = Instant::now();
         let (sender, receiver) = unbounded();
-        let mut timers = Timers::new(duration, duration, sender);
-        assert!(timers.progress().is_none());
+        let mut timers = Timers::new(one_micro, one_micro, sender);
+        assert!(timers.progress(now).is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
-        timers.set_timeouts(0);
-        while timers.progress().is_some() {
-            thread::sleep(duration);
+        timers.set_timeouts(0, now);
+        while timers.progress(now).is_some() {
+            now = now.checked_add(one_micro).unwrap();
         }
         let mut events = receiver.try_iter().collect::<Vec<_>>();
 
