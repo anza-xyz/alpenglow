@@ -40,7 +40,9 @@ impl TimerManager {
                 while !exit.load(Ordering::Relaxed) {
                     let duration = match timers.write().progress() {
                         None => {
-                            // No active timers, sleep for some arbitrary amount.
+                            // No active timers, sleep for an arbitrary amount.
+                            // This should be smaller than the minimum amount
+                            // of time any newly added timers would take to expire.
                             Duration::from_millis(100)
                         }
                         Some(next_fire) => next_fire.duration_since(Instant::now()),

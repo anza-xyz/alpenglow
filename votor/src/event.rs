@@ -41,10 +41,11 @@ pub enum VotorEvent {
     /// The pool has marked the given block as a ready parent for `slot`
     ParentReady { slot: Slot, parent_block: Block },
 
-    /// Timeout to inspect whether the leader has crashed.
+    //// Timeout to early detect that a honest that has crashed and
+    /// if the leader window should be skipped.
     TimeoutCrashedLeader(Slot),
 
-    /// Timeout to inspect whether the slot should be skipped.
+    /// Timeout to inspect whether the remaining leader window should be skipped.
     Timeout(Slot),
 
     /// The given block has reached the safe to notar status
