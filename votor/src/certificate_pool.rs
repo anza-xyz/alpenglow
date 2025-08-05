@@ -89,6 +89,7 @@ impl From<AlpenglowCommitmentError> for AddVoteError {
 
 #[derive(Default)]
 pub struct CertificatePool {
+    my_pubkey: Pubkey,
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePoolType>,
     /// Completed certificates
@@ -131,6 +132,7 @@ impl CertificatePool {
         let parent_ready_tracker = ParentReadyTracker::new(my_pubkey, root_block);
 
         let mut pool = Self {
+            my_pubkey,
             vote_pools: BTreeMap::new(),
             completed_certificates: BTreeMap::new(),
             highest_notarized_fallback: None,
@@ -322,6 +324,7 @@ impl CertificatePool {
         cert: Arc<CertificateMessage>,
         events: &mut Vec<VotorEvent>,
     ) {
+        trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_id);
         self.completed_certificates.insert(cert_id, cert);
         match cert_id {
             Certificate::NotarizeFallback(slot, block_id) => {
@@ -686,6 +689,7 @@ impl CertificatePool {
     /// This avoids the need to recreate the entire certificate pool since it's
     /// not distinguished by the pubkey.
     pub fn update_pubkey(&mut self, new_pubkey: Pubkey) {
+        self.my_pubkey = new_pubkey;
         self.parent_ready_tracker.update_pubkey(new_pubkey);
     }
 
@@ -696,8 +700,9 @@ impl CertificatePool {
     pub fn get_certs_for_standstill(&self) -> Vec<Arc<CertificateMessage>> {
         self.completed_certificates
             .iter()
-            .filter_map(|(_, cert)| {
+            .filter_map(|(cert_id, cert)| {
                 if Some(cert.certificate.slot()) >= self.highest_finalized_with_notarize {
+                    trace!("{}: Refreshing certificate {:?}", self.my_pubkey, cert_id);
                     Some(cert.clone())
                 } else {
                     None
