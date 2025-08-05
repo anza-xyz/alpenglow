@@ -92,6 +92,13 @@ pub struct Api<'a> {
         Symbol<'a, unsafe extern "C" fn(hashes: *mut u8, num_hashes: *const u64)>,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum SpecialEntry {
+    /// Alpenglow optimistic block production. Used to specify "ParentReady" information if
+    /// ParentReady associated with the previous block is not received.
+    UpdateParentReadyBlock(Slot, Hash),
+}
+
 /// Each Entry contains three pieces of data. The `num_hashes` field is the number
 /// of hashes performed since the previous entry.  The `hash` field is the result
 /// of hashing `hash` from the previous entry `num_hashes` times.  The `transactions`
@@ -132,18 +139,10 @@ pub struct Entry {
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
     pub transactions: Vec<VersionedTransaction>,
 
-    /// Alpenglow optimistic block production. This field will be set to None, unless it's a
-    /// validator's first leader slot. During a validator's first leader slot, updated_parent_block
-    /// is initially None, as we optimistically assume that a block that we receive but haven't yet
-    /// received a certificate for, will eventually be finalized. Most of the time, we expect this
-    /// to be the case. Occasionally, the disseminated block will be skipped - in this case, "parent
-    /// ready" in the Alpenglow algorithm will not be generated for the block that was just
-    /// disseminated, but rather to a previous block, at which point this field will be set to
-    /// Some((slot, hash)) where (slot, hash) refers to said previous block.
-    ///
-    /// TODO(karthik): should we instead turn Entry into an Enum with two variants: one for the
-    /// current Entry type and another for (Slot, Hash)?
-    pub updated_parent_block: Option<(Slot, Hash)>,
+    /// Store additional information about the entry (e.g., updated ParentReady information for
+    /// Alpenglow optimistic block production).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub special: Option<SpecialEntry>,
 }
 
 pub struct EntrySummary {
@@ -183,7 +182,7 @@ impl Entry {
             num_hashes,
             hash,
             transactions,
-            updated_parent_block: None,
+            special: None,
         }
     }
 
@@ -205,7 +204,7 @@ impl Entry {
             num_hashes,
             hash: *hash,
             transactions: vec![],
-            updated_parent_block: None,
+            special: None,
         }
     }
 
@@ -664,7 +663,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
-            updated_parent_block: None,
+            special: None,
         }];
         let entry_pairs = genesis.par_iter().chain(self).zip(self);
         let res = thread_pool.install(|| {
@@ -705,7 +704,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
-            updated_parent_block: None,
+            special: None,
         }];
 
         let aligned_len = self.len().div_ceil(simd_len) * simd_len;
@@ -820,7 +819,7 @@ impl EntrySlice for [Entry] {
             num_hashes: 0,
             hash: *start_hash,
             transactions: vec![],
-            updated_parent_block: None,
+            special: None,
         }];
 
         let hashes: Vec<Hash> = genesis
@@ -966,7 +965,7 @@ pub fn next_versioned_entry(
         num_hashes,
         hash: next_hash(prev_hash, num_hashes, &transactions),
         transactions,
-        updated_parent_block: None,
+        special: None,
     }
 }
 

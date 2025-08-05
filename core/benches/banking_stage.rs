@@ -432,7 +432,7 @@ fn simulate_process_entries(
         num_hashes: 1,
         hash: next_hash(&bank.last_blockhash(), 1, &tx_vector),
         transactions: tx_vector,
-        updated_parent_block: None,
+        special: None,
     };
     process_entries_for_tests(&bank, vec![entry], None, None).unwrap();
 }
