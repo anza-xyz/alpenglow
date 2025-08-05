@@ -961,7 +961,7 @@ mod tests {
             consensus::tower_storage::NullTowerStorage,
             validator::{Validator, ValidatorConfig, ValidatorTpuConfig},
         },
-        solana_gossip::cluster_info::{ClusterInfo, Node},
+        solana_gossip::{cluster_info::ClusterInfo, node::Node},
         solana_ledger::{
             create_new_tmp_ledger,
             genesis_utils::{
