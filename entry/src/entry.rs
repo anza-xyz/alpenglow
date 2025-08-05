@@ -141,6 +141,8 @@ pub struct Entry {
 
     /// Store additional information about the entry (e.g., updated ParentReady information for
     /// Alpenglow optimistic block production).
+    ///
+    /// TODO(karthik): serde(default) doesn't work here - why not?
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special: Option<SpecialEntry>,
 }
