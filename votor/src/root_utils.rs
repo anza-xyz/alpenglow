@@ -40,11 +40,13 @@ pub(crate) fn set_root(
     rctx: &RootContext,
     pending_blocks: &mut PendingBlocks,
     finalized_blocks: &mut BTreeSet<Block>,
+    received_shred: &mut BTreeSet<Slot>,
 ) -> Result<(), SetRootError> {
     info!("{my_pubkey}: setting root {new_root}");
     vctx.vote_history.set_root(new_root);
     *pending_blocks = pending_blocks.split_off(&new_root);
     *finalized_blocks = finalized_blocks.split_off(&(new_root, Hash::default()));
+    *received_shred = received_shred.split_off(&new_root);
 
     check_and_handle_new_root(
         new_root,

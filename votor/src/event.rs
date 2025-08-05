@@ -35,10 +35,17 @@ pub enum VotorEvent {
     /// The block has received a notarization certificate
     BlockNotarized(Block),
 
+    /// Received the first shred for the slot.
+    FirstShred(Slot),
+
     /// The pool has marked the given block as a ready parent for `slot`
     ParentReady { slot: Slot, parent_block: Block },
 
-    /// The skip timer has fired for the given slot
+    //// Timeout to early detect that a honest that has crashed and
+    /// if the leader window should be skipped.
+    TimeoutCrashedLeader(Slot),
+
+    /// Timeout to inspect whether the remaining leader window should be skipped.
     Timeout(Slot),
 
     /// The given block has reached the safe to notar status
@@ -67,16 +74,18 @@ impl VotorEvent {
     pub(crate) fn should_ignore(&self, root: Slot) -> bool {
         match self {
             VotorEvent::Block(completed_block) => completed_block.slot <= root,
-            VotorEvent::BlockNotarized((s, _)) => *s <= root,
-            VotorEvent::ParentReady {
-                slot,
+            VotorEvent::Timeout(s)
+            | VotorEvent::SafeToSkip(s)
+            | VotorEvent::TimeoutCrashedLeader(s)
+            | VotorEvent::FirstShred(s)
+            | VotorEvent::SafeToNotar((s, _))
+            | VotorEvent::Finalized((s, _))
+            | VotorEvent::BlockNotarized((s, _))
+            | VotorEvent::ParentReady {
+                slot: s,
                 parent_block: _,
-            } => *slot <= root,
-            VotorEvent::Timeout(s) => *s <= root,
-            VotorEvent::SafeToNotar((s, _)) => *s <= root,
-            VotorEvent::SafeToSkip(s) => *s <= root,
+            } => s <= &root,
             VotorEvent::ProduceWindow(_) => false,
-            VotorEvent::Finalized((s, _)) => *s <= root,
             VotorEvent::Standstill(_) => false,
             VotorEvent::SetIdentity => false,
         }
