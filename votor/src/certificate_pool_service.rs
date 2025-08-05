@@ -26,7 +26,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{
-        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
+        bank::Bank, bank_forks::SharableBank, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
     stats::CertificatePoolServiceStats,
@@ -48,7 +48,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
-    pub(crate) root_bank_cache: RootBankCache,
+    pub(crate) root_bank: SharableBank,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     // TODO: for now we ingest our own votes into the certificate pool
@@ -83,7 +83,7 @@ impl CertificatePoolService {
 
     fn maybe_update_root_and_send_new_certificates(
         cert_pool: &mut CertificatePool,
-        root_bank_cache: &mut RootBankCache,
+        root_bank: &SharableBank,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
@@ -96,7 +96,8 @@ impl CertificatePoolService {
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
         }
-        cert_pool.prune_old_state(root_bank_cache.root_bank().slot());
+        let bank = root_bank.load();
+        cert_pool.prune_old_state(bank.slot());
         CertificatePoolServiceStats::incr_u64(&mut stats.prune_old_state_called);
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
@@ -148,9 +149,10 @@ impl CertificatePoolService {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
+        let root_bank = ctx.root_bank.load();
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
-                &ctx.root_bank_cache.root_bank(),
+                &root_bank,
                 my_pubkey,
                 &ctx.my_vote_pubkey,
                 message,
@@ -160,7 +162,7 @@ impl CertificatePoolService {
             )?;
         Self::maybe_update_root_and_send_new_certificates(
             cert_pool,
-            &mut ctx.root_bank_cache,
+            &ctx.root_bank,
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
@@ -186,9 +188,10 @@ impl CertificatePoolService {
     fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
+        let root_bank = ctx.root_bank.load();
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &my_pubkey,
-            &ctx.root_bank_cache.root_bank(),
+            &root_bank,
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
             &mut events,
@@ -204,7 +207,7 @@ impl CertificatePoolService {
         let mut standstill_timer = Instant::now();
 
         // Kick off parent ready
-        let root_bank = ctx.root_bank_cache.root_bank();
+        let root_bank = ctx.root_bank.load();
         let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
@@ -356,9 +359,10 @@ impl CertificatePoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
+        let root_bank = ctx.root_bank.load();
         let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
             *highest_parent_ready,
-            Some(&ctx.root_bank_cache.root_bank()),
+            Some(&root_bank),
         ) else {
             error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
             ctx.exit.store(true, Ordering::Relaxed);

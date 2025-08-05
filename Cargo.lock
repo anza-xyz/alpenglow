@@ -10266,6 +10266,7 @@ dependencies = [
  "agave-transaction-view",
  "ahash 0.8.12",
  "aquamarine",
+ "arc-swap",
  "arrayref",
  "assert_matches",
  "base64 0.22.1",

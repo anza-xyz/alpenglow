@@ -155,7 +155,8 @@ impl EventHandler {
                 .receive_event_time
                 .saturating_add(receive_event_time.as_us() as u32);
 
-            if event.should_ignore(vctx.root_bank_cache.root_bank().slot()) {
+            let root_bank = vctx.root_bank.load();
+            if event.should_ignore(root_bank.slot()) {
                 local_context.stats.ignored = local_context.stats.ignored.saturating_add(1);
                 continue;
             }
@@ -556,8 +557,9 @@ impl EventHandler {
         // In case we set root in the middle of a leader window,
         // it's not necessary to vote skip prior to it and we won't
         // be able to check vote history if we've already voted on it
+        let root_bank = voting_context.root_bank.load();
         let start = first_of_consecutive_leader_slots(slot)
-            .max(voting_context.root_bank_cache.root_bank().slot());
+            .max(root_bank.slot());
         for s in start..=last_of_consecutive_leader_slots(slot) {
             if voting_context.vote_history.voted(s) {
                 continue;

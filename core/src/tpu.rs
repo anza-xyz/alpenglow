@@ -54,7 +54,6 @@ use {
     solana_runtime::{
         bank_forks::BankForks,
         prioritization_fee_cache::PrioritizationFeeCache,
-        root_bank_cache::RootBankCache,
         vote_sender_types::{BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_streamer::{
@@ -343,9 +342,9 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let root_bank_cache = RootBankCache::new(bank_forks.clone());
+            let root_bank = bank_forks.read().unwrap().sharable_root_bank();
             let verifier = BLSSigVerifier::new(
-                root_bank_cache,
+                root_bank,
                 verified_vote_sender.clone(),
                 bls_verified_message_sender,
             );
@@ -394,7 +393,7 @@ impl Tpu {
             forward_stage_receiver,
             client,
             vote_forwarding_client_socket,
-            RootBankCache::new(bank_forks.clone()),
+            bank_forks.read().unwrap().sharable_root_bank(),
             ForwardAddressGetter::new(cluster_info.clone(), poh_recorder.clone()),
             DataBudget::default(),
         );
