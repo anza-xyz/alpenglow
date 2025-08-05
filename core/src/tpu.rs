@@ -42,7 +42,6 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks,
-        epoch_stakes_service::EpochStakesService,
         prioritization_fee_cache::PrioritizationFeeCache,
         root_bank_cache::RootBankCache,
         vote_sender_types::{BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender},
@@ -261,13 +260,9 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let (tx, rx) = unbounded();
-            bank_forks.write().unwrap().register_new_bank_subscriber(tx);
-            let bank = bank_forks.read().unwrap().root_bank();
-            let epoch = bank.epoch();
-            let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+            let root_bank_cache = RootBankCache::new(bank_forks.clone());
             let verifier = BLSSigVerifier::new(
-                epoch_stakes_service,
+                root_bank_cache,
                 verified_vote_sender.clone(),
                 bls_verified_message_sender,
             );
