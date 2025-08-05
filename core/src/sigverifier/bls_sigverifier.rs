@@ -10,7 +10,9 @@ use {
     },
     crossbeam_channel::{Sender, TrySendError},
     solana_pubkey::Pubkey,
-    solana_runtime::epoch_stakes_service::EpochStakesService,
+    solana_runtime::{
+        bank::Bank, epoch_stakes::BLSPubkeyToRankMap, root_bank_cache::RootBankCache,
+    },
     solana_sdk::clock::Slot,
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::bls_message::BLSMessage,
@@ -18,10 +20,18 @@ use {
     std::{collections::HashMap, sync::Arc},
 };
 
+fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+    let stakes = bank.epoch_stakes_map();
+    let epoch = bank.epoch_schedule().get_epoch(slot);
+    stakes
+        .get(&epoch)
+        .map(|stake| stake.bls_pubkey_to_rank_map())
+}
+
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<BLSMessage>,
-    epoch_stakes_service: Arc<EpochStakesService>,
+    root_bank_cache: RootBankCache,
     stats: BLSSigVerifierStats,
 }
 
@@ -60,8 +70,8 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let Some(rank_to_pubkey_map) = self.epoch_stakes_service.get_key_to_rank_map(slot)
-            else {
+            let bank = self.root_bank_cache.root_bank();
+            let Some(rank_to_pubkey_map) = get_key_to_rank_map(&bank, slot) else {
                 stats_updater.received_no_epoch_stakes += 1;
                 continue;
             };
@@ -102,12 +112,12 @@ impl SigVerifier for BLSSigVerifier {
 
 impl BLSSigVerifier {
     pub fn new(
-        epoch_stakes_service: Arc<EpochStakesService>,
+        root_bank_cache: RootBankCache,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<BLSMessage>,
     ) -> Self {
         Self {
-            epoch_stakes_service,
+            root_bank_cache,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
@@ -137,11 +147,12 @@ mod tests {
     use {
         super::*,
         bitvec::prelude::*,
-        crossbeam_channel::{unbounded, Receiver},
+        crossbeam_channel::Receiver,
         solana_bls_signatures::Signature,
         solana_perf::packet::Packet,
         solana_runtime::{
             bank::Bank,
+            bank_forks::BankForks,
             genesis_utils::{
                 create_genesis_config_with_alpenglow_vote_accounts_no_program,
                 ValidatorVoteKeypairs,
@@ -174,13 +185,12 @@ mod tests {
             &validator_keypairs,
             stakes_vec,
         );
-        let bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
-        let epoch = bank.epoch();
-        let (_tx, rx) = unbounded();
-        let epoch_stakes_service = Arc::new(EpochStakesService::new(bank, epoch, rx));
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let bank_forks = BankForks::new_rw_arc(bank0);
+        let root_bank_cache = RootBankCache::new(bank_forks);
         (
             validator_keypairs,
-            BLSSigVerifier::new(epoch_stakes_service, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(root_bank_cache, verified_vote_sender, message_sender),
         )
     }
 
