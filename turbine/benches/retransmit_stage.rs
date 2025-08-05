@@ -120,6 +120,8 @@ fn bench_retransmitter(bencher: &mut Bencher) {
 
     let num_packets = data_shreds.len();
 
+    let (sender, _) = unbounded();
+
     let retransmit_stage = RetransmitStage::new(
         bank_forks,
         leader_schedule_cache,
@@ -130,6 +132,7 @@ fn bench_retransmitter(bencher: &mut Bencher) {
         Arc::new(solana_rpc::max_slots::MaxSlots::default()),
         None,
         None,
+        sender,
     );
 
     let mut index = 0;
