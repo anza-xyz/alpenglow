@@ -6,7 +6,7 @@ use {
         cluster_nodes::{self, ClusterNodes, ClusterNodesCache, Error, MAX_NUM_TURBINE_HOPS},
     },
     bytes::Bytes,
-    crossbeam_channel::{Receiver, RecvError, TryRecvError},
+    crossbeam_channel::{Receiver, RecvError, Sender, TryRecvError},
     lru::LruCache,
     rand::Rng,
     rayon::{prelude::*, ThreadPool, ThreadPoolBuilder},
@@ -32,6 +32,7 @@ use {
         sendmmsg::{multi_target_send, SendPktsError},
         socket::SocketAddrSpace,
     },
+    solana_votor::event::VotorEvent,
     static_assertions::const_assert_eq,
     std::{
         borrow::Cow,
@@ -224,6 +225,7 @@ fn retransmit(
     max_slots: &MaxSlots,
     rpc_subscriptions: Option<&RpcSubscriptions>,
     slot_status_notifier: Option<&SlotStatusNotifier>,
+    votor_event_sender: &Sender<VotorEvent>,
 ) -> Result<(), RecvError> {
     // Try to receive shreds from the channel without blocking. If the channel
     // is empty precompute turbine trees speculatively. If no cache updates are
@@ -340,6 +342,7 @@ fn retransmit(
         addr_cache,
         rpc_subscriptions,
         slot_status_notifier,
+        votor_event_sender,
     );
     timer_start.stop();
     stats.total_time += timer_start.as_us();
@@ -522,6 +525,7 @@ impl RetransmitStage {
     /// * `leader_schedule_cache` - The leader schedule to verify shreds
     /// * `cluster_info` - This structure needs to be updated and populated by the bank and via gossip.
     /// * `retransmit_receiver` - Receive channel for batches of shreds to be retransmitted.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
@@ -532,6 +536,7 @@ impl RetransmitStage {
         max_slots: Arc<MaxSlots>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
+        votor_event_sender: Sender<VotorEvent>,
     ) -> Self {
         let cluster_nodes_cache = ClusterNodesCache::<RetransmitStage>::new(
             CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
@@ -571,6 +576,7 @@ impl RetransmitStage {
                     &max_slots,
                     rpc_subscriptions.as_deref(),
                     slot_status_notifier.as_ref(),
+                    &votor_event_sender,
                 )
                 .is_ok()
                 {}
@@ -652,6 +658,7 @@ impl RetransmitStats {
         addr_cache: &mut AddrCache,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         slot_status_notifier: Option<&SlotStatusNotifier>,
+        votor_event_sender: &Sender<VotorEvent>,
     ) {
         for (slot, mut slot_stats) in feed {
             addr_cache.record(slot, &mut slot_stats);
@@ -663,6 +670,7 @@ impl RetransmitStats {
                             slot_stats.outset,
                             rpc_subscriptions,
                             slot_status_notifier,
+                            votor_event_sender,
                         );
                     }
                     self.slot_stats.put(slot, slot_stats);
@@ -756,6 +764,7 @@ fn notify_subscribers(
     timestamp: u64, // When the first shred in the slot was received.
     rpc_subscriptions: Option<&RpcSubscriptions>,
     slot_status_notifier: Option<&SlotStatusNotifier>,
+    votor_event_sender: &Sender<VotorEvent>,
 ) {
     if let Some(rpc_subscriptions) = rpc_subscriptions {
         let slot_update = SlotUpdate::FirstShredReceived { slot, timestamp };
@@ -768,6 +777,9 @@ fn notify_subscribers(
             .unwrap()
             .notify_first_shred_received(slot);
     }
+    votor_event_sender
+        .send(VotorEvent::FirstShred(slot))
+        .unwrap();
 }
 
 #[cfg(test)]
