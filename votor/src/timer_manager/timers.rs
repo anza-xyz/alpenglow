@@ -46,13 +46,13 @@ impl TimerState {
     /// Call to make progress on the state machine.
     ///
     /// Returns a potentially empty list of events that should be sent.
-    fn progress(&mut self, delta_block: Duration) -> Vec<VotorEvent> {
+    fn progress(&mut self, delta_block: Duration) -> Option<VotorEvent> {
         let now = Instant::now();
         match self {
             Self::WaitDeltaTimeout { window, timeout } => {
                 assert!(!window.is_empty());
                 if &now < timeout {
-                    return vec![];
+                    return None;
                 }
                 let slot = *window.last().unwrap();
                 let timeout = now.checked_add(delta_block).unwrap();
@@ -60,26 +60,23 @@ impl TimerState {
                     window: window.to_owned(),
                     timeout,
                 };
-                vec![VotorEvent::TimeoutCrashedLeader(slot)]
+                Some(VotorEvent::TimeoutCrashedLeader(slot))
             }
             Self::WaitDeltaBlock { window, timeout } => {
                 assert!(!window.is_empty());
                 if &now < timeout {
-                    return vec![];
+                    return None;
                 }
 
-                let mut events = Vec::with_capacity(2);
-                let slot = window.pop().unwrap();
-                events.push(VotorEvent::Timeout(slot));
+                let ret = Some(VotorEvent::Timeout(window.pop().unwrap()));
                 if window.is_empty() {
                     *self = Self::Done;
-                    return events;
+                } else {
+                    *timeout = now.checked_add(delta_block).unwrap();
                 }
-                events.push(VotorEvent::TimeoutCrashedLeader(*window.last().unwrap()));
-                *timeout = now.checked_add(delta_block).unwrap();
-                events
+                ret
             }
-            Self::Done => vec![],
+            Self::Done => None,
         }
     }
 
@@ -153,7 +150,7 @@ impl Timers {
                     }
 
                     let mut timer = self.timers.remove(&slot).unwrap();
-                    for event in timer.progress(self.delta_block) {
+                    if let Some(event) = timer.progress(self.delta_block) {
                         self.event_sender.send(event).unwrap();
                     }
                     if let Some(next_fire) = timer.next_fire() {
@@ -180,38 +177,38 @@ mod tests {
         let slot = 0;
         let (mut timer_state, next_fire) = TimerState::new(slot, Duration::from_micros(1));
 
-        let duration = next_fire.duration_since(Instant::now());
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 1);
-        assert!(matches!(events[0], VotorEvent::TimeoutCrashedLeader(0)));
+        let next_fire = next_fire.duration_since(Instant::now());
+        let delta_block = Duration::from_micros(1);
 
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 2);
-        assert!(matches!(events[0], VotorEvent::Timeout(0)));
-        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(1)));
+        thread::sleep(next_fire);
+        assert!(matches!(
+            timer_state.progress(delta_block).unwrap(),
+            VotorEvent::TimeoutCrashedLeader(0)
+        ));
 
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 2);
-        assert!(matches!(events[0], VotorEvent::Timeout(1)));
-        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(2)));
+        thread::sleep(next_fire);
+        assert!(matches!(
+            timer_state.progress(delta_block).unwrap(),
+            VotorEvent::Timeout(0)
+        ));
 
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 2);
-        assert!(matches!(events[0], VotorEvent::Timeout(2)));
-        assert!(matches!(events[1], VotorEvent::TimeoutCrashedLeader(3)));
+        thread::sleep(next_fire);
+        assert!(matches!(
+            timer_state.progress(delta_block).unwrap(),
+            VotorEvent::Timeout(1)
+        ));
 
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.len() == 1);
-        assert!(matches!(events[0], VotorEvent::Timeout(3)));
+        thread::sleep(next_fire);
+        assert!(matches!(
+            timer_state.progress(delta_block).unwrap(),
+            VotorEvent::Timeout(2)
+        ));
 
-        thread::sleep(duration);
-        let events = timer_state.progress(Duration::from_micros(1));
-        assert!(events.is_empty());
+        thread::sleep(next_fire);
+        assert!(matches!(
+            timer_state.progress(delta_block).unwrap(),
+            VotorEvent::Timeout(3)
+        ));
         assert!(timer_state.next_fire().is_none());
     }
 
@@ -228,11 +225,9 @@ mod tests {
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
         timers.set_timeouts(0);
-        println!("calling progress");
         while timers.progress().is_some() {
             thread::sleep(duration);
         }
-        println!("recving msgs");
         let mut events = receiver.try_iter().collect::<Vec<_>>();
 
         assert!(matches!(
@@ -240,25 +235,9 @@ mod tests {
             VotorEvent::TimeoutCrashedLeader(0)
         ));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(0)));
-
-        assert!(matches!(
-            events.remove(0),
-            VotorEvent::TimeoutCrashedLeader(1)
-        ));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(1)));
-
-        assert!(matches!(
-            events.remove(0),
-            VotorEvent::TimeoutCrashedLeader(2)
-        ));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
-
-        assert!(matches!(
-            events.remove(0),
-            VotorEvent::TimeoutCrashedLeader(3)
-        ));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
-
         assert!(events.is_empty());
     }
 }
