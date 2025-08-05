@@ -706,23 +706,20 @@ impl CertificatePool {
         self.completed_certificates
             .iter()
             .filter_map(|(cert_id, cert)| {
-                let cert_to_send = match cert
-                    .certificate
-                    .slot()
-                    .cmp(&highest_finalized_with_notarize_slot)
-                {
-                    Ordering::Greater => Some(cert.clone()),
-                    Ordering::Equal => match cert.certificate.certificate_type() {
-                        CertificateType::Finalize | CertificateType::Notarize => {
-                            if has_fast_finalize {
-                                None
-                            } else {
-                                Some(cert.clone())
-                            }
-                        }
-                        CertificateType::FinalizeFast => Some(cert.clone()),
-                        _ => None,
-                    },
+                let cert_to_send = match (
+                    cert.certificate
+                        .slot()
+                        .cmp(&highest_finalized_with_notarize_slot),
+                    cert_id.certificate_type(),
+                    has_fast_finalize,
+                ) {
+                    (Ordering::Greater, _, _)
+                    | (
+                        Ordering::Equal,
+                        CertificateType::Finalize | CertificateType::Notarize,
+                        false,
+                    )
+                    | (Ordering::Equal, CertificateType::FinalizeFast, _) => Some(cert.clone()),
                     _ => None,
                 };
                 if cert_to_send.is_some() {
