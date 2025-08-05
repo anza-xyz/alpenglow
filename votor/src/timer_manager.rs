@@ -1,6 +1,6 @@
 //! Controls the queueing and firing of skip timer events for use
 //! in the event loop.
-//! TODO: Make this mockable in event_handler for tests
+// TODO: Make this mockable in event_handler for tests
 
 mod timers;
 
