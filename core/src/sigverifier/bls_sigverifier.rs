@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_blssigverifier_send_discarded_packets() {
-        let (sender, _) = crossbeam_channel::unbounded();
+        let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
         let message = BLSMessage::Vote(VoteMessage {
@@ -406,5 +406,6 @@ mod tests {
         assert_eq!(verifier.stats.sent, 0);
         assert_eq!(verifier.stats.received, 1);
         assert_eq!(verifier.stats.received_discarded, 1);
+        assert!(receiver.is_empty());
     }
 }
