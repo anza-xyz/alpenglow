@@ -135,12 +135,12 @@ impl VoteHistory {
         self.its_over.contains(&slot)
     }
 
-    /// All votes cast since `slot` including `slot`, for use in
+    /// All votes cast since `slot` excluding `slot`, for use in
     /// refresh
     pub fn votes_cast_since(&self, slot: Slot) -> Vec<Vote> {
         self.votes_cast
             .iter()
-            .filter(|(&s, _)| s >= slot)
+            .filter(|(&s, _)| s > slot)
             .flat_map(|(_, votes)| votes.iter())
             .cloned()
             .collect()
