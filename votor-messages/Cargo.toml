@@ -20,7 +20,7 @@ num_enum = { workspace = true }
 serde = { workspace = true }
 solana-account = { workspace = true }
 solana-bls-signatures = { workspace = true, features = [
-    "solana-signer-derive",
+    "bytemuck", "solana-signer-derive",
 ] }
 solana-clock = { workspace = true }
 solana-frozen-abi = { workspace = true, optional = true, features = [
