@@ -54,6 +54,11 @@ impl SigVerifier for BLSSigVerifier {
         for packet in packet_batches.iter().flatten() {
             stats_updater.received += 1;
 
+            if packet.meta().discard() {
+                stats_updater.received_discarded += 1;
+                continue;
+            }
+
             let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
@@ -388,5 +393,35 @@ mod tests {
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, false);
+    }
+
+    #[test]
+    fn test_blssigverifier_send_discarded_packets() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+        let message = BLSMessage::Vote(VoteMessage {
+            vote: Vote::new_finalization_vote(5),
+            signature: Signature::default(),
+            rank: 0,
+        });
+        let mut packet = Packet::default();
+        packet
+            .populate_packet(None, &message)
+            .expect("Failed to populate packet");
+        packet.meta_mut().set_discard(true);
+        let packets = vec![packet];
+        let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        assert!(verifier.send_packets(packet_batches).is_ok());
+        assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.sent_failed, 0);
+        assert_eq!(verifier.stats.verified_votes_sent, 0);
+        assert_eq!(verifier.stats.verified_votes_sent_failed, 0);
+        assert_eq!(verifier.stats.received, 1);
+        assert_eq!(verifier.stats.received_discarded, 1);
+        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 0);
+        assert_eq!(verifier.stats.received_votes, 0);
+        assert!(receiver.is_empty());
     }
 }
