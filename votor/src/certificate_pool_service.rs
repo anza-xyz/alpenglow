@@ -25,7 +25,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{
-        root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
+        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
     stats::CertificatePoolServiceStats,
@@ -81,7 +81,6 @@ impl CertificatePoolService {
     }
 
     fn maybe_update_root_and_send_new_certificates(
-        cert_pool: &mut CertificatePool,
         root_bank_cache: &mut RootBankCache,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
@@ -96,11 +95,10 @@ impl CertificatePoolService {
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
-            let root_bank = root_bank_cache.root_bank();
-            if root_bank.slot() > *current_root {
+            let bank = root_bank_cache.root_bank();
+            if &bank.slot() > current_root {
                 CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
-                *current_root = root_bank.slot();
-                cert_pool.handle_new_root(root_bank);
+                *current_root = bank.slot();
             }
         }
         // Send new certificates to peers
@@ -155,6 +153,7 @@ impl CertificatePoolService {
         }
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
+                &ctx.root_bank_cache.root_bank(),
                 &ctx.my_pubkey,
                 &ctx.my_vote_pubkey,
                 message,
@@ -163,7 +162,6 @@ impl CertificatePoolService {
                 &ctx.commitment_sender,
             )?;
         Self::maybe_update_root_and_send_new_certificates(
-            cert_pool,
             &mut ctx.root_bank_cache,
             &ctx.bls_sender,
             new_finalized_slot,
@@ -296,6 +294,7 @@ impl CertificatePoolService {
     ///
     /// If a new finalization slot was recognized, returns the slot
     fn add_message_and_maybe_update_commitment(
+        bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
         message: &BLSMessage,
@@ -303,8 +302,14 @@ impl CertificatePoolService {
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
-        let (new_finalized_slot, new_certificates_to_send) =
-            cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
+        let (new_finalized_slot, new_certificates_to_send) = cert_pool.add_message(
+            bank.epoch_schedule(),
+            bank.epoch_stakes_map(),
+            bank.slot(),
+            my_vote_pubkey,
+            message,
+            votor_events,
+        )?;
         let Some(new_finalized_slot) = new_finalized_slot else {
             return Ok((None, new_certificates_to_send));
         };
