@@ -9,6 +9,7 @@ pub(super) struct StatsUpdater {
     pub(super) verified_votes_sent: u64,
     pub(super) verified_votes_sent_failed: u64,
     pub(super) received: u64,
+    pub(super) received_discarded: u64,
     pub(super) received_malformed: u64,
     pub(super) received_no_epoch_stakes: u64,
     pub(super) received_votes: u64,
@@ -26,6 +27,7 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) verified_votes_sent: u64,
     pub(super) verified_votes_sent_failed: u64,
     pub(super) received: u64,
+    pub(super) received_discarded: u64,
     pub(super) received_malformed: u64,
     pub(super) received_no_epoch_stakes: u64,
     pub(super) received_votes: u64,
@@ -40,6 +42,7 @@ impl BLSSigVerifierStats {
             verified_votes_sent: 0,
             verified_votes_sent_failed: 0,
             received: 0,
+            received_discarded: 0,
             received_malformed: 0,
             received_no_epoch_stakes: 0,
             received_votes: 0,
@@ -65,6 +68,7 @@ impl BLSSigVerifierStats {
                 i64
             ),
             ("received", self.received as i64, i64),
+            ("received_discarded", self.received_discarded as i64, i64),
             ("received_votes", self.received_votes as i64, i64),
             (
                 "received_no_epoch_stakes",
@@ -84,6 +88,7 @@ impl BLSSigVerifierStats {
             verified_votes_sent,
             verified_votes_sent_failed,
             received,
+            received_discarded,
             received_malformed,
             received_no_epoch_stakes,
             received_votes,
@@ -94,6 +99,7 @@ impl BLSSigVerifierStats {
         self.verified_votes_sent += verified_votes_sent;
         self.verified_votes_sent_failed += verified_votes_sent_failed;
         self.received += received;
+        self.received_discarded += received_discarded;
         self.received_malformed += received_malformed;
         self.received_no_epoch_stakes += received_no_epoch_stakes;
         self.received_votes += received_votes;
