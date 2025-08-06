@@ -414,8 +414,14 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         assert!(verifier.send_packets(packet_batches).is_ok());
         assert_eq!(verifier.stats.sent, 0);
+        assert_eq!(verifier.stats.sent_failed, 0);
+        assert_eq!(verifier.stats.verified_votes_sent, 0);
+        assert_eq!(verifier.stats.verified_votes_sent_failed, 0);
         assert_eq!(verifier.stats.received, 1);
         assert_eq!(verifier.stats.received_discarded, 1);
+        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.received_no_epoch_stakes, 0);
+        assert_eq!(verifier.stats.received_votes, 0);
         assert!(receiver.is_empty());
     }
 }
