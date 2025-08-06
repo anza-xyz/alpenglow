@@ -520,7 +520,7 @@ impl EventHandler {
         }
     }
 
-    /// Refresh all votes cast for slots >= highest_finalized_slot
+    /// Refresh all votes cast for slots > highest_finalized_slot
     fn refresh_votes(
         my_pubkey: &Pubkey,
         highest_finalized_slot: Slot,
