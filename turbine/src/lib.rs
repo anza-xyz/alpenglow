@@ -1,6 +1,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 mod addr_cache;
+pub mod block_location_lookup;
 pub mod broadcast_stage;
 pub mod cluster_nodes;
 pub mod quic_endpoint;

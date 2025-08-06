@@ -262,6 +262,10 @@ impl Blockstore {
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok()
             & self
+                .block_versions_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
                 .dead_slots_cf
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok()
@@ -307,6 +311,26 @@ impl Blockstore {
                 .is_ok()
             & self
                 .slot_certificates_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_meta_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_erasure_meta_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_index_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_data_shred_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_merkle_root_meta_cf
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok();
 
@@ -346,6 +370,10 @@ impl Blockstore {
                 .delete_file_in_range(from_slot, to_slot)
                 .is_ok()
             & self
+                .block_versions_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
                 .dead_slots_cf
                 .delete_file_in_range(from_slot, to_slot)
                 .is_ok()
@@ -391,6 +419,26 @@ impl Blockstore {
                 .is_ok()
             & self
                 .slot_certificates_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_meta_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_erasure_meta_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_index_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_data_shred_cf
+                .delete_file_in_range(from_slot, to_slot)
+                .is_ok()
+            & self
+                .alt_merkle_root_meta_cf
                 .delete_file_in_range(from_slot, to_slot)
                 .is_ok()
     }
