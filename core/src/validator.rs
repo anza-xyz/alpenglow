@@ -1702,7 +1702,7 @@ impl Validator {
             forwarding_tpu_client,
             bls_verified_message_sender,
             turbine_quic_endpoint_sender,
-            votor_event_sender,
+            votor_event_sender.clone(),
             &identity_keypair,
             config.runtime_config.log_messages_bytes_limit,
             &staked_nodes,
@@ -1753,6 +1753,7 @@ impl Validator {
             outstanding_repair_requests,
             cluster_slots,
             gossip_socket: Some(node.sockets.gossip.clone()),
+            votor_event_sender,
         });
 
         Ok(Self {
