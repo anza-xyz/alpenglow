@@ -4618,7 +4618,7 @@ impl Bank {
             let accounts_db_ = Arc::clone(accounts_db);
             accounts_db.verify_accounts_hash_in_bg.start(|| {
                 Builder::new()
-                    .name("solBgHashVerify".into())
+                    .name("solBgVerfyAccts".into())
                     .spawn(move || {
                         info!("Verifying accounts in background...");
                         let start = Instant::now();
