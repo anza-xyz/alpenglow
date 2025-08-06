@@ -85,7 +85,6 @@ impl CertificatePoolService {
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
-        current_root: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -96,10 +95,6 @@ impl CertificatePoolService {
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
             // Set root
             let bank = root_bank_cache.root_bank();
-            if &bank.slot() > current_root {
-                CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
-                *current_root = bank.slot();
-            }
         }
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
@@ -139,7 +134,6 @@ impl CertificatePoolService {
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
-        current_root: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -166,7 +160,6 @@ impl CertificatePoolService {
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
-            current_root,
             standstill_timer,
             stats,
         )
@@ -196,7 +189,6 @@ impl CertificatePoolService {
         info!("{}: Certificate pool loop initialized", &ctx.my_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
         info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
-        let mut current_root = ctx.root_bank_cache.root_bank().slot();
         let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
@@ -269,7 +261,6 @@ impl CertificatePoolService {
                     &message,
                     &mut cert_pool,
                     &mut events,
-                    &mut current_root,
                     &mut standstill_timer,
                     &mut stats,
                 ) {
