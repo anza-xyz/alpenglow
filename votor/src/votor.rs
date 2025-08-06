@@ -177,7 +177,7 @@ impl Votor {
 
         let identity_keypair = cluster_info.keypair().clone();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
-        
+
         // Get the sharable root bank
         let root_bank = bank_forks.read().unwrap().sharable_root_bank();
 

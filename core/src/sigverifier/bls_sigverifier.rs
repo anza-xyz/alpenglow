@@ -11,9 +11,7 @@ use {
     crossbeam_channel::{Sender, TrySendError},
     solana_clock::Slot,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap,
-    },
+    solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::bls_message::BLSMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},

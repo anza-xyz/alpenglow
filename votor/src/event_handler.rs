@@ -558,8 +558,7 @@ impl EventHandler {
         // it's not necessary to vote skip prior to it and we won't
         // be able to check vote history if we've already voted on it
         let root_bank = voting_context.root_bank.load();
-        let start = first_of_consecutive_leader_slots(slot)
-            .max(root_bank.slot());
+        let start = first_of_consecutive_leader_slots(slot).max(root_bank.slot());
         for s in start..=last_of_consecutive_leader_slots(slot) {
             if voting_context.vote_history.voted(s) {
                 continue;
