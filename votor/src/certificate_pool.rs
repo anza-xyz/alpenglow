@@ -1983,7 +1983,7 @@ mod tests {
         // Should return empty vector if no certificates
         assert!(pool.get_certs_for_standstill().is_empty());
 
-        // Add notar-fallback cert on 3 and finalize cert on 4
+        // Add notar-fallback cert on 3 and notar-fallback cert on 4
         let cert_3 = CertificateMessage {
             certificate: Certificate::new(
                 CertificateType::NotarizeFallback,
@@ -2005,7 +2005,11 @@ mod tests {
             )
             .is_ok());
         let cert_4 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Finalize, 4, None),
+            certificate: Certificate::new(
+                CertificateType::NotarizeFallback,
+                4,
+                Some(Hash::new_unique()),
+            ),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -2025,7 +2029,7 @@ mod tests {
         assert!(certs.iter().any(|cert| cert.certificate.slot() == 3
             && cert.certificate.certificate_type() == CertificateType::NotarizeFallback));
         assert!(certs.iter().any(|cert| cert.certificate.slot() == 4
-            && cert.certificate.certificate_type() == CertificateType::Finalize));
+            && cert.certificate.certificate_type() == CertificateType::NotarizeFallback));
 
         // Add Notarize cert on 5
         let cert_5 = CertificateMessage {
