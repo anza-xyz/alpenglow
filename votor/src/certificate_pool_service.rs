@@ -285,7 +285,7 @@ impl CertificatePoolService {
     ///
     /// If a new finalization slot was recognized, returns the slot
     fn add_message_and_maybe_update_commitment(
-        bank: &Bank,
+        root_bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
         message: &BLSMessage,
@@ -294,9 +294,9 @@ impl CertificatePoolService {
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
         let (new_finalized_slot, new_certificates_to_send) = cert_pool.add_message(
-            bank.epoch_schedule(),
-            bank.epoch_stakes_map(),
-            bank.slot(),
+            root_bank.epoch_schedule(),
+            root_bank.epoch_stakes_map(),
+            root_bank.slot(),
             my_vote_pubkey,
             message,
             votor_events,
