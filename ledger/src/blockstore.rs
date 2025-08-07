@@ -2,6 +2,7 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
+use solana_entry::entry_batch::EntryBatch;
 #[cfg(feature = "dev-context-only-utils")]
 use trees::{Tree, TreeWalk};
 use {
@@ -3882,11 +3883,17 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        bincode::deserialize::<Vec<Entry>>(&payload).map_err(|e| {
-                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                                format!("could not reconstruct entries: {e:?}"),
-                            )))
-                        })
+                        // TODO(karthik): if Alpenglow flag is disabled, return an error on special
+                        // EntryBatches.
+                        EntryBatch::from_bytes(&payload)
+                            .map(|eb| eb.entries)
+                            .map_err(|e| {
+                                BlockstoreError::InvalidShredData(Box::new(
+                                    bincode::ErrorKind::Custom(format!(
+                                        "could not reconstruct entries: {e:?}"
+                                    )),
+                                ))
+                            })
                     })
             })
             .flatten_ok()
