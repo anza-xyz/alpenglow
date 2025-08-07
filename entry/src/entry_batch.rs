@@ -94,100 +94,103 @@ pub struct ParentReadyUpdateV0 {
 }
 
 impl EntryBatch {
-    /// Validates the EntryBatch invariants and converts to bytes.
-    ///
-    /// # Errors
-    /// - If entries.len() > 0 and special is Some
-    /// - If entries.len() == 0 and special is None
-    /// - If bincode serialization fails
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        // Enforce serialization rules
-        let entries_len = self.entries.len();
-        match (entries_len > 0, self.special.is_some()) {
-            (true, true) => {
-                return Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                    "EntryBatch cannot have both entries and special data".to_string(),
-                )));
-            }
-            (false, false) => {
-                return Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                    "EntryBatch must have either entries or special data".to_string(),
-                )));
-            }
-            _ => {} // Valid combinations: (true, false) or (false, true)
+    /// Creates a new EntryBatch with entries only.
+    pub fn new(entries: Vec<Entry>) -> Result<Self, String> {
+        if entries.is_empty() {
+            return Err("EntryBatch with entries cannot be empty".to_string());
         }
+
+        Ok(Self {
+            entries,
+            special: None,
+        })
+    }
+
+    /// Creates a new EntryBatch with special data only.
+    pub fn new_special(special: VersionedSpecialEntry) -> Self {
+        Self {
+            entries: Vec::new(),
+            special: Some(special),
+        }
+    }
+
+    /// Validates the EntryBatch invariants.
+    fn validate(&self) -> Result<(), String> {
+        match (self.entries.is_empty(), self.special.is_some()) {
+            (true, false) => Err("EntryBatch must have either entries or special data".to_string()),
+            (false, true) => {
+                Err("EntryBatch cannot have both entries and special data".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Converts to bytes with validation.
+    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        self.validate()
+            .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
         let mut buffer = Vec::new();
 
         // Write entries length (8 bytes, little-endian)
-        let entries_len = self.entries.len() as u64;
-        buffer.extend_from_slice(&entries_len.to_le_bytes());
+        buffer.extend_from_slice(&(self.entries.len() as u64).to_le_bytes());
 
-        // Write each entry using bincode
+        // Write entries
         for entry in &self.entries {
-            let entry_bytes = bincode::serialize(entry)?;
-            buffer.extend_from_slice(&entry_bytes);
+            buffer.extend_from_slice(&bincode::serialize(entry)?);
         }
 
         // Write special entry if present
-        if let Some(special) = &self.special {
-            let special_bytes = special.to_bytes()?;
-            buffer.extend_from_slice(&special_bytes);
+        if let Some(ref special) = self.special {
+            buffer.extend_from_slice(&special.to_bytes()?);
         }
 
         Ok(buffer)
     }
 
-    /// Deserializes an EntryBatch from bytes and validates invariants.
-    ///
-    /// # Errors
-    /// - If data is too short (< 8 bytes for length header)
-    /// - If the deserialized data violates EntryBatch rules
-    /// - If bincode deserialization fails
+    /// Deserializes from bytes with validation.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        if data.len() < 8 {
+        const HEADER_SIZE: usize = 8;
+
+        if data.len() < HEADER_SIZE {
             return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
         }
 
-        // Read entries length from first 8 bytes
-        let entries_len = u64::from_le_bytes([
-            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-        ]);
+        // Read entries length
+        let entries_len = u64::from_le_bytes(
+            data[..HEADER_SIZE]
+                .try_into()
+                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+        );
 
-        let mut cursor = 8;
-        let mut entries = Vec::new();
+        let mut cursor = HEADER_SIZE;
+        let mut entries = Vec::with_capacity(entries_len as usize);
 
-        // Deserialize each entry
+        // Deserialize entries
         for _ in 0..entries_len {
+            if cursor >= data.len() {
+                return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+            }
+
             let entry: Entry = bincode::deserialize(&data[cursor..])?;
             let entry_size = bincode::serialized_size(&entry)? as usize;
             entries.push(entry);
             cursor += entry_size;
         }
 
-        // Check for remaining data (special entry)
+        // Check for special entry
         let special = if cursor < data.len() {
             Some(VersionedSpecialEntry::from_bytes(&data[cursor..])?)
         } else {
             None
         };
 
-        // Validate invariants after deserialization
-        match (entries.len() > 0, special.is_some()) {
-            (true, true) => {
-                return Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                    "Deserialized EntryBatch cannot have both entries and special data".to_string(),
-                )));
-            }
-            (false, false) => {
-                return Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                    "Deserialized EntryBatch must have either entries or special data".to_string(),
-                )));
-            }
-            _ => {} // Valid combinations
-        }
+        let batch = Self { entries, special };
+        batch
+            .validate()
+            .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
-        Ok(EntryBatch { entries, special })
+        Ok(batch)
     }
 }
 
@@ -201,55 +204,62 @@ impl Serialize for EntryBatch {
     }
 }
 
-struct EntryBatchVisitor;
-
-impl<'de> Visitor<'de> for EntryBatchVisitor {
-    type Value = EntryBatch;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized EntryBatch byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<EntryBatch, E>
-    where
-        E: de::Error,
-    {
-        EntryBatch::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for EntryBatch {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct EntryBatchVisitor;
+
+        impl<'de> Visitor<'de> for EntryBatchVisitor {
+            type Value = EntryBatch;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized EntryBatch byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<EntryBatch, E>
+            where
+                E: de::Error,
+            {
+                EntryBatch::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(EntryBatchVisitor)
     }
 }
 
 impl VersionedSpecialEntry {
-    /// Serializes the versioned special entry to bytes.
-    /// Format: [2 bytes version] + [inner SpecialEntry bytes]
+    /// Creates a new versioned special entry.
+    pub fn new(version: u16, inner: SpecialEntry) -> Self {
+        Self { version, inner }
+    }
+
+    /// Serializes to bytes.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&self.version.to_le_bytes());
-
-        let inner_bytes = self.inner.to_bytes()?;
-        buffer.extend_from_slice(&inner_bytes);
-
+        buffer.extend_from_slice(&self.inner.to_bytes()?);
         Ok(buffer)
     }
 
-    /// Deserializes a versioned special entry from bytes.
-    /// Expects at least 2 bytes for the version header.
+    /// Deserializes from bytes.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        if data.len() < 2 {
+        const VERSION_SIZE: usize = 2;
+
+        if data.len() < VERSION_SIZE {
             return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
         }
 
-        let version = u16::from_le_bytes([data[0], data[1]]);
-        let inner = SpecialEntry::from_bytes(&data[2..])?;
-        Ok(VersionedSpecialEntry { version, inner })
+        let version = u16::from_le_bytes(
+            data[..VERSION_SIZE]
+                .try_into()
+                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+        );
+
+        let inner = SpecialEntry::from_bytes(&data[VERSION_SIZE..])?;
+        Ok(Self { version, inner })
     }
 }
 
@@ -263,45 +273,44 @@ impl Serialize for VersionedSpecialEntry {
     }
 }
 
-struct VersionedSpecialEntryVisitor;
-
-impl<'de> Visitor<'de> for VersionedSpecialEntryVisitor {
-    type Value = VersionedSpecialEntry;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized VersionedSpecialEntry byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<VersionedSpecialEntry, E>
-    where
-        E: de::Error,
-    {
-        VersionedSpecialEntry::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for VersionedSpecialEntry {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct VersionedSpecialEntryVisitor;
+
+        impl<'de> Visitor<'de> for VersionedSpecialEntryVisitor {
+            type Value = VersionedSpecialEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized VersionedSpecialEntry byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedSpecialEntry, E>
+            where
+                E: de::Error,
+            {
+                VersionedSpecialEntry::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(VersionedSpecialEntryVisitor)
     }
 }
 
 impl SpecialEntry {
-    /// Serializes the special entry by delegating to the inner SpecialEntryV0.
-    /// Both V0 and Current variants use the same serialization format.
+    /// Serializes by delegating to inner type.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
-            SpecialEntry::V0(entry) | SpecialEntry::Current(entry) => entry.to_bytes(),
+            Self::V0(entry) | Self::Current(entry) => entry.to_bytes(),
         }
     }
 
-    /// Deserializes a special entry, always creating a Current variant for backward compatibility.
+    /// Deserializes, always creating Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         let entry = SpecialEntryV0::from_bytes(data)?;
-        Ok(SpecialEntry::Current(entry))
+        Ok(Self::Current(entry))
     }
 }
 
@@ -315,50 +324,48 @@ impl Serialize for SpecialEntry {
     }
 }
 
-struct SpecialEntryVisitor;
-
-impl<'de> Visitor<'de> for SpecialEntryVisitor {
-    type Value = SpecialEntry;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized SpecialEntry byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<SpecialEntry, E>
-    where
-        E: de::Error,
-    {
-        SpecialEntry::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for SpecialEntry {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct SpecialEntryVisitor;
+
+        impl<'de> Visitor<'de> for SpecialEntryVisitor {
+            type Value = SpecialEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized SpecialEntry byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<SpecialEntry, E>
+            where
+                E: de::Error,
+            {
+                SpecialEntry::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(SpecialEntryVisitor)
     }
 }
 
 impl SpecialEntryV0 {
-    /// Serializes the special entry V0.
-    /// Empty variant produces 0 bytes, ParentReadyUpdate delegates to its serialization.
+    /// Serializes the special entry.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
-            SpecialEntryV0::Empty => Ok(Vec::new()),
-            SpecialEntryV0::ParentReadyUpdate(update) => update.to_bytes(),
+            Self::Empty => Ok(Vec::new()),
+            Self::ParentReadyUpdate(update) => update.to_bytes(),
         }
     }
 
-    /// Deserializes a special entry V0.
-    /// Empty data creates Empty variant, non-empty data creates ParentReadyUpdate.
+    /// Deserializes based on data length.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         if data.is_empty() {
-            Ok(SpecialEntryV0::Empty)
+            Ok(Self::Empty)
         } else {
             let update = VersionedParentReadyUpdate::from_bytes(data)?;
-            Ok(SpecialEntryV0::ParentReadyUpdate(update))
+            Ok(Self::ParentReadyUpdate(update))
         }
     }
 }
@@ -373,54 +380,55 @@ impl Serialize for SpecialEntryV0 {
     }
 }
 
-struct SpecialEntryV0Visitor;
-
-impl<'de> Visitor<'de> for SpecialEntryV0Visitor {
-    type Value = SpecialEntryV0;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized SpecialEntryV0 byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<SpecialEntryV0, E>
-    where
-        E: de::Error,
-    {
-        SpecialEntryV0::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for SpecialEntryV0 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct SpecialEntryV0Visitor;
+
+        impl<'de> Visitor<'de> for SpecialEntryV0Visitor {
+            type Value = SpecialEntryV0;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized SpecialEntryV0 byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<SpecialEntryV0, E>
+            where
+                E: de::Error,
+            {
+                SpecialEntryV0::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(SpecialEntryV0Visitor)
     }
 }
 
 impl VersionedParentReadyUpdate {
-    /// Serializes the versioned parent ready update.
-    /// Format: [1 byte version] + [inner ParentReadyUpdate bytes]
+    /// Creates a new versioned parent ready update.
+    pub fn new(version: u8, inner: ParentReadyUpdate) -> Self {
+        Self { version, inner }
+    }
+
+    /// Serializes to bytes.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
-        buffer.extend_from_slice(&self.version.to_le_bytes());
-
-        let inner_bytes = self.inner.to_bytes()?;
-        buffer.extend_from_slice(&inner_bytes);
-
+        buffer.push(self.version);
+        buffer.extend_from_slice(&self.inner.to_bytes()?);
         Ok(buffer)
     }
 
-    /// Deserializes a versioned parent ready update.
-    /// Expects at least 1 byte for the version.
+    /// Deserializes from bytes.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         if data.is_empty() {
             return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
         }
+
         let version = data[0];
         let inner = ParentReadyUpdate::from_bytes(&data[1..])?;
-        Ok(VersionedParentReadyUpdate { version, inner })
+        Ok(Self { version, inner })
     }
 }
 
@@ -434,47 +442,44 @@ impl Serialize for VersionedParentReadyUpdate {
     }
 }
 
-struct VersionedParentReadyUpdateVisitor;
-
-impl<'de> Visitor<'de> for VersionedParentReadyUpdateVisitor {
-    type Value = VersionedParentReadyUpdate;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized VersionedParentReadyUpdate byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<VersionedParentReadyUpdate, E>
-    where
-        E: de::Error,
-    {
-        VersionedParentReadyUpdate::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for VersionedParentReadyUpdate {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct VersionedParentReadyUpdateVisitor;
+
+        impl<'de> Visitor<'de> for VersionedParentReadyUpdateVisitor {
+            type Value = VersionedParentReadyUpdate;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized VersionedParentReadyUpdate byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedParentReadyUpdate, E>
+            where
+                E: de::Error,
+            {
+                VersionedParentReadyUpdate::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(VersionedParentReadyUpdateVisitor)
     }
 }
 
 impl ParentReadyUpdate {
-    /// Serializes the parent ready update using bincode for the inner data.
-    /// Both V0 and Current variants use the same serialization format.
+    /// Serializes using bincode for inner data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
-            ParentReadyUpdate::V0(update) | ParentReadyUpdate::Current(update) => {
-                bincode::serialize(update)
-            }
+            Self::V0(update) | Self::Current(update) => bincode::serialize(update),
         }
     }
 
-    /// Deserializes a parent ready update, always creating a Current variant.
+    /// Deserializes, always creating Current variant.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         let update: ParentReadyUpdateV0 = bincode::deserialize(data)?;
-        Ok(ParentReadyUpdate::Current(update))
+        Ok(Self::Current(update))
     }
 }
 
@@ -488,28 +493,28 @@ impl Serialize for ParentReadyUpdate {
     }
 }
 
-struct ParentReadyUpdateVisitor;
-
-impl<'de> Visitor<'de> for ParentReadyUpdateVisitor {
-    type Value = ParentReadyUpdate;
-
-    fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("a serialized ParentReadyUpdate byte stream")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<ParentReadyUpdate, E>
-    where
-        E: de::Error,
-    {
-        ParentReadyUpdate::from_bytes(v).map_err(de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for ParentReadyUpdate {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct ParentReadyUpdateVisitor;
+
+        impl<'de> Visitor<'de> for ParentReadyUpdateVisitor {
+            type Value = ParentReadyUpdate;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized ParentReadyUpdate byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<ParentReadyUpdate, E>
+            where
+                E: de::Error,
+            {
+                ParentReadyUpdate::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
         deserializer.deserialize_bytes(ParentReadyUpdateVisitor)
     }
 }
