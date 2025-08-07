@@ -319,7 +319,6 @@ impl EventHandler {
             }
 
             // Operator called set identity make sure that our keypair is updated for voting
-            // TODO: plug this in from cli
             VotorEvent::SetIdentity => {
                 info!("{my_pubkey}: SetIdentity");
                 if let Err(e) = Self::handle_set_identity(my_pubkey, ctx, vctx) {
