@@ -23,8 +23,8 @@ use crate::entry::Entry;
 /// [variable: optional VersionedSpecialEntry if present]
 /// ```
 pub struct EntryBatch {
-    entries: Vec<Entry>,
-    special: Option<VersionedSpecialEntry>,
+    pub entries: Vec<Entry>,
+    pub special: Option<VersionedSpecialEntry>,
 }
 
 /// A versioned wrapper around SpecialEntry for backward compatibility.
@@ -35,8 +35,8 @@ pub struct EntryBatch {
 /// [variable: serialized SpecialEntry]
 /// ```
 pub struct VersionedSpecialEntry {
-    version: u16,
-    inner: SpecialEntry,
+    pub version: u16,
+    pub inner: SpecialEntry,
 }
 
 /// An enum representing different versions of special entries.
@@ -67,8 +67,8 @@ pub enum SpecialEntryV0 {
 /// [variable: serialized ParentReadyUpdate]
 /// ```
 pub struct VersionedParentReadyUpdate {
-    version: u8,
-    inner: ParentReadyUpdate,
+    pub version: u8,
+    pub inner: ParentReadyUpdate,
 }
 
 /// An enum representing different versions of parent ready updates.
@@ -88,9 +88,9 @@ pub enum ParentReadyUpdate {
 /// Uses bincode serialization for all fields.
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct ParentReadyUpdateV0 {
-    version: u8,
-    new_parent_slot: Slot,
-    new_parent_block_id: Hash,
+    pub version: u8,
+    pub new_parent_slot: Slot,
+    pub new_parent_block_id: Hash,
 }
 
 impl EntryBatch {
@@ -126,7 +126,7 @@ impl EntryBatch {
     }
 
     /// Converts to bytes with validation.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         self.validate()
             .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
@@ -149,7 +149,7 @@ impl EntryBatch {
     }
 
     /// Deserializes from bytes with validation.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const HEADER_SIZE: usize = 8;
 
         if data.len() < HEADER_SIZE {
