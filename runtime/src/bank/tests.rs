@@ -5861,7 +5861,11 @@ fn test_bank_load_program() {
     assert!(bank.process_transaction(&transaction).is_ok());
 
     {
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let [program] = program_cache.get_slot_versions_for_tests(&program_key) else {
             panic!();
         };
@@ -5911,7 +5915,11 @@ fn test_bpf_loader_upgradeable_deploy_with_max_len(formalize_loaded_transaction_
     );
     {
         // Make sure it is not in the cache because the account owner is not a loader
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&program_keypair.pubkey());
         assert!(slot_versions.is_empty());
     }
@@ -5987,7 +5995,11 @@ fn test_bpf_loader_upgradeable_deploy_with_max_len(formalize_loaded_transaction_
         )),
     );
     {
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&program_keypair.pubkey());
         assert_eq!(slot_versions.len(), 1);
         assert_eq!(slot_versions[0].deployment_slot, bank.slot());
@@ -6011,7 +6023,11 @@ fn test_bpf_loader_upgradeable_deploy_with_max_len(formalize_loaded_transaction_
         )),
     );
     {
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&buffer_address);
         assert_eq!(slot_versions.len(), 1);
         assert_eq!(slot_versions[0].deployment_slot, bank.slot());
@@ -6113,7 +6129,11 @@ fn test_bpf_loader_upgradeable_deploy_with_max_len(formalize_loaded_transaction_
     let transaction = Transaction::new(&[&binding], invocation_message, bank.last_blockhash());
     assert!(bank.process_transaction(&transaction).is_ok());
     {
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&program_keypair.pubkey());
         assert_eq!(slot_versions.len(), 2);
         assert_eq!(slot_versions[0].deployment_slot, bank.slot() - 1);
@@ -10802,14 +10822,14 @@ fn test_feature_activation_loaded_programs_cache_preparation_phase(
     let bank = new_bank_from_parent_with_bank_forks(&bank_forks, bank, &Pubkey::default(), 16);
     let current_env = bank
         .transaction_processor
-        .program_cache
+        .global_program_cache
         .read()
         .unwrap()
         .get_environments_for_epoch(0)
         .program_runtime_v1;
     let upcoming_env = bank
         .transaction_processor
-        .program_cache
+        .global_program_cache
         .read()
         .unwrap()
         .get_environments_for_epoch(1)
@@ -10817,7 +10837,11 @@ fn test_feature_activation_loaded_programs_cache_preparation_phase(
 
     // Advance the bank to recompile the program.
     {
-        let program_cache = bank.transaction_processor.program_cache.read().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .read()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&program_keypair.pubkey());
         assert_eq!(slot_versions.len(), 1);
         assert!(Arc::ptr_eq(
@@ -10828,7 +10852,11 @@ fn test_feature_activation_loaded_programs_cache_preparation_phase(
     goto_end_of_slot(bank.clone());
     let bank = new_from_parent_with_fork_next_slot(bank, bank_forks.as_ref());
     {
-        let program_cache = bank.transaction_processor.program_cache.write().unwrap();
+        let program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .write()
+            .unwrap();
         let slot_versions = program_cache.get_slot_versions_for_tests(&program_keypair.pubkey());
         assert_eq!(slot_versions.len(), 2);
         assert!(Arc::ptr_eq(
@@ -10915,7 +10943,11 @@ fn test_feature_activation_loaded_programs_epoch_transition() {
 
     {
         // Prune for rerooting and thus finishing the recompilation phase.
-        let mut program_cache = bank.transaction_processor.program_cache.write().unwrap();
+        let mut program_cache = bank
+            .transaction_processor
+            .global_program_cache
+            .write()
+            .unwrap();
         program_cache.prune(bank.slot(), bank.epoch());
 
         // Unload all (which is only the entry with the new environment)
