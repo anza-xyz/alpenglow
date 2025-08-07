@@ -12,6 +12,9 @@ use {
             progress_map::{ForkProgress, ProgressMap},
         },
         drop_bank_service::DropBankService,
+        repair::cluster_slot_state_verifier::{
+            DuplicateConfirmedSlots, DuplicateSlotsTracker, EpochSlotsFrozenSlots,
+        },
         replay_stage::{ReplayStage, TowerBFTStructures},
         unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
     },
@@ -139,18 +142,20 @@ fn test_scheduler_waited_by_drop_bank_service() {
             progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
         }
 
-        let duplicate_slots_tracker = vec![root - 1, root, root + 1].into_iter().collect();
-        let duplicate_confirmed_slots = vec![root - 1, root, root + 1]
+        let duplicate_slots_tracker: DuplicateSlotsTracker =
+            vec![root - 1, root, root + 1].into_iter().collect();
+        let duplicate_confirmed_slots: DuplicateConfirmedSlots = vec![root - 1, root, root + 1]
             .into_iter()
             .map(|s| (s, Hash::default()))
             .collect();
-        let unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes {
-            votes_per_slot: vec![root - 1, root, root + 1]
-                .into_iter()
-                .map(|s| (s, HashMap::new()))
-                .collect(),
-        };
-        let epoch_slots_frozen_slots = vec![root - 1, root, root + 1]
+        let unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes =
+            UnfrozenGossipVerifiedVoteHashes {
+                votes_per_slot: vec![root - 1, root, root + 1]
+                    .into_iter()
+                    .map(|s| (s, HashMap::new()))
+                    .collect(),
+            };
+        let epoch_slots_frozen_slots: EpochSlotsFrozenSlots = vec![root - 1, root, root + 1]
             .into_iter()
             .map(|slot| (slot, Hash::default()))
             .collect();
