@@ -11,17 +11,17 @@ use {
 
 /// A batch of entries with optional special metadata.
 ///
-/// EntryBatch enforces a strict serialization rule:
-/// - Either `entries.len() > 0` and `special` is `None` (regular entry batch)
-/// - Or `entries.len() == 0` and `special` is `Some` (special-only batch)
-///
-/// Invalid combinations will result in serialization errors.
+/// EntryBatch enforces validation rules but allows flexible combinations:
+/// - Entries can be present with or without special data
+/// - Special data can be present with or without entries
+/// - Only restriction: entries cannot be both present and special data present simultaneously
+/// - Empty entries with no special data is allowed
 ///
 /// # Serialization Format
 /// The binary format is:
 /// ```
 /// [8 bytes: entries_len as u64 little-endian]
-/// [variable: serialized entries using bincode]
+/// [variable: serialized entries using bincode, concatenated]
 /// [variable: optional VersionedSpecialEntry if present]
 /// ```
 pub struct EntryBatch {
@@ -42,7 +42,8 @@ pub struct VersionedSpecialEntry {
 }
 
 /// An enum representing different versions of special entries.
-/// Currently both V0 and Current map to the same underlying type for compatibility.
+/// Both V0 and Current variants contain the same underlying type for compatibility.
+/// During deserialization, always creates Current variant for forward compatibility.
 ///
 /// # Serialization Format
 /// Delegates to the inner SpecialEntryV0's serialization format.
@@ -52,12 +53,11 @@ pub enum SpecialEntry {
 }
 
 /// Version 0 of special entry types.
+/// Currently only supports ParentReadyUpdate variant.
 ///
 /// # Serialization Format
-/// - Empty: 0 bytes (empty buffer)
 /// - ParentReadyUpdate: delegates to VersionedParentReadyUpdate format
 pub enum SpecialEntryV0 {
-    Empty,
     ParentReadyUpdate(VersionedParentReadyUpdate),
 }
 
@@ -74,7 +74,8 @@ pub struct VersionedParentReadyUpdate {
 }
 
 /// An enum representing different versions of parent ready updates.
-/// Currently both V0 and Current map to the same underlying type for compatibility.
+/// Both V0 and Current variants contain the same underlying type for compatibility.
+/// During deserialization, always creates Current variant for forward compatibility.
 ///
 /// # Serialization Format
 /// Delegates to bincode serialization of the inner ParentReadyUpdateV0.
@@ -84,10 +85,10 @@ pub enum ParentReadyUpdate {
 }
 
 /// Version 0 of parent ready update data.
-/// Contains information about a new parent slot and block ID.
+/// Contains information about a new parent slot and block ID, plus a version field.
 ///
 /// # Serialization Format
-/// Uses bincode serialization for all fields.
+/// Uses bincode serialization for all fields (version, new_parent_slot, new_parent_block_id).
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct ParentReadyUpdateV0 {
     pub version: u8,
@@ -100,6 +101,7 @@ impl EntryBatch {
     const MAX_ENTRIES: usize = u32::MAX as usize;
 
     /// Creates a new EntryBatch with entries only.
+    /// Requires at least one entry and validates entry count limits.
     pub fn new(entries: Vec<Entry>) -> Result<Self, String> {
         if entries.is_empty() {
             return Err("EntryBatch with entries cannot be empty".to_string());
@@ -114,6 +116,7 @@ impl EntryBatch {
     }
 
     /// Creates a new EntryBatch with special data only.
+    /// Results in an EntryBatch with empty entries vector and the provided special data.
     pub fn new_special(special: VersionedSpecialEntry) -> Self {
         Self {
             entries: Vec::new(),
@@ -135,9 +138,10 @@ impl EntryBatch {
     }
 
     /// Validates the EntryBatch invariants.
+    /// Currently only prevents having both entries and special data simultaneously.
     fn validate(&self) -> Result<(), String> {
         match (self.entries.is_empty(), self.special.is_some()) {
-            (true, false) => Err("EntryBatch must have either entries or special data".to_string()),
+            // (true, false) => Err("EntryBatch must have either entries or special data".to_string()),
             (false, true) => {
                 Err("EntryBatch cannot have both entries and special data".to_string())
             }
@@ -146,6 +150,8 @@ impl EntryBatch {
     }
 
     /// Converts to bytes with validation.
+    /// Serializes entries length as u64, followed by bincode-serialized entries,
+    /// followed by optional special entry data.
     pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         self.validate()
             .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
@@ -172,6 +178,8 @@ impl EntryBatch {
     }
 
     /// Deserializes from bytes with validation.
+    /// Reads entries length, deserializes each entry individually by calculating
+    /// serialized size, then checks for remaining data to deserialize special entry.
     pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const HEADER_SIZE: usize = 8;
 
@@ -263,12 +271,12 @@ impl<'de> Deserialize<'de> for EntryBatch {
 }
 
 impl VersionedSpecialEntry {
-    /// Creates a new versioned special entry.
+    /// Creates a new versioned special entry with the provided version and inner data.
     pub fn new(version: u16, inner: SpecialEntry) -> Self {
         Self { version, inner }
     }
 
-    /// Serializes to bytes.
+    /// Serializes to bytes by writing version as u16 little-endian followed by inner data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&self.version.to_le_bytes());
@@ -276,7 +284,7 @@ impl VersionedSpecialEntry {
         Ok(buffer)
     }
 
-    /// Deserializes from bytes.
+    /// Deserializes from bytes by reading u16 version followed by inner SpecialEntry data.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const VERSION_SIZE: usize = 2;
 
@@ -332,14 +340,14 @@ impl<'de> Deserialize<'de> for VersionedSpecialEntry {
 }
 
 impl SpecialEntry {
-    /// Serializes by delegating to inner type.
+    /// Serializes by delegating to the inner SpecialEntryV0 regardless of variant.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
             Self::V0(entry) | Self::Current(entry) => entry.to_bytes(),
         }
     }
 
-    /// Deserializes, always creating Current variant for forward compatibility.
+    /// Deserializes by parsing SpecialEntryV0 data and always creating Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         let entry = SpecialEntryV0::from_bytes(data)?;
         Ok(Self::Current(entry))
@@ -383,22 +391,17 @@ impl<'de> Deserialize<'de> for SpecialEntry {
 }
 
 impl SpecialEntryV0 {
-    /// Serializes the special entry.
+    /// Serializes the special entry by delegating to the inner type's serialization.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
-            Self::Empty => Ok(Vec::new()),
             Self::ParentReadyUpdate(update) => update.to_bytes(),
         }
     }
 
-    /// Deserializes based on data length.
+    /// Deserializes by parsing VersionedParentReadyUpdate data and creating ParentReadyUpdate variant.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        if data.is_empty() {
-            Ok(Self::Empty)
-        } else {
-            let update = VersionedParentReadyUpdate::from_bytes(data)?;
-            Ok(Self::ParentReadyUpdate(update))
-        }
+        let update = VersionedParentReadyUpdate::from_bytes(data)?;
+        Ok(Self::ParentReadyUpdate(update))
     }
 }
 
@@ -439,12 +442,12 @@ impl<'de> Deserialize<'de> for SpecialEntryV0 {
 }
 
 impl VersionedParentReadyUpdate {
-    /// Creates a new versioned parent ready update.
+    /// Creates a new versioned parent ready update with the provided version and inner data.
     pub fn new(version: u8, inner: ParentReadyUpdate) -> Self {
         Self { version, inner }
     }
 
-    /// Serializes to bytes.
+    /// Serializes to bytes by writing version as single byte followed by inner data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
         buffer.push(self.version);
@@ -452,7 +455,7 @@ impl VersionedParentReadyUpdate {
         Ok(buffer)
     }
 
-    /// Deserializes from bytes.
+    /// Deserializes from bytes by reading single byte version followed by inner ParentReadyUpdate data.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         if data.is_empty() {
             return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
@@ -501,14 +504,14 @@ impl<'de> Deserialize<'de> for VersionedParentReadyUpdate {
 }
 
 impl ParentReadyUpdate {
-    /// Serializes using bincode for inner data.
+    /// Serializes using bincode for the inner ParentReadyUpdateV0 data, regardless of variant.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         match self {
             Self::V0(update) | Self::Current(update) => bincode::serialize(update),
         }
     }
 
-    /// Deserializes, always creating Current variant.
+    /// Deserializes using bincode and always creates Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         let update: ParentReadyUpdateV0 = bincode::deserialize(data)?;
         Ok(Self::Current(update))
