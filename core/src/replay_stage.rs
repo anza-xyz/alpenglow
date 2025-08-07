@@ -748,16 +748,19 @@ impl ReplayStage {
             let mut skipped_slots_info = SkippedSlotsInfo::default();
             let mut replay_timing = ReplayLoopTiming::default();
             let duplicate_slots_tracker = DuplicateSlotsTracker::default();
-            let duplicate_confirmed_slots: DuplicateConfirmedSlots =
-                DuplicateConfirmedSlots::default();
-            let epoch_slots_frozen_slots: EpochSlotsFrozenSlots = EpochSlotsFrozenSlots::default();
+            let duplicate_confirmed_slots = DuplicateConfirmedSlots::default();
+            let epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
             let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
             let mut purge_repair_slot_counter = PurgeRepairSlotCounter::default();
-            let unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes =
-                UnfrozenGossipVerifiedVoteHashes::default();
-            let mut latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks =
+            let unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes::default();
+            let mut latest_validator_votes_for_frozen_banks =
                 LatestValidatorVotesForFrozenBanks::default();
             let mut tracked_vote_transactions: Vec<TrackedVoteTransaction> = Vec::new();
+            let mut has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
+            let mut last_vote_refresh_time = LastVoteRefreshTime {
+                last_refresh_time: Instant::now(),
+                last_print_time: Instant::now(),
+            };
             let mut tbft_structs = TowerBFTStructures {
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
@@ -765,12 +768,6 @@ impl ReplayStage {
                 unfrozen_gossip_verified_vote_hashes,
                 epoch_slots_frozen_slots,
             };
-            let mut has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
-            let mut last_vote_refresh_time = LastVoteRefreshTime {
-                last_refresh_time: Instant::now(),
-                last_print_time: Instant::now(),
-            };
-
             let (working_bank, in_vote_only_mode) = {
                 let r_bank_forks = bank_forks.read().unwrap();
                 (
