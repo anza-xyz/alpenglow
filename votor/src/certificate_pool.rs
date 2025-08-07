@@ -1977,7 +1977,7 @@ mod tests {
         // Should return empty vector if no certificates
         assert!(pool.get_certs_for_standstill().is_empty());
 
-        // Add notar-fallback cert on 3 and notar-fallback cert on 4
+        // Add notar-fallback cert on 3 and finalize cert on 4
         let cert_3 = CertificateMessage {
             certificate: Certificate::new(
                 CertificateType::NotarizeFallback,
@@ -1999,7 +1999,7 @@ mod tests {
             )
             .is_ok());
         let cert_4 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Finalize, 4, Some(Hash::new_unique())),
+            certificate: Certificate::new(CertificateType::Finalize, 4, None),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
