@@ -1097,12 +1097,16 @@ fn verify_ticks(
 
     if let Some(first_alpenglow_slot) = bank
         .feature_set
-        .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+        .activated_slot(&agave_feature_set::alpenglow::id())
     {
         if bank.parent_slot() >= first_alpenglow_slot {
+            // If fully in an alpenglow epoch, no tick verification is needed
             return Ok(());
         }
 
+        // If the bank is in the alpenglow epoch, but the parent is from an epoch
+        // where the feature flag is not active, we must verify ticks that correspond
+        // to the epoch in which poh is active.
         if bank.slot() >= first_alpenglow_slot && next_bank_tick_height == max_bank_tick_height {
             if entries.is_empty() {
                 // This shouldn't happen, but good to double check
@@ -1833,13 +1837,14 @@ fn process_next_slots(
 }
 
 /// Set alpenglow bank tick height.
-/// For alpenglow banks this tick height is `max_tick_height` - 1,
-/// For a bank on the boundary of feature activation, we need ticks_per_slot for
-/// TowerBFT ticks, and one extra tick for the alpenglow bank
+///
+/// For alpenglow banks this tick height is `max_tick_height` - 1, for a bank on the epoch boundary
+/// of feature activation, we need ticks_per_slot for each slot between the parent and epoch boundary
+/// and one extra tick for the alpenglow bank
 pub fn set_alpenglow_ticks(bank: &Bank) {
     let Some(first_alpenglow_slot) = bank
         .feature_set
-        .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+        .activated_slot(&agave_feature_set::alpenglow::id())
     else {
         return;
     };
@@ -1854,7 +1859,7 @@ pub fn set_alpenglow_ticks(bank: &Bank) {
     };
 
     info!(
-        "Setting tick height for slot {} to {}",
+        "Alpenglow: Setting tick height for slot {} to {}",
         bank.slot(),
         bank.max_tick_height() - alpenglow_ticks
     );

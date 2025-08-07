@@ -962,7 +962,7 @@ impl TestValidator {
 
         for feature in feature_set {
             // TODO remove this
-            if feature != agave_feature_set::secp256k1_program_enabled::id() {
+            if feature != agave_feature_set::alpenglow::id() {
                 genesis_utils::activate_feature(&mut genesis_config, feature);
             }
         }
@@ -1442,7 +1442,7 @@ mod test {
             agave_feature_set::deprecate_rewards_sysvar::id(),
             agave_feature_set::disable_fees_sysvar::id(),
             // TODO: remove this
-            agave_feature_set::secp256k1_program_enabled::id(),
+            agave_feature_set::alpenglow::id(),
         ]
         .into_iter()
         .for_each(|feature| {

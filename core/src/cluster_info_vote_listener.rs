@@ -285,7 +285,7 @@ impl ClusterInfoVoteListener {
         let root_bank = root_bank.load();
         let first_alpenglow_slot = root_bank
             .feature_set
-            .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+            .activated_slot(&agave_feature_set::alpenglow::id())
             .unwrap_or(Slot::MAX);
         let epoch_schedule = root_bank.epoch_schedule();
         votes
@@ -640,7 +640,7 @@ impl ClusterInfoVoteListener {
                 ParsedVoteTransaction::Tower(vote) => {
                     if root_bank
                         .feature_set
-                        .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+                        .is_active(&agave_feature_set::alpenglow::id())
                     {
                         continue;
                     }

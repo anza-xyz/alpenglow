@@ -675,7 +675,7 @@ impl ReplayStage {
             .unwrap()
             .root_bank()
             .feature_set
-            .activated_slot(&agave_feature_set::secp256k1_program_enabled::id());
+            .activated_slot(&agave_feature_set::alpenglow::id());
 
         let mut is_alpenglow_migration_complete = false;
         if let Some(first_alpenglow_slot) = first_alpenglow_slot {
@@ -2680,7 +2680,7 @@ impl ReplayStage {
                     .unwrap()
                     .root_bank()
                     .feature_set
-                    .activated_slot(&agave_feature_set::secp256k1_program_enabled::id());
+                    .activated_slot(&agave_feature_set::alpenglow::id());
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     info!(
                         "alpenglow feature detected in root bank {}, to be enabled on slot {}",
@@ -4526,7 +4526,6 @@ impl ReplayStage {
                     slot_status_notifier,
                     NewBankOptions::default(),
                 );
-                // Set ticks for received banks, block creation loop will take care of leader banks
                 blockstore_processor::set_alpenglow_ticks(&child_bank);
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(

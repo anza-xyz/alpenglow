@@ -739,7 +739,7 @@ impl RepairService {
 
         if !root_bank
             .feature_set
-            .is_active(&agave_feature_set::secp256k1_program_enabled::id())
+            .is_active(&agave_feature_set::alpenglow::id())
         {
             Self::handle_popular_pruned_forks(
                 root_bank.clone(),

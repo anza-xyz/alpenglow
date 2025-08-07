@@ -927,7 +927,7 @@ impl Validator {
             startup_verification_complete = Arc::clone(bank.get_startup_verification_complete());
             let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
                 hfb.feature_set
-                    .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+                    .activated_slot(&agave_feature_set::alpenglow::id())
             });
             let is_alpenglow_enabled = highest_frozen_bank
                 .zip(first_alpenglow_slot)
@@ -1002,7 +1002,7 @@ impl Validator {
 
         let is_alpenglow = genesis_config
             .accounts
-            .contains_key(&agave_feature_set::secp256k1_program_enabled::id());
+            .contains_key(&agave_feature_set::alpenglow::id());
 
         let mut process_blockstore = ProcessBlockStore::new(
             &id,
@@ -1497,7 +1497,7 @@ impl Validator {
         };
         let (tower, vote_history) = if genesis_config
             .accounts
-            .contains_key(&agave_feature_set::secp256k1_program_enabled::id())
+            .contains_key(&agave_feature_set::alpenglow::id())
         {
             let vote_history = match process_blockstore.process_to_create_vote_history() {
                 Ok(vote_history) => {
@@ -2111,7 +2111,7 @@ fn post_process_restored_vote_history(
             datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{}", message);
 
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(
                 hard_fork_restart_slot,
@@ -2119,7 +2119,7 @@ fn post_process_restored_vote_history(
         }
 
         if let Some(warp_slot) = config.warp_slot {
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(warp_slot));
         }
