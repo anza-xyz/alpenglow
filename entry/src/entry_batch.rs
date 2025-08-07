@@ -1,11 +1,13 @@
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
-
-use solana_clock::Slot;
-use solana_hash::Hash;
-
-use crate::entry::Entry;
+use {
+    crate::entry::Entry,
+    serde::{
+        de::{self, Visitor},
+        Deserialize, Deserializer, Serialize, Serializer,
+    },
+    solana_clock::Slot,
+    solana_hash::Hash,
+    std::fmt,
+};
 
 /// A batch of entries with optional special metadata.
 ///
@@ -211,7 +213,7 @@ impl<'de> Deserialize<'de> for EntryBatch {
     {
         struct EntryBatchVisitor;
 
-        impl<'de> Visitor<'de> for EntryBatchVisitor {
+        impl Visitor<'_> for EntryBatchVisitor {
             type Value = EntryBatch;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -280,7 +282,7 @@ impl<'de> Deserialize<'de> for VersionedSpecialEntry {
     {
         struct VersionedSpecialEntryVisitor;
 
-        impl<'de> Visitor<'de> for VersionedSpecialEntryVisitor {
+        impl Visitor<'_> for VersionedSpecialEntryVisitor {
             type Value = VersionedSpecialEntry;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -331,7 +333,7 @@ impl<'de> Deserialize<'de> for SpecialEntry {
     {
         struct SpecialEntryVisitor;
 
-        impl<'de> Visitor<'de> for SpecialEntryVisitor {
+        impl Visitor<'_> for SpecialEntryVisitor {
             type Value = SpecialEntry;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -387,7 +389,7 @@ impl<'de> Deserialize<'de> for SpecialEntryV0 {
     {
         struct SpecialEntryV0Visitor;
 
-        impl<'de> Visitor<'de> for SpecialEntryV0Visitor {
+        impl Visitor<'_> for SpecialEntryV0Visitor {
             type Value = SpecialEntryV0;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -449,7 +451,7 @@ impl<'de> Deserialize<'de> for VersionedParentReadyUpdate {
     {
         struct VersionedParentReadyUpdateVisitor;
 
-        impl<'de> Visitor<'de> for VersionedParentReadyUpdateVisitor {
+        impl Visitor<'_> for VersionedParentReadyUpdateVisitor {
             type Value = VersionedParentReadyUpdate;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -500,7 +502,7 @@ impl<'de> Deserialize<'de> for ParentReadyUpdate {
     {
         struct ParentReadyUpdateVisitor;
 
-        impl<'de> Visitor<'de> for ParentReadyUpdateVisitor {
+        impl Visitor<'_> for ParentReadyUpdateVisitor {
             type Value = ParentReadyUpdate;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

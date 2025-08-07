@@ -2,7 +2,6 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
-use solana_entry::entry_batch::EntryBatch;
 #[cfg(feature = "dev-context-only-utils")]
 use trees::{Tree, TreeWalk};
 use {
@@ -39,7 +38,10 @@ use {
     solana_accounts_db::hardened_unpack::unpack_genesis_archive,
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
-    solana_entry::entry::{create_ticks, Entry},
+    solana_entry::{
+        entry::{create_ticks, Entry},
+        entry_batch::EntryBatch,
+    },
     solana_genesis_config::{GenesisConfig, DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE},
     solana_hash::Hash,
     solana_keypair::Keypair,
