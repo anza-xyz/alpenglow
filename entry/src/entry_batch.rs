@@ -579,7 +579,7 @@ impl<'de> Deserialize<'de> for ParentReadyUpdate {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, solana_hash::Hash, std::iter::repeat};
+    use {super::*, solana_hash::Hash, std::iter::repeat_n};
 
     // Helper function to create a mock Entry
     fn create_mock_entry() -> Entry {
