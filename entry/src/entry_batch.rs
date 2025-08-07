@@ -588,7 +588,7 @@ mod tests {
 
     // Helper function to create multiple mock entries
     fn create_mock_entries(count: usize) -> Vec<Entry> {
-        repeat(create_mock_entry()).take(count).collect()
+        repeat_n(create_mock_entry(), count).collect()
     }
 
     // Helper function to create a ParentReadyUpdateV0
