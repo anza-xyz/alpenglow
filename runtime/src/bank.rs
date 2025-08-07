@@ -1586,7 +1586,7 @@ impl Bank {
         bank_forks: &BankForks,
     ) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .prune_locked(new_root_slot, new_root_epoch, bank_forks);
