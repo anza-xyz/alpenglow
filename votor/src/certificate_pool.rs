@@ -1999,11 +1999,7 @@ mod tests {
             )
             .is_ok());
         let cert_4 = CertificateMessage {
-            certificate: Certificate::new(
-                CertificateType::NotarizeFallback,
-                4,
-                Some(Hash::new_unique()),
-            ),
+            certificate: Certificate::new(CertificateType::Finalize, 4, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
             bitmap: BitVec::new(),
         };
@@ -2023,7 +2019,7 @@ mod tests {
         assert!(certs.iter().any(|cert| cert.certificate.slot() == 3
             && cert.certificate.certificate_type() == CertificateType::NotarizeFallback));
         assert!(certs.iter().any(|cert| cert.certificate.slot() == 4
-            && cert.certificate.certificate_type() == CertificateType::NotarizeFallback));
+            && cert.certificate.certificate_type() == CertificateType::Finalize));
 
         // Add Notarize cert on 5
         let cert_5 = CertificateMessage {
