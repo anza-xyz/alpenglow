@@ -800,10 +800,10 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
-        let bank = bank_forks.read().unwrap().root_bank();
+        let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &bank, None),
+            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank, None),
             bank_forks,
         )
     }
