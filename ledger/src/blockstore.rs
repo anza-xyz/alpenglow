@@ -3888,7 +3888,7 @@ impl Blockstore {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
                         EntryBatch::from_bytes(&payload)
-                            .map(|eb| eb.entries)
+                            .map(|eb| eb.entries().to_vec())
                             .map_err(|e| {
                                 BlockstoreError::InvalidShredData(Box::new(
                                     bincode::ErrorKind::Custom(format!(
