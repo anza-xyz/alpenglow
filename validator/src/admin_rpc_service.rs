@@ -1,4 +1,5 @@
 use {
+    agave_votor::event::VotorEvent,
     crossbeam_channel::Sender,
     jsonrpc_core::{BoxFuture, ErrorCode, MetaIoHandler, Metadata, Result},
     jsonrpc_core_client::{RpcError, transports::ipc},
@@ -941,6 +942,12 @@ impl AdminRpcImpl {
                 .cluster_info
                 .set_keypair(Arc::new(identity_keypair));
             warn!("Identity set to {new_identity}");
+            post_init
+                .votor_event_sender
+                .send(VotorEvent::SetIdentity)
+                .unwrap_or_else(|err| {
+                    error!("Failed to send SetIdentity event: {err}");
+                });
             Ok(())
         })
     }
@@ -1164,6 +1171,7 @@ mod tests {
             let vote_account = vote_keypair.pubkey();
             let start_progress = Arc::new(RwLock::new(ValidatorStartProgress::default()));
             let repair_whitelist = Arc::new(RwLock::new(HashSet::new()));
+            let (votor_event_sender, _votor_event_receiver) = crossbeam_channel::unbounded();
             let meta = AdminRpcRequestMetadata {
                 rpc_addr: None,
                 start_time: SystemTime::now(),
@@ -1188,6 +1196,7 @@ mod tests {
                     node: None,
                     banking_control_sender: mpsc::channel(1).0,
                     snapshot_controller,
+                    votor_event_sender,
                 }))),
                 staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
                 rpc_to_plugin_manager_sender: None,

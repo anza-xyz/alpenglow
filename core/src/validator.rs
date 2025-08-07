@@ -1772,7 +1772,7 @@ impl Validator {
                 )
             }),
             cancel,
-            votor_event_sender,
+            votor_event_sender.clone(),
         );
 
         datapoint_info!(
@@ -1805,6 +1805,7 @@ impl Validator {
             node: Some(node_multihoming),
             banking_control_sender,
             snapshot_controller,
+            votor_event_sender,
         });
 
         Ok(Self {
