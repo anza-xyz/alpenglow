@@ -355,14 +355,12 @@ impl CertificatePool {
                 }
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
-                    self.cleanup();
                 }
             }
             Certificate::FinalizeFast(slot, block_id) => {
                 events.push(VotorEvent::Finalized((slot, block_id)));
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
-                    self.cleanup();
                 }
                 if self
                     .highest_finalized_with_notarize
@@ -650,10 +648,7 @@ impl CertificatePool {
     }
 
     /// Cleanup any old slots from the certificate pool
-    fn cleanup(&mut self) {
-        let Some(slot) = self.highest_finalized_slot else {
-            return;
-        };
+    pub fn cleanup(&mut self, root_slot: Slot) {
         // `completed_certificates`` now only contains entries >= `slot`
         self.completed_certificates
             .retain(|cert_id, _| match cert_id {
@@ -661,11 +656,11 @@ impl CertificatePool {
                 | Certificate::FinalizeFast(s, _)
                 | Certificate::Notarize(s, _)
                 | Certificate::NotarizeFallback(s, _)
-                | Certificate::Skip(s) => s >= &slot,
+                | Certificate::Skip(s) => s >= &root_slot,
             });
-        self.vote_pools = self.vote_pools.split_off(&(slot, VoteType::Finalize));
-        self.slot_stake_counters_map = self.slot_stake_counters_map.split_off(&slot);
-        self.parent_ready_tracker.set_root(slot);
+        self.vote_pools = self.vote_pools.split_off(&(root_slot, VoteType::Finalize));
+        self.slot_stake_counters_map = self.slot_stake_counters_map.split_off(&root_slot);
+        self.parent_ready_tracker.set_root(root_slot);
     }
 
     /// Updates the pubkey used for logging purposes only.
@@ -1939,9 +1934,9 @@ mod tests {
 
         let root_bank = bank_forks.read().unwrap().root_bank();
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));
-        pool.cleanup();
+        pool.cleanup(new_bank.slot());
         let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
-        pool.cleanup();
+        pool.cleanup(new_bank.slot());
         // Send a vote on slot 1, it should be rejected
         let vote = Vote::new_skip_vote(1);
         assert!(pool
