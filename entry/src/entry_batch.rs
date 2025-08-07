@@ -96,11 +96,16 @@ pub struct ParentReadyUpdateV0 {
 }
 
 impl EntryBatch {
+    /// Maximum number of entries allowed in an EntryBatch.
+    const MAX_ENTRIES: usize = u32::MAX as usize;
+
     /// Creates a new EntryBatch with entries only.
     pub fn new(entries: Vec<Entry>) -> Result<Self, String> {
         if entries.is_empty() {
             return Err("EntryBatch with entries cannot be empty".to_string());
         }
+
+        Self::validate_entries_length(entries.len())?;
 
         Ok(Self {
             entries,
@@ -113,6 +118,19 @@ impl EntryBatch {
         Self {
             entries: Vec::new(),
             special: Some(special),
+        }
+    }
+
+    /// Validates that entries length doesn't exceed maximum allowed.
+    fn validate_entries_length(len: usize) -> Result<(), String> {
+        if len >= Self::MAX_ENTRIES {
+            Err(format!(
+                "EntryBatch entries length {} exceeds maximum {}",
+                len,
+                Self::MAX_ENTRIES
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -130,6 +148,9 @@ impl EntryBatch {
     /// Converts to bytes with validation.
     pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         self.validate()
+            .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
+
+        Self::validate_entries_length(self.entries.len())
             .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
         let mut buffer = Vec::new();
@@ -164,6 +185,15 @@ impl EntryBatch {
                 .try_into()
                 .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
         );
+
+        // Check if entries length exceeds maximum
+        if entries_len as usize >= Self::MAX_ENTRIES {
+            return Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
+                "EntryBatch entries length {} exceeds maximum {}",
+                entries_len,
+                Self::MAX_ENTRIES
+            ))));
+        }
 
         let mut cursor = HEADER_SIZE;
         let mut entries = Vec::with_capacity(entries_len as usize);
