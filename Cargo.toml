@@ -531,6 +531,7 @@ solana-short-vec = "2.2.1"
 solana-shred-version = "2.2.1"
 solana-signature = { version = "2.3.0", default-features = false }
 solana-signer = "2.2.1"
+solana-signer-store = "0.1.0"
 solana-slot-hashes = "2.2.1"
 solana-slot-history = "2.2.1"
 solana-stable-layout = "2.2.1"

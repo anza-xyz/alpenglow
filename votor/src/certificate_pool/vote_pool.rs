@@ -68,9 +68,13 @@ impl SimpleVotePool {
         Some(self.vote_entry.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, output: &mut VoteCertificateBuilder) {
+    pub fn add_to_certificate(
+        &self,
+        is_first_vote_type: bool,
+        output: &mut VoteCertificateBuilder,
+    ) {
         output
-            .aggregate(&self.vote_entry.transactions)
+            .aggregate(&self.vote_entry.transactions, is_first_vote_type)
             .expect("Incoming vote message signatures are assumed to be valid")
     }
 }
@@ -144,10 +148,15 @@ impl DuplicateBlockVotePool {
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificateBuilder) {
+    pub fn add_to_certificate(
+        &self,
+        block_id: &Hash,
+        is_first_vote_type: bool,
+        output: &mut VoteCertificateBuilder,
+    ) {
         if let Some(vote_entries) = self.votes.get(block_id) {
             output
-                .aggregate(&vote_entries.transactions)
+                .aggregate(&vote_entries.transactions, is_first_vote_type)
                 .expect("Incoming vote message signatures are assumed to be valid")
         }
     }

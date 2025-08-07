@@ -151,7 +151,6 @@ impl BLSSigVerifier {
 mod tests {
     use {
         super::*,
-        bitvec::prelude::*,
         crossbeam_channel::Receiver,
         solana_bls_signatures::Signature,
         solana_hash::Hash,
@@ -241,9 +240,10 @@ mod tests {
         let (validator_keypairs, mut verifier) =
             create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
 
-        let mut bitmap = BitVec::<u8, Lsb0>::repeat(false, 8);
-        bitmap.set(3, true);
-        bitmap.set(5, true);
+        // TODO(wen): this is just a fake map, when we add verification we should use real map
+        let mut bitmap = vec![0; 5];
+        bitmap[1] = 255;
+        bitmap[4] = 10;
         let vote_rank: usize = 2;
 
         let certificate = Certificate::new(CertificateType::Finalize, 4, None);
