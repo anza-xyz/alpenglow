@@ -1100,9 +1100,13 @@ fn verify_ticks(
         .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
     {
         if bank.parent_slot() >= first_alpenglow_slot {
+            // If fully in an alpenglow epoch, no tick verification is needed
             return Ok(());
         }
 
+        // If the bank is in the alpenglow epoch, but the parent is from an epoch
+        // where the feature flag is not active, we must verify ticks that correspond
+        // to the epoch in which poh is active.
         if bank.slot() >= first_alpenglow_slot && next_bank_tick_height == max_bank_tick_height {
             if entries.is_empty() {
                 // This shouldn't happen, but good to double check
@@ -1854,7 +1858,7 @@ pub fn set_alpenglow_ticks(bank: &Bank) {
     };
 
     info!(
-        "Setting tick height for slot {} to {}",
+        "Alpenglow: Setting tick height for slot {} to {}",
         bank.slot(),
         bank.max_tick_height() - alpenglow_ticks
     );

@@ -1586,7 +1586,7 @@ impl Bank {
         bank_forks: &BankForks,
     ) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .prune_locked(new_root_slot, new_root_epoch, bank_forks);
@@ -4152,6 +4152,10 @@ impl Bank {
             );
     }
 
+    pub fn set_tick_height(&self, tick_height: u64) {
+        self.tick_height.store(tick_height, Relaxed)
+    }
+
     pub fn set_inflation(&self, inflation: Inflation) {
         *self.inflation.write().unwrap() = inflation;
     }
@@ -4951,10 +4955,6 @@ impl Bank {
     /// Return the number of ticks since genesis.
     pub fn tick_height(&self) -> u64 {
         self.tick_height.load(Relaxed)
-    }
-
-    pub fn set_tick_height(&self, tick_height: u64) {
-        self.tick_height.store(tick_height, Relaxed)
     }
 
     /// Return the inflation parameters of the Bank
