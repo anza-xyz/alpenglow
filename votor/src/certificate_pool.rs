@@ -648,7 +648,7 @@ impl CertificatePool {
     }
 
     /// Cleanup any old slots from the certificate pool
-    pub fn cleanup(&mut self, root_slot: Slot) {
+    pub fn prune_old_state(&mut self, root_slot: Slot) {
         // `completed_certificates`` now only contains entries >= `slot`
         self.completed_certificates
             .retain(|cert_id, _| match cert_id {
@@ -1934,9 +1934,9 @@ mod tests {
 
         let root_bank = bank_forks.read().unwrap().root_bank();
         let new_bank = Arc::new(create_bank(2, root_bank, &Pubkey::new_unique()));
-        pool.cleanup(new_bank.slot());
+        pool.prune_old_state(new_bank.slot());
         let new_bank = Arc::new(create_bank(3, new_bank, &Pubkey::new_unique()));
-        pool.cleanup(new_bank.slot());
+        pool.prune_old_state(new_bank.slot());
         // Send a vote on slot 1, it should be rejected
         let vote = Vote::new_skip_vote(1);
         assert!(pool

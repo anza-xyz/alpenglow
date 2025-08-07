@@ -95,7 +95,7 @@ impl CertificatePoolService {
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
         }
-        cert_pool.cleanup(root_bank_cache.root_bank().slot());
+        cert_pool.prune_old_state(root_bank_cache.root_bank().slot());
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
     }
