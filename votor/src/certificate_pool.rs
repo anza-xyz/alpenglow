@@ -681,9 +681,8 @@ impl CertificatePool {
     }
 
     pub fn get_certs_for_standstill(&self) -> Vec<Arc<CertificateMessage>> {
-        let (highest_finalized_with_notarize_slot, has_fast_finalize) = self
-            .highest_finalized_with_notarize
-            .unwrap_or((self.root, false));
+        let (highest_finalized_with_notarize_slot, has_fast_finalize) =
+            self.highest_finalized_with_notarize.unwrap_or((0, true));
         self.completed_certificates
             .iter()
             .filter_map(|(cert_id, cert)| {
@@ -2039,6 +2038,9 @@ mod tests {
         };
         assert!(pool
             .add_message(
+                bank.epoch_schedule(),
+                bank.epoch_stakes_map(),
+                bank.slot(),
                 &Pubkey::new_unique(),
                 &BLSMessage::Certificate(cert_5.clone()),
                 &mut vec![]
@@ -2053,6 +2055,9 @@ mod tests {
         };
         assert!(pool
             .add_message(
+                bank.epoch_schedule(),
+                bank.epoch_stakes_map(),
+                bank.slot(),
                 &Pubkey::new_unique(),
                 &BLSMessage::Certificate(cert_5_finalize.clone()),
                 &mut vec![]
@@ -2139,6 +2144,9 @@ mod tests {
         };
         assert!(pool
             .add_message(
+                bank.epoch_schedule(),
+                bank.epoch_stakes_map(),
+                bank.slot(),
                 &Pubkey::new_unique(),
                 &BLSMessage::Certificate(cert_6_notarize_fallback.clone()),
                 &mut vec![]

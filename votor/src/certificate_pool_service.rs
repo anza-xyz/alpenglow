@@ -81,7 +81,6 @@ impl CertificatePoolService {
     }
 
     fn maybe_update_root_and_send_new_certificates(
-        root_bank_cache: &mut RootBankCache,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
@@ -93,8 +92,6 @@ impl CertificatePoolService {
             // Reset standstill timer
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
-            // Set root
-            let bank = root_bank_cache.root_bank();
         }
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
@@ -156,7 +153,6 @@ impl CertificatePoolService {
                 &ctx.commitment_sender,
             )?;
         Self::maybe_update_root_and_send_new_certificates(
-            &mut ctx.root_bank_cache,
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
