@@ -32,7 +32,7 @@ use {
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex,
+            Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -44,7 +44,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) exit: Arc<AtomicBool>,
     pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
 
-    pub(crate) my_pubkey: Pubkey,
+    pub(crate) my_pubkey: Arc<RwLock<Pubkey>>,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
     pub(crate) root_bank_cache: RootBankCache,
@@ -131,6 +131,7 @@ impl CertificatePoolService {
 
     fn process_bls_message(
         ctx: &mut CertificatePoolContext,
+        my_pubkey: &Pubkey,
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
@@ -148,7 +149,7 @@ impl CertificatePoolService {
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
                 &ctx.root_bank_cache.root_bank(),
-                &ctx.my_pubkey,
+                my_pubkey,
                 &ctx.my_vote_pubkey,
                 message,
                 cert_pool,
@@ -170,7 +171,11 @@ impl CertificatePoolService {
         ctx: &mut CertificatePoolContext,
         channel_name: &str,
     ) -> Result<(), ()> {
-        info!("{}: {} disconnected. Exiting", ctx.my_pubkey, channel_name);
+        info!(
+            "{}: {} disconnected. Exiting",
+            *ctx.my_pubkey.read().unwrap(),
+            channel_name
+        );
         ctx.exit.store(true, Ordering::Relaxed);
         Err(())
     }
@@ -178,8 +183,9 @@ impl CertificatePoolService {
     // Main loop for the certificate pool service, it only exits when any channel is disconnected
     fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
+        let mut my_current_pubkey = *ctx.my_pubkey.read().unwrap();
         let mut cert_pool = certificate_pool::load_from_blockstore(
-            &ctx.my_pubkey,
+            &my_current_pubkey,
             &ctx.root_bank_cache.root_bank(),
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
@@ -187,9 +193,9 @@ impl CertificatePoolService {
         );
 
         // Wait until migration has completed
-        info!("{}: Certificate pool loop initialized", &ctx.my_pubkey);
+        info!("{}: Certificate pool loop initialized", &my_current_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
-        info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
+        info!("{}: Certificate pool loop starting", &my_current_pubkey);
         let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
@@ -206,10 +212,19 @@ impl CertificatePoolService {
 
         // Ingest votes into certificate pool and notify voting loop of new events
         while !ctx.exit.load(Ordering::Relaxed) {
-            // TODO: we need set identity here as well
+            // Update the current pubkey if it has changed
+            {
+                let new_pubkey_guard = ctx.my_pubkey.read().unwrap();
+                if my_current_pubkey != *new_pubkey_guard {
+                    my_current_pubkey = *new_pubkey_guard;
+                    cert_pool.update_pubkey(my_current_pubkey);
+                }
+            }
+
             Self::add_produce_block_event(
                 &mut highest_parent_ready,
                 &cert_pool,
+                &my_current_pubkey,
                 &mut ctx,
                 &mut events,
                 &mut stats,
@@ -231,7 +246,7 @@ impl CertificatePoolService {
                     Err(e) => {
                         trace!(
                             "{}: unable to push standstill certificates into pool {}",
-                            &ctx.my_pubkey,
+                            my_current_pubkey,
                             e
                         );
                     }
@@ -259,6 +274,7 @@ impl CertificatePoolService {
             for message in bls_messages {
                 match Self::process_bls_message(
                     &mut ctx,
+                    &my_current_pubkey,
                     &message,
                     &mut cert_pool,
                     &mut events,
@@ -271,7 +287,11 @@ impl CertificatePoolService {
                     }
                     Err(e) => {
                         // This is a non critical error, a duplicate vote for example
-                        trace!("{}: unable to push vote into pool {}", &ctx.my_pubkey, e);
+                        trace!(
+                            "{}: unable to push vote into pool {}",
+                            &my_current_pubkey,
+                            e
+                        );
                         CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
                     }
                 }
@@ -317,6 +337,7 @@ impl CertificatePoolService {
     fn add_produce_block_event(
         highest_parent_ready: &mut Slot,
         cert_pool: &CertificatePool,
+        my_pubkey: &Pubkey,
         ctx: &mut CertificatePoolContext,
         events: &mut Vec<VotorEvent>,
         stats: &mut CertificatePoolServiceStats,
@@ -347,7 +368,7 @@ impl CertificatePoolService {
             return;
         };
 
-        if leader_pubkey != ctx.my_pubkey {
+        if &leader_pubkey != my_pubkey {
             return;
         }
 
@@ -358,7 +379,7 @@ impl CertificatePoolService {
             warn!(
                 "{}: We have already produced shreds in the window {start_slot}-{end_slot}, \
                     skipping production of our leader window",
-                ctx.my_pubkey
+                my_pubkey,
             );
             return;
         }
@@ -371,7 +392,7 @@ impl CertificatePoolService {
                 warn!(
                     "{}: Leader slot {start_slot} has already been certified, \
                     skipping production of {start_slot}-{end_slot}",
-                    ctx.my_pubkey,
+                    my_pubkey,
                 );
                 CertificatePoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
             }

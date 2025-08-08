@@ -132,6 +132,7 @@ pub(crate) struct SharedContext {
     pub(crate) rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub(crate) leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub(crate) vote_history_storage: Arc<dyn VoteHistoryStorage>,
+    pub(crate) certificate_pool_pubkey: Arc<RwLock<Pubkey>>,
 }
 
 pub struct Votor {
@@ -178,6 +179,7 @@ impl Votor {
         let identity_keypair = cluster_info.keypair().clone();
         let my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
+        let certificate_pool_pubkey = Arc::new(RwLock::new(my_pubkey));
 
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -186,6 +188,7 @@ impl Votor {
             rpc_subscriptions,
             leader_window_notifier,
             vote_history_storage,
+            certificate_pool_pubkey: certificate_pool_pubkey.clone(),
         };
 
         let voting_context = VotingContext {
@@ -227,7 +230,7 @@ impl Votor {
         let cert_pool_context = CertificatePoolContext {
             exit: exit.clone(),
             start: start.clone(),
-            my_pubkey,
+            my_pubkey: certificate_pool_pubkey,
             my_vote_pubkey: vote_account,
             blockstore,
             root_bank_cache: RootBankCache::new(bank_forks.clone()),

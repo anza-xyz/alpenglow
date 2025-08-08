@@ -351,6 +351,7 @@ impl EventHandler {
             *my_pubkey = new_pubkey;
             vctx.vote_history = VoteHistory::restore(ctx.vote_history_storage.as_ref(), my_pubkey)?;
             vctx.identity_keypair = new_identity.clone();
+            *ctx.certificate_pool_pubkey.write().unwrap() = new_pubkey;
             warn!("set-identity: from {my_old_pubkey} to {my_pubkey}");
         }
         Ok(())
