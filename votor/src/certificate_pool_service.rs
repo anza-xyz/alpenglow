@@ -19,6 +19,7 @@ use {
     },
     crossbeam_channel::{select, Sender, TrySendError},
     solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -32,7 +33,7 @@ use {
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex, RwLock,
+            Arc, Condvar, Mutex,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -44,7 +45,7 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) exit: Arc<AtomicBool>,
     pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
 
-    pub(crate) my_pubkey: Arc<RwLock<Pubkey>>,
+    pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
     pub(crate) root_bank_cache: RootBankCache,
@@ -173,7 +174,7 @@ impl CertificatePoolService {
     ) -> Result<(), ()> {
         info!(
             "{}: {} disconnected. Exiting",
-            *ctx.my_pubkey.read().unwrap(),
+            ctx.cluster_info.id(),
             channel_name
         );
         ctx.exit.store(true, Ordering::Relaxed);
@@ -183,7 +184,7 @@ impl CertificatePoolService {
     // Main loop for the certificate pool service, it only exits when any channel is disconnected
     fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
-        let mut my_current_pubkey = *ctx.my_pubkey.read().unwrap();
+        let mut my_current_pubkey = ctx.cluster_info.id();
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &my_current_pubkey,
             &ctx.root_bank_cache.root_bank(),
@@ -213,12 +214,10 @@ impl CertificatePoolService {
         // Ingest votes into certificate pool and notify voting loop of new events
         while !ctx.exit.load(Ordering::Relaxed) {
             // Update the current pubkey if it has changed
-            {
-                let new_pubkey_guard = ctx.my_pubkey.read().unwrap();
-                if my_current_pubkey != *new_pubkey_guard {
-                    my_current_pubkey = *new_pubkey_guard;
-                    cert_pool.update_pubkey(my_current_pubkey);
-                }
+            let new_pubkey = ctx.cluster_info.id();
+            if my_current_pubkey != new_pubkey {
+                my_current_pubkey = new_pubkey;
+                cert_pool.update_pubkey(my_current_pubkey);
             }
 
             Self::add_produce_block_event(
