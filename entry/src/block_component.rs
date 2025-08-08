@@ -3,7 +3,7 @@
 /// Most of the time, an EntryBatch is a Vec<Entry> and nothing else. A block (roughly) consists of
 /// a number of EntryBatches. However, periodically, there are special messages that a block needs
 /// to contain. To accommodate these special messages, EntryBatch allows for the inclusion of
-/// special data via VersionedSpecialEntry.
+/// special data via VersionedBlockMarker.
 ///
 /// For now, we only have a single special entry type, UpdateParent, used in Alpenglow's optimistic
 /// block packing algorithm. Other special entry types (e.g., BlockFooter) may be added in the
@@ -29,14 +29,14 @@
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// | zeros                  (64 bits of 0) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// | SpecialEntry version        (16 bits) |
+/// | BlockMarker version        (16 bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// | variant                      (8 bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// | Special batch variant bits   (X bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ///
-/// UpdateParent Layout, SpecialEntry Variant
+/// UpdateParent Layout, BlockMarker Variant
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// | UpdateParent version         (8 bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -67,11 +67,11 @@ use {
 /// The binary format is:
 /// [8 bytes: entries_len as u64 little-endian]
 /// [variable: serialized entries using bincode, concatenated]
-/// [variable: optional VersionedSpecialEntry if present]
+/// [variable: optional VersionedBlockMarker if present]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntryBatch {
-    EntryVec(Vec<Entry>),
-    Special(VersionedSpecialEntry),
+pub enum BlockComponent {
+    Entries(Vec<Entry>),
+    BlockMarker(VersionedBlockMarker),
 }
 
 /// A versioned special entry enum with different versions for backward compatibility.
@@ -80,11 +80,11 @@ pub enum EntryBatch {
 ///
 /// # Serialization Format
 /// [2 bytes: version as u16 little-endian]
-/// [variable: serialized SpecialEntryV0]
+/// [variable: serialized BlockMarkerV0]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionedSpecialEntry {
-    V0(SpecialEntryV0),
-    Current(SpecialEntryV0),
+pub enum VersionedBlockMarker {
+    V0(BlockMarkerV0),
+    Current(BlockMarkerV0),
 }
 
 /// Version 0 of special entry types.
@@ -93,7 +93,7 @@ pub enum VersionedSpecialEntry {
 /// # Serialization Format
 /// - ParentReadyUpdate: delegates to VersionedParentReadyUpdate format
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpecialEntryV0 {
+pub enum BlockMarkerV0 {
     ParentReadyUpdate(VersionedParentReadyUpdate),
 }
 
@@ -122,13 +122,13 @@ pub struct ParentReadyUpdateV0 {
     pub new_parent_block_id: Hash,
 }
 
-impl Default for EntryBatch {
+impl Default for BlockComponent {
     fn default() -> Self {
-        Self::EntryVec(Vec::new())
+        Self::Entries(Vec::new())
     }
 }
 
-impl EntryBatch {
+impl BlockComponent {
     /// Maximum number of entries allowed in an EntryBatch.
     ///
     /// TODO(karthik): lower this to a reasonable value.
@@ -142,38 +142,38 @@ impl EntryBatch {
         }
 
         Self::validate_entries_length(entries.len())?;
-        Ok(Self::EntryVec(entries))
+        Ok(Self::Entries(entries))
     }
 
     /// Creates a new EntryBatch with special data only.
-    pub const fn new_special(special: VersionedSpecialEntry) -> Self {
-        Self::Special(special)
+    pub const fn new_special(special: VersionedBlockMarker) -> Self {
+        Self::BlockMarker(special)
     }
 
     /// Returns the entries from the EntryBatch.
     pub fn entries(&self) -> &[Entry] {
         match self {
-            Self::EntryVec(entries) => entries,
-            Self::Special(_) => &[],
+            Self::Entries(entries) => entries,
+            Self::BlockMarker(_) => &[],
         }
     }
 
     /// Returns the special data from the EntryBatch if present.
-    pub const fn special(&self) -> Option<&VersionedSpecialEntry> {
+    pub const fn special(&self) -> Option<&VersionedBlockMarker> {
         match self {
-            Self::EntryVec(_) => None,
-            Self::Special(special) => Some(special),
+            Self::Entries(_) => None,
+            Self::BlockMarker(special) => Some(special),
         }
     }
 
     /// Returns true if the EntryBatch contains entries.
     pub const fn is_entry_vec(&self) -> bool {
-        matches!(self, Self::EntryVec(_))
+        matches!(self, Self::Entries(_))
     }
 
     /// Returns true if the EntryBatch contains special data.
     pub const fn is_special(&self) -> bool {
-        matches!(self, Self::Special(_))
+        matches!(self, Self::BlockMarker(_))
     }
 
     /// Validates that entries length doesn't exceed maximum allowed.
@@ -195,7 +195,7 @@ impl EntryBatch {
         let mut buffer = Vec::new();
 
         match self {
-            Self::EntryVec(entries) => {
+            Self::Entries(entries) => {
                 Self::validate_entries_length(entries.len())
                     .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
@@ -207,7 +207,7 @@ impl EntryBatch {
                     buffer.extend_from_slice(&bincode::serialize(entry)?);
                 }
             }
-            Self::Special(special) => {
+            Self::BlockMarker(special) => {
                 // Write entries length as 0 (8 bytes, little-endian)
                 buffer.extend_from_slice(&0u64.to_le_bytes());
                 // Write special entry
@@ -263,9 +263,9 @@ impl EntryBatch {
         let batch = if let Some(remaining_data) = data.get(cursor..) {
             if !remaining_data.is_empty() {
                 // There's remaining data, so it should be special data
-                let special = VersionedSpecialEntry::from_bytes(remaining_data)?;
+                let special = VersionedBlockMarker::from_bytes(remaining_data)?;
                 if entries.is_empty() {
-                    Self::Special(special)
+                    Self::BlockMarker(special)
                 } else {
                     // This would be an invalid state - both entries and special data
                     return Err(bincode::Error::new(bincode::ErrorKind::Custom(
@@ -273,17 +273,17 @@ impl EntryBatch {
                     )));
                 }
             } else {
-                Self::EntryVec(entries)
+                Self::Entries(entries)
             }
         } else {
-            Self::EntryVec(entries)
+            Self::Entries(entries)
         };
 
         Ok(batch)
     }
 }
 
-impl Serialize for EntryBatch {
+impl Serialize for BlockComponent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -293,7 +293,7 @@ impl Serialize for EntryBatch {
     }
 }
 
-impl<'de> Deserialize<'de> for EntryBatch {
+impl<'de> Deserialize<'de> for BlockComponent {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -301,17 +301,17 @@ impl<'de> Deserialize<'de> for EntryBatch {
         struct EntryBatchVisitor;
 
         impl Visitor<'_> for EntryBatchVisitor {
-            type Value = EntryBatch;
+            type Value = BlockComponent;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a serialized EntryBatch byte stream")
             }
 
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<EntryBatch, E>
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<BlockComponent, E>
             where
                 E: de::Error,
             {
-                EntryBatch::from_bytes(value).map_err(de::Error::custom)
+                BlockComponent::from_bytes(value).map_err(de::Error::custom)
             }
         }
 
@@ -319,14 +319,14 @@ impl<'de> Deserialize<'de> for EntryBatch {
     }
 }
 
-impl VersionedSpecialEntry {
+impl VersionedBlockMarker {
     /// Creates a new versioned special entry with V0 variant.
-    pub const fn new_v0(entry: SpecialEntryV0) -> Self {
+    pub const fn new_v0(entry: BlockMarkerV0) -> Self {
         Self::V0(entry)
     }
 
     /// Creates a new versioned special entry with Current variant.
-    pub const fn new(entry: SpecialEntryV0) -> Self {
+    pub const fn new(entry: BlockMarkerV0) -> Self {
         Self::Current(entry)
     }
 
@@ -338,7 +338,7 @@ impl VersionedSpecialEntry {
         }
     }
 
-    /// Serializes to bytes by writing version as u16 little-endian followed by SpecialEntryV0 data.
+    /// Serializes to bytes by writing version as u16 little-endian followed by BlockMarkerV0 data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&self.version().to_le_bytes());
@@ -350,7 +350,7 @@ impl VersionedSpecialEntry {
         Ok(buffer)
     }
 
-    /// Deserializes from bytes by reading u16 version followed by SpecialEntryV0 data.
+    /// Deserializes from bytes by reading u16 version followed by BlockMarkerV0 data.
     /// Always creates Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const VERSION_SIZE: usize = 2;
@@ -365,12 +365,12 @@ impl VersionedSpecialEntry {
                 .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
         );
 
-        let entry = SpecialEntryV0::from_bytes(&data[VERSION_SIZE..])?;
+        let entry = BlockMarkerV0::from_bytes(&data[VERSION_SIZE..])?;
         Ok(Self::Current(entry))
     }
 }
 
-impl Serialize for VersionedSpecialEntry {
+impl Serialize for VersionedBlockMarker {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -380,33 +380,33 @@ impl Serialize for VersionedSpecialEntry {
     }
 }
 
-impl<'de> Deserialize<'de> for VersionedSpecialEntry {
+impl<'de> Deserialize<'de> for VersionedBlockMarker {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct VersionedSpecialEntryVisitor;
+        struct VersionedBlockMarkerVisitor;
 
-        impl Visitor<'_> for VersionedSpecialEntryVisitor {
-            type Value = VersionedSpecialEntry;
+        impl Visitor<'_> for VersionedBlockMarkerVisitor {
+            type Value = VersionedBlockMarker;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized VersionedSpecialEntry byte stream")
+                formatter.write_str("a serialized VersionedBlockMarker byte stream")
             }
 
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedSpecialEntry, E>
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedBlockMarker, E>
             where
                 E: de::Error,
             {
-                VersionedSpecialEntry::from_bytes(value).map_err(de::Error::custom)
+                VersionedBlockMarker::from_bytes(value).map_err(de::Error::custom)
             }
         }
 
-        deserializer.deserialize_bytes(VersionedSpecialEntryVisitor)
+        deserializer.deserialize_bytes(VersionedBlockMarkerVisitor)
     }
 }
 
-impl SpecialEntryV0 {
+impl BlockMarkerV0 {
     /// Serializes the special entry by delegating to the inner type's serialization.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let Self::ParentReadyUpdate(update) = self;
@@ -420,7 +420,7 @@ impl SpecialEntryV0 {
     }
 }
 
-impl Serialize for SpecialEntryV0 {
+impl Serialize for BlockMarkerV0 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -430,29 +430,29 @@ impl Serialize for SpecialEntryV0 {
     }
 }
 
-impl<'de> Deserialize<'de> for SpecialEntryV0 {
+impl<'de> Deserialize<'de> for BlockMarkerV0 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct SpecialEntryV0Visitor;
+        struct BlockMarkerV0Visitor;
 
-        impl Visitor<'_> for SpecialEntryV0Visitor {
-            type Value = SpecialEntryV0;
+        impl Visitor<'_> for BlockMarkerV0Visitor {
+            type Value = BlockMarkerV0;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized SpecialEntryV0 byte stream")
+                formatter.write_str("a serialized BlockMarkerV0 byte stream")
             }
 
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<SpecialEntryV0, E>
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<BlockMarkerV0, E>
             where
                 E: de::Error,
             {
-                SpecialEntryV0::from_bytes(value).map_err(de::Error::custom)
+                BlockMarkerV0::from_bytes(value).map_err(de::Error::custom)
             }
         }
 
-        deserializer.deserialize_bytes(SpecialEntryV0Visitor)
+        deserializer.deserialize_bytes(BlockMarkerV0Visitor)
     }
 }
 
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn test_entry_batch_new_valid() {
         let entries = create_mock_entries(3);
-        let batch = EntryBatch::new(entries).unwrap();
+        let batch = BlockComponent::new(entries).unwrap();
         assert_eq!(batch.entries().len(), 3);
         assert!(batch.special().is_none());
     }
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn test_entry_batch_new_empty_entries() {
         let entries = Vec::new();
-        let result = EntryBatch::new(entries);
+        let result = BlockComponent::new(entries);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot be empty"));
     }
@@ -596,17 +596,17 @@ mod tests {
         // by creating a batch with entries and then manually testing the length validation
 
         // First test that MAX_ENTRIES itself fails
-        let result = EntryBatch::validate_entries_length(EntryBatch::MAX_ENTRIES);
+        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum"));
 
         // Test that MAX_ENTRIES + 1 also fails
-        let result = EntryBatch::validate_entries_length(EntryBatch::MAX_ENTRIES + 1);
+        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES + 1);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum"));
 
         // Test that MAX_ENTRIES - 1 succeeds
-        let result = EntryBatch::validate_entries_length(EntryBatch::MAX_ENTRIES - 1);
+        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES - 1);
         assert!(result.is_ok());
     }
 
@@ -616,21 +616,21 @@ mod tests {
         let mut data = Vec::new();
 
         // Write entries length as u32::MAX (which equals MAX_ENTRIES)
-        data.extend_from_slice(&(EntryBatch::MAX_ENTRIES as u64).to_le_bytes());
+        data.extend_from_slice(&(BlockComponent::MAX_ENTRIES as u64).to_le_bytes());
 
         // Add some dummy data to prevent other errors
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = EntryBatch::from_bytes(&data);
+        let result = BlockComponent::from_bytes(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
         // Test with even larger number
         let mut data = Vec::new();
-        data.extend_from_slice(&((EntryBatch::MAX_ENTRIES + 1000) as u64).to_le_bytes());
+        data.extend_from_slice(&((BlockComponent::MAX_ENTRIES + 1000) as u64).to_le_bytes());
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = EntryBatch::from_bytes(&data);
+        let result = BlockComponent::from_bytes(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
@@ -639,17 +639,17 @@ mod tests {
         data.extend_from_slice(&u64::MAX.to_le_bytes());
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = EntryBatch::from_bytes(&data);
+        let result = BlockComponent::from_bytes(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
         // Test that MAX_ENTRIES - 1 would succeed (if we had valid entry data)
         let mut data = Vec::new();
-        data.extend_from_slice(&((EntryBatch::MAX_ENTRIES - 1) as u64).to_le_bytes());
+        data.extend_from_slice(&((BlockComponent::MAX_ENTRIES - 1) as u64).to_le_bytes());
         // Note: This will still fail because we don't have valid entry data,
         // but it should fail for a different reason (not the length check)
 
-        let result = EntryBatch::from_bytes(&data);
+        let result = BlockComponent::from_bytes(&data);
         assert!(result.is_err());
         // Should NOT contain "exceeds maximum" since the length is valid
         assert!(!result.unwrap_err().to_string().contains("exceeds maximum"));
@@ -659,7 +659,7 @@ mod tests {
     fn test_entry_batch_new_max_entries() {
         // Test near the boundary - creating u32::MAX entries would be impractical
         // So we'll test the validation logic directly
-        let result = EntryBatch::validate_entries_length(EntryBatch::MAX_ENTRIES);
+        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("exceeds maximum"));
     }
@@ -667,9 +667,8 @@ mod tests {
     #[test]
     fn test_entry_batch_new_special() {
         let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
-        let special =
-            VersionedSpecialEntry::new(SpecialEntryV0::ParentReadyUpdate(versioned_update));
-        let batch = EntryBatch::new_special(special);
+        let special = VersionedBlockMarker::new(BlockMarkerV0::ParentReadyUpdate(versioned_update));
+        let batch = BlockComponent::new_special(special);
         assert_eq!(batch.entries().len(), 0);
         assert!(batch.special().is_some());
     }
@@ -678,7 +677,7 @@ mod tests {
     #[test]
     fn test_entry_batch_valid_entries_only() {
         let entries = create_mock_entries(3);
-        let batch = EntryBatch::new(entries).unwrap();
+        let batch = BlockComponent::new(entries).unwrap();
 
         // Test serialization
         let bytes = batch.to_bytes().unwrap();
@@ -691,13 +690,13 @@ mod tests {
         assert_eq!(entries_len, 3);
 
         // Test deserialization
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
         assert_eq!(deserialized.entries().len(), 3);
         assert!(deserialized.special().is_none());
 
         // Test serde serialization
         let serialized = bincode::serialize(&batch).unwrap();
-        let serde_deserialized: EntryBatch = bincode::deserialize(&serialized).unwrap();
+        let serde_deserialized: BlockComponent = bincode::deserialize(&serialized).unwrap();
         assert_eq!(serde_deserialized.entries().len(), 3);
         assert!(serde_deserialized.special().is_none());
     }
@@ -705,9 +704,8 @@ mod tests {
     #[test]
     fn test_entry_batch_valid_special_only() {
         let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
-        let special =
-            VersionedSpecialEntry::new(SpecialEntryV0::ParentReadyUpdate(versioned_update));
-        let batch = EntryBatch::new_special(special);
+        let special = VersionedBlockMarker::new(BlockMarkerV0::ParentReadyUpdate(versioned_update));
+        let batch = BlockComponent::new_special(special);
 
         // Test serialization
         let bytes = batch.to_bytes().unwrap();
@@ -720,13 +718,13 @@ mod tests {
         assert_eq!(entries_len, 0);
 
         // Test deserialization
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
         assert_eq!(deserialized.entries().len(), 0);
         assert!(deserialized.special().is_some());
 
         // Test serde serialization
         let serialized = bincode::serialize(&batch).unwrap();
-        let serde_deserialized: EntryBatch = bincode::deserialize(&serialized).unwrap();
+        let serde_deserialized: BlockComponent = bincode::deserialize(&serialized).unwrap();
         assert_eq!(serde_deserialized.entries().len(), 0);
         assert!(serde_deserialized.special().is_some());
     }
@@ -734,29 +732,29 @@ mod tests {
     #[test]
     fn test_entry_batch_from_bytes_insufficient_data() {
         let short_data = vec![1, 2, 3]; // Less than 8 bytes
-        let result = EntryBatch::from_bytes(&short_data);
+        let result = BlockComponent::from_bytes(&short_data);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_entry_batch_large_entries_count() {
         let entries = create_mock_entries(1000);
-        let batch = EntryBatch::EntryVec(entries);
+        let batch = BlockComponent::Entries(entries);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
         assert_eq!(deserialized.entries().len(), 1000);
     }
 
     #[test]
     fn test_entry_batch_empty_entries_with_special() {
-        let special = VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
+        let special = VersionedBlockMarker::Current(BlockMarkerV0::ParentReadyUpdate(
             VersionedParentReadyUpdate::Current(create_parent_ready_update()),
         ));
-        let batch = EntryBatch::Special(special);
+        let batch = BlockComponent::BlockMarker(special);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
         assert_eq!(deserialized.entries().len(), 0);
         assert!(deserialized.special().is_some());
@@ -855,38 +853,38 @@ mod tests {
         assert_eq!(original_data, deser_data);
     }
 
-    // SpecialEntryV0 Tests
+    // BlockMarkerV0 Tests
     #[test]
     fn test_special_entry_v0_parent_ready_update_serialization() {
         let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
-        let entry = SpecialEntryV0::ParentReadyUpdate(versioned_update);
+        let entry = BlockMarkerV0::ParentReadyUpdate(versioned_update);
 
         let bytes = entry.to_bytes().unwrap();
         assert!(!bytes.is_empty());
 
-        let deserialized = SpecialEntryV0::from_bytes(&bytes).unwrap();
-        let SpecialEntryV0::ParentReadyUpdate(update) = deserialized;
+        let deserialized = BlockMarkerV0::from_bytes(&bytes).unwrap();
+        let BlockMarkerV0::ParentReadyUpdate(update) = deserialized;
         assert_eq!(update.version(), 0);
 
         let serialized = bincode::serialize(&entry).unwrap();
-        let SpecialEntryV0::ParentReadyUpdate(_) = bincode::deserialize(&serialized).unwrap();
+        let BlockMarkerV0::ParentReadyUpdate(_) = bincode::deserialize(&serialized).unwrap();
     }
 
-    // VersionedSpecialEntry Tests
+    // VersionedBlockMarker Tests
     #[test]
     fn test_versioned_special_entry_serialization() {
         let versioned_parent = VersionedParentReadyUpdate::new(create_parent_ready_update());
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
-        let versioned_entry = VersionedSpecialEntry::new(special_entry);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_parent);
+        let versioned_entry = VersionedBlockMarker::new(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         assert!(bytes.len() >= 2);
 
-        let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
         assert_eq!(versioned_entry.version(), deserialized.version());
 
         let serialized = bincode::serialize(&versioned_entry).unwrap();
-        let serde_deserialized: VersionedSpecialEntry = bincode::deserialize(&serialized).unwrap();
+        let serde_deserialized: VersionedBlockMarker = bincode::deserialize(&serialized).unwrap();
         assert_eq!(versioned_entry.version(), serde_deserialized.version());
     }
 
@@ -895,17 +893,16 @@ mod tests {
         let versioned_update = VersionedParentReadyUpdate::new(
             create_parent_ready_update_with_data(12345, Hash::new_unique()),
         );
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_update);
-        let versioned_entry = VersionedSpecialEntry::new_v0(special_entry);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_update);
+        let versioned_entry = VersionedBlockMarker::new_v0(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
-        let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
         assert_eq!(versioned_entry.version(), deserialized.version());
 
         // Should be Current variant after deserialization
-        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
-            deserialized
+        let VersionedBlockMarker::Current(BlockMarkerV0::ParentReadyUpdate(update)) = deserialized
         else {
             panic!("Expected Current(ParentReadyUpdate) variant");
         };
@@ -920,18 +917,18 @@ mod tests {
     #[test]
     fn test_versioned_special_entry_insufficient_data() {
         let short_data = vec![1]; // Less than 2 bytes
-        let result = VersionedSpecialEntry::from_bytes(&short_data);
+        let result = VersionedBlockMarker::from_bytes(&short_data);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_versioned_special_entry_zero_version() {
         let versioned_parent = VersionedParentReadyUpdate::new(create_parent_ready_update());
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
-        let versioned_entry = VersionedSpecialEntry::new_v0(special_entry);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_parent);
+        let versioned_entry = VersionedBlockMarker::new_v0(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
-        let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
         assert_eq!(deserialized.version(), 0);
     }
 
@@ -941,13 +938,13 @@ mod tests {
         let complex_hash = Hash::new_unique();
         let parent_update = create_parent_ready_update_with_data(u64::MAX, complex_hash);
         let versioned_parent_update = VersionedParentReadyUpdate::new(parent_update);
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent_update);
-        let versioned_special = VersionedSpecialEntry::new(special_entry);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_parent_update);
+        let versioned_special = VersionedBlockMarker::new(special_entry);
 
-        let batch = EntryBatch::new_special(versioned_special);
+        let batch = BlockComponent::new_special(versioned_special);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
         assert_eq!(deserialized.entries().len(), 0);
         assert!(deserialized.special().is_some());
@@ -955,7 +952,7 @@ mod tests {
         let special = deserialized.special().unwrap();
         assert_eq!(special.version(), 0);
 
-        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = special
+        let VersionedBlockMarker::Current(BlockMarkerV0::ParentReadyUpdate(update)) = special
         else {
             panic!("Expected Current(ParentReadyUpdate) variant");
         };
@@ -968,7 +965,7 @@ mod tests {
         assert_eq!(data.new_parent_block_id, complex_hash);
 
         let serde_bytes = bincode::serialize(&batch).unwrap();
-        let serde_deserialized: EntryBatch = bincode::deserialize(&serde_bytes).unwrap();
+        let serde_deserialized: BlockComponent = bincode::deserialize(&serde_bytes).unwrap();
         assert_eq!(serde_deserialized.entries().len(), 0);
         assert!(serde_deserialized.special().is_some());
     }
@@ -976,10 +973,10 @@ mod tests {
     #[test]
     fn test_entry_batch_with_mixed_entry_sizes() {
         let entries = create_mock_entries(10);
-        let batch = EntryBatch::EntryVec(entries);
+        let batch = BlockComponent::Entries(entries);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
         assert_eq!(deserialized.entries().len(), 10);
         assert!(deserialized.special().is_none());
     }
@@ -988,17 +985,16 @@ mod tests {
     fn test_all_variant_combinations() {
         let v0_parent = create_parent_ready_update();
         let v0_versioned = VersionedParentReadyUpdate::new_v0(v0_parent);
-        let v0_special = SpecialEntryV0::ParentReadyUpdate(v0_versioned);
-        let v0_versioned_special = VersionedSpecialEntry::new_v0(v0_special);
+        let v0_special = BlockMarkerV0::ParentReadyUpdate(v0_versioned);
+        let v0_versioned_special = VersionedBlockMarker::new_v0(v0_special);
 
         let bytes = v0_versioned_special.to_bytes().unwrap();
-        let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
         // After deserialization, should always be Current variant
-        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
-            deserialized
+        let VersionedBlockMarker::Current(BlockMarkerV0::ParentReadyUpdate(update)) = deserialized
         else {
-            panic!("Expected Current SpecialEntry");
+            panic!("Expected Current BlockMarker");
         };
 
         let VersionedParentReadyUpdate::Current(_) = update else {
@@ -1025,9 +1021,9 @@ mod tests {
     fn test_serialization_deterministic() {
         let update = create_parent_ready_update();
         let versioned_parent = VersionedParentReadyUpdate::new(update);
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
-        let versioned_special = VersionedSpecialEntry::new(special_entry);
-        let batch = EntryBatch::new_special(versioned_special);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_parent);
+        let versioned_special = VersionedBlockMarker::new(special_entry);
+        let batch = BlockComponent::new_special(versioned_special);
 
         let bytes1 = batch.to_bytes().unwrap();
         let bytes2 = batch.to_bytes().unwrap();
@@ -1041,16 +1037,15 @@ mod tests {
     fn test_large_version_numbers() {
         let parent_update = create_parent_ready_update_with_data(u64::MAX, Hash::new_unique());
         let versioned_parent = VersionedParentReadyUpdate::new(parent_update);
-        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
-        let large_versioned = VersionedSpecialEntry::new(special_entry);
+        let special_entry = BlockMarkerV0::ParentReadyUpdate(versioned_parent);
+        let large_versioned = VersionedBlockMarker::new(special_entry);
 
         let bytes = large_versioned.to_bytes().unwrap();
-        let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
         assert_eq!(deserialized.version(), 0);
 
-        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
-            deserialized
+        let VersionedBlockMarker::Current(BlockMarkerV0::ParentReadyUpdate(update)) = deserialized
         else {
             panic!("Expected ParentReadyUpdate variant");
         };
@@ -1065,9 +1060,9 @@ mod tests {
     #[test]
     fn test_error_conditions_comprehensive() {
         assert!(VersionedParentReadyUpdate::from_bytes(&[]).is_err());
-        assert!(SpecialEntryV0::from_bytes(&[]).is_err());
-        assert!(VersionedSpecialEntry::from_bytes(&[1]).is_err());
-        assert!(EntryBatch::from_bytes(&[1, 2, 3]).is_err());
+        assert!(BlockMarkerV0::from_bytes(&[]).is_err());
+        assert!(VersionedBlockMarker::from_bytes(&[1]).is_err());
+        assert!(BlockComponent::from_bytes(&[1, 2, 3]).is_err());
     }
 
     #[test]
