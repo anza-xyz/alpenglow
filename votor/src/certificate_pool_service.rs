@@ -25,7 +25,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{
-        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
+        root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
     },
     solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
     stats::CertificatePoolServiceStats,
@@ -86,6 +86,7 @@ impl CertificatePoolService {
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
+        current_root: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -94,8 +95,14 @@ impl CertificatePoolService {
             // Reset standstill timer
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
+            // Set root
+            let root_bank = root_bank_cache.root_bank();
+            if root_bank.slot() > *current_root {
+                CertificatePoolServiceStats::incr_u16(&mut stats.new_root);
+                *current_root = root_bank.slot();
+                cert_pool.handle_new_root(root_bank);
+            }
         }
-        cert_pool.prune_old_state(root_bank_cache.root_bank().slot());
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
     }
@@ -134,6 +141,7 @@ impl CertificatePoolService {
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
+        current_root: &mut Slot,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
@@ -147,7 +155,6 @@ impl CertificatePoolService {
         }
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
-                &ctx.root_bank_cache.root_bank(),
                 &ctx.my_pubkey,
                 &ctx.my_vote_pubkey,
                 message,
@@ -161,6 +168,7 @@ impl CertificatePoolService {
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
+            current_root,
             standstill_timer,
             stats,
         )
@@ -190,6 +198,7 @@ impl CertificatePoolService {
         info!("{}: Certificate pool loop initialized", &ctx.my_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
         info!("{}: Certificate pool loop starting", &ctx.my_pubkey);
+        let mut current_root = ctx.root_bank_cache.root_bank().slot();
         let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
@@ -262,6 +271,7 @@ impl CertificatePoolService {
                     &message,
                     &mut cert_pool,
                     &mut events,
+                    &mut current_root,
                     &mut standstill_timer,
                     &mut stats,
                 ) {
@@ -286,7 +296,6 @@ impl CertificatePoolService {
     ///
     /// If a new finalization slot was recognized, returns the slot
     fn add_message_and_maybe_update_commitment(
-        root_bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
         message: &BLSMessage,
@@ -294,14 +303,8 @@ impl CertificatePoolService {
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
-        let (new_finalized_slot, new_certificates_to_send) = cert_pool.add_message(
-            root_bank.epoch_schedule(),
-            root_bank.epoch_stakes_map(),
-            root_bank.slot(),
-            my_vote_pubkey,
-            message,
-            votor_events,
-        )?;
+        let (new_finalized_slot, new_certificates_to_send) =
+            cert_pool.add_message(my_vote_pubkey, message, votor_events)?;
         let Some(new_finalized_slot) = new_finalized_slot else {
             return Ok((None, new_certificates_to_send));
         };

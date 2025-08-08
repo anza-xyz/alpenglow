@@ -11,6 +11,7 @@ pub(crate) struct CertificatePoolServiceStats {
     pub(crate) certificates_sent: u16,
     pub(crate) certificates_dropped: u16,
     pub(crate) new_finalized_slot: u16,
+    pub(crate) new_root: u16,
     pub(crate) parent_ready_missed_window: u16,
     pub(crate) parent_ready_produce_window: u16,
     pub(crate) received_votes: u32,
@@ -26,6 +27,7 @@ impl CertificatePoolServiceStats {
             certificates_sent: 0,
             certificates_dropped: 0,
             new_finalized_slot: 0,
+            new_root: 0,
             parent_ready_missed_window: 0,
             parent_ready_produce_window: 0,
             received_votes: 0,
@@ -48,6 +50,7 @@ impl CertificatePoolServiceStats {
         self.certificates_sent = 0;
         self.certificates_dropped = 0;
         self.new_finalized_slot = 0;
+        self.new_root = 0;
         self.parent_ready_missed_window = 0;
         self.parent_ready_produce_window = 0;
         self.received_votes = 0;
@@ -62,6 +65,7 @@ impl CertificatePoolServiceStats {
             ("add_message_failed", self.add_message_failed, i64),
             ("certificates_sent", self.certificates_sent, i64),
             ("certificates_dropped", self.certificates_dropped, i64),
+            ("new_root", self.new_root, i64),
             ("new_finalized_slot", self.new_finalized_slot, i64),
             (
                 "parent_ready_missed_window",
