@@ -32,6 +32,14 @@ pub enum CertificateError {
 pub struct VoteCertificateBuilder {
     certificate: Certificate,
     signature: SignatureProjective,
+    // For some certificates we need two bitmaps, for example, NotarizeFallback
+    // certificates have Notarize and NotarizeFallback votes, so we need two bitmaps
+    // to represent them. The order of the VoteType is defined in certificate_limits_and_vote_types.
+    // We normally put fallback votes in the second bitmap.
+    // The order of the VoteType is important, if you change it, you might interpret
+    // the bitmap incorrectly.
+    // Some certificates (like Finalize) only need one bitmap, then the second bitmap
+    // will be empty.
     input_bitmap_1: BitVec<u8, Lsb0>,
     input_bitmap_2: BitVec<u8, Lsb0>,
 }
