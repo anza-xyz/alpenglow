@@ -2368,12 +2368,13 @@ pub struct Sockets {
     pub tpu_vote_forwarding_client: UdpSocket,
     /// Client-side socket for ForwardingStage non-vote transactions
     pub tpu_transaction_forwarding_client: UdpSocket,
+    /// Socket for alpenglow consensus logic
+    pub alpenglow: Option<UdpSocket>,
     /// Connection cache endpoint for QUIC-based Vote
     pub quic_vote_client: UdpSocket,
     /// Client-side socket for RPC/SendTransactionService.
     pub rpc_sts_client: UdpSocket,
     pub vortexor_receivers: Option<Vec<UdpSocket>>,
-    pub alpenglow: UdpSocket,
 }
 
 pub struct NodeConfig {
@@ -2681,6 +2682,7 @@ impl Node {
         info!("vortexor_receivers is {vortexor_receivers:?}");
         trace!("new ContactInfo: {info:?}");
         let sockets = Sockets {
+            alpenglow: Some(alpenglow),
             gossip: AtomicUdpSocket::new(gossip),
             tvu: tvu_sockets,
             tvu_quic,
@@ -2704,7 +2706,6 @@ impl Node {
             tpu_transaction_forwarding_client,
             rpc_sts_client,
             vortexor_receivers,
-            alpenglow,
         };
         info!("Bound all network sockets as follows: {:#?}", &sockets);
         Node { info, sockets }
@@ -3154,7 +3155,10 @@ mod tests {
         check_socket(&node.sockets.gossip.load(), ip, range);
         check_socket(&node.sockets.repair, ip, range);
         check_socket(&node.sockets.tvu_quic, ip, range);
-        check_socket(&node.sockets.alpenglow, ip, range);
+
+        if let Some(alpenglow) = &node.sockets.alpenglow {
+            check_socket(alpenglow, ip, range);
+        }
 
         check_sockets(&node.sockets.tvu, ip, range);
         check_sockets(&node.sockets.tpu, ip, range);

@@ -98,6 +98,7 @@ pub struct TvuSockets {
     pub repair: UdpSocket,
     pub retransmit: Vec<UdpSocket>,
     pub ancestor_hashes_requests: UdpSocket,
+    pub alpenglow: Option<UdpSocket>,
 }
 
 pub struct TvuConfig {
@@ -201,6 +202,7 @@ impl Tvu {
             fetch: fetch_sockets,
             retransmit: retransmit_sockets,
             ancestor_hashes_requests: ancestor_hashes_socket,
+            alpenglow: alpenglow_socket,
         } = sockets;
 
         let (fetch_sender, fetch_receiver) = EvictingSender::new_bounded(SHRED_FETCH_CHANNEL_SIZE);
@@ -394,6 +396,7 @@ impl Tvu {
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
             bank_forks.clone(),
+            alpenglow_socket,
             voting_service_test_override,
         );
 
@@ -601,6 +604,7 @@ pub mod tests {
                     retransmit: target1.sockets.retransmit_sockets,
                     fetch: target1.sockets.tvu,
                     ancestor_hashes_requests: target1.sockets.ancestor_hashes_requests,
+                    alpenglow: target1.sockets.alpenglow,
                 }
             },
             blockstore,

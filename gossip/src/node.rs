@@ -176,9 +176,6 @@ impl Node {
         )
         .expect("retransmit multi_bind");
 
-        let (alpenglow_port, alpenglow) =
-            bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
-                .expect("alpenglow bind");
         let (_, repair) = bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
             .expect("repair bind");
         let (_, repair_quic) = bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
@@ -202,6 +199,9 @@ impl Node {
             bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
                 .expect("ancestor_hashes_requests QUIC bind should succeed");
 
+        let (alpenglow_port, alpenglow) =
+            bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
+                .expect("Alpenglow port bind should succeed");
         // These are client sockets, so the port is set to be 0 because it must be ephimeral.
         let tpu_vote_forwarding_client =
             bind_to_with_config(bind_ip_addr, 0, socket_config).unwrap();
@@ -232,6 +232,7 @@ impl Node {
             .unwrap();
         info.set_serve_repair(UDP, (advertised_ip, serve_repair_port))
             .unwrap();
+        info.set_alpenglow((advertised_ip, alpenglow_port)).unwrap();
         info.set_serve_repair(QUIC, (advertised_ip, serve_repair_quic_port))
             .unwrap();
         info.set_alpenglow((advertised_ip, alpenglow_port)).unwrap();
@@ -255,6 +256,7 @@ impl Node {
         info!("vortexor_receivers is {vortexor_receivers:?}");
         trace!("new ContactInfo: {info:?}");
         let sockets = Sockets {
+            alpenglow: Some(alpenglow),
             gossip: AtomicUdpSocket::new(gossip),
             tvu: tvu_sockets,
             tvu_quic,
@@ -278,7 +280,6 @@ impl Node {
             tpu_transaction_forwarding_client,
             rpc_sts_client,
             vortexor_receivers,
-            alpenglow,
         };
         info!("Bound all network sockets as follows: {:#?}", &sockets);
         Node { info, sockets }

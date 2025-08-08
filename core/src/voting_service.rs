@@ -1,6 +1,7 @@
 use {
     crate::{
         consensus::tower_storage::{SavedTowerVersions, TowerStorage},
+        mock_alpenglow_consensus::MockAlpenglowConsensus,
         next_leader::upcoming_leader_tpu_vote_sockets,
         staked_validators_cache::StakedValidatorsCache,
     },
@@ -9,7 +10,7 @@ use {
     solana_client::connection_cache::ConnectionCache,
     solana_clock::{Slot, FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET},
     solana_connection_cache::client_connection::ClientConnection,
-    solana_gossip::cluster_info::ClusterInfo,
+    solana_gossip::{cluster_info::ClusterInfo, epoch_specs::EpochSpecs},
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::PohRecorder,
     solana_pubkey::Pubkey,
@@ -20,7 +21,7 @@ use {
     solana_votor_messages::bls_message::BLSMessage,
     std::{
         collections::HashMap,
-        net::SocketAddr,
+        net::{SocketAddr, UdpSocket},
         sync::{Arc, RwLock},
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -160,6 +161,7 @@ impl VotingService {
         vote_history_storage: Arc<dyn VoteHistoryStorage>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
+        alpenglow_socket: Option<UdpSocket>,
         test_override: Option<VotingServiceOverride>,
     ) -> Self {
         let (additional_listeners, alpenglow_port_override) = test_override
@@ -182,11 +184,29 @@ impl VotingService {
                     alpenglow_port_override,
                 );
 
+                let mut mock_alpenglow = alpenglow_socket.map(|s| {
+                    MockAlpenglowConsensus::new(
+                        s,
+                        cluster_info.clone(),
+                        EpochSpecs::from(bank_forks.clone()),
+                    )
+                });
+
                 loop {
                     select! {
                         recv(vote_receiver) -> vote_op => {
                             match vote_op {
                                 Ok(vote_op) => {
+                                    let vote_slot = match vote_op {
+                                        VoteOp::PushVote {
+                                            tx: _,
+                                            ref tower_slots,
+                                            ..
+                                        } => tower_slots.iter().copied().last(),
+                                        _ => None,
+                                    };
+
+
                                     Self::handle_vote(
                                         &cluster_info,
                                         &poh_recorder,
@@ -194,6 +214,14 @@ impl VotingService {
                                         vote_op,
                                         connection_cache.clone(),
                                     );
+
+                                    // trigger mock alpenglow vote if we have just cast an actual vote
+                                    if let Some(slot) = vote_slot {
+                                        if let Some(ag) = mock_alpenglow.as_mut() {
+                                            let root_bank = { bank_forks.read().unwrap().root_bank() };
+                                            ag.signal_new_slot(slot, &root_bank);
+                                        }
+                                    }
                                 }
                                 Err(_) => {
                                     break;
@@ -218,6 +246,10 @@ impl VotingService {
                             }
                         }
                     }
+                }
+
+                if let Some(ag) = mock_alpenglow {
+                    let _ = ag.join();
                 }
             })
             .unwrap();
@@ -472,6 +504,7 @@ mod tests {
             Arc::new(NullVoteHistoryStorage::default()),
             Arc::new(ConnectionCache::with_udp("TestConnectionCache", 10)),
             bank_forks,
+            None, // Avoid running MockAlpenglowConsensus in tests
             Some(VotingServiceOverride {
                 additional_listeners: vec![listener],
                 alpenglow_port_override: AlpenglowPortOverride::default(),

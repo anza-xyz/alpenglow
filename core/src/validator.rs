@@ -1560,6 +1560,15 @@ impl Validator {
                 (None, None)
             };
 
+        // disable all2all tests if not allowed for a given cluster type
+        let alpenglow_socket = if genesis_config.cluster_type == ClusterType::Testnet
+            || genesis_config.cluster_type == ClusterType::Development
+        {
+            node.sockets.alpenglow
+        } else {
+            None
+        };
+
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
@@ -1570,6 +1579,7 @@ impl Validator {
                 retransmit: node.sockets.retransmit_sockets,
                 fetch: node.sockets.tvu,
                 ancestor_hashes_requests: node.sockets.ancestor_hashes_requests,
+                alpenglow: None, // Disable all2all tests for now
             },
             blockstore.clone(),
             ledger_signal_receiver,
@@ -1686,7 +1696,8 @@ impl Validator {
                 vote_quic: node.sockets.tpu_vote_quic,
                 vote_forwarding_client: node.sockets.tpu_vote_forwarding_client,
                 vortexor_receivers: node.sockets.vortexor_receivers,
-                alpenglow_quic: node.sockets.alpenglow,
+                // TODO(ksn): turn this field into an Option<>
+                alpenglow_quic: alpenglow_socket.expect("alpenglow_quic socket should exist"),
             },
             rpc_subscriptions.clone(),
             transaction_status_sender,
@@ -1836,10 +1847,13 @@ impl Validator {
             "local retransmit address: {}",
             node.sockets.retransmit_sockets[0].local_addr().unwrap()
         );
-        info!(
-            "local alpenglow address: {}",
-            node.sockets.alpenglow.local_addr().unwrap()
-        );
+
+        if let Some(alpenglow_socket) = node.sockets.alpenglow.as_ref() {
+            info!(
+                "local alpenglow address: {}",
+                alpenglow_socket.local_addr().unwrap()
+            );
+        }
     }
 
     pub fn join(self) {
@@ -2111,7 +2125,7 @@ fn post_process_restored_vote_history(
             datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{}", message);
 
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(
                 hard_fork_restart_slot,
@@ -2119,7 +2133,7 @@ fn post_process_restored_vote_history(
         }
 
         if let Some(warp_slot) = config.warp_slot {
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(warp_slot));
         }

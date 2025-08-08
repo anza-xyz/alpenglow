@@ -6398,6 +6398,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "bs58",
+ "bytemuck",
  "bytes",
  "chrono",
  "conditional-mod",
