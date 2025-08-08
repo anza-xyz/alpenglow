@@ -70,7 +70,6 @@ use {
         snapshot_controller::SnapshotController,
         vote_sender_types::{BLSVerifiedMessageReceiver, BLSVerifiedMessageSender},
     },
-    solana_signer::Signer,
     solana_votor_messages::bls_message::{Certificate, CertificateMessage},
     std::{
         collections::HashMap,
@@ -176,7 +175,6 @@ impl Votor {
         let start = Arc::new((Mutex::new(false), Condvar::new()));
 
         let identity_keypair = cluster_info.keypair().clone();
-        let my_pubkey = identity_keypair.pubkey();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
         let shared_context = SharedContext {
@@ -227,7 +225,7 @@ impl Votor {
         let cert_pool_context = CertificatePoolContext {
             exit: exit.clone(),
             start: start.clone(),
-            my_pubkey,
+            cluster_info: cluster_info.clone(),
             my_vote_pubkey: vote_account,
             blockstore,
             root_bank_cache: RootBankCache::new(bank_forks.clone()),
