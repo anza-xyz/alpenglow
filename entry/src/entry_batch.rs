@@ -1,3 +1,49 @@
+/// EntryBatch and friends.
+///
+/// Most of the time, an EntryBatch is a Vec<Entry> and nothing else. A block (roughly) consists of
+/// a number of EntryBatches. However, periodically, there are special messages that a block needs
+/// to contain. To accommodate these special messages, EntryBatch allows for the inclusion of
+/// special data via VersionedSpecialEntry.
+///
+/// For now, we only have a single special entry type, UpdateParent, used in Alpenglow's optimistic
+/// block packing algorithm. Other special entry types (e.g., BlockFooter) may be added in the
+/// future.
+///
+/// EntryBatch has the following serialization layout (all numerics are little-endian):
+///
+/// EntryBatch Layout, EntryVec variant
+/// with N Entry-s
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | N                           (64 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | bincode-serialized Entry 0   (? bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | bincode-serialized Entry 1   (? bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | ...                          (? bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | bincode-serialized Entry N   (? bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///
+/// EntryBatch Layout, Special variant
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | zeros                  (64 bits of 0) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | SpecialEntry version        (16 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | variant                      (8 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Special batch variant bits   (X bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///
+/// UpdateParent Layout, SpecialEntry Variant
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | UpdateParent version         (8 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | new parent slot             (64 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | new parent block id        (256 bits) |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 use {
     crate::entry::Entry,
     serde::{
