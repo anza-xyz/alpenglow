@@ -184,9 +184,9 @@ impl CertificatePoolService {
     // Main loop for the certificate pool service, it only exits when any channel is disconnected
     fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
-        let mut my_current_pubkey = ctx.cluster_info.id();
+        let mut my_pubkey = ctx.cluster_info.id();
         let mut cert_pool = certificate_pool::load_from_blockstore(
-            &my_current_pubkey,
+            &my_pubkey,
             &ctx.root_bank_cache.root_bank(),
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
@@ -194,9 +194,9 @@ impl CertificatePoolService {
         );
 
         // Wait until migration has completed
-        info!("{}: Certificate pool loop initialized", &my_current_pubkey);
+        info!("{}: Certificate pool loop initialized", &my_pubkey);
         Votor::wait_for_migration_or_exit(&ctx.exit, &ctx.start);
-        info!("{}: Certificate pool loop starting", &my_current_pubkey);
+        info!("{}: Certificate pool loop starting", &my_pubkey);
         let mut stats = CertificatePoolServiceStats::new();
 
         // Standstill tracking
@@ -215,15 +215,16 @@ impl CertificatePoolService {
         while !ctx.exit.load(Ordering::Relaxed) {
             // Update the current pubkey if it has changed
             let new_pubkey = ctx.cluster_info.id();
-            if my_current_pubkey != new_pubkey {
-                my_current_pubkey = new_pubkey;
-                cert_pool.update_pubkey(my_current_pubkey);
+            if my_pubkey != new_pubkey {
+                my_pubkey = new_pubkey;
+                cert_pool.update_pubkey(my_pubkey);
+                warn!("Certificate pool pubkey updated to {my_pubkey}");
             }
 
             Self::add_produce_block_event(
                 &mut highest_parent_ready,
                 &cert_pool,
-                &my_current_pubkey,
+                &my_pubkey,
                 &mut ctx,
                 &mut events,
                 &mut stats,
@@ -245,7 +246,7 @@ impl CertificatePoolService {
                     Err(e) => {
                         trace!(
                             "{}: unable to push standstill certificates into pool {}",
-                            my_current_pubkey,
+                            my_pubkey,
                             e
                         );
                     }
@@ -273,7 +274,7 @@ impl CertificatePoolService {
             for message in bls_messages {
                 match Self::process_bls_message(
                     &mut ctx,
-                    &my_current_pubkey,
+                    &my_pubkey,
                     &message,
                     &mut cert_pool,
                     &mut events,
@@ -286,11 +287,7 @@ impl CertificatePoolService {
                     }
                     Err(e) => {
                         // This is a non critical error, a duplicate vote for example
-                        trace!(
-                            "{}: unable to push vote into pool {}",
-                            &my_current_pubkey,
-                            e
-                        );
+                        trace!("{}: unable to push vote into pool {}", &my_pubkey, e);
                         CertificatePoolServiceStats::incr_u32(&mut stats.add_message_failed);
                     }
                 }
