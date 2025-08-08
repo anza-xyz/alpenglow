@@ -28,25 +28,15 @@ pub enum EntryBatch {
     Special(VersionedSpecialEntry),
 }
 
-/// A versioned wrapper around SpecialEntry for backward compatibility.
-///
-/// # Serialization Format
-/// [2 bytes: version as u16 little-endian]
-/// [variable: serialized SpecialEntry]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VersionedSpecialEntry {
-    pub version: u16,
-    pub inner: SpecialEntry,
-}
-
-/// An enum representing different versions of special entries.
+/// A versioned special entry enum with different versions for backward compatibility.
 /// Both V0 and Current variants contain the same underlying type for compatibility.
 /// During deserialization, always creates Current variant for forward compatibility.
 ///
 /// # Serialization Format
-/// Delegates to the inner SpecialEntryV0's serialization format.
+/// [2 bytes: version as u16 little-endian]
+/// [variable: serialized SpecialEntryV0]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpecialEntry {
+pub enum VersionedSpecialEntry {
     V0(SpecialEntryV0),
     Current(SpecialEntryV0),
 }
@@ -61,37 +51,27 @@ pub enum SpecialEntryV0 {
     ParentReadyUpdate(VersionedParentReadyUpdate),
 }
 
-/// A versioned wrapper around ParentReadyUpdate for backward compatibility.
-///
-/// # Serialization Format
-/// [1 byte: version as u8]
-/// [variable: serialized ParentReadyUpdate]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VersionedParentReadyUpdate {
-    pub version: u8,
-    pub inner: ParentReadyUpdate,
-}
-
-/// An enum representing different versions of parent ready updates.
+/// A versioned parent ready update enum with different versions for backward compatibility.
 /// Both V0 and Current variants contain the same underlying type for compatibility.
 /// During deserialization, always creates Current variant for forward compatibility.
 ///
 /// # Serialization Format
-/// Delegates to bincode serialization of the inner ParentReadyUpdateV0.
+/// [1 byte: version as u8]
+/// [variable: serialized ParentReadyUpdateV0 using bincode]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParentReadyUpdate {
+pub enum VersionedParentReadyUpdate {
     V0(ParentReadyUpdateV0),
     Current(ParentReadyUpdateV0),
 }
 
 /// Version 0 of parent ready update data.
-/// Contains information about a new parent slot and block ID, plus a version field.
+/// Contains information about a new parent slot and block ID.
+/// The version is determined by the enum variant rather than stored in the struct.
 ///
 /// # Serialization Format
-/// Uses bincode serialization for all fields (version, new_parent_slot, new_parent_block_id).
+/// Uses bincode serialization for all fields (new_parent_slot, new_parent_block_id).
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct ParentReadyUpdateV0 {
-    pub version: u8,
     pub new_parent_slot: Slot,
     pub new_parent_block_id: Hash,
 }
@@ -294,20 +274,38 @@ impl<'de> Deserialize<'de> for EntryBatch {
 }
 
 impl VersionedSpecialEntry {
-    /// Creates a new versioned special entry with the provided version and inner data.
-    pub const fn new(version: u16, inner: SpecialEntry) -> Self {
-        Self { version, inner }
+    /// Creates a new versioned special entry with V0 variant.
+    pub const fn new_v0(entry: SpecialEntryV0) -> Self {
+        Self::V0(entry)
     }
 
-    /// Serializes to bytes by writing version as u16 little-endian followed by inner data.
+    /// Creates a new versioned special entry with Current variant.
+    pub const fn new(entry: SpecialEntryV0) -> Self {
+        Self::Current(entry)
+    }
+
+    /// Returns the version derived from the variant.
+    /// Both V0 and Current variants return version 0.
+    pub const fn version(&self) -> u16 {
+        match self {
+            Self::V0(_) | Self::Current(_) => 0,
+        }
+    }
+
+    /// Serializes to bytes by writing version as u16 little-endian followed by SpecialEntryV0 data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
-        buffer.extend_from_slice(&self.version.to_le_bytes());
-        buffer.extend_from_slice(&self.inner.to_bytes()?);
+        buffer.extend_from_slice(&self.version().to_le_bytes());
+
+        let entry = match self {
+            Self::V0(entry) | Self::Current(entry) => entry,
+        };
+        buffer.extend_from_slice(&entry.to_bytes()?);
         Ok(buffer)
     }
 
-    /// Deserializes from bytes by reading u16 version followed by inner SpecialEntry data.
+    /// Deserializes from bytes by reading u16 version followed by SpecialEntryV0 data.
+    /// Always creates Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const VERSION_SIZE: usize = 2;
 
@@ -315,14 +313,14 @@ impl VersionedSpecialEntry {
             .get(..VERSION_SIZE)
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
-        let version = u16::from_le_bytes(
+        let _version = u16::from_le_bytes(
             version_bytes
                 .try_into()
                 .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
         );
 
-        let inner = SpecialEntry::from_bytes(&data[VERSION_SIZE..])?;
-        Ok(Self { version, inner })
+        let entry = SpecialEntryV0::from_bytes(&data[VERSION_SIZE..])?;
+        Ok(Self::Current(entry))
     }
 }
 
@@ -359,58 +357,6 @@ impl<'de> Deserialize<'de> for VersionedSpecialEntry {
         }
 
         deserializer.deserialize_bytes(VersionedSpecialEntryVisitor)
-    }
-}
-
-impl SpecialEntry {
-    /// Serializes by delegating to the inner SpecialEntryV0 regardless of variant.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        let entry = match self {
-            Self::V0(entry) | Self::Current(entry) => entry,
-        };
-        entry.to_bytes()
-    }
-
-    /// Deserializes by parsing SpecialEntryV0 data and always creating Current variant for forward compatibility.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        let entry = SpecialEntryV0::from_bytes(data)?;
-        Ok(Self::Current(entry))
-    }
-}
-
-impl Serialize for SpecialEntry {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
-        serializer.serialize_bytes(&bytes)
-    }
-}
-
-impl<'de> Deserialize<'de> for SpecialEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct SpecialEntryVisitor;
-
-        impl Visitor<'_> for SpecialEntryVisitor {
-            type Value = SpecialEntry;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized SpecialEntry byte stream")
-            }
-
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<SpecialEntry, E>
-            where
-                E: de::Error,
-            {
-                SpecialEntry::from_bytes(value).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_bytes(SpecialEntryVisitor)
     }
 }
 
@@ -465,27 +411,45 @@ impl<'de> Deserialize<'de> for SpecialEntryV0 {
 }
 
 impl VersionedParentReadyUpdate {
-    /// Creates a new versioned parent ready update with the provided version and inner data.
-    pub const fn new(version: u8, inner: ParentReadyUpdate) -> Self {
-        Self { version, inner }
+    /// Creates a new versioned parent ready update with V0 variant.
+    pub const fn new_v0(update: ParentReadyUpdateV0) -> Self {
+        Self::V0(update)
     }
 
-    /// Serializes to bytes by writing version as single byte followed by inner data.
+    /// Creates a new versioned parent ready update with Current variant.
+    pub const fn new(update: ParentReadyUpdateV0) -> Self {
+        Self::Current(update)
+    }
+
+    /// Returns the version derived from the variant.
+    /// Both V0 and Current variants return version 0.
+    pub const fn version(&self) -> u8 {
+        match self {
+            Self::V0(_) | Self::Current(_) => 0,
+        }
+    }
+
+    /// Serializes to bytes by writing version as single byte followed by ParentReadyUpdateV0 data.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut buffer = Vec::new();
-        buffer.push(self.version);
-        buffer.extend_from_slice(&self.inner.to_bytes()?);
+        buffer.push(self.version());
+
+        let update = match self {
+            Self::V0(update) | Self::Current(update) => update,
+        };
+        buffer.extend_from_slice(&bincode::serialize(update)?);
         Ok(buffer)
     }
 
-    /// Deserializes from bytes by reading single byte version followed by inner ParentReadyUpdate data.
+    /// Deserializes from bytes by reading single byte version followed by ParentReadyUpdateV0 data.
+    /// Always creates Current variant for forward compatibility.
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        let (&version, remaining) = data
+        let (_version, remaining) = data
             .split_first()
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
-        let inner = ParentReadyUpdate::from_bytes(remaining)?;
-        Ok(Self { version, inner })
+        let update: ParentReadyUpdateV0 = bincode::deserialize(remaining)?;
+        Ok(Self::Current(update))
     }
 }
 
@@ -525,55 +489,10 @@ impl<'de> Deserialize<'de> for VersionedParentReadyUpdate {
     }
 }
 
-impl ParentReadyUpdate {
-    /// Serializes using bincode for the inner ParentReadyUpdateV0 data, regardless of variant.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        let update = match self {
-            Self::V0(update) | Self::Current(update) => update,
-        };
-        bincode::serialize(update)
-    }
-
-    /// Deserializes using bincode and always creates Current variant for forward compatibility.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        let update: ParentReadyUpdateV0 = bincode::deserialize(data)?;
-        Ok(Self::Current(update))
-    }
-}
-
-impl Serialize for ParentReadyUpdate {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
-        serializer.serialize_bytes(&bytes)
-    }
-}
-
-impl<'de> Deserialize<'de> for ParentReadyUpdate {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct ParentReadyUpdateVisitor;
-
-        impl Visitor<'_> for ParentReadyUpdateVisitor {
-            type Value = ParentReadyUpdate;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized ParentReadyUpdate byte stream")
-            }
-
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<ParentReadyUpdate, E>
-            where
-                E: de::Error,
-            {
-                ParentReadyUpdate::from_bytes(value).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_bytes(ParentReadyUpdateVisitor)
+impl ParentReadyUpdateV0 {
+    /// Returns the version for this struct, which is always 0.
+    pub const fn version(&self) -> u8 {
+        0
     }
 }
 
@@ -594,20 +513,14 @@ mod tests {
     // Helper function to create a ParentReadyUpdateV0
     fn create_parent_ready_update() -> ParentReadyUpdateV0 {
         ParentReadyUpdateV0 {
-            version: 1,
             new_parent_slot: 42,
             new_parent_block_id: Hash::default(),
         }
     }
 
     // Helper function to create different ParentReadyUpdateV0 instances
-    fn create_parent_ready_update_with_data(
-        version: u8,
-        slot: u64,
-        hash: Hash,
-    ) -> ParentReadyUpdateV0 {
+    fn create_parent_ready_update_with_data(slot: u64, hash: Hash) -> ParentReadyUpdateV0 {
         ParentReadyUpdateV0 {
-            version,
             new_parent_slot: slot,
             new_parent_block_id: hash,
         }
@@ -707,14 +620,9 @@ mod tests {
 
     #[test]
     fn test_entry_batch_new_special() {
-        let versioned_update = VersionedParentReadyUpdate::new(
-            1,
-            ParentReadyUpdate::Current(create_parent_ready_update()),
-        );
-        let special = VersionedSpecialEntry::new(
-            1,
-            SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(versioned_update)),
-        );
+        let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
+        let special =
+            VersionedSpecialEntry::new(SpecialEntryV0::ParentReadyUpdate(versioned_update));
         let batch = EntryBatch::new_special(special);
         assert_eq!(batch.entries().len(), 0);
         assert!(batch.special().is_some());
@@ -750,14 +658,9 @@ mod tests {
 
     #[test]
     fn test_entry_batch_valid_special_only() {
-        let versioned_update = VersionedParentReadyUpdate::new(
-            1,
-            ParentReadyUpdate::Current(create_parent_ready_update()),
-        );
-        let special = VersionedSpecialEntry::new(
-            1,
-            SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(versioned_update)),
-        );
+        let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
+        let special =
+            VersionedSpecialEntry::new(SpecialEntryV0::ParentReadyUpdate(versioned_update));
         let batch = EntryBatch::new_special(special);
 
         // Test serialization
@@ -801,15 +704,9 @@ mod tests {
 
     #[test]
     fn test_entry_batch_empty_entries_with_special() {
-        let special = VersionedSpecialEntry {
-            version: 255,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
-                VersionedParentReadyUpdate {
-                    version: 10,
-                    inner: ParentReadyUpdate::Current(create_parent_ready_update()),
-                },
-            )),
-        };
+        let special = VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
+            VersionedParentReadyUpdate::Current(create_parent_ready_update()),
+        ));
         let batch = EntryBatch::Special(special);
 
         let bytes = batch.to_bytes().unwrap();
@@ -819,7 +716,7 @@ mod tests {
         assert!(deserialized.special().is_some());
 
         let special = deserialized.special().unwrap();
-        assert_eq!(special.version, 255);
+        assert_eq!(special.version(), 0);
     }
 
     // ParentReadyUpdateV0 Tests
@@ -847,9 +744,9 @@ mod tests {
     #[test]
     fn test_parent_ready_update_v0_with_different_values() {
         let hash = Hash::new_unique();
-        let update = create_parent_ready_update_with_data(255, u64::MAX, hash);
+        let update = create_parent_ready_update_with_data(u64::MAX, hash);
 
-        assert_eq!(update.version, 255);
+        assert_eq!(update.version(), 0);
         assert_eq!(update.new_parent_slot, u64::MAX);
         assert_eq!(update.new_parent_block_id, hash);
 
@@ -862,69 +759,25 @@ mod tests {
     fn test_parent_ready_update_v0_equality() {
         let update1 = create_parent_ready_update();
         let update2 = create_parent_ready_update();
-        let update3 = create_parent_ready_update_with_data(2, 43, Hash::new_unique());
+        let update3 = create_parent_ready_update_with_data(43, Hash::new_unique());
 
         assert_eq!(update1, update2);
         assert_ne!(update1, update3);
-    }
-
-    // ParentReadyUpdate Tests
-    #[test]
-    fn test_parent_ready_update_serialization() {
-        let original_data = create_parent_ready_update();
-        let update = ParentReadyUpdate::Current(original_data.clone());
-
-        let bytes = update.to_bytes().unwrap();
-        let deserialized = ParentReadyUpdate::from_bytes(&bytes).unwrap();
-
-        let ParentReadyUpdate::Current(deser_data) = deserialized else {
-            panic!("Expected Current variant");
-        };
-        assert_eq!(original_data, deser_data);
-
-        let serialized = bincode::serialize(&update).unwrap();
-        let serde_deserialized: ParentReadyUpdate = bincode::deserialize(&serialized).unwrap();
-
-        let ParentReadyUpdate::Current(serde_deser_data) = serde_deserialized else {
-            panic!("Expected Current variant from serde");
-        };
-        assert_eq!(original_data, serde_deser_data);
-    }
-
-    #[test]
-    fn test_parent_ready_update_v0_variant() {
-        let original_data = create_parent_ready_update();
-        let update = ParentReadyUpdate::V0(original_data.clone());
-
-        let bytes = update.to_bytes().unwrap();
-        let deserialized = ParentReadyUpdate::from_bytes(&bytes).unwrap();
-
-        let ParentReadyUpdate::Current(deser_data) = deserialized else {
-            panic!("Expected V0 -> Current conversion");
-        };
-        assert_eq!(original_data, deser_data);
-    }
-
-    #[test]
-    fn test_parent_ready_update_empty_data() {
-        let result = ParentReadyUpdate::from_bytes(&[]);
-        assert!(result.is_err());
     }
 
     // VersionedParentReadyUpdate Tests
     #[test]
     fn test_versioned_parent_ready_update_serialization() {
         let original_data = create_parent_ready_update();
-        let versioned_update = VersionedParentReadyUpdate {
-            version: 42,
-            inner: ParentReadyUpdate::Current(original_data.clone()),
-        };
+        let versioned_update = VersionedParentReadyUpdate::new(original_data.clone());
 
         let bytes = versioned_update.to_bytes().unwrap();
         let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
 
-        assert_eq!(versioned_update.version, deserialized.version);
-        let ParentReadyUpdate::Current(deser_data) = deserialized.inner else {
+        assert_eq!(versioned_update.version(), deserialized.version());
+
+        // Both should be Current variant after round-trip
+        let VersionedParentReadyUpdate::Current(deser_data) = deserialized else {
             panic!("Expected Current variant");
         };
         assert_eq!(original_data, deser_data);
@@ -932,7 +785,7 @@ mod tests {
         let serialized = bincode::serialize(&versioned_update).unwrap();
         let serde_deserialized: VersionedParentReadyUpdate =
             bincode::deserialize(&serialized).unwrap();
-        assert_eq!(versioned_update.version, serde_deserialized.version);
+        assert_eq!(versioned_update.version(), serde_deserialized.version());
     }
 
     #[test]
@@ -942,119 +795,79 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_parent_ready_update_max_version() {
-        let versioned_update = VersionedParentReadyUpdate {
-            version: u8::MAX,
-            inner: ParentReadyUpdate::Current(create_parent_ready_update_with_data(
-                255,
-                u64::MAX,
-                Hash::new_unique(),
-            )),
-        };
+    fn test_versioned_parent_ready_update_v0_variant() {
+        let original_data = create_parent_ready_update_with_data(255, Hash::new_unique());
+        let versioned_update = VersionedParentReadyUpdate::new_v0(original_data.clone());
 
         let bytes = versioned_update.to_bytes().unwrap();
         let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
-        assert_eq!(versioned_update.version, deserialized.version);
+
+        // Should become Current variant after deserialization
+        let VersionedParentReadyUpdate::Current(deser_data) = deserialized else {
+            panic!("Expected Current variant after deserialization");
+        };
+        assert_eq!(original_data, deser_data);
     }
 
     // SpecialEntryV0 Tests
     #[test]
     fn test_special_entry_v0_parent_ready_update_serialization() {
-        let versioned_update = VersionedParentReadyUpdate {
-            version: 1,
-            inner: ParentReadyUpdate::Current(create_parent_ready_update()),
-        };
+        let versioned_update = VersionedParentReadyUpdate::new(create_parent_ready_update());
         let entry = SpecialEntryV0::ParentReadyUpdate(versioned_update);
 
         let bytes = entry.to_bytes().unwrap();
         assert!(!bytes.is_empty());
 
-        let SpecialEntryV0::ParentReadyUpdate(update) = SpecialEntryV0::from_bytes(&bytes).unwrap();
-        assert_eq!(update.version, 1);
+        let deserialized = SpecialEntryV0::from_bytes(&bytes).unwrap();
+        let SpecialEntryV0::ParentReadyUpdate(update) = deserialized;
+        assert_eq!(update.version(), 0);
 
         let serialized = bincode::serialize(&entry).unwrap();
         let SpecialEntryV0::ParentReadyUpdate(_) = bincode::deserialize(&serialized).unwrap();
     }
 
-    // SpecialEntry Tests
-    #[test]
-    fn test_special_entry_current_variant_serialization() {
-        let versioned_update = VersionedParentReadyUpdate {
-            version: 2,
-            inner: ParentReadyUpdate::Current(create_parent_ready_update()),
-        };
-        let entry = SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(versioned_update));
-
-        let bytes = entry.to_bytes().unwrap();
-        let deserialized = SpecialEntry::from_bytes(&bytes).unwrap();
-
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = deserialized else {
-            panic!("Expected Current(ParentReadyUpdate) variant");
-        };
-        assert_eq!(update.version, 2);
-
-        let serialized = bincode::serialize(&entry).unwrap();
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(_)) =
-            bincode::deserialize(&serialized).unwrap()
-        else {
-            panic!("Expected Current(ParentReadyUpdate) variant from serde");
-        };
-    }
-
     // VersionedSpecialEntry Tests
     #[test]
     fn test_versioned_special_entry_serialization() {
-        let versioned_entry = VersionedSpecialEntry {
-            version: 1000,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
-                VersionedParentReadyUpdate {
-                    version: 1,
-                    inner: ParentReadyUpdate::Current(create_parent_ready_update()),
-                },
-            )),
-        };
+        let versioned_parent = VersionedParentReadyUpdate::new(create_parent_ready_update());
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
+        let versioned_entry = VersionedSpecialEntry::new(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         assert!(bytes.len() >= 2);
 
         let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
-        assert_eq!(versioned_entry.version, deserialized.version);
+        assert_eq!(versioned_entry.version(), deserialized.version());
 
         let serialized = bincode::serialize(&versioned_entry).unwrap();
         let serde_deserialized: VersionedSpecialEntry = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(versioned_entry.version, serde_deserialized.version);
+        assert_eq!(versioned_entry.version(), serde_deserialized.version());
     }
 
     #[test]
     fn test_versioned_special_entry_with_parent_ready_update() {
-        let versioned_update = VersionedParentReadyUpdate {
-            version: 5,
-            inner: ParentReadyUpdate::Current(create_parent_ready_update_with_data(
-                100,
-                12345,
-                Hash::new_unique(),
-            )),
-        };
-        let versioned_entry = VersionedSpecialEntry {
-            version: u16::MAX,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(versioned_update)),
-        };
+        let versioned_update = VersionedParentReadyUpdate::new(
+            create_parent_ready_update_with_data(12345, Hash::new_unique()),
+        );
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_update);
+        let versioned_entry = VersionedSpecialEntry::new_v0(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
 
-        assert_eq!(versioned_entry.version, deserialized.version);
+        assert_eq!(versioned_entry.version(), deserialized.version());
 
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = deserialized.inner
+        // Should be Current variant after deserialization
+        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
+            deserialized
         else {
-            panic!("Expected ParentReadyUpdate variant");
+            panic!("Expected Current(ParentReadyUpdate) variant");
         };
-        assert_eq!(update.version, 5);
+        assert_eq!(update.version(), 0);
 
-        let ParentReadyUpdate::Current(data) = update.inner else {
+        let VersionedParentReadyUpdate::Current(data) = update else {
             panic!("Expected Current variant");
         };
-        assert_eq!(data.version, 100);
         assert_eq!(data.new_parent_slot, 12345);
     }
 
@@ -1067,38 +880,25 @@ mod tests {
 
     #[test]
     fn test_versioned_special_entry_zero_version() {
-        let versioned_entry = VersionedSpecialEntry {
-            version: 0,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
-                VersionedParentReadyUpdate {
-                    version: 1,
-                    inner: ParentReadyUpdate::Current(create_parent_ready_update()),
-                },
-            )),
-        };
+        let versioned_parent = VersionedParentReadyUpdate::new(create_parent_ready_update());
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
+        let versioned_entry = VersionedSpecialEntry::new_v0(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
-        assert_eq!(deserialized.version, 0);
+        assert_eq!(deserialized.version(), 0);
     }
 
     // End-to-end Tests
     #[test]
     fn test_full_entry_batch_with_complex_special_data() {
         let complex_hash = Hash::new_unique();
-        let parent_update = create_parent_ready_update_with_data(255, u64::MAX, complex_hash);
-        let versioned_parent_update = VersionedParentReadyUpdate {
-            version: u8::MAX,
-            inner: ParentReadyUpdate::Current(parent_update),
-        };
-        let special_entry =
-            SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(versioned_parent_update));
-        let versioned_special = VersionedSpecialEntry {
-            version: u16::MAX,
-            inner: special_entry,
-        };
+        let parent_update = create_parent_ready_update_with_data(u64::MAX, complex_hash);
+        let versioned_parent_update = VersionedParentReadyUpdate::new(parent_update);
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent_update);
+        let versioned_special = VersionedSpecialEntry::new(special_entry);
 
-        let batch = EntryBatch::Special(versioned_special);
+        let batch = EntryBatch::new_special(versioned_special);
 
         let bytes = batch.to_bytes().unwrap();
         let deserialized = EntryBatch::from_bytes(&bytes).unwrap();
@@ -1107,18 +907,17 @@ mod tests {
         assert!(deserialized.special().is_some());
 
         let special = deserialized.special().unwrap();
-        assert_eq!(special.version, u16::MAX);
+        assert_eq!(special.version(), 0);
 
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = &special.inner
+        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = special
         else {
-            panic!("Expected ParentReadyUpdate variant");
+            panic!("Expected Current(ParentReadyUpdate) variant");
         };
-        assert_eq!(update.version, u8::MAX);
+        assert_eq!(update.version(), 0);
 
-        let ParentReadyUpdate::Current(data) = &update.inner else {
+        let VersionedParentReadyUpdate::Current(data) = update else {
             panic!("Expected Current variant");
         };
-        assert_eq!(data.version, 255);
         assert_eq!(data.new_parent_slot, u64::MAX);
         assert_eq!(data.new_parent_block_id, complex_hash);
 
@@ -1141,43 +940,36 @@ mod tests {
 
     #[test]
     fn test_all_variant_combinations() {
-        let v0_parent = ParentReadyUpdate::V0(create_parent_ready_update());
-        let v0_versioned = VersionedParentReadyUpdate {
-            version: 0,
-            inner: v0_parent,
-        };
-        let v0_special = SpecialEntry::V0(SpecialEntryV0::ParentReadyUpdate(v0_versioned));
-        let v0_versioned_special = VersionedSpecialEntry {
-            version: 0,
-            inner: v0_special,
-        };
+        let v0_parent = create_parent_ready_update();
+        let v0_versioned = VersionedParentReadyUpdate::new_v0(v0_parent);
+        let v0_special = SpecialEntryV0::ParentReadyUpdate(v0_versioned);
+        let v0_versioned_special = VersionedSpecialEntry::new_v0(v0_special);
 
         let bytes = v0_versioned_special.to_bytes().unwrap();
         let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
 
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = deserialized.inner
+        // After deserialization, should always be Current variant
+        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
+            deserialized
         else {
             panic!("Expected Current SpecialEntry");
         };
 
-        let ParentReadyUpdate::Current(_) = update.inner else {
+        let VersionedParentReadyUpdate::Current(_) = update else {
             panic!("Expected inner ParentReadyUpdate to be Current");
         };
     }
 
     #[test]
     fn test_boundary_values() {
-        let boundary_update = create_parent_ready_update_with_data(0, 0, Hash::default());
-        let boundary_versioned = VersionedParentReadyUpdate {
-            version: 0,
-            inner: ParentReadyUpdate::Current(boundary_update.clone()),
-        };
+        let boundary_update = create_parent_ready_update_with_data(0, Hash::default());
+        let boundary_versioned = VersionedParentReadyUpdate::new(boundary_update.clone());
 
         let bytes = boundary_versioned.to_bytes().unwrap();
         let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
 
-        assert_eq!(deserialized.version, 0);
-        let ParentReadyUpdate::Current(data) = deserialized.inner else {
+        assert_eq!(deserialized.version(), 0);
+        let VersionedParentReadyUpdate::Current(data) = deserialized else {
             panic!("Expected Current variant");
         };
         assert_eq!(data, boundary_update);
@@ -1186,15 +978,10 @@ mod tests {
     #[test]
     fn test_serialization_deterministic() {
         let update = create_parent_ready_update();
-        let batch = EntryBatch::Special(VersionedSpecialEntry {
-            version: 1,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
-                VersionedParentReadyUpdate {
-                    version: 1,
-                    inner: ParentReadyUpdate::Current(update),
-                },
-            )),
-        });
+        let versioned_parent = VersionedParentReadyUpdate::new(update);
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
+        let versioned_special = VersionedSpecialEntry::new(special_entry);
+        let batch = EntryBatch::new_special(versioned_special);
 
         let bytes1 = batch.to_bytes().unwrap();
         let bytes2 = batch.to_bytes().unwrap();
@@ -1206,49 +993,40 @@ mod tests {
 
     #[test]
     fn test_large_version_numbers() {
-        let large_versioned = VersionedSpecialEntry {
-            version: u16::MAX,
-            inner: SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(
-                VersionedParentReadyUpdate {
-                    version: u8::MAX,
-                    inner: ParentReadyUpdate::Current(create_parent_ready_update_with_data(
-                        u8::MAX,
-                        u64::MAX,
-                        Hash::new_unique(),
-                    )),
-                },
-            )),
-        };
+        let parent_update = create_parent_ready_update_with_data(u64::MAX, Hash::new_unique());
+        let versioned_parent = VersionedParentReadyUpdate::new(parent_update);
+        let special_entry = SpecialEntryV0::ParentReadyUpdate(versioned_parent);
+        let large_versioned = VersionedSpecialEntry::new(special_entry);
 
         let bytes = large_versioned.to_bytes().unwrap();
         let deserialized = VersionedSpecialEntry::from_bytes(&bytes).unwrap();
 
-        assert_eq!(deserialized.version, u16::MAX);
+        assert_eq!(deserialized.version(), 0);
 
-        let SpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) = deserialized.inner
+        let VersionedSpecialEntry::Current(SpecialEntryV0::ParentReadyUpdate(update)) =
+            deserialized
         else {
             panic!("Expected ParentReadyUpdate variant");
         };
-        assert_eq!(update.version, u8::MAX);
+        assert_eq!(update.version(), 0);
 
-        let ParentReadyUpdate::Current(data) = update.inner else {
+        let VersionedParentReadyUpdate::Current(data) = update else {
             panic!("Expected Current variant");
         };
-        assert_eq!(data.version, u8::MAX);
         assert_eq!(data.new_parent_slot, u64::MAX);
     }
 
     #[test]
     fn test_error_conditions_comprehensive() {
-        assert!(ParentReadyUpdate::from_bytes(&[]).is_err());
         assert!(VersionedParentReadyUpdate::from_bytes(&[]).is_err());
+        assert!(SpecialEntryV0::from_bytes(&[]).is_err());
         assert!(VersionedSpecialEntry::from_bytes(&[1]).is_err());
         assert!(EntryBatch::from_bytes(&[1, 2, 3]).is_err());
     }
 
     #[test]
     fn test_round_trip_consistency() {
-        let original_update = create_parent_ready_update_with_data(42, 12345, Hash::new_unique());
+        let original_update = create_parent_ready_update_with_data(42, Hash::new_unique());
 
         let bytes1 = bincode::serialize(&original_update).unwrap();
         let deser1: ParentReadyUpdateV0 = bincode::deserialize(&bytes1).unwrap();
