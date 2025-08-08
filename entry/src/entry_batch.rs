@@ -22,7 +22,7 @@
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// | ...                          (? bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-/// | bincode-serialized Entry N   (? bits) |
+/// | bincode-serialized Entry N-1 (? bits) |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ///
 /// EntryBatch Layout, Special variant
