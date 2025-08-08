@@ -1,4 +1,5 @@
 use {
+    crate::{certificate_limits_and_vote_types, VoteType},
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{decode, encode_base2, encode_base3, DecodeError, Decoded, EncodeError},
@@ -80,21 +81,26 @@ impl VoteCertificateBuilder {
     }
 
     /// Aggregates a slice of `VoteMessage`s into the builder.
-    pub fn aggregate(
-        &mut self,
-        messages: &[VoteMessage],
-        is_first_vote_type: bool,
-    ) -> Result<(), CertificateError> {
+    pub fn aggregate(&mut self, messages: &[VoteMessage]) -> Result<(), CertificateError> {
+        let Some(vote_type) = messages.first().map(|m| VoteType::get_type(&m.vote)) else {
+            return Ok(());
+        };
+        let vote_types = certificate_limits_and_vote_types(self.certificate).1;
+
+        let target_bitmap = if vote_type == vote_types[0] {
+            &mut self.input_bitmap_1
+        } else {
+            &mut self.input_bitmap_2
+        };
+
         for vote_message in messages {
-            if MAXIMUM_VALIDATORS <= vote_message.rank as usize {
+            let rank = vote_message.rank as usize;
+            if MAXIMUM_VALIDATORS <= rank {
                 return Err(CertificateError::ValidatorDoesNotExist(vote_message.rank));
             }
-            if is_first_vote_type {
-                self.input_bitmap_1.set(vote_message.rank as usize, true);
-            } else {
-                self.input_bitmap_2.set(vote_message.rank as usize, true);
-            }
+            target_bitmap.set(rank, true);
         }
+
         let signature_iter = messages.iter().map(|vote_message| &vote_message.signature);
         Ok(self.signature.aggregate_with(signature_iter)?)
     }
@@ -172,7 +178,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         builder
-            .aggregate(&messages_1, true)
+            .aggregate(&messages_1)
             .expect("Failed to aggregate notarization votes");
         // Create NotarizeFallback on validator 2, 3, 5, 7
         let vote = Vote::new_notarization_fallback_vote(1, hash);
@@ -190,7 +196,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         builder
-            .aggregate(&messages_2, false)
+            .aggregate(&messages_2)
             .expect("Failed to aggregate notarization fallback votes");
 
         let certificate_message = builder.build().expect("Failed to build certificate");
@@ -216,7 +222,7 @@ mod tests {
         // Build a new certificate with only Notarize votes, we should get Base2 encoding
         let mut builder = VoteCertificateBuilder::new(certificate);
         builder
-            .aggregate(&messages_1, true)
+            .aggregate(&messages_1)
             .expect("Failed to aggregate notarization votes");
         let certificate_message = builder.build().expect("Failed to build certificate");
         assert_eq!(certificate_message.certificate, certificate);
@@ -237,7 +243,7 @@ mod tests {
         // certificate with only NotarizeFallback votes, we should still get Base3 encoding
         let mut builder = VoteCertificateBuilder::new(certificate);
         builder
-            .aggregate(&messages_2, false)
+            .aggregate(&messages_2)
             .expect("Failed to aggregate notarization fallback votes");
         let certificate_message = builder.build().expect("Failed to build certificate");
         assert_eq!(certificate_message.certificate, certificate);
@@ -264,6 +270,7 @@ mod tests {
 
         // Test with a rank that exceeds the maximum allowed
         let vote = Vote::new_notarization_vote(1, hash);
+        let vote2 = Vote::new_notarization_fallback_vote(1, hash);
         let rank_out_of_bounds = MAXIMUM_VALIDATORS.saturating_add(1); // Exceeds MAXIMUM_VALIDATORS
         let keypair = BLSKeypair::new();
         let signature = keypair.sign(b"fake_vote_message");
@@ -273,7 +280,7 @@ mod tests {
             rank: rank_out_of_bounds as u16,
         };
         assert_eq!(
-            builder.aggregate(&[message_out_of_bounds], true),
+            builder.aggregate(&[message_out_of_bounds]),
             Err(CertificateError::ValidatorDoesNotExist(
                 rank_out_of_bounds as u16
             ))
@@ -286,7 +293,7 @@ mod tests {
             rank: 1,
         };
         assert_eq!(
-            builder.aggregate(&[message_with_invalid_signature], true),
+            builder.aggregate(&[message_with_invalid_signature]),
             Err(CertificateError::BlsError(BlsError::PointConversion))
         );
 
@@ -300,15 +307,15 @@ mod tests {
         }];
         let mut builder = VoteCertificateBuilder::new(certificate);
         builder
-            .aggregate(&messages_1, true)
+            .aggregate(&messages_1)
             .expect("Failed to aggregate notarization votes");
         let messages_2 = vec![VoteMessage {
-            vote,
+            vote: vote2,
             signature: signature.into(),
             rank: 1, // Same rank as in messages_1
         }];
         builder
-            .aggregate(&messages_2, false)
+            .aggregate(&messages_2)
             .expect("Failed to aggregate notarization fallback votes");
         assert_eq!(
             builder.build(),

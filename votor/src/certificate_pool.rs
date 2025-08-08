@@ -246,12 +246,11 @@ impl CertificatePool {
                 continue;
             }
             let mut vote_certificate_builder = VoteCertificateBuilder::new(cert_id);
-            vote_types.iter().enumerate().for_each(|(vote_type_index, vote_type)| {
-                let is_first_vote_type = vote_type_index == 0;
+            vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match vote_pool {
-                        VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(is_first_vote_type, &mut vote_certificate_builder),
-                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), is_first_vote_type, &mut vote_certificate_builder),
+                        VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate_builder),
+                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), &mut vote_certificate_builder),
                     };
                 }
             });
