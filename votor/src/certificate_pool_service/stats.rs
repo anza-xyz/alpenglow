@@ -16,6 +16,7 @@ pub(crate) struct CertificatePoolServiceStats {
     pub(crate) received_votes: u32,
     pub(crate) received_certificates: u32,
     pub(crate) standstill: bool,
+    pub(crate) prune_old_state_called: u64,
     last_request_time: Instant,
 }
 
@@ -31,6 +32,7 @@ impl CertificatePoolServiceStats {
             received_votes: 0,
             received_certificates: 0,
             standstill: false,
+            prune_old_state_called: 0,
             last_request_time: Instant::now(),
         }
     }
@@ -40,6 +42,10 @@ impl CertificatePoolServiceStats {
     }
 
     pub fn incr_u32(value: &mut u32) {
+        *value = value.saturating_add(1);
+    }
+
+    pub fn incr_u64(value: &mut u64) {
         *value = value.saturating_add(1);
     }
 
@@ -53,6 +59,7 @@ impl CertificatePoolServiceStats {
         self.received_votes = 0;
         self.received_certificates = 0;
         self.standstill = false;
+        self.prune_old_state_called = 0;
         self.last_request_time = Instant::now();
     }
 
@@ -76,6 +83,7 @@ impl CertificatePoolServiceStats {
             ("received_votes", self.received_votes, i64),
             ("received_certificates", self.received_certificates, i64),
             ("standstill", self.standstill, i64),
+            ("prune_old_state_called", self.prune_old_state_called, i64),
         );
     }
 

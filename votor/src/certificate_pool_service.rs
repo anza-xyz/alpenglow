@@ -96,6 +96,7 @@ impl CertificatePoolService {
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
         }
         cert_pool.prune_old_state(root_bank_cache.root_bank().slot());
+        CertificatePoolServiceStats::incr_u64(&mut stats.prune_old_state_called);
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
     }
