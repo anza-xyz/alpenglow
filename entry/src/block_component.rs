@@ -330,14 +330,7 @@ impl BlockComponent {
                 Self::validate_entries_length(entries.len())
                     .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
-                // Write entry count
-                buffer.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-
-                // Write each entry
-                for entry in entries {
-                    let entry_bytes = bincode::serialize(entry)?;
-                    buffer.extend_from_slice(&entry_bytes);
-                }
+                buffer = bincode::serialize(entries)?;
             }
             Self::BlockMarker(marker) => {
                 // Write zero entry count
