@@ -367,20 +367,9 @@ impl BlockComponent {
                 Self::MAX_ENTRIES
             ))));
         };
-        let mut cursor = ENTRY_COUNT_SIZE;
-        let mut entries = Vec::with_capacity(entry_count as usize);
 
-        // Deserialize entries
-        for _ in 0..entry_count {
-            let remaining_data = data
-                .get(cursor..)
-                .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
-
-            let entry: Entry = bincode::deserialize(remaining_data)?;
-            let entry_size = bincode::serialized_size(&entry)? as usize;
-            entries.push(entry);
-            cursor += entry_size;
-        }
+        let entries = bincode::deserialize::<Vec<Entry>>(data)?;
+        let cursor = bincode::serialized_size(&entries)? as usize;
 
         // Handle remaining data
         let remaining_bytes = data.get(cursor..).ok_or_else(|| {
