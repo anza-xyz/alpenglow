@@ -1,6 +1,6 @@
 use {
     crate::{
-        commitment::AlpenglowCommitmentAggregationData,
+        commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
@@ -68,6 +68,9 @@ pub enum VoteError {
 
     #[error("Unable to send to certificate pool")]
     CertificatePoolError(#[from] SendError<()>),
+
+    #[error("Commitment sender error {0}")]
+    CommitmentSenderError(#[from] AlpenglowCommitmentError),
 }
 
 /// Context required to construct vote transactions
