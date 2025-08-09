@@ -163,13 +163,14 @@ impl CertificatePool {
 
     fn new_vote_pool(vote_type: VoteType) -> VotePoolType {
         match vote_type {
-            VoteType::NotarizeFallback => VotePoolType::DuplicateBlockVotePool(
-                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
-            ),
-            VoteType::Notarize => VotePoolType::DuplicateBlockVotePool(
-                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
-            ),
-            _ => VotePoolType::SimpleVotePool(SimpleVotePool::new()),
+            VoteType::NotarizeFallback | VoteType::Notarize => {
+                VotePoolType::DuplicateBlockVotePool(DuplicateBlockVotePool::new(
+                    MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+                ))
+            }
+            VoteType::Finalize | VoteType::Skip | VoteType::SkipFallback => {
+                VotePoolType::SimpleVotePool(SimpleVotePool::new())
+            }
         }
     }
 
