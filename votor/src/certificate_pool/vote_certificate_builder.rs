@@ -106,12 +106,13 @@ impl VoteCertificateBuilder {
     }
 
     pub fn build(self) -> Result<CertificateMessage, CertificateError> {
-        let last_one_1 = self
-            .input_bitmap_1
+        let mut input_bitmap_1 = self.input_bitmap_1;
+        let mut input_bitmap_2 = self.input_bitmap_2;
+
+        let last_one_1 = input_bitmap_1 // use local variable
             .last_one()
             .map_or(0, |i| i.saturating_add(1));
-        let last_one_2 = self
-            .input_bitmap_2
+        let last_one_2 = input_bitmap_2 // use local variable
             .last_one()
             .map_or(0, |i| i.saturating_add(1));
         let new_length = last_one_1.max(last_one_2);
@@ -123,18 +124,14 @@ impl VoteCertificateBuilder {
             return Err(CertificateError::ValidatorDoesNotExist(new_length as u16));
         }
 
-        let mut bitmap1 = self.input_bitmap_1.clone();
-        let mut bitmap2 = self.input_bitmap_2.clone();
-
-        bitmap1.resize(new_length, false);
-        bitmap2.resize(new_length, false);
-
-        let bitmap = if bitmap2.count_ones() > 0 {
+        input_bitmap_1.resize(new_length, false);
+        input_bitmap_2.resize(new_length, false);
+        let bitmap = if input_bitmap_2.count_ones() > 0 {
             // If we have two bitmaps, use Base3 encoding
-            encode_base3(&bitmap1, &bitmap2).map_err(CertificateError::EncodeError)?
+            encode_base3(&input_bitmap_1, &input_bitmap_2).map_err(CertificateError::EncodeError)?
         } else {
             // If we only have one bitmap, use Base2 encoding
-            encode_base2(&bitmap1).map_err(CertificateError::EncodeError)?
+            encode_base2(&input_bitmap_1).map_err(CertificateError::EncodeError)?
         };
         Ok(CertificateMessage {
             certificate: self.certificate,
