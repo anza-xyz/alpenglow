@@ -390,19 +390,22 @@ impl BlockComponent {
         }
 
         // Handle remaining data
-        match data.get(cursor..) {
-            Some(remaining) if !remaining.is_empty() => {
-                // Remaining data should be a marker
-                let marker = VersionedBlockMarker::from_bytes(remaining)?;
-                if entries.is_empty() {
-                    Ok(Self::BlockMarker(marker))
-                } else {
-                    Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                        "BlockComponent cannot have both entries and marker data".to_string(),
-                    )))
-                }
+        let remaining_bytes = data.get(cursor..).ok_or_else(|| {
+            bincode::Error::new(bincode::ErrorKind::Custom(
+                "Cursor exceeded boundary".to_string(),
+            ))
+        })?;
+
+        match (entries.is_empty(), remaining_bytes.is_empty()) {
+            (true, true) => Ok(Self::Entries(Vec::new())),
+            (true, false) => {
+                let marker = VersionedBlockMarker::from_bytes(remaining_bytes)?;
+                Ok(Self::BlockMarker(marker))
             }
-            _ => Ok(Self::Entries(entries)),
+            (false, true) => Ok(Self::Entries(entries)),
+            (false, false) => Err(bincode::Error::new(bincode::ErrorKind::Custom(
+                "BlockComponent cannot have both entries and marker data".to_string(),
+            ))),
         }
     }
 }
