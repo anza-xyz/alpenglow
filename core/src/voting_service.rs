@@ -389,7 +389,6 @@ mod tests {
     use {
         super::*,
         crate::consensus::tower_storage::NullTowerStorage,
-        bitvec::prelude::*,
         solana_bls_signatures::Signature as BLSSignature,
         solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
         solana_keypair::Keypair,
@@ -497,12 +496,12 @@ mod tests {
         certificate: Arc::new(CertificateMessage {
             certificate: Certificate::new(CertificateType::Skip, 5, None),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         }),
     }, BLSMessage::Certificate(CertificateMessage {
         certificate: Certificate::new(CertificateType::Skip, 5, None),
         signature: BLSSignature::default(),
-        bitmap: BitVec::new(),
+        bitmap: Vec::new(),
     }))]
     fn test_send_bls_message(bls_op: BLSOp, expected_bls_message: BLSMessage) {
         solana_logger::setup();

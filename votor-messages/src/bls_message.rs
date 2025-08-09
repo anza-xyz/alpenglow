@@ -1,7 +1,6 @@
 //! Put BLS message here so all clients can agree on the format
 use {
     crate::vote::Vote,
-    bitvec::prelude::*,
     serde::{Deserialize, Serialize},
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
@@ -140,8 +139,8 @@ pub struct CertificateMessage {
     pub certificate: Certificate,
     /// The signature
     pub signature: BLSSignature,
-    /// The bitmap for validators, little endian byte order
-    pub bitmap: BitVec<u8, Lsb0>,
+    /// The bitmap for validators, see solana-signer-store for encoding format
+    pub bitmap: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,7 +166,7 @@ impl BLSMessage {
     /// Create a new certificate message
     pub fn new_certificate(
         certificate: Certificate,
-        bitmap: BitVec<u8, Lsb0>,
+        bitmap: Vec<u8>,
         signature: BLSSignature,
     ) -> Self {
         Self::Certificate(CertificateMessage {

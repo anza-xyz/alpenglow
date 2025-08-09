@@ -240,13 +240,13 @@ impl CertificatePool {
             let mut vote_certificate_builder = VoteCertificateBuilder::new(cert_id);
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                match vote_pool {
-                    VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate_builder),
-                    VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), &mut vote_certificate_builder),
-                };
-            }
+                    match vote_pool {
+                        VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate_builder),
+                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), &mut vote_certificate_builder),
+                    };
+                }
             });
-            let new_cert = Arc::new(vote_certificate_builder.build());
+            let new_cert = Arc::new(vote_certificate_builder.build()?);
             self.send_and_insert_certificate(cert_id, new_cert.clone(), events)?;
             self.stats
                 .incr_cert_type(new_cert.certificate.certificate_type(), true);
@@ -742,7 +742,6 @@ pub fn load_from_blockstore(
 mod tests {
     use {
         super::*,
-        bitvec::prelude::*,
         solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
         solana_clock::Slot,
         solana_hash::Hash,
@@ -1236,7 +1235,7 @@ mod tests {
         let certificate_message = CertificateMessage {
             certificate,
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
         let bls_message = BLSMessage::Certificate(certificate_message.clone());
@@ -1956,7 +1955,7 @@ mod tests {
         let cert = BLSMessage::Certificate(CertificateMessage {
             certificate,
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         });
         assert!(pool
             .add_message(
@@ -1985,7 +1984,7 @@ mod tests {
                 Some(Hash::new_unique()),
             ),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
         assert!(pool
@@ -2001,7 +2000,7 @@ mod tests {
         let cert_4 = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 4, None),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2025,7 +2024,7 @@ mod tests {
         let cert_5 = CertificateMessage {
             certificate: Certificate::new(CertificateType::Notarize, 5, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2042,7 +2041,7 @@ mod tests {
         let cert_5_finalize = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 5, None),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2063,7 +2062,7 @@ mod tests {
                 Some(Hash::new_unique()),
             ),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2087,7 +2086,7 @@ mod tests {
         let cert_6 = CertificateMessage {
             certificate: Certificate::new(CertificateType::Notarize, 6, Some(Hash::new_unique())),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2111,7 +2110,7 @@ mod tests {
         let cert_6_finalize = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 6, None),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2131,7 +2130,7 @@ mod tests {
                 Some(Hash::new_unique()),
             ),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
@@ -2156,7 +2155,7 @@ mod tests {
         let cert_7 = CertificateMessage {
             certificate: Certificate::new(CertificateType::Skip, 7, None),
             signature: BLSSignature::default(),
-            bitmap: BitVec::new(),
+            bitmap: Vec::new(),
         };
         assert!(pool
             .add_message(
