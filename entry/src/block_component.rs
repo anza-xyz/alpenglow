@@ -164,6 +164,10 @@ pub enum BlockMarkerV1 {
     ParentReadyUpdate(VersionedParentReadyUpdate),
 }
 
+// ============================================================================
+// Block Footer Types
+// ============================================================================
+
 /// Versioned block footer for backward compatibility.
 ///
 /// # Serialization Format
@@ -201,143 +205,9 @@ pub struct BlockFooterV0 {
     pub block_user_agent: Vec<u8>,
 }
 
-impl BlockFooterV0 {
-    /// Maximum length for user agent bytes.
-    const MAX_USER_AGENT_LEN: usize = 255;
-
-    /// Returns the version for this struct.
-    pub const fn version(&self) -> u8 {
-        0
-    }
-
-    /// Serializes to bytes with user agent length capping.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        let mut buffer =
-            Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
-
-        // Serialize timestamp
-        buffer.extend_from_slice(&self.block_producer_time_nanos.to_le_bytes());
-
-        // Serialize user agent with length capping
-        let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
-        buffer.push(capped_len as u8);
-        buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
-
-        Ok(buffer)
-    }
-
-    /// Deserializes from bytes with validation.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        const TIMESTAMP_SIZE: usize = 8;
-        const LENGTH_SIZE: usize = 1;
-        const HEADER_SIZE: usize = TIMESTAMP_SIZE + LENGTH_SIZE;
-
-        if data.len() < HEADER_SIZE {
-            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
-        }
-
-        // Read timestamp
-        let time_bytes: [u8; TIMESTAMP_SIZE] = data[..TIMESTAMP_SIZE]
-            .try_into()
-            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
-        let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
-
-        // Read user agent length
-        let user_agent_len = data[TIMESTAMP_SIZE] as usize;
-
-        // Validate remaining data size
-        if data.len() < HEADER_SIZE + user_agent_len {
-            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
-        }
-
-        // Read user agent bytes
-        let user_agent_bytes = data[HEADER_SIZE..HEADER_SIZE + user_agent_len].to_vec();
-
-        Ok(Self {
-            block_producer_time_nanos,
-            block_user_agent: user_agent_bytes,
-        })
-    }
-}
-
-impl VersionedBlockFooter {
-    /// Creates a new versioned block footer with V0 variant.
-    pub const fn new_v0(footer: BlockFooterV0) -> Self {
-        Self::V0(footer)
-    }
-
-    /// Creates a new versioned block footer with Current variant.
-    pub const fn new(footer: BlockFooterV0) -> Self {
-        Self::Current(footer)
-    }
-
-    /// Returns the version number for this footer.
-    pub const fn version(&self) -> u8 {
-        match self {
-            Self::V0(_) | Self::Current(_) => 0,
-        }
-    }
-
-    /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        let footer = match self {
-            Self::V0(footer) | Self::Current(footer) => footer,
-        };
-
-        let footer_bytes = footer.to_bytes()?;
-        let mut buffer = Vec::with_capacity(1 + footer_bytes.len());
-        buffer.push(self.version());
-        buffer.extend_from_slice(&footer_bytes);
-
-        Ok(buffer)
-    }
-
-    /// Deserializes from bytes, always creating Current variant.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        let (_version, remaining) = data
-            .split_first()
-            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
-
-        let footer = BlockFooterV0::from_bytes(remaining)?;
-        Ok(Self::Current(footer))
-    }
-}
-
-impl Serialize for VersionedBlockFooter {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
-        serializer.serialize_bytes(&bytes)
-    }
-}
-
-impl<'de> Deserialize<'de> for VersionedBlockFooter {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct VersionedBlockFooterVisitor;
-
-        impl Visitor<'_> for VersionedBlockFooterVisitor {
-            type Value = VersionedBlockFooter;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized VersionedBlockFooter byte stream")
-            }
-
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedBlockFooter, E>
-            where
-                E: de::Error,
-            {
-                VersionedBlockFooter::from_bytes(value).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_bytes(VersionedBlockFooterVisitor)
-    }
-}
+// ============================================================================
+// Parent Ready Update Types
+// ============================================================================
 
 /// Versioned parent ready update for optimistic block packing in Alpenglow.
 ///
@@ -377,22 +247,9 @@ pub struct ParentReadyUpdateV0 {
     pub new_parent_block_id: Hash,
 }
 
-impl ParentReadyUpdateV0 {
-    /// Returns the version for this struct.
-    pub const fn version(&self) -> u8 {
-        0
-    }
-
-    /// Serializes to bytes using bincode.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        bincode::serialize(self)
-    }
-
-    /// Deserializes from bytes using bincode.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        bincode::deserialize(data)
-    }
-}
+// ============================================================================
+// BlockComponent Implementation
+// ============================================================================
 
 impl Default for BlockComponent {
     fn default() -> Self {
@@ -414,7 +271,6 @@ impl BlockComponent {
         if entries.is_empty() {
             return Err("BlockComponent with entries cannot be empty".to_string());
         }
-
         Self::validate_entries_length(entries.len())?;
         Ok(Self::Entries(entries))
     }
@@ -505,14 +361,10 @@ impl BlockComponent {
     pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const ENTRY_COUNT_SIZE: usize = 8;
 
-        let entry_count_bytes = data
-            .get(..ENTRY_COUNT_SIZE)
-            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
-
         let entry_count = u64::from_le_bytes(
-            entry_count_bytes
-                .try_into()
-                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+            data.get(..ENTRY_COUNT_SIZE)
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
         );
 
         // Validate entry count
@@ -592,6 +444,10 @@ impl<'de> Deserialize<'de> for BlockComponent {
     }
 }
 
+// ============================================================================
+// VersionedBlockMarker Implementation
+// ============================================================================
+
 impl VersionedBlockMarker {
     /// Creates a new versioned marker with V0 variant.
     pub const fn new_v0(marker: BlockMarkerV0) -> Self {
@@ -629,29 +485,21 @@ impl VersionedBlockMarker {
     fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         const VERSION_SIZE: usize = 2;
 
-        let version_bytes = data
-            .get(..VERSION_SIZE)
-            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
-
         let version = u16::from_le_bytes(
-            version_bytes
-                .try_into()
-                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+            data.get(..VERSION_SIZE)
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
         );
 
         let marker_data = &data[VERSION_SIZE..];
 
-        let marker = match version {
-            0 => Self::Current(BlockMarkerV0::from_bytes(marker_data)?),
-            1 => Self::V1(BlockMarkerV1::from_bytes(marker_data)?),
-            _ => {
-                return Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
-                    "Unsupported VersionedBlockMarker version: {version}"
-                ))))
-            }
-        };
-
-        Ok(marker)
+        match version {
+            0 => Ok(Self::Current(BlockMarkerV0::from_bytes(marker_data)?)),
+            1 => Ok(Self::V1(BlockMarkerV1::from_bytes(marker_data)?)),
+            _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
+                "Unsupported VersionedBlockMarker version: {version}"
+            )))),
+        }
     }
 }
 
@@ -691,6 +539,10 @@ impl<'de> Deserialize<'de> for VersionedBlockMarker {
     }
 }
 
+// ============================================================================
+// BlockMarkerV0 Implementation
+// ============================================================================
+
 impl BlockMarkerV0 {
     /// Serializes to bytes with variant prefix.
     fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
@@ -711,10 +563,9 @@ impl BlockMarkerV0 {
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
         match variant_id {
-            0 => {
-                let footer = VersionedBlockFooter::from_bytes(remaining)?;
-                Ok(Self::BlockFooter(footer))
-            }
+            0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
+                remaining,
+            )?)),
             _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
                 "Unknown BlockMarkerV0 variant: {variant_id}"
             )))),
@@ -758,6 +609,10 @@ impl<'de> Deserialize<'de> for BlockMarkerV0 {
     }
 }
 
+// ============================================================================
+// BlockMarkerV1 Implementation
+// ============================================================================
+
 impl BlockMarkerV1 {
     /// Returns the version for this marker.
     pub const fn version(&self) -> u8 {
@@ -785,14 +640,12 @@ impl BlockMarkerV1 {
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
         match variant_id {
-            0 => {
-                let footer = VersionedBlockFooter::from_bytes(remaining)?;
-                Ok(Self::BlockFooter(footer))
-            }
-            1 => {
-                let update = VersionedParentReadyUpdate::from_bytes(remaining)?;
-                Ok(Self::ParentReadyUpdate(update))
-            }
+            0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
+                remaining,
+            )?)),
+            1 => Ok(Self::ParentReadyUpdate(
+                VersionedParentReadyUpdate::from_bytes(remaining)?,
+            )),
             _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
                 "Unknown BlockMarkerV1 variant: {variant_id}"
             )))),
@@ -833,6 +686,169 @@ impl<'de> Deserialize<'de> for BlockMarkerV1 {
         }
 
         deserializer.deserialize_bytes(BlockMarkerV1Visitor)
+    }
+}
+
+// ============================================================================
+// BlockFooter Implementation
+// ============================================================================
+
+impl BlockFooterV0 {
+    /// Maximum length for user agent bytes.
+    const MAX_USER_AGENT_LEN: usize = 255;
+
+    /// Returns the version for this struct.
+    pub const fn version(&self) -> u8 {
+        0
+    }
+
+    /// Serializes to bytes with user agent length capping.
+    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        let mut buffer =
+            Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
+
+        // Serialize timestamp
+        buffer.extend_from_slice(&self.block_producer_time_nanos.to_le_bytes());
+
+        // Serialize user agent with length capping
+        let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
+        buffer.push(capped_len as u8);
+        buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
+
+        Ok(buffer)
+    }
+
+    /// Deserializes from bytes with validation.
+    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+        const TIMESTAMP_SIZE: usize = 8;
+        const LENGTH_SIZE: usize = 1;
+        const HEADER_SIZE: usize = TIMESTAMP_SIZE + LENGTH_SIZE;
+
+        if data.len() < HEADER_SIZE {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
+
+        // Read timestamp
+        let time_bytes: [u8; TIMESTAMP_SIZE] = data[..TIMESTAMP_SIZE]
+            .try_into()
+            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+        let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
+
+        // Read user agent length
+        let user_agent_len = data[TIMESTAMP_SIZE] as usize;
+
+        // Validate remaining data size
+        if data.len() < HEADER_SIZE + user_agent_len {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
+
+        // Read user agent bytes
+        let block_user_agent = data[HEADER_SIZE..HEADER_SIZE + user_agent_len].to_vec();
+
+        Ok(Self {
+            block_producer_time_nanos,
+            block_user_agent,
+        })
+    }
+}
+
+impl VersionedBlockFooter {
+    /// Creates a new versioned block footer with V0 variant.
+    pub const fn new_v0(footer: BlockFooterV0) -> Self {
+        Self::V0(footer)
+    }
+
+    /// Creates a new versioned block footer with Current variant.
+    pub const fn new(footer: BlockFooterV0) -> Self {
+        Self::Current(footer)
+    }
+
+    /// Returns the version number for this footer.
+    pub const fn version(&self) -> u8 {
+        match self {
+            Self::V0(_) | Self::Current(_) => 0,
+        }
+    }
+
+    /// Serializes to bytes with version prefix.
+    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        let footer = match self {
+            Self::V0(footer) | Self::Current(footer) => footer,
+        };
+
+        let footer_bytes = footer.to_bytes()?;
+        let mut buffer = Vec::with_capacity(1 + footer_bytes.len());
+        buffer.push(self.version());
+        buffer.extend_from_slice(&footer_bytes);
+
+        Ok(buffer)
+    }
+
+    /// Deserializes from bytes, always creating Current variant.
+    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+        let (_version, remaining) = data
+            .split_first()
+            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+
+        let footer = BlockFooterV0::from_bytes(remaining)?;
+        Ok(Self::Current(footer))
+    }
+}
+
+impl Serialize for VersionedBlockFooter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
+        serializer.serialize_bytes(&bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for VersionedBlockFooter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct VersionedBlockFooterVisitor;
+
+        impl Visitor<'_> for VersionedBlockFooterVisitor {
+            type Value = VersionedBlockFooter;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized VersionedBlockFooter byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedBlockFooter, E>
+            where
+                E: de::Error,
+            {
+                VersionedBlockFooter::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_bytes(VersionedBlockFooterVisitor)
+    }
+}
+
+// ============================================================================
+// ParentReadyUpdate Implementation
+// ============================================================================
+
+impl ParentReadyUpdateV0 {
+    /// Returns the version for this struct.
+    pub const fn version(&self) -> u8 {
+        0
+    }
+
+    /// Serializes to bytes using bincode.
+    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(self)
+    }
+
+    /// Deserializes from bytes using bincode.
+    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+        bincode::deserialize(data)
     }
 }
 
