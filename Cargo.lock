@@ -244,7 +244,6 @@ dependencies = [
  "solana-keypair",
  "solana-ledger",
  "solana-loader-v3-interface",
- "solana-log-collector",
  "solana-logger 3.0.0",
  "solana-measure",
  "solana-message",
@@ -265,6 +264,7 @@ dependencies = [
  "solana-streamer",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-system-interface",
  "solana-transaction",
  "solana-transaction-context",
@@ -366,7 +366,6 @@ dependencies = [
  "solana-keccak-hasher",
  "solana-last-restart-slot",
  "solana-loader-v3-interface",
- "solana-log-collector",
  "solana-measure",
  "solana-poseidon",
  "solana-program",
@@ -382,6 +381,7 @@ dependencies = [
  "solana-stable-layout",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-timings",
@@ -7442,7 +7442,6 @@ dependencies = [
  "solana-last-restart-slot",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
- "solana-log-collector",
  "solana-measure",
  "solana-packet",
  "solana-program",
@@ -7455,6 +7454,7 @@ dependencies = [
  "solana-slot-hashes",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-system-interface",
  "solana-transaction-context",
  "solana-type-overrides",
@@ -9239,13 +9239,13 @@ dependencies = [
  "solana-instruction",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
- "solana-log-collector",
  "solana-measure",
  "solana-packet",
  "solana-program-runtime",
  "solana-pubkey",
  "solana-sbpf",
  "solana-sdk-ids",
+ "solana-svm-log-collector",
  "solana-sysvar",
  "solana-transaction-context",
  "solana-type-overrides",
@@ -9333,13 +9333,6 @@ dependencies = [
  "serde_json",
  "solana-logger 3.0.0",
  "solana-version",
-]
-
-[[package]]
-name = "solana-log-collector"
-version = "3.0.0"
-dependencies = [
- "log",
 ]
 
 [[package]]
@@ -9862,7 +9855,6 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-last-restart-slot",
- "solana-log-collector",
  "solana-measure",
  "solana-metrics",
  "solana-program-entrypoint",
@@ -9875,6 +9867,7 @@ dependencies = [
  "solana-slot-hashes",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-sysvar",
@@ -9917,7 +9910,6 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface",
- "solana-log-collector",
  "solana-logger 3.0.0",
  "solana-message",
  "solana-msg",
@@ -9937,6 +9929,7 @@ dependencies = [
  "solana-stake-interface",
  "solana-stake-program",
  "solana-svm",
+ "solana-svm-log-collector",
  "solana-system-interface",
  "solana-sysvar",
  "solana-sysvar-id",
@@ -10171,7 +10164,6 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-ledger",
- "solana-log-collector",
  "solana-measure",
  "solana-message",
  "solana-metrics",
@@ -10204,6 +10196,7 @@ dependencies = [
  "solana-storage-bigtable",
  "solana-streamer",
  "solana-svm",
+ "solana-svm-log-collector",
  "solana-system-interface",
  "solana-system-transaction",
  "solana-sysvar",
@@ -10927,7 +10920,6 @@ dependencies = [
  "solana-epoch-schedule",
  "solana-genesis-config",
  "solana-instruction",
- "solana-log-collector",
  "solana-native-token",
  "solana-packet",
  "solana-program-runtime",
@@ -10937,6 +10929,7 @@ dependencies = [
  "solana-stake-interface",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-sysvar",
  "solana-sysvar-id",
  "solana-transaction-context",
@@ -11129,7 +11122,6 @@ dependencies = [
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
  "solana-loader-v4-program",
- "solana-log-collector",
  "solana-logger 3.0.0",
  "solana-measure",
  "solana-message",
@@ -11152,6 +11144,7 @@ dependencies = [
  "solana-svm",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-system-program",
@@ -11181,6 +11174,13 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "3.0.0"
+
+[[package]]
+name = "solana-svm-log-collector"
+version = "3.0.0"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "solana-svm-transaction"
@@ -11231,7 +11231,6 @@ dependencies = [
  "solana-fee-calculator",
  "solana-hash",
  "solana-instruction",
- "solana-log-collector",
  "solana-nonce",
  "solana-nonce-account",
  "solana-packet",
@@ -11242,6 +11241,7 @@ dependencies = [
  "solana-sha256-hasher",
  "solana-svm-callback",
  "solana-svm-feature-set",
+ "solana-svm-log-collector",
  "solana-system-interface",
  "solana-sysvar",
  "solana-transaction-context",
@@ -12167,9 +12167,9 @@ dependencies = [
  "num-derive",
  "num-traits",
  "solana-instruction",
- "solana-log-collector",
  "solana-program-runtime",
  "solana-sdk-ids",
+ "solana-svm-log-collector",
  "solana-zk-sdk 3.0.0",
 ]
 
@@ -12295,9 +12295,9 @@ dependencies = [
  "num-derive",
  "num-traits",
  "solana-instruction",
- "solana-log-collector",
  "solana-program-runtime",
  "solana-sdk-ids",
+ "solana-svm-log-collector",
  "solana-zk-token-sdk",
 ]
 
