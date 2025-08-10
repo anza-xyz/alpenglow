@@ -159,6 +159,26 @@ impl EventHandler {
         Ok(())
     }
 
+    fn generate_vote_message_and_push_to_votes(
+        votes: &mut Vec<BLSOp>,
+        vote: Vote,
+        is_refresh: bool,
+        vctx: &mut VotingContext,
+    ) -> Result<(), VoteError> {
+        let bls_op = match voting_utils::insert_vote_and_create_bls_message(vote, is_refresh, vctx)
+        {
+            Ok(bls_op) => bls_op,
+            Err(VoteError::GenerationError(e)) => {
+                error!("Failed to generate vote and push to votes: {:?}", e);
+                // These are not fatal errors, just skip the vote for now.
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        votes.push(bls_op);
+        Ok(())
+    }
+
     fn handle_event(
         my_pubkey: &mut Pubkey,
         event: VotorEvent,
@@ -253,12 +273,12 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
-                votes.push(voting_utils::insert_vote_and_create_bls_message(
-                    my_pubkey,
+                Self::generate_vote_message_and_push_to_votes(
+                    &mut votes,
                     Vote::new_notarization_fallback_vote(slot, block_id),
                     false,
                     vctx,
-                )?);
+                )?;
             }
 
             // We have observed the safe to skip condition, and can send a skip fallback vote
@@ -269,12 +289,12 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting skip-fallback for {slot}");
-                votes.push(voting_utils::insert_vote_and_create_bls_message(
-                    my_pubkey,
+                Self::generate_vote_message_and_push_to_votes(
+                    &mut votes,
                     Vote::new_skip_fallback_vote(slot),
                     false,
                     vctx,
-                )?);
+                )?;
             }
 
             // It is time to produce our leader window
@@ -414,12 +434,12 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
-        votes.push(voting_utils::insert_vote_and_create_bls_message(
-            my_pubkey,
+        Self::generate_vote_message_and_push_to_votes(
+            votes,
             Vote::new_notarization_vote(slot, block_id),
             false,
             voting_context,
-        )?);
+        )?;
         alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
             slot,
@@ -486,12 +506,12 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting finalize for {slot}");
-        votes.push(voting_utils::insert_vote_and_create_bls_message(
-            my_pubkey,
+        Self::generate_vote_message_and_push_to_votes(
+            votes,
             Vote::new_finalization_vote(slot),
             false,
             voting_context,
-        )?);
+        )?;
         Ok(true)
     }
 
@@ -511,12 +531,12 @@ impl EventHandler {
                 continue;
             }
             info!("{my_pubkey}: Voting skip for {s}");
-            votes.push(voting_utils::insert_vote_and_create_bls_message(
-                my_pubkey,
+            Self::generate_vote_message_and_push_to_votes(
+                votes,
                 Vote::new_skip_vote(s),
                 false,
                 voting_context,
-            )?);
+            )?;
         }
         Ok(())
     }
@@ -533,12 +553,7 @@ impl EventHandler {
             .votes_cast_since(highest_finalized_slot)
         {
             info!("{my_pubkey}: Refreshing vote {vote:?}");
-            votes.push(voting_utils::insert_vote_and_create_bls_message(
-                my_pubkey,
-                vote,
-                true,
-                voting_context,
-            )?);
+            Self::generate_vote_message_and_push_to_votes(votes, vote, true, voting_context)?;
         }
         Ok(())
     }

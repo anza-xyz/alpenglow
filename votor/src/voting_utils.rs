@@ -1,7 +1,7 @@
 use {
     crate::{
         commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
-        vote_history::VoteHistory,
+        vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
     crossbeam_channel::{SendError, Sender},
@@ -71,6 +71,9 @@ pub enum VoteError {
 
     #[error("Commitment sender error {0}")]
     CommitmentSenderError(#[from] AlpenglowCommitmentError),
+
+    #[error("Saved vote history error {0}")]
+    SavedVoteHistoryError(#[from] VoteHistoryError),
 }
 
 /// Context required to construct vote transactions
@@ -223,7 +226,6 @@ pub fn generate_vote_tx(
 ///
 /// Returns false if we are currently a non-voting node
 pub(crate) fn insert_vote_and_create_bls_message(
-    my_pubkey: &Pubkey,
     vote: Vote,
     is_refresh: bool,
     context: &mut VotingContext,
@@ -247,16 +249,7 @@ pub(crate) fn insert_vote_and_create_bls_message(
 
     // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
     let saved_vote_history =
-        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
-            |err| {
-                error!(
-                    "{my_pubkey}: Unable to create saved vote history: {:?}",
-                    err
-                );
-                // TODO: maybe unify this with exit flag instead
-                std::process::exit(1);
-            },
-        );
+        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair)?;
 
     // Return vote for sending
     Ok(BLSOp::PushVote {
