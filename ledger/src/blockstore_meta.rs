@@ -1,6 +1,7 @@
 use {
     crate::{
         bit_vec::BitVec,
+        blockstore::BlockstoreError,
         shred::{self, Shred, ShredType, MAX_DATA_SHREDS_PER_SLOT},
     },
     bincode::Options,
