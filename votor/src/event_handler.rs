@@ -168,13 +168,13 @@ impl EventHandler {
         let bls_op = match voting_utils::insert_vote_and_create_bls_message(vote, is_refresh, vctx)
         {
             Ok(bls_op) => bls_op,
-            Err(VoteError::GenerationWarning(e)) => {
+            Err(VoteError::InvalidConfig(e)) => {
                 warn!("Failed to generate vote and push to votes: {:?}", e);
                 // These are not fatal errors, just skip the vote for now. But they are misconfigurations
                 // that should be warned about.
                 return Ok(());
             }
-            Err(VoteError::GenerationInfo(e)) => {
+            Err(VoteError::TransientError(e)) => {
                 info!("Failed to generate vote and push to votes: {:?}", e);
                 // These are transient errors, just skip the vote for now.
                 return Ok(());
@@ -406,8 +406,8 @@ impl EventHandler {
     /// - Either it's the first leader block of the window and we are parent ready
     /// - or it's a consecutive slot and we have voted notarize on the parent
     ///
-    ///
-    /// If successful returns true
+    /// The boolean in the Result indicates whether we actually voted notarize.
+    /// An error returned will cause the voting process to be aborted.
     fn try_notar(
         my_pubkey: &Pubkey,
         (slot, block_id): Block,
@@ -489,7 +489,8 @@ impl EventHandler {
     /// - we voted notarize for the block
     /// - we have not voted skip, notarize fallback or skip fallback in the slot (bad window)
     ///
-    /// If successful returns true
+    /// The boolean in the Result indicates whether we actually voted finalize.
+    /// An error returned will cause the voting process to be aborted.
     fn try_final(
         my_pubkey: &Pubkey,
         block @ (slot, block_id): Block,
