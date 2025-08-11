@@ -76,8 +76,8 @@ use {
         },
     },
     solana_signer::Signer,
+    solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
-    solana_timings::ExecuteTimings,
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
