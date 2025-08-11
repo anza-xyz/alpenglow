@@ -223,6 +223,17 @@ impl EventHandler {
                 if should_set_timeouts {
                     timer_manager.write().set_timeouts(slot);
                 }
+                let mut highest_parent_ready = ctx
+                    .leader_window_notifier
+                    .highest_parent_ready
+                    .write()
+                    .unwrap();
+
+                let (current_slot, _) = *highest_parent_ready;
+
+                if slot > current_slot {
+                    *highest_parent_ready = (slot, parent_block);
+                }
             }
 
             VotorEvent::TimeoutCrashedLeader(slot) => {
