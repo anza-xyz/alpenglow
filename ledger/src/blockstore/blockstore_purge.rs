@@ -252,6 +252,8 @@ impl Blockstore {
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
         self.code_shred_cf
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.block_versions_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
         self.dead_slots_cf
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
         self.duplicate_slots_cf
@@ -274,6 +276,16 @@ impl Blockstore {
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
         self.merkle_root_meta_cf
             .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.alt_meta_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.alt_erasure_meta_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.alt_index_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.alt_data_shred_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
+        self.alt_merkle_root_meta_cf
+            .delete_range_in_batch(write_batch, from_slot, to_slot)?;
 
         match purge_type {
             PurgeType::Exact => self.purge_special_columns_exact(write_batch, from_slot, to_slot),
@@ -295,6 +307,8 @@ impl Blockstore {
             .delete_file_in_range(from_slot, to_slot)?;
         self.code_shred_cf
             .delete_file_in_range(from_slot, to_slot)?;
+        self.block_versions_cf
+            .delete_file_in_range(from_slot, to_slot)?;
         self.dead_slots_cf
             .delete_file_in_range(from_slot, to_slot)?;
         self.duplicate_slots_cf
@@ -312,6 +326,14 @@ impl Blockstore {
         self.optimistic_slots_cf
             .delete_file_in_range(from_slot, to_slot)?;
         self.merkle_root_meta_cf
+            .delete_file_in_range(from_slot, to_slot)?;
+        self.alt_meta_cf.delete_file_in_range(from_slot, to_slot)?;
+        self.alt_erasure_meta_cf
+            .delete_file_in_range(from_slot, to_slot)?;
+        self.alt_index_cf.delete_file_in_range(from_slot, to_slot)?;
+        self.alt_data_shred_cf
+            .delete_file_in_range(from_slot, to_slot)?;
+        self.alt_merkle_root_meta_cf
             .delete_file_in_range(from_slot, to_slot)
     }
 

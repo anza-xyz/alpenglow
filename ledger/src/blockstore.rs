@@ -254,6 +254,7 @@ pub struct Blockstore {
     blocktime_cf: LedgerColumn<cf::Blocktime>,
     code_shred_cf: LedgerColumn<cf::ShredCode>,
     data_shred_cf: LedgerColumn<cf::ShredData>,
+    block_versions_cf: LedgerColumn<cf::BlockVersions>,
     dead_slots_cf: LedgerColumn<cf::DeadSlots>,
     duplicate_slots_cf: LedgerColumn<cf::DuplicateSlots>,
     erasure_meta_cf: LedgerColumn<cf::ErasureMeta>,
@@ -268,6 +269,11 @@ pub struct Blockstore {
     transaction_memos_cf: LedgerColumn<cf::TransactionMemos>,
     transaction_status_cf: LedgerColumn<cf::TransactionStatus>,
     transaction_status_index_cf: LedgerColumn<cf::TransactionStatusIndex>,
+    alt_meta_cf: LedgerColumn<cf::AlternateSlotMeta>,
+    alt_erasure_meta_cf: LedgerColumn<cf::AlternateErasureMeta>,
+    alt_index_cf: LedgerColumn<cf::AlternateIndex>,
+    alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
+    alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
     max_root: AtomicU64,
@@ -398,6 +404,7 @@ impl Blockstore {
         let blocktime_cf = db.column();
         let code_shred_cf = db.column();
         let data_shred_cf = db.column();
+        let block_versions_cf = db.column();
         let dead_slots_cf = db.column();
         let duplicate_slots_cf = db.column();
         let erasure_meta_cf = db.column();
@@ -412,6 +419,11 @@ impl Blockstore {
         let transaction_memos_cf = db.column();
         let transaction_status_cf = db.column();
         let transaction_status_index_cf = db.column();
+        let alt_meta_cf = db.column();
+        let alt_erasure_meta_cf = db.column();
+        let alt_index_cf = db.column();
+        let alt_data_shred_cf = db.column();
+        let alt_merkle_root_meta_cf = db.column();
 
         // Get max root or 0 if it doesn't exist
         let max_root = roots_cf
@@ -432,6 +444,7 @@ impl Blockstore {
             blocktime_cf,
             code_shred_cf,
             data_shred_cf,
+            block_versions_cf,
             dead_slots_cf,
             duplicate_slots_cf,
             erasure_meta_cf,
@@ -446,6 +459,12 @@ impl Blockstore {
             transaction_memos_cf,
             transaction_status_cf,
             transaction_status_index_cf,
+            alt_meta_cf,
+            alt_erasure_meta_cf,
+            alt_index_cf,
+            alt_data_shred_cf,
+            alt_merkle_root_meta_cf,
+
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
             completed_slots_senders: Mutex::default(),
@@ -558,6 +577,27 @@ impl Blockstore {
         self.meta_cf.get(slot)
     }
 
+    /// Returns the SlotMeta of the specified slot from the specified location
+    pub fn meta_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<SlotMeta>> {
+        match location {
+            BlockLocation::Turbine => self.meta_cf.get(slot),
+            BlockLocation::Repair { block_id } => self.alt_meta_cf.get((slot, block_id)),
+        }
+    }
+
+    /// Returns the BlockVersions of the specified slot.
+    pub fn block_versions(&self, slot: Slot) -> Result<Option<BlockVersions>> {
+        self.block_versions_cf.get(slot)
+    }
+
+    pub fn set_block_versions(&self, slot: Slot, block_versions: &BlockVersions) -> Result<()> {
+        self.block_versions_cf.put(slot, block_versions)
+    }
+
     /// Returns true if the specified slot is full.
     pub fn is_full(&self, slot: Slot) -> bool {
         if let Ok(Some(meta)) = self.meta_cf.get(slot) {
@@ -569,6 +609,22 @@ impl Blockstore {
     fn erasure_meta(&self, erasure_set: ErasureSetId) -> Result<Option<ErasureMeta>> {
         let (slot, fec_set_index) = erasure_set.store_key();
         self.erasure_meta_cf.get((slot, u64::from(fec_set_index)))
+    }
+
+    #[allow(dead_code)]
+    fn erasure_meta_from_location(
+        &self,
+        erasure_set: ErasureSetId,
+        location: BlockLocation,
+    ) -> Result<Option<ErasureMeta>> {
+        match location {
+            BlockLocation::Turbine => self.erasure_meta(erasure_set),
+            BlockLocation::Repair { block_id } => {
+                let (slot, fec_set_index) = erasure_set.store_key();
+                self.alt_erasure_meta_cf
+                    .get((slot, fec_set_index, block_id))
+            }
+        }
     }
 
     #[cfg(test)]
@@ -651,6 +707,22 @@ impl Blockstore {
 
     fn merkle_root_meta(&self, erasure_set: ErasureSetId) -> Result<Option<MerkleRootMeta>> {
         self.merkle_root_meta_cf.get(erasure_set.store_key())
+    }
+
+    #[allow(dead_code)]
+    fn merkle_root_meta_from_location(
+        &self,
+        erasure_set: ErasureSetId,
+        location: BlockLocation,
+    ) -> Result<Option<MerkleRootMeta>> {
+        match location {
+            BlockLocation::Turbine => self.merkle_root_meta_cf.get(erasure_set.store_key()),
+            BlockLocation::Repair { block_id } => {
+                let (slot, fec_set_index) = erasure_set.store_key();
+                self.alt_merkle_root_meta_cf
+                    .get((slot, fec_set_index, block_id))
+            }
+        }
     }
 
     /// Check whether the specified slot is an orphan slot which does not
@@ -869,6 +941,7 @@ impl Blockstore {
         self.index_cf.submit_rocksdb_cf_metrics();
         self.data_shred_cf.submit_rocksdb_cf_metrics();
         self.code_shred_cf.submit_rocksdb_cf_metrics();
+        self.block_versions_cf.submit_rocksdb_cf_metrics();
         self.transaction_status_cf.submit_rocksdb_cf_metrics();
         self.address_signatures_cf.submit_rocksdb_cf_metrics();
         self.transaction_memos_cf.submit_rocksdb_cf_metrics();
@@ -880,6 +953,11 @@ impl Blockstore {
         self.bank_hash_cf.submit_rocksdb_cf_metrics();
         self.optimistic_slots_cf.submit_rocksdb_cf_metrics();
         self.merkle_root_meta_cf.submit_rocksdb_cf_metrics();
+        self.alt_meta_cf.submit_rocksdb_cf_metrics();
+        self.alt_erasure_meta_cf.submit_rocksdb_cf_metrics();
+        self.alt_index_cf.submit_rocksdb_cf_metrics();
+        self.alt_data_shred_cf.submit_rocksdb_cf_metrics();
+        self.alt_merkle_root_meta_cf.submit_rocksdb_cf_metrics();
     }
 
     /// Attempts to insert shreds into blockstore and updates relevant metrics
@@ -2386,6 +2464,29 @@ impl Blockstore {
             .collect()
     }
 
+    pub fn get_data_shred_from_location(
+        &self,
+        slot: Slot,
+        index: u64,
+        location: BlockLocation,
+    ) -> Result<Option<Vec<u8>>> {
+        match location {
+            BlockLocation::Turbine => self.get_data_shred(slot, index),
+            BlockLocation::Repair { block_id } => {
+                self.alt_data_shred_cf.get_bytes((slot, index, block_id))
+            }
+        }
+    }
+
+    /// Checks all available block versions, if we have a complete block for
+    /// `block_id`, returns the location where it is stored
+    pub fn get_block_location(&self, slot: Slot, block_id: Hash) -> Result<Option<BlockLocation>> {
+        let Some(block_versions) = self.block_versions(slot)? else {
+            return Ok(None);
+        };
+        Ok(block_versions.get_location(block_id))
+    }
+
     // Only used by tests
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_entries(
@@ -2475,6 +2576,17 @@ impl Blockstore {
 
     pub fn get_index(&self, slot: Slot) -> Result<Option<Index>> {
         self.index_cf.get(slot)
+    }
+
+    pub fn get_index_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<Index>> {
+        match location {
+            BlockLocation::Turbine => self.get_index(slot),
+            BlockLocation::Repair { block_id } => self.alt_index_cf.get((slot, block_id)),
+        }
     }
 
     /// Manually update the meta for a slot.
@@ -5255,6 +5367,13 @@ pub fn test_all_empty_or_min(blockstore: &Blockstore, min_slot: Slot) {
             .map(|((slot, _), _)| slot >= min_slot)
             .unwrap_or(true)
         & blockstore
+            .block_versions_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|(slot, _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
             .dead_slots_cf
             .iter(IteratorMode::Start)
             .unwrap()
@@ -5309,7 +5428,43 @@ pub fn test_all_empty_or_min(blockstore: &Blockstore, min_slot: Slot) {
             .unwrap()
             .next()
             .map(|(slot, _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
+            .alt_meta_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|((slot, _), _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
+            .alt_erasure_meta_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|((slot, _, _), _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
+            .alt_index_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|((slot, _), _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
+            .alt_data_shred_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|((slot, _, _), _)| slot >= min_slot)
+            .unwrap_or(true)
+        & blockstore
+            .alt_merkle_root_meta_cf
+            .iter(IteratorMode::Start)
+            .unwrap()
+            .next()
+            .map(|((slot, _, _), _)| slot >= min_slot)
             .unwrap_or(true);
+
     assert!(condition_met);
 }
 
