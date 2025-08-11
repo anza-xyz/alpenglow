@@ -38,7 +38,9 @@ use {
     thiserror::Error,
 };
 #[cfg(feature = "dev-context-only-utils")]
-use {crate::transaction_recorder::TransactionRecorder, qualifier_attr::qualifiers, RwLock};
+use {
+    crate::transaction_recorder::TransactionRecorder, qualifier_attr::qualifiers, std::sync::RwLock,
+};
 
 pub const GRACE_TICKS_FACTOR: u64 = 2;
 pub const MAX_GRACE_SLOTS: u64 = 2;
