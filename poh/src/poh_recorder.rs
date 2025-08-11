@@ -11,6 +11,7 @@
 //! * recorded entry must be >= WorkingBank::min_tick_height && entry must be < WorkingBank::max_tick_height
 //!
 use {
+    agave_feature_set,
     crate::poh_service::PohService,
     arc_swap::ArcSwapOption,
     crossbeam_channel::{unbounded, Receiver, SendError, Sender, TrySendError},
@@ -60,32 +61,6 @@ pub enum PohRecorderError {
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
 
 pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
-
-#[derive(Debug, Clone)]
-pub struct BankStart {
-    pub working_bank: Arc<Bank>,
-    pub bank_creation_time: Arc<Instant>,
-    pub contains_valid_certificate: Arc<AtomicBool>,
-}
-
-impl BankStart {
-    pub fn should_working_bank_still_be_processing_txs(&self) -> bool {
-        Bank::should_bank_still_be_processing_txs(
-            &self.bank_creation_time,
-            self.working_bank.ns_per_slot,
-        )
-    }
-}
-
-impl From<&WorkingBank> for BankStart {
-    fn from(w: &WorkingBank) -> Self {
-        Self {
-            working_bank: w.bank.clone(),
-            bank_creation_time: w.start.clone(),
-            contains_valid_certificate: w.contains_valid_certificate.clone(),
-        }
-    }
-}
 
 // Sends the Result of the record operation, including the index in the slot of the first
 // transaction, if being tracked by WorkingBank
@@ -689,8 +664,31 @@ impl PohRecorder {
         self.working_bank.as_ref().map(|w| w.bank.clone())
     }
 
-    pub fn bank_start(&self) -> Option<BankStart> {
-        self.working_bank.as_ref().map(BankStart::from)
+    pub fn bank_with_certificate_check(&self) -> Option<Arc<Bank>> {
+        self.working_bank.as_ref().and_then(|w| {
+            let bank = w.bank.clone();
+            let first_alpenglow_slot = bank
+                .feature_set
+                .activated_slot(&agave_feature_set::alpenglow::id())
+                .unwrap_or(u64::MAX);
+            
+            let contains_valid_certificate = if bank.slot() >= first_alpenglow_slot {
+                w.contains_valid_certificate.load(Ordering::Relaxed)
+            } else {
+                true
+            };
+            
+            let should_still_be_processing = Bank::should_bank_still_be_processing_txs(
+                &w.start,
+                bank.ns_per_slot,
+            );
+            
+            if contains_valid_certificate && should_still_be_processing {
+                Some(bank)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn has_bank(&self) -> bool {

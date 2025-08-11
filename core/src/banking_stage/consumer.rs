@@ -203,7 +203,7 @@ impl Consumer {
 
     pub fn process_and_record_transactions(
         &self,
-        bank: &Arc<Bank>,
+        bank: &Bank,
         txs: &[impl TransactionWithMeta],
     ) -> ProcessTransactionBatchOutput {
         let mut error_counters = TransactionErrorMetrics::default();
@@ -233,7 +233,7 @@ impl Consumer {
 
     pub fn process_and_record_aged_transactions(
         &self,
-        bank: &Arc<Bank>,
+        bank: &Bank,
         txs: &[impl TransactionWithMeta],
         max_ages: &[MaxAge],
     ) -> ProcessTransactionBatchOutput {
@@ -268,7 +268,7 @@ impl Consumer {
 
     fn process_and_record_transactions_with_pre_results(
         &self,
-        bank: &Arc<Bank>,
+        bank: &Bank,
         txs: &[impl TransactionWithMeta],
         pre_results: impl Iterator<Item = Result<(), TransactionError>>,
     ) -> ProcessTransactionBatchOutput {
@@ -336,7 +336,7 @@ impl Consumer {
 
     fn execute_and_commit_transactions_locked(
         &self,
-        bank: &Arc<Bank>,
+        bank: &Bank,
         batch: &TransactionBatch<impl TransactionWithMeta>,
     ) -> ExecuteAndCommitTransactionsOutput {
         let transaction_status_sender_enabled = self.committer.transaction_status_sender_enabled();
@@ -641,7 +641,7 @@ mod tests {
             borrow::Cow,
             sync::{
                 atomic::{AtomicBool, AtomicU64, Ordering},
-                RwLock,
+                Arc, RwLock,
             },
             thread::{Builder, JoinHandle},
             time::Duration,
