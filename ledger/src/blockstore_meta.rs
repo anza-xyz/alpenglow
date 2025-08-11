@@ -417,6 +417,9 @@ pub enum BlockStatus {
     /// The block is being ingested, of the shreds received there are no conflicts
     Incomplete,
 
+    /// We are unable to recover the block with the shreds ingested
+    Conflicting,
+
     /// The block `block_id` has been fully ingested, has consistent shreds and is ready for replay
     Complete { block_id: Hash },
 }
