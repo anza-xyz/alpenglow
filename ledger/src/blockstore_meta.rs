@@ -426,7 +426,12 @@ pub enum BlockStatus {
 
 #[derive(Deserialize, Serialize)]
 pub struct BlockVersions {
+    /// The version that was ingested by turbine
     pub turbine_version: BlockStatus,
+    /// The versions that were requested by repair, populated during
+    /// catchup, safeToNotar, and by notarize-fallback certificates during duplicate blocke events.
+    /// In rare cases there can be overlap with the Turbine version, if for example we were heavily delayed
+    /// in the turbine ingest and ended up repairing the same block via a certificate condition.
     pub repaired_versions: [(Hash, BlockStatus); 3],
 }
 

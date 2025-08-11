@@ -174,7 +174,7 @@ pub mod columns {
     pub struct AlternateShredData;
 
     #[derive(Debug)]
-    /// The block verisons
+    /// The block versions
     ///
     /// This column stores information about what versions of blocks in `slot` we
     /// have available, for use in serving repair or switching replayed banks
