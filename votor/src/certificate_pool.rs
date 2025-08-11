@@ -678,7 +678,7 @@ impl CertificatePool {
 
     pub fn get_certs_for_standstill(&self) -> Vec<Arc<CertificateMessage>> {
         let (highest_finalized_with_notarize_slot, has_fast_finalize) =
-            self.highest_finalized_with_notarize.unwrap_or((0, true));
+            self.highest_finalized_with_notarize.unwrap_or((0, false));
         self.completed_certificates
             .iter()
             .filter_map(|(cert_id, cert)| {
@@ -847,7 +847,7 @@ mod tests {
 
     fn add_skip_vote_range(
         pool: &mut CertificatePool,
-        bank: &Bank,
+        root_bank: &Bank,
         start: Slot,
         end: Slot,
         keypairs: &[ValidatorVoteKeypairs],
@@ -857,9 +857,9 @@ mod tests {
             let vote = Vote::new_skip_vote(slot);
             assert!(pool
                 .add_message(
-                    bank.epoch_schedule(),
-                    bank.epoch_stakes_map(),
-                    bank.slot(),
+                    root_bank.epoch_schedule(),
+                    root_bank.epoch_stakes_map(),
+                    root_bank.slot(),
                     &Pubkey::new_unique(),
                     &dummy_transaction(keypairs, &vote, rank),
                     &mut vec![]
