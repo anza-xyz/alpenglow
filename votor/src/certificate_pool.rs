@@ -12,7 +12,7 @@ use {
         conflicting_types,
         event::VotorEvent,
         vote_to_certificate_ids, Certificate, Stake, VoteType,
-        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
     },
     crossbeam_channel::Sender,
     log::{error, trace},
