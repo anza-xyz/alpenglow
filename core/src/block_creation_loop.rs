@@ -439,19 +439,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         let mut window_production_start = Measure::start("window_production");
         let mut slot = start_slot;
         while !exit.load(Ordering::Relaxed) {
-            // Check if the entire window is skipped.
-            let highest_parent_ready_slot = leader_window_notifier
-                .highest_parent_ready
-                .read()
-                .unwrap()
-                .0;
-            if highest_parent_ready_slot > end_slot {
-                trace!(
-                    "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is {highest_parent_ready_slot} > end slot {end_slot}"
-                );
-                break;
-            }
-
             let leader_index = leader_slot_index(slot);
             let timeout = block_timeout(leader_index);
 
@@ -521,6 +508,19 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             slot += 1;
             if slot > end_slot {
                 trace!("{my_pubkey}: finished leader window {start_slot}-{end_slot}");
+                break;
+            }
+
+            // Check if the entire window is skipped.
+            let highest_parent_ready_slot = leader_window_notifier
+                .highest_parent_ready
+                .read()
+                .unwrap()
+                .0;
+            if highest_parent_ready_slot > end_slot {
+                trace!(
+                    "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is {highest_parent_ready_slot} > end slot {end_slot}"
+                );
                 break;
             }
 
