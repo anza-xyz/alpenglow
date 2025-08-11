@@ -35,9 +35,9 @@ solana-rent = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-stake-interface = { workspace = true }
 solana-svm-log-collector = { workspace = true }
+solana-svm-type-overrides = { workspace = true }
 solana-sysvar = { workspace = true }
 solana-transaction-context = { workspace = true, features = ["bincode"] }
-solana-type-overrides = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-interface = { workspace = true, features = ["bincode"] }
 solana-votor-messages = { workspace = true }
@@ -49,7 +49,9 @@ proptest = { workspace = true }
 solana-compute-budget = { workspace = true }
 solana-epoch-rewards = { workspace = true }
 solana-epoch-schedule = { workspace = true }
-solana-program-runtime = { workspace = true, features = ["dev-context-only-utils"] }
+solana-program-runtime = { workspace = true, features = [
+    "dev-context-only-utils",
+] }
 solana-pubkey = { workspace = true, features = ["rand"] }
 solana-svm-callback = { workspace = true }
 solana-svm-feature-set = { workspace = true }
