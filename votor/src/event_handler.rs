@@ -168,9 +168,15 @@ impl EventHandler {
         let bls_op = match voting_utils::insert_vote_and_create_bls_message(vote, is_refresh, vctx)
         {
             Ok(bls_op) => bls_op,
-            Err(VoteError::GenerationError(e)) => {
-                error!("Failed to generate vote and push to votes: {:?}", e);
-                // These are not fatal errors, just skip the vote for now.
+            Err(VoteError::GenerationWarning(e)) => {
+                warn!("Failed to generate vote and push to votes: {:?}", e);
+                // These are not fatal errors, just skip the vote for now. But they are misconfigurations
+                // that should be warned about.
+                return Ok(());
+            }
+            Err(VoteError::GenerationInfo(e)) => {
+                info!("Failed to generate vote and push to votes: {:?}", e);
+                // These are transient errors, just skip the vote for now.
                 return Ok(());
             }
             Err(e) => return Err(e),

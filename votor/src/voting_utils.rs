@@ -30,8 +30,10 @@ pub enum GenerateVoteTxResult {
     // hot spare validator, not eligble for refresh
     // until set identity is invoked
     HotSpare,
+    // Wait to vote slot is not reached
+    WaitToVoteSlot,
     // failed generation, eligible for refresh
-    Failed,
+    Failed(String),
     // no rank found.
     NoRankFound,
     // Generated a vote transaction
@@ -63,8 +65,11 @@ pub enum BLSOp {
 
 #[derive(Debug, Error)]
 pub enum VoteError {
-    #[error("Unable to generate bls vote message")]
-    GenerationError(Box<GenerateVoteTxResult>),
+    #[error("Unable to generate bls vote message, transient error: {0:?}")]
+    GenerationInfo(Box<GenerateVoteTxResult>),
+
+    #[error("Unable to generate bls vote message, configuration error: {0:?}")]
+    GenerationWarning(Box<GenerateVoteTxResult>),
 
     #[error("Unable to send to certificate pool")]
     CertificatePoolError(#[from] SendError<()>),
@@ -124,26 +129,25 @@ pub fn generate_vote_tx(
     {
         let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
         if !bank.has_initial_accounts_hash_verification_completed() {
-            info!("startup verification incomplete, so unable to vote");
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::Failed("startup verification incomplete".into());
         }
         if authorized_voter_keypairs.is_empty() {
             return GenerateVoteTxResult::NonVoting;
         }
         if let Some(slot) = context.wait_to_vote_slot {
             if vote.slot() < slot {
-                return GenerateVoteTxResult::Failed;
+                return GenerateVoteTxResult::WaitToVoteSlot;
             }
         }
         let Some(vote_account) = bank.get_vote_account(&context.vote_account_pubkey) else {
-            warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::Failed(
+                "Vote account {vote_account_pubkey} does not exist".into(),
+            );
         };
         let Some(vote_state) = vote_account.alpenglow_vote_state() else {
-            warn!(
-                "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
+            return GenerateVoteTxResult::Failed(
+                "Vote account {vote_account_pubkey} does not have an Alpenglow vote state".into(),
             );
-            return GenerateVoteTxResult::Failed;
         };
         if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
             info!(
@@ -164,10 +168,11 @@ pub fn generate_vote_tx(
         };
 
         let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
-            warn!("Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
+            return GenerateVoteTxResult::Failed(format!(
+                "Vote account {} has no authorized voter for epoch {}.  Unable to vote",
+                vote_account_pubkey,
                 bank.epoch()
-            );
-            return GenerateVoteTxResult::Failed;
+            ));
         };
 
         let Some(keypair) = authorized_voter_keypairs
@@ -238,8 +243,11 @@ pub(crate) fn insert_vote_and_create_bls_message(
     let bank = context.root_bank_cache.root_bank();
     let bls_message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
+        e @ GenerateVoteTxResult::Failed(_) | e @ GenerateVoteTxResult::Tx(_) => {
+            return Err(VoteError::GenerationWarning(Box::new(e)));
+        }
         e => {
-            return Err(VoteError::GenerationError(Box::new(e)));
+            return Err(VoteError::GenerationInfo(Box::new(e)));
         }
     };
     context
