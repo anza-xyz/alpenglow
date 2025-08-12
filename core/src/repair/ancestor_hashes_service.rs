@@ -938,6 +938,7 @@ mod test {
         solana_runtime::bank_forks::BankForks,
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
+        solana_turbine::block_location_lookup::BlockLocationLookup,
         std::collections::HashMap,
         trees::tr,
     };
@@ -1403,8 +1404,7 @@ mod test {
                 repair_validators: None,
                 repair_whitelist,
                 wen_restart_repair_slots: None,
-                block_location_lookup:
-                    solana_turbine::block_location_lookup::BlockLocationLookup::new_arc(),
+                block_location_lookup: BlockLocationLookup::new_arc(),
             };
 
             let (ancestor_hashes_replay_update_sender, ancestor_hashes_replay_update_receiver) =
