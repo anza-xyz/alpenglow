@@ -2770,7 +2770,7 @@ impl ReplayStage {
     ) -> GenerateVoteTxResult {
         if !bank.has_initial_accounts_hash_verification_completed() {
             info!("startup verification incomplete, so unable to vote");
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::WaitForStartupVerification;
         }
 
         if authorized_voter_keypairs.is_empty() {
@@ -2778,13 +2778,13 @@ impl ReplayStage {
         }
         if let Some(slot) = wait_to_vote_slot {
             if bank.slot() < slot {
-                return GenerateVoteTxResult::Failed;
+                return GenerateVoteTxResult::WaitToVoteSlot(slot);
             }
         }
         let vote_account = match bank.get_vote_account(vote_account_pubkey) {
             None => {
                 warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote",);
-                return GenerateVoteTxResult::Failed;
+                return GenerateVoteTxResult::VoteAccountNotFound(*vote_account_pubkey);
             }
             Some(vote_account) => vote_account,
         };
@@ -2794,7 +2794,7 @@ impl ReplayStage {
                     "Vote account {} does not have a vote state.  Unable to vote",
                     vote_account_pubkey,
                 );
-                return GenerateVoteTxResult::Failed;
+                return GenerateVoteTxResult::NoVoteState(*vote_account_pubkey);
             }
             Some(vote_state_view) => vote_state_view,
         };
@@ -2814,7 +2814,7 @@ impl ReplayStage {
                 vote_account_pubkey,
                 bank.epoch()
             );
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::NoAuthorizedVoter(*vote_account_pubkey, bank.epoch());
         };
 
         let authorized_voter_keypair = match authorized_voter_keypairs
