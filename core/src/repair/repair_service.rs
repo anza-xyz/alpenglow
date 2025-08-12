@@ -161,19 +161,30 @@ pub struct RepairStats {
     pub shred: RepairStatsGroup,
     pub highest_shred: RepairStatsGroup,
     pub orphan: RepairStatsGroup,
+    pub orphan_for_block_id: RepairStatsGroup,
+    pub shred_for_block_id: RepairStatsGroup,
+    pub highest_shred_for_block_id: RepairStatsGroup,
     pub get_best_orphans_us: u64,
     pub get_best_shreds_us: u64,
 }
 
 impl RepairStats {
     fn report(&self) {
-        let repair_total = self.shred.count + self.highest_shred.count + self.orphan.count;
+        let repair_total = self.shred.count
+            + self.highest_shred.count
+            + self.orphan.count
+            + self.orphan_for_block_id.count
+            + self.shred_for_block_id.count
+            + self.highest_shred_for_block_id.count;
         let slot_to_count: Vec<_> = self
             .shred
             .slot_pubkeys
             .iter()
             .chain(self.highest_shred.slot_pubkeys.iter())
             .chain(self.orphan.slot_pubkeys.iter())
+            .chain(self.orphan_for_block_id.slot_pubkeys.iter())
+            .chain(self.shred_for_block_id.slot_pubkeys.iter())
+            .chain(self.highest_shred_for_block_id.slot_pubkeys.iter())
             .map(|(slot, slot_repairs)| (slot, slot_repairs.pubkey_repairs.values().sum::<u64>()))
             .collect();
         info!("repair_stats: {slot_to_count:?}");
@@ -185,6 +196,9 @@ impl RepairStats {
                 ("shred-count", self.shred.count, i64),
                 ("highest-shred-count", self.highest_shred.count, i64),
                 ("orphan-count", self.orphan.count, i64),
+                ("orphan-for-block-id-count", self.orphan_for_block_id.count, i64),
+                ("shred-for-block-id-count", self.shred_for_block_id.count, i64),
+                ("highest-shred-for-block-id-count", self.highest_shred_for_block_id.count, i64),
                 ("shred-slot-max", nonzero_num(self.shred.max), Option<i64>),
                 ("shred-slot-min", nonzero_num(self.shred.min), Option<i64>),
                 ("repair-highest-slot", self.highest_shred.max, i64), // deprecated

@@ -589,6 +589,27 @@ impl Blockstore {
         }
     }
 
+    /// Checks all available block versions, if we have a *complete* block for
+    /// `block_id`, returns the associated slot meta
+    pub fn meta_for_block_id(&self, slot: Slot, block_id: Hash) -> Result<Option<SlotMeta>> {
+        let Some(location) = self.get_block_location(slot, block_id)? else {
+            return Ok(None);
+        };
+        self.meta_from_location(slot, location)
+    }
+
+    /// For the block in slot `slot` in the specified location, return the `block_id` of the parent block.
+    pub fn get_parent_block_id_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<Hash>> {
+        let Some(shred) = self.get_data_shred_from_location(slot, 0, location)? else {
+            return Ok(None);
+        };
+        Ok(shred::layout::get_chained_merkle_root(&shred))
+    }
+
     /// Returns the BlockVersions of the specified slot.
     pub fn block_versions(&self, slot: Slot) -> Result<Option<BlockVersions>> {
         self.block_versions_cf.get(slot)
@@ -2478,7 +2499,7 @@ impl Blockstore {
         }
     }
 
-    /// Checks all available block versions, if we have a complete block for
+    /// Checks all available block versions, if we have a *complete* block for
     /// `block_id`, returns the location where it is stored
     pub fn get_block_location(&self, slot: Slot, block_id: Hash) -> Result<Option<BlockLocation>> {
         let Some(block_versions) = self.block_versions(slot)? else {
