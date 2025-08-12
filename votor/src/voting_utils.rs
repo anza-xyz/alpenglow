@@ -236,7 +236,7 @@ pub fn generate_vote_tx(
 /// the certificate pool thread for ingestion.
 ///
 /// Returns false if we are currently a non-voting node
-pub(crate) fn insert_vote_and_create_bls_message(
+fn insert_vote_and_create_bls_message(
     vote: Vote,
     is_refresh: bool,
     context: &mut VotingContext,
@@ -274,4 +274,29 @@ pub(crate) fn insert_vote_and_create_bls_message(
         slot: vote.slot(),
         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
     })
+}
+
+pub fn generate_vote_message_and_push_to_votes(
+    votes: &mut Vec<BLSOp>,
+    vote: Vote,
+    is_refresh: bool,
+    vctx: &mut VotingContext,
+) -> Result<(), VoteError> {
+    let bls_op = match insert_vote_and_create_bls_message(vote, is_refresh, vctx) {
+        Ok(bls_op) => bls_op,
+        Err(VoteError::InvalidConfig(e)) => {
+            warn!("Failed to generate vote and push to votes: {:?}", e);
+            // These are not fatal errors, just skip the vote for now. But they are misconfigurations
+            // that should be warned about.
+            return Ok(());
+        }
+        Err(VoteError::TransientError(e)) => {
+            info!("Failed to generate vote and push to votes: {:?}", e);
+            // These are transient errors, just skip the vote for now.
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    votes.push(bls_op);
+    Ok(())
 }
