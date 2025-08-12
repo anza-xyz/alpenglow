@@ -81,6 +81,7 @@ struct BlockCreationLoopMetrics {
     loop_count: u64,
     bank_timeout_completion_count: u64,
     bank_filled_completion_count: u64,
+    skipped_window_behind_parent_ready_count: u64,
 
     window_production_elapsed: u64,
     bank_filled_completion_elapsed_hist: histogram::Histogram,
@@ -93,6 +94,7 @@ impl BlockCreationLoopMetrics {
             + self.bank_timeout_completion_count
             + self.bank_filled_completion_count
             + self.window_production_elapsed
+            + self.skipped_window_behind_parent_ready_count
             + self.bank_filled_completion_elapsed_hist.entries()
             + self.bank_timeout_completion_elapsed_hist.entries()
     }
@@ -123,6 +125,11 @@ impl BlockCreationLoopMetrics {
                 (
                     "window_production_elapsed",
                     self.window_production_elapsed,
+                    i64
+                ),
+                (
+                    "skipped_window_behind_parent_ready_count",
+                    self.skipped_window_behind_parent_ready_count,
                     i64
                 ),
                 (
@@ -185,6 +192,7 @@ impl BlockCreationLoopMetrics {
             self.bank_timeout_completion_count = 0;
             self.bank_filled_completion_count = 0;
             self.window_production_elapsed = 0;
+            self.skipped_window_behind_parent_ready_count = 0;
             self.bank_filled_completion_elapsed_hist.clear();
             self.bank_timeout_completion_elapsed_hist.clear();
             self.last_report = now;
@@ -521,6 +529,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 trace!(
                     "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is {highest_parent_ready_slot} > end slot {end_slot}"
                 );
+                metrics.skipped_window_behind_parent_ready_count += 1;
                 break;
             }
 
