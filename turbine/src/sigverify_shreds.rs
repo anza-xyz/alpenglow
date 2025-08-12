@@ -254,13 +254,17 @@ fn run_shred_sigverify<const K: usize>(
         .partition_map(|(shred, nonce)| {
             if let Some(nonce) = nonce {
                 // Only block id repair needs to insert shreds in a special column,
-                // Regular repair will insert in the Turbine column
+                // TowerBFT repair will insert in the Turbine column
                 let location = block_location_lookup
                     .get_location(nonce)
                     .unwrap_or(BlockLocation::Turbine);
                 // No need for Arc overhead here because repaired shreds are
                 // not retranmitted.
-                Either::Right((shred::Payload::from(shred), location))
+                Either::Right((
+                    shred::Payload::from(shred),
+                    /* is_repaired */ true,
+                    location,
+                ))
             } else {
                 // Share the payload between the retransmit-stage and the
                 // window-service.
@@ -281,9 +285,6 @@ fn run_shred_sigverify<const K: usize>(
     let shreds = shreds
         .into_iter()
         .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Turbine));
-    let repairs = repairs.into_iter().map(|(shred, location)| {
-        (shred, /*is_repaired:*/ true, location)
-    });
     verified_sender.send(shreds.chain(repairs).collect())?;
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     shred_buffer.clear();
