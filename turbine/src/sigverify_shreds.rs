@@ -249,15 +249,27 @@ fn run_shred_sigverify<const K: usize>(
         .filter(|packet| !packet.meta().discard())
         .filter_map(|packet| {
             let (shred, nonce) = shred::layout::get_shred_and_repair_nonce(packet)?;
-            Some((shred.to_vec(), nonce))
+            let Some(nonce) = nonce else {
+                // Turbine shred
+                return Some((shred.to_vec(), None));
+            };
+
+            // Repaired shred
+            if let Some(location) = block_location_lookup.get_location(nonce) {
+                Some((shred.to_vec(), Some(location)))
+            } else {
+                // Although we requested repair of this shred (nonce was previously verified),
+                // The location is missing. This means we have oversaturated the cache. We should
+                // throw away this shred
+                error!(
+                    "block location lookup is saturated, discarding repaired shred nonce {nonce}"
+                );
+                stats.num_unknown_block_location += 1;
+                None
+            }
         })
-        .partition_map(|(shred, nonce)| {
-            if let Some(nonce) = nonce {
-                // Only block id repair needs to insert shreds in a special column,
-                // TowerBFT repair will insert in the Turbine column
-                let location = block_location_lookup
-                    .get_location(nonce)
-                    .unwrap_or(BlockLocation::Turbine);
+        .partition_map(|(shred, location)| {
+            if let Some(location) = location {
                 // No need for Arc overhead here because repaired shreds are
                 // not retranmitted.
                 Either::Right((
@@ -495,6 +507,7 @@ struct ShredSigVerifyStats {
     num_retransmit_shreds: usize,
     num_unknown_slot_leader: AtomicUsize,
     num_unknown_turbine_parent: AtomicUsize,
+    num_unknown_block_location: usize,
     elapsed_micros: u64,
     resign_micros: u64,
 }
@@ -519,6 +532,7 @@ impl ShredSigVerifyStats {
             num_retransmit_shreds: 0usize,
             num_unknown_slot_leader: AtomicUsize::default(),
             num_unknown_turbine_parent: AtomicUsize::default(),
+            num_unknown_block_location: 0usize,
             elapsed_micros: 0u64,
             resign_micros: 0u64,
         }
@@ -568,6 +582,11 @@ impl ShredSigVerifyStats {
             (
                 "num_unknown_turbine_parent",
                 self.num_unknown_turbine_parent.load(Ordering::Relaxed),
+                i64
+            ),
+            (
+                "num_unknown_block_location",
+                self.num_unknown_block_location,
                 i64
             ),
             ("elapsed_micros", self.elapsed_micros, i64),
