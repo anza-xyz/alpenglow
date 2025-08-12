@@ -11,7 +11,7 @@ pub enum AlpenglowCommitmentError {
 }
 
 pub enum AlpenglowCommitmentType {
-    /// Our node has voted notarize for the slot
+    /// Our node has voted notarize for the slot.
     Notarize,
     /// We have observed a finalization certificate for the slot
     Finalized,
