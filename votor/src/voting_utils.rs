@@ -64,6 +64,34 @@ impl GenerateVoteTxResult {
     pub fn is_hot_spare(&self) -> bool {
         matches!(self, Self::HotSpare)
     }
+
+    pub fn is_invalid_config(&self) -> bool {
+        match self {
+            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
+                true
+            }
+            Self::NonVoting
+            | Self::HotSpare
+            | Self::WaitForStartupVerification
+            | Self::WaitToVoteSlot(_)
+            | Self::NoRankFound => false,
+            Self::Tx(_) | Self::BLSMessage(_) => false,
+        }
+    }
+
+    pub fn is_transient_error(&self) -> bool {
+        match self {
+            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
+                false
+            }
+            Self::NonVoting
+            | Self::HotSpare
+            | Self::WaitForStartupVerification
+            | Self::WaitToVoteSlot(_)
+            | Self::NoRankFound => true,
+            Self::Tx(_) | Self::BLSMessage(_) => false,
+        }
+    }
 }
 
 pub enum BLSOp {
@@ -249,14 +277,12 @@ fn insert_vote_and_create_bls_message(
     let bank = context.root_bank_cache.root_bank();
     let bls_message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
-        e @ GenerateVoteTxResult::NoAuthorizedVoter(_, _)
-        | e @ GenerateVoteTxResult::NoVoteState(_)
-        | e @ GenerateVoteTxResult::VoteAccountNotFound(_)
-        | e @ GenerateVoteTxResult::Tx(_) => {
-            return Err(VoteError::InvalidConfig(Box::new(e)));
-        }
         e => {
-            return Err(VoteError::TransientError(Box::new(e)));
+            if e.is_transient_error() {
+                return Err(VoteError::TransientError(Box::new(e)));
+            } else {
+                return Err(VoteError::InvalidConfig(Box::new(e)));
+            }
         }
     };
     context
