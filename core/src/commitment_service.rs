@@ -10,7 +10,7 @@ use {
         bank::Bank,
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
     },
-    solana_votor::commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentType},
+    solana_votor::commitment::AlpenglowCommitment,
     std::{
         cmp::max,
         collections::HashMap,
@@ -71,7 +71,7 @@ impl AggregateCommitmentService {
         subscriptions: Option<Arc<RpcSubscriptions>>,
     ) -> (
         Sender<TowerCommitmentAggregationData>,
-        Sender<AlpenglowCommitmentAggregationData>,
+        Sender<AlpenglowCommitment>,
         Self,
     ) {
         let (sender, receiver): (
@@ -79,10 +79,8 @@ impl AggregateCommitmentService {
             Receiver<TowerCommitmentAggregationData>,
         ) = unbounded();
         // This channel should not grow unbounded, cap at 1000 messages for now
-        let (ag_sender, ag_receiver): (
-            Sender<AlpenglowCommitmentAggregationData>,
-            Receiver<AlpenglowCommitmentAggregationData>,
-        ) = bounded(1000);
+        let (ag_sender, ag_receiver): (Sender<AlpenglowCommitment>, Receiver<AlpenglowCommitment>) =
+            bounded(1000);
 
         (
             sender,
@@ -112,7 +110,7 @@ impl AggregateCommitmentService {
 
     fn run(
         receiver: &Receiver<TowerCommitmentAggregationData>,
-        ag_receiver: &Receiver<AlpenglowCommitmentAggregationData>,
+        ag_receiver: &Receiver<AlpenglowCommitment>,
         block_commitment_cache: &RwLock<BlockCommitmentCache>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         exit: &AtomicBool,
@@ -138,8 +136,7 @@ impl AggregateCommitmentService {
                     let data = ag_receiver.try_iter().last().unwrap_or(data);
                     Self::alpenglow_update_commitment_cache(
                         block_commitment_cache,
-                        data.commitment_type,
-                        data.slot,
+                        data,
                     )
                 }
                 default(Duration::from_secs(1)) => continue
@@ -176,16 +173,15 @@ impl AggregateCommitmentService {
 
     fn alpenglow_update_commitment_cache(
         block_commitment_cache: &RwLock<BlockCommitmentCache>,
-        update_type: AlpenglowCommitmentType,
-        slot: Slot,
+        commitment: AlpenglowCommitment,
     ) -> CommitmentSlots {
         let mut w_block_commitment_cache = block_commitment_cache.write().unwrap();
 
-        match update_type {
-            AlpenglowCommitmentType::Notarize => {
+        match commitment {
+            AlpenglowCommitment::Notarize(slot) => {
                 w_block_commitment_cache.set_slot(slot);
             }
-            AlpenglowCommitmentType::Finalized => {
+            AlpenglowCommitment::Finalized(slot) => {
                 w_block_commitment_cache.set_highest_confirmed_slot(slot);
                 w_block_commitment_cache.set_root(slot);
                 w_block_commitment_cache.set_highest_super_majority_root(slot);

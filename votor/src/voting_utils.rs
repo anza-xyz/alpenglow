@@ -1,6 +1,6 @@
 use {
     crate::{
-        commitment::AlpenglowCommitmentAggregationData,
+        commitment::AlpenglowCommitment,
         vote_history::VoteHistory,
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
@@ -81,7 +81,7 @@ pub struct VotingContext {
     pub has_new_vote_been_rooted: bool,
     pub own_vote_sender: BLSVerifiedMessageSender,
     pub bls_sender: Sender<BLSOp>,
-    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub commitment_sender: Sender<AlpenglowCommitment>,
     pub wait_to_vote_slot: Option<u64>,
     pub root_bank_cache: RootBankCache,
 }

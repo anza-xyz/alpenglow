@@ -8,7 +8,7 @@ use {
             vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
         },
-        commitment::AlpenglowCommitmentError,
+        commitment::AlpenglowUpdateCommitmentCacheError,
         conflicting_types,
         event::VotorEvent,
         vote_to_certificate_ids, Certificate, Stake, VoteType,
@@ -74,6 +74,9 @@ pub enum AddVoteError {
     #[error("{0} channel disconnected")]
     ChannelDisconnected(String),
 
+    #[error("{0} channel full")]
+    ChannelFull(String),
+
     #[error("Voting Service queue full")]
     VotingServiceQueueFull,
 
@@ -81,9 +84,16 @@ pub enum AddVoteError {
     InvalidRank(u16),
 }
 
-impl From<AlpenglowCommitmentError> for AddVoteError {
-    fn from(_: AlpenglowCommitmentError) -> Self {
-        AddVoteError::ChannelDisconnected("CommitmentSender".to_string())
+impl From<AlpenglowUpdateCommitmentCacheError> for AddVoteError {
+    fn from(err: AlpenglowUpdateCommitmentCacheError) -> Self {
+        match err {
+            AlpenglowUpdateCommitmentCacheError::ChannelDisconnected => {
+                Self::ChannelDisconnected("alpenglow commitment sender".to_string())
+            }
+            AlpenglowUpdateCommitmentCacheError::ChannelFull => {
+                Self::ChannelFull("alpenglow commitment sender".to_string())
+            }
+        }
     }
 }
 
