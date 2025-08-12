@@ -8,7 +8,7 @@ use {
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
-        voting_utils::{generate_vote_message_and_push_to_votes, BLSOp, VoteError, VotingContext},
+        voting_utils::{generate_vote_message, BLSOp, VoteError, VotingContext},
         votor::{SharedContext, Votor},
     },
     crossbeam_channel::{select, RecvError, SendError},
@@ -253,7 +253,7 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
-                if let Some(bls_op) = generate_vote_message_and_push_to_votes(
+                if let Some(bls_op) = generate_vote_message(
                     Vote::new_notarization_fallback_vote(slot, block_id),
                     false,
                     vctx,
@@ -270,11 +270,9 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting skip-fallback for {slot}");
-                if let Some(bls_op) = generate_vote_message_and_push_to_votes(
-                    Vote::new_skip_fallback_vote(slot),
-                    false,
-                    vctx,
-                )? {
+                if let Some(bls_op) =
+                    generate_vote_message(Vote::new_skip_fallback_vote(slot), false, vctx)?
+                {
                     votes.push(bls_op);
                 }
             }
@@ -416,7 +414,7 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
-        if let Some(bls_op) = generate_vote_message_and_push_to_votes(
+        if let Some(bls_op) = generate_vote_message(
             Vote::new_notarization_vote(slot, block_id),
             false,
             voting_context,
@@ -490,11 +488,9 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting finalize for {slot}");
-        if let Some(bls_op) = generate_vote_message_and_push_to_votes(
-            Vote::new_finalization_vote(slot),
-            false,
-            voting_context,
-        )? {
+        if let Some(bls_op) =
+            generate_vote_message(Vote::new_finalization_vote(slot), false, voting_context)?
+        {
             votes.push(bls_op);
         }
         Ok(true)
@@ -516,11 +512,9 @@ impl EventHandler {
                 continue;
             }
             info!("{my_pubkey}: Voting skip for {s}");
-            if let Some(bls_op) = generate_vote_message_and_push_to_votes(
-                Vote::new_skip_vote(s),
-                false,
-                voting_context,
-            )? {
+            if let Some(bls_op) =
+                generate_vote_message(Vote::new_skip_vote(s), false, voting_context)?
+            {
                 votes.push(bls_op);
             }
         }
@@ -539,9 +533,7 @@ impl EventHandler {
             .votes_cast_since(highest_finalized_slot)
         {
             info!("{my_pubkey}: Refreshing vote {vote:?}");
-            if let Some(bls_op) =
-                generate_vote_message_and_push_to_votes(vote, true, voting_context)?
-            {
+            if let Some(bls_op) = generate_vote_message(vote, true, voting_context)? {
                 votes.push(bls_op);
             }
         }

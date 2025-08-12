@@ -276,7 +276,7 @@ fn insert_vote_and_create_bls_message(
     })
 }
 
-pub fn generate_vote_message_and_push_to_votes(
+pub fn generate_vote_message(
     vote: Vote,
     is_refresh: bool,
     vctx: &mut VotingContext,
