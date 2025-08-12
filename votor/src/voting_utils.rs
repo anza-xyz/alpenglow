@@ -277,26 +277,24 @@ fn insert_vote_and_create_bls_message(
 }
 
 pub fn generate_vote_message_and_push_to_votes(
-    votes: &mut Vec<BLSOp>,
     vote: Vote,
     is_refresh: bool,
     vctx: &mut VotingContext,
-) -> Result<(), VoteError> {
+) -> Result<Option<BLSOp>, VoteError> {
     let bls_op = match insert_vote_and_create_bls_message(vote, is_refresh, vctx) {
         Ok(bls_op) => bls_op,
         Err(VoteError::InvalidConfig(e)) => {
             warn!("Failed to generate vote and push to votes: {:?}", e);
             // These are not fatal errors, just skip the vote for now. But they are misconfigurations
             // that should be warned about.
-            return Ok(());
+            return Ok(None);
         }
         Err(VoteError::TransientError(e)) => {
             info!("Failed to generate vote and push to votes: {:?}", e);
             // These are transient errors, just skip the vote for now.
-            return Ok(());
+            return Ok(None);
         }
         Err(e) => return Err(e),
     };
-    votes.push(bls_op);
-    Ok(())
+    Ok(Some(bls_op))
 }

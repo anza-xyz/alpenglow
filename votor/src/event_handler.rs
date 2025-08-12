@@ -253,12 +253,13 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
-                generate_vote_message_and_push_to_votes(
-                    &mut votes,
+                if let Some(bls_op) = generate_vote_message_and_push_to_votes(
                     Vote::new_notarization_fallback_vote(slot, block_id),
                     false,
                     vctx,
-                )?;
+                )? {
+                    votes.push(bls_op);
+                }
             }
 
             // We have observed the safe to skip condition, and can send a skip fallback vote
@@ -269,12 +270,13 @@ impl EventHandler {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting skip-fallback for {slot}");
-                generate_vote_message_and_push_to_votes(
-                    &mut votes,
+                if let Some(bls_op) = generate_vote_message_and_push_to_votes(
                     Vote::new_skip_fallback_vote(slot),
                     false,
                     vctx,
-                )?;
+                )? {
+                    votes.push(bls_op);
+                }
             }
 
             // It is time to produce our leader window
@@ -414,12 +416,13 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
-        generate_vote_message_and_push_to_votes(
-            votes,
+        if let Some(bls_op) = generate_vote_message_and_push_to_votes(
             Vote::new_notarization_vote(slot, block_id),
             false,
             voting_context,
-        )?;
+        )? {
+            votes.push(bls_op);
+        }
         alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
             slot,
@@ -487,12 +490,13 @@ impl EventHandler {
         }
 
         info!("{my_pubkey}: Voting finalize for {slot}");
-        generate_vote_message_and_push_to_votes(
-            votes,
+        if let Some(bls_op) = generate_vote_message_and_push_to_votes(
             Vote::new_finalization_vote(slot),
             false,
             voting_context,
-        )?;
+        )? {
+            votes.push(bls_op);
+        }
         Ok(true)
     }
 
@@ -512,12 +516,13 @@ impl EventHandler {
                 continue;
             }
             info!("{my_pubkey}: Voting skip for {s}");
-            generate_vote_message_and_push_to_votes(
-                votes,
+            if let Some(bls_op) = generate_vote_message_and_push_to_votes(
                 Vote::new_skip_vote(s),
                 false,
                 voting_context,
-            )?;
+            )? {
+                votes.push(bls_op);
+            }
         }
         Ok(())
     }
@@ -534,7 +539,11 @@ impl EventHandler {
             .votes_cast_since(highest_finalized_slot)
         {
             info!("{my_pubkey}: Refreshing vote {vote:?}");
-            generate_vote_message_and_push_to_votes(votes, vote, true, voting_context)?;
+            if let Some(bls_op) =
+                generate_vote_message_and_push_to_votes(vote, true, voting_context)?
+            {
+                votes.push(bls_op);
+            }
         }
         Ok(())
     }
