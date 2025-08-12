@@ -3,7 +3,7 @@
 
 use {
     crate::{
-        commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
+        commitment::{alpenglow_update_commitment_cache, AlpenglowCommitment},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
@@ -420,11 +420,12 @@ impl EventHandler {
             false,
             voting_context,
         ));
-        let _ = alpenglow_update_commitment_cache(
-            AlpenglowCommitmentType::Notarize,
-            slot,
+        if let Err(err) = alpenglow_update_commitment_cache(
+            AlpenglowCommitment::Notarize(slot),
             &voting_context.commitment_sender,
-        );
+        ) {
+            error!("sending notarize commitment for slot {slot} failed with {err:?}");
+        }
         pending_blocks.remove(&slot);
 
         true

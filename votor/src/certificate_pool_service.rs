@@ -8,10 +8,7 @@ use {
         certificate_pool::{
             self, parent_ready_tracker::BlockProductionParent, AddVoteError, CertificatePool,
         },
-        commitment::{
-            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
-            AlpenglowCommitmentType,
-        },
+        commitment::{alpenglow_update_commitment_cache, AlpenglowCommitment},
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::BLSOp,
         votor::Votor,
@@ -59,7 +56,7 @@ pub(crate) struct CertificatePoolContext {
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
-    pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub(crate) commitment_sender: Sender<AlpenglowCommitment>,
     pub(crate) certificate_sender: Sender<(Certificate, CertificateMessage)>,
 }
 
@@ -309,7 +306,7 @@ impl CertificatePoolService {
         message: &BLSMessage,
         cert_pool: &mut CertificatePool,
         votor_events: &mut Vec<VotorEvent>,
-        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+        commitment_sender: &Sender<AlpenglowCommitment>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
         let (new_finalized_slot, new_certificates_to_send) = cert_pool.add_message(
             root_bank.epoch_schedule(),
@@ -324,8 +321,7 @@ impl CertificatePoolService {
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
         alpenglow_update_commitment_cache(
-            AlpenglowCommitmentType::Finalized,
-            new_finalized_slot,
+            AlpenglowCommitment::Finalized(new_finalized_slot),
             commitment_sender,
         )?;
         Ok((Some(new_finalized_slot), new_certificates_to_send))

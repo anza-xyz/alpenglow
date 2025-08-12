@@ -43,7 +43,7 @@
 use {
     crate::{
         certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
-        commitment::AlpenglowCommitmentAggregationData,
+        commitment::AlpenglowCommitment,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
@@ -110,7 +110,7 @@ pub struct VotorConfig {
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub bls_sender: Sender<BLSOp>,
-    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub commitment_sender: Sender<AlpenglowCommitment>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
