@@ -2,8 +2,8 @@
 use {
     crate::repair::standard_repair_handler::StandardRepairHandler,
     crossbeam_channel::unbounded,
+    solana_ledger::block_location_lookup::BlockLocationLookup,
     solana_ledger::{blockstore::Blockstore, get_tmp_ledger_path_auto_delete},
-    solana_turbine::block_location_lookup::BlockLocationLookup,
 };
 use {
     crate::{

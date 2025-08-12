@@ -32,7 +32,8 @@ use {
     },
     solana_keypair::Keypair,
     solana_ledger::{
-        blockstore::Blockstore, blockstore_cleanup_service::BlockstoreCleanupService,
+        block_location_lookup::BlockLocationLookup, blockstore::Blockstore,
+        blockstore_cleanup_service::BlockstoreCleanupService,
         blockstore_processor::TransactionStatusSender, entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
     },
@@ -52,10 +53,7 @@ use {
         },
     },
     solana_streamer::evicting_sender::EvictingSender,
-    solana_turbine::{
-        block_location_lookup::BlockLocationLookup, retransmit_stage::RetransmitStage,
-        xdp::XdpSender,
-    },
+    solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
         event::{VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,

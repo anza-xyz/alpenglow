@@ -930,15 +930,14 @@ mod test {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore::make_many_slot_entries, get_tmp_ledger_path,
-            get_tmp_ledger_path_auto_delete, shred::Nonce,
+            block_location_lookup::BlockLocationLookup, blockstore::make_many_slot_entries,
+            get_tmp_ledger_path, get_tmp_ledger_path_auto_delete, shred::Nonce,
         },
         solana_net_utils::sockets::bind_to_localhost_unique,
         solana_perf::packet::Packet,
         solana_runtime::bank_forks::BankForks,
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
-        solana_turbine::block_location_lookup::BlockLocationLookup,
         std::collections::HashMap,
         trees::tr,
     };

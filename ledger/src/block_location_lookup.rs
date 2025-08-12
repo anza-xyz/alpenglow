@@ -8,8 +8,8 @@
 //! We don't actively cleanup this cache, its size is managed according to Lru policy
 
 use {
+    crate::{blockstore_meta::BlockLocation, shred::Nonce},
     lru::LruCache,
-    solana_ledger::{blockstore_meta::BlockLocation, shred::Nonce},
     std::sync::{Arc, RwLock},
 };
 

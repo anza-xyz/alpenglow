@@ -1,6 +1,5 @@
 use {
     crate::{
-        block_location_lookup::BlockLocationLookup,
         cluster_nodes::{self, check_feature_activation, ClusterNodesCache},
         retransmit_stage::RetransmitStage,
     },
@@ -12,6 +11,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
     solana_ledger::{
+        block_location_lookup::BlockLocationLookup,
         blockstore_meta::BlockLocation,
         leader_schedule_cache::LeaderScheduleCache,
         shred::{

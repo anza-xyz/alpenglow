@@ -28,6 +28,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
+        block_location_lookup::BlockLocationLookup,
         blockstore::{Blockstore, SlotMeta},
         shred,
     },
@@ -36,7 +37,6 @@ use {
     solana_runtime::{bank::Bank, bank_forks::BankForks, root_bank_cache::RootBankCache},
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     solana_time_utils::timestamp,
-    solana_turbine::block_location_lookup::BlockLocationLookup,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         iter::Iterator,
