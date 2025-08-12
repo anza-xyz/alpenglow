@@ -7157,6 +7157,7 @@ dependencies = [
  "assert_matches",
  "bincode",
  "bitflags 2.9.3",
+ "bytes",
  "bzip2",
  "chrono",
  "chrono-humanize",
