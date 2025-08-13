@@ -86,8 +86,85 @@ use {
     },
     solana_clock::Slot,
     solana_hash::Hash,
-    std::fmt,
+    std::{error::Error, fmt},
 };
+
+/// Error types for block component operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockComponentError {
+    /// Data is too short for the expected format
+    InsufficientData,
+    /// Entry count exceeds the maximum allowed
+    TooManyEntries { count: usize, max: usize },
+    /// Entries vector is empty when it shouldn't be
+    EmptyEntries,
+    /// Unknown variant identifier
+    UnknownVariant { variant_type: String, id: u8 },
+    /// Unsupported version number
+    UnsupportedVersion { version: u16 },
+    /// Data length conversion failed (e.g., usize to u16)
+    DataLengthOverflow,
+    /// Cursor position exceeded data boundary
+    CursorOutOfBounds,
+    /// BlockComponent cannot have both entries and marker data
+    MixedData,
+    /// Serialization failed
+    SerializationFailed(String),
+    /// Deserialization failed
+    DeserializationFailed(String),
+}
+
+impl fmt::Display for BlockComponentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InsufficientData => write!(f, "Insufficient data for deserialization"),
+            Self::TooManyEntries { count, max } => {
+                write!(f, "Entry count {count} exceeds maximum {max}")
+            }
+            Self::EmptyEntries => write!(f, "BlockComponent with entries cannot be empty"),
+            Self::UnknownVariant { variant_type, id } => {
+                write!(f, "Unknown {variant_type} variant: {id}")
+            }
+            Self::UnsupportedVersion { version } => {
+                write!(f, "Unsupported version: {version}")
+            }
+            Self::DataLengthOverflow => write!(f, "Data length exceeds maximum representable size"),
+            Self::CursorOutOfBounds => write!(f, "Cursor exceeded data boundary"),
+            Self::MixedData => write!(f, "BlockComponent cannot have both entries and marker data"),
+            Self::SerializationFailed(msg) => write!(f, "Serialization failed: {msg}"),
+            Self::DeserializationFailed(msg) => write!(f, "Deserialization failed: {msg}"),
+        }
+    }
+}
+
+impl Error for BlockComponentError {}
+
+// Conversion from bincode::Error to BlockComponentError
+impl From<bincode::Error> for BlockComponentError {
+    fn from(err: bincode::Error) -> Self {
+        use bincode::ErrorKind;
+        match err.as_ref() {
+            ErrorKind::SizeLimit => Self::InsufficientData,
+            ErrorKind::Custom(msg) => {
+                // Try to parse our custom error messages
+                if msg.contains("exceeds maximum") {
+                    // Extract numbers if possible, otherwise use defaults
+                    Self::TooManyEntries { count: 0, max: 0 }
+                } else if msg.contains("Unknown") {
+                    Self::UnknownVariant {
+                        variant_type: "Unknown".to_string(),
+                        id: 0,
+                    }
+                } else if msg.contains("Unsupported") {
+                    Self::UnsupportedVersion { version: 0 }
+                } else {
+                    Self::DeserializationFailed(msg.clone())
+                }
+            }
+            _ => Self::DeserializationFailed(err.to_string()),
+        }
+    }
+}
 
 /// A block component containing either entries or special metadata.
 ///
@@ -268,9 +345,9 @@ impl BlockComponent {
     ///
     /// # Errors
     /// Returns an error if the entries vector is empty or exceeds the maximum allowed size.
-    pub fn new_entries(entries: Vec<Entry>) -> Result<Self, String> {
+    pub fn new_entries(entries: Vec<Entry>) -> Result<Self, BlockComponentError> {
         if entries.is_empty() {
-            return Err("BlockComponent with entries cannot be empty".to_string());
+            return Err(BlockComponentError::EmptyEntries);
         }
         Self::validate_entries_length(entries.len())?;
         Ok(Self::Entries(entries))
@@ -308,12 +385,12 @@ impl BlockComponent {
     }
 
     /// Validates that the entries length is within bounds.
-    fn validate_entries_length(len: usize) -> Result<(), String> {
+    fn validate_entries_length(len: usize) -> Result<(), BlockComponentError> {
         if len >= Self::MAX_ENTRIES {
-            Err(format!(
-                "BlockComponent entries length {len} exceeds maximum {}",
-                Self::MAX_ENTRIES
-            ))
+            Err(BlockComponentError::TooManyEntries {
+                count: len,
+                max: Self::MAX_ENTRIES,
+            })
         } else {
             Ok(())
         }
@@ -322,16 +399,16 @@ impl BlockComponent {
     /// Serializes to bytes.
     ///
     /// # Errors
-    /// Returns a bincode error if serialization fails or if validation fails.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    /// Returns an error if serialization fails or if validation fails.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let mut buffer = Vec::new();
 
         match self {
             Self::Entries(entries) => {
-                Self::validate_entries_length(entries.len())
-                    .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
+                Self::validate_entries_length(entries.len())?;
 
-                buffer = bincode::serialize(entries)?;
+                buffer = bincode::serialize(entries)
+                    .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?;
             }
             Self::BlockMarker(marker) => {
                 // Write zero entry count
@@ -348,32 +425,29 @@ impl BlockComponent {
     /// Deserializes from bytes with validation.
     ///
     /// # Errors
-    /// Returns a bincode error if deserialization fails or data is invalid.
+    /// Returns an error if deserialization fails or data is invalid.
     ///
     /// TODO(karthik): fuzz test this function.
     /// TODO(karthik): should we error out if there are remaining bytes after deserialization?
-    pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         const ENTRY_COUNT_SIZE: usize = 8;
 
         let entry_count = u64::from_le_bytes(
             data.get(..ENTRY_COUNT_SIZE)
                 .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+                .ok_or(BlockComponentError::InsufficientData)?,
         );
 
         // Validate entry count
-        Self::validate_entries_length(entry_count as usize)
-            .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
+        Self::validate_entries_length(entry_count as usize)?;
 
-        let entries = bincode::deserialize::<Vec<Entry>>(data)?;
-        let cursor = bincode::serialized_size(&entries)? as usize;
+        let entries = bincode::deserialize::<Vec<Entry>>(data)
+            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
+        let cursor = bincode::serialized_size(&entries)
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))? as usize;
 
         // Handle remaining data
-        let remaining_bytes = data.get(cursor..).ok_or_else(|| {
-            bincode::Error::new(bincode::ErrorKind::Custom(
-                "Cursor exceeded boundary".to_string(),
-            ))
-        })?;
+        let remaining_bytes = data.get(cursor..).ok_or(BlockComponentError::CursorOutOfBounds)?;
 
         match (entries.is_empty(), remaining_bytes.is_empty()) {
             (true, true) => Ok(Self::Entries(Vec::new())),
@@ -384,9 +458,7 @@ impl BlockComponent {
             // This is the "everything is empty" case, which means there are no entries and no
             // marker data.
             (false, true) => Ok(Self::Entries(entries)),
-            (false, false) => Err(bincode::Error::new(bincode::ErrorKind::Custom(
-                "BlockComponent cannot have both entries and marker data".to_string(),
-            ))),
+            (false, false) => Err(BlockComponentError::MixedData),
         }
     }
 }
@@ -451,7 +523,7 @@ impl VersionedBlockMarker {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let marker_bytes = match self {
             Self::V1(marker) | Self::Current(marker) => marker.to_bytes(),
             Self::V2(marker) => marker.to_bytes(),
@@ -465,13 +537,13 @@ impl VersionedBlockMarker {
     }
 
     /// Deserializes from bytes, creating appropriate variant based on version.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         const VERSION_SIZE: usize = 2;
 
         let version = u16::from_le_bytes(
             data.get(..VERSION_SIZE)
                 .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+                .ok_or(BlockComponentError::InsufficientData)?,
         );
 
         let marker_data = &data[VERSION_SIZE..];
@@ -479,9 +551,7 @@ impl VersionedBlockMarker {
         match version {
             1 => Ok(Self::Current(BlockMarkerV1::from_bytes(marker_data)?)),
             2 => Ok(Self::V2(BlockMarkerV2::from_bytes(marker_data)?)),
-            _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
-                "Unsupported VersionedBlockMarker version: {version}"
-            )))),
+            _ => Err(BlockComponentError::UnsupportedVersion { version }),
         }
     }
 }
@@ -528,11 +598,11 @@ impl<'de> Deserialize<'de> for VersionedBlockMarker {
 
 /// Writes a variant ID and byte length prefix, then appends the data.
 /// Returns the complete serialized bytes.
-fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, bincode::Error> {
+fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, BlockComponentError> {
     let num_bytes: u16 = data
         .len()
         .try_into()
-        .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+        .map_err(|_| BlockComponentError::DataLengthOverflow)?;
 
     let mut buffer = Vec::with_capacity(1 + 2 + data.len());
     buffer.push(variant_id);
@@ -544,15 +614,15 @@ fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, bin
 
 /// Reads a variant ID and byte length prefix from data.
 /// Returns (variant_id, payload_data) or an error.
-fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), bincode::Error> {
+fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), BlockComponentError> {
     // Get variant ID
     let (variant_id, remaining) = data
         .split_first()
-        .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+        .ok_or(BlockComponentError::InsufficientData)?;
 
     // Check we have at least 2 bytes for the length field
     if remaining.len() < 2 {
-        return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        return Err(BlockComponentError::InsufficientData);
     }
 
     // Read byte length
@@ -560,12 +630,12 @@ fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), bincode::Error> 
     let bytes_len = u16::from_le_bytes(
         bytes_len
             .try_into()
-            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+            .map_err(|_| BlockComponentError::InsufficientData)?,
     );
 
     // Check we have enough data
     if remaining.len() < bytes_len as usize {
-        return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        return Err(BlockComponentError::InsufficientData);
     }
 
     // Return variant ID and the exact payload slice
@@ -574,23 +644,24 @@ fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), bincode::Error> 
 
 impl BlockMarkerV1 {
     /// Serializes to bytes with variant prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let Self::BlockFooter(footer) = self;
         let footer_bytes = footer.to_bytes()?;
         write_variant_with_length(0_u8, &footer_bytes)
     }
 
     /// Deserializes from bytes, validating variant ID.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (variant_id, payload) = read_variant_with_length(data)?;
 
         match variant_id {
             0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
                 payload,
             )?)),
-            _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
-                "Unknown BlockMarkerV1 variant: {variant_id}"
-            )))),
+            _ => Err(BlockComponentError::UnknownVariant {
+                variant_type: "BlockMarkerV1".to_string(),
+                id: variant_id,
+            }),
         }
     }
 }
@@ -642,7 +713,7 @@ impl BlockMarkerV2 {
     }
 
     /// Serializes to bytes with variant prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let (variant_id, data_bytes) = match self {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
             Self::ParentReadyUpdate(update) => (1_u8, update.to_bytes()?),
@@ -652,7 +723,7 @@ impl BlockMarkerV2 {
     }
 
     /// Deserializes from bytes, validating variant ID.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (variant_id, payload) = read_variant_with_length(data)?;
 
         match variant_id {
@@ -662,9 +733,10 @@ impl BlockMarkerV2 {
             1 => Ok(Self::ParentReadyUpdate(
                 VersionedParentReadyUpdate::from_bytes(payload)?,
             )),
-            _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
-                "Unknown BlockMarkerV2 variant: {variant_id}"
-            )))),
+            _ => Err(BlockComponentError::UnknownVariant {
+                variant_type: "BlockMarkerV2".to_string(),
+                id: variant_id,
+            }),
         }
     }
 }
@@ -719,7 +791,7 @@ impl BlockFooterV1 {
     }
 
     /// Serializes to bytes with user agent length capping.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let mut buffer =
             Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
 
@@ -735,19 +807,19 @@ impl BlockFooterV1 {
     }
 
     /// Deserializes from bytes with validation.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         const TIMESTAMP_SIZE: usize = 8;
         const LENGTH_SIZE: usize = 1;
         const HEADER_SIZE: usize = TIMESTAMP_SIZE + LENGTH_SIZE;
 
         if data.len() < HEADER_SIZE {
-            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+            return Err(BlockComponentError::InsufficientData);
         }
 
         // Read timestamp
         let time_bytes: [u8; TIMESTAMP_SIZE] = data[..TIMESTAMP_SIZE]
             .try_into()
-            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+            .map_err(|_| BlockComponentError::InsufficientData)?;
         let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
 
         // Read user agent length
@@ -755,7 +827,7 @@ impl BlockFooterV1 {
 
         // Validate remaining data size
         if data.len() < HEADER_SIZE + user_agent_len {
-            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+            return Err(BlockComponentError::InsufficientData);
         }
 
         // Read user agent bytes
@@ -787,7 +859,7 @@ impl VersionedBlockFooter {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let footer = match self {
             Self::V1(footer) | Self::Current(footer) => footer,
         };
@@ -801,10 +873,10 @@ impl VersionedBlockFooter {
     }
 
     /// Deserializes from bytes, always creating Current variant.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (_version, remaining) = data
             .split_first()
-            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+            .ok_or(BlockComponentError::InsufficientData)?;
 
         let footer = BlockFooterV1::from_bytes(remaining)?;
         Ok(Self::Current(footer))
@@ -858,13 +930,15 @@ impl ParentReadyUpdateV1 {
     }
 
     /// Serializes to bytes using bincode.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         bincode::serialize(self)
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
     }
 
     /// Deserializes from bytes using bincode.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         bincode::deserialize(data)
+            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))
     }
 }
 
@@ -887,7 +961,7 @@ impl VersionedParentReadyUpdate {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let update = match self {
             Self::V1(update) | Self::Current(update) => update,
         };
@@ -901,10 +975,10 @@ impl VersionedParentReadyUpdate {
     }
 
     /// Deserializes from bytes, always creating Current variant.
-    fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (_version, remaining) = data
             .split_first()
-            .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+            .ok_or(BlockComponentError::InsufficientData)?;
 
         let update = ParentReadyUpdateV1::from_bytes(remaining)?;
         Ok(Self::Current(update))
@@ -999,7 +1073,7 @@ mod tests {
     fn test_block_component_empty_entries_error() {
         let result = BlockComponent::new_entries(vec![]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot be empty"));
+        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntries);
     }
 
     #[test]
@@ -1744,7 +1818,7 @@ mod tests {
         let entries = Vec::new();
         let result = BlockComponent::new_entries(entries);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot be empty"));
+        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntries);
     }
 
     #[test]
@@ -1756,12 +1830,18 @@ mod tests {
         // First test that MAX_ENTRIES itself fails
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum"));
+        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
+            count: BlockComponent::MAX_ENTRIES,
+            max: BlockComponent::MAX_ENTRIES,
+        });
 
         // Test that MAX_ENTRIES + 1 also fails
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES + 1);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum"));
+        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
+            count: BlockComponent::MAX_ENTRIES + 1,
+            max: BlockComponent::MAX_ENTRIES,
+        });
 
         // Test that MAX_ENTRIES - 1 succeeds
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES - 1);
@@ -1819,7 +1899,10 @@ mod tests {
         // So we'll test the validation logic directly
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds maximum"));
+        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
+            count: BlockComponent::MAX_ENTRIES,
+            max: BlockComponent::MAX_ENTRIES,
+        });
     }
 
     #[test]
