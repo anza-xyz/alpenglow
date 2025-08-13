@@ -38,10 +38,7 @@ use {
     solana_accounts_db::hardened_unpack::unpack_genesis_archive,
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
-    solana_entry::{
-        block_component::BlockComponent,
-        entry::{create_ticks, Entry},
-    },
+    solana_entry::entry::{create_ticks, Entry},
     solana_genesis_config::{GenesisConfig, DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE},
     solana_hash::Hash,
     solana_keypair::Keypair,
@@ -580,8 +577,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<SlotMeta>> {
         match location {
-            BlockLocation::Turbine => self.meta_cf.get(slot),
-            BlockLocation::Repair { block_id } => self.alt_meta_cf.get((slot, block_id)),
+            BlockLocation::Original => self.meta_cf.get(slot),
+            BlockLocation::Alternate { block_id } => self.alt_meta_cf.get((slot, block_id)),
         }
     }
 
@@ -635,8 +632,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<ErasureMeta>> {
         match location {
-            BlockLocation::Turbine => self.erasure_meta(erasure_set),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.erasure_meta(erasure_set),
+            BlockLocation::Alternate { block_id } => {
                 let (slot, fec_set_index) = erasure_set.store_key();
                 self.alt_erasure_meta_cf
                     .get((slot, fec_set_index, block_id))
@@ -733,8 +730,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<MerkleRootMeta>> {
         match location {
-            BlockLocation::Turbine => self.merkle_root_meta_cf.get(erasure_set.store_key()),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.merkle_root_meta_cf.get(erasure_set.store_key()),
+            BlockLocation::Alternate { block_id } => {
                 let (slot, fec_set_index) = erasure_set.store_key();
                 self.alt_merkle_root_meta_cf
                     .get((slot, fec_set_index, block_id))
@@ -2472,8 +2469,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<Vec<u8>>> {
         match location {
-            BlockLocation::Turbine => self.get_data_shred(slot, index),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.get_data_shred(slot, index),
+            BlockLocation::Alternate { block_id } => {
                 self.alt_data_shred_cf.get_bytes((slot, index, block_id))
             }
         }
@@ -2583,8 +2580,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<Index>> {
         match location {
-            BlockLocation::Turbine => self.get_index(slot),
-            BlockLocation::Repair { block_id } => self.alt_index_cf.get((slot, block_id)),
+            BlockLocation::Original => self.get_index(slot),
+            BlockLocation::Alternate { block_id } => self.alt_index_cf.get((slot, block_id)),
         }
     }
 
@@ -3885,17 +3882,11 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        // TODO(karthik): if Alpenglow flag is disabled, return an error on special
-                        // EntryBatches.
-                        BlockComponent::from_bytes(&payload)
-                            .map(|eb| eb.entries().to_vec())
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct entries: {e:?}"
-                                    )),
-                                ))
-                            })
+                        bincode::deserialize::<Vec<Entry>>(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct entries: {e:?}"),
+                            )))
+                        })
                     })
             })
             .flatten_ok()

@@ -296,7 +296,7 @@ fn run_shred_sigverify<const K: usize>(
     // Send all shreds to window service to be inserted into blockstore.
     let shreds = shreds
         .into_iter()
-        .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Turbine));
+        .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Original));
     verified_sender.send(shreds.chain(repairs).collect())?;
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     shred_buffer.clear();

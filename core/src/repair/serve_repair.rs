@@ -130,14 +130,16 @@ impl ShredRepairType {
 
     pub fn location_to_insert_response(&self) -> BlockLocation {
         match self {
+            // AG repair ingests into an alternate column
             ShredRepairType::OrphanForBlockId(_, bid)
             | ShredRepairType::HighestShredForBlockId(_, _, bid)
             | ShredRepairType::ShredForBlockId(_, _, bid) => {
-                BlockLocation::Repair { block_id: *bid }
+                BlockLocation::Alternate { block_id: *bid }
             }
+            // TowerBFT repair ingests into the original column populated by turbine
             ShredRepairType::Orphan(_)
             | ShredRepairType::HighestShred(_, _)
-            | ShredRepairType::Shred(_, _) => BlockLocation::Turbine,
+            | ShredRepairType::Shred(_, _) => BlockLocation::Original,
         }
     }
 }
