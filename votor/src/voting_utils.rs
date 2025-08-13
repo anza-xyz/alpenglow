@@ -1,7 +1,7 @@
 use {
     crate::{
-        commitment::AlpenglowCommitmentAggregationData,
-        vote_history::VoteHistory,
+        commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
+        vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
     crossbeam_channel::{SendError, Sender},
@@ -24,16 +24,32 @@ use {
 
 #[derive(Debug)]
 pub enum GenerateVoteTxResult {
+    // The following are transient errors
     // non voting validator, not eligible for refresh
     // until authorized keypair is overriden
     NonVoting,
     // hot spare validator, not eligble for refresh
     // until set identity is invoked
     HotSpare,
-    // failed generation, eligible for refresh
-    Failed,
-    // no rank found.
+    // The hash verification at startup has not completed
+    WaitForStartupVerification,
+    // Wait to vote slot is not reached
+    WaitToVoteSlot(Slot),
+    // no rank found, this can happen if the validator
+    // is not staked in the current epoch, but it may
+    // still be staked in future or past epochs, so this
+    // is considered a transient error
     NoRankFound,
+
+    // The following are misconfiguration errors
+    // The authorized voter for the given pubkey and Epoch does not exist
+    NoAuthorizedVoter(Pubkey, u64),
+    // The vote state associated with given pubkey does not exist
+    NoVoteState(Pubkey),
+    // The vote account associated with given pubkey does not exist
+    VoteAccountNotFound(Pubkey),
+
+    // The following are the successful cases
     // Generated a vote transaction
     Tx(Transaction),
     // Generated a BLS message
@@ -47,6 +63,34 @@ impl GenerateVoteTxResult {
 
     pub fn is_hot_spare(&self) -> bool {
         matches!(self, Self::HotSpare)
+    }
+
+    pub fn is_invalid_config(&self) -> bool {
+        match self {
+            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
+                true
+            }
+            Self::NonVoting
+            | Self::HotSpare
+            | Self::WaitForStartupVerification
+            | Self::WaitToVoteSlot(_)
+            | Self::NoRankFound => false,
+            Self::Tx(_) | Self::BLSMessage(_) => false,
+        }
+    }
+
+    pub fn is_transient_error(&self) -> bool {
+        match self {
+            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
+                false
+            }
+            Self::NonVoting
+            | Self::HotSpare
+            | Self::WaitForStartupVerification
+            | Self::WaitToVoteSlot(_)
+            | Self::NoRankFound => true,
+            Self::Tx(_) | Self::BLSMessage(_) => false,
+        }
     }
 }
 
@@ -63,11 +107,20 @@ pub enum BLSOp {
 
 #[derive(Debug, Error)]
 pub enum VoteError {
-    #[error("Unable to generate bls vote message")]
-    GenerationError(Box<GenerateVoteTxResult>),
+    #[error("Unable to generate bls vote message, transient error: {0:?}")]
+    TransientError(Box<GenerateVoteTxResult>),
+
+    #[error("Unable to generate bls vote message, configuration error: {0:?}")]
+    InvalidConfig(Box<GenerateVoteTxResult>),
 
     #[error("Unable to send to certificate pool")]
     CertificatePoolError(#[from] SendError<()>),
+
+    #[error("Commitment sender error {0}")]
+    CommitmentSenderError(#[from] AlpenglowCommitmentError),
+
+    #[error("Saved vote history error {0}")]
+    SavedVoteHistoryError(#[from] VoteHistoryError),
 }
 
 /// Context required to construct vote transactions
@@ -118,26 +171,21 @@ pub fn generate_vote_tx(
     {
         let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
         if !bank.has_initial_accounts_hash_verification_completed() {
-            info!("startup verification incomplete, so unable to vote");
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::WaitForStartupVerification;
         }
         if authorized_voter_keypairs.is_empty() {
             return GenerateVoteTxResult::NonVoting;
         }
         if let Some(slot) = context.wait_to_vote_slot {
             if vote.slot() < slot {
-                return GenerateVoteTxResult::Failed;
+                return GenerateVoteTxResult::WaitToVoteSlot(slot);
             }
         }
-        let Some(vote_account) = bank.get_vote_account(&context.vote_account_pubkey) else {
-            warn!("Vote account {vote_account_pubkey} does not exist.  Unable to vote");
-            return GenerateVoteTxResult::Failed;
+        let Some(vote_account) = bank.get_vote_account(&vote_account_pubkey) else {
+            return GenerateVoteTxResult::VoteAccountNotFound(vote_account_pubkey);
         };
         let Some(vote_state) = vote_account.alpenglow_vote_state() else {
-            warn!(
-                "Vote account {vote_account_pubkey} does not have an Alpenglow vote state.  Unable to vote",
-            );
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::NoVoteState(vote_account_pubkey);
         };
         if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
             info!(
@@ -158,10 +206,7 @@ pub fn generate_vote_tx(
         };
 
         let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
-            warn!("Vote account {vote_account_pubkey} has no authorized voter for epoch {}.  Unable to vote",
-                bank.epoch()
-            );
-            return GenerateVoteTxResult::Failed;
+            return GenerateVoteTxResult::NoAuthorizedVoter(vote_account_pubkey, bank.epoch());
         };
 
         let Some(keypair) = authorized_voter_keypairs
@@ -219,8 +264,7 @@ pub fn generate_vote_tx(
 /// the certificate pool thread for ingestion.
 ///
 /// Returns false if we are currently a non-voting node
-pub(crate) fn insert_vote_and_create_bls_message(
-    my_pubkey: &Pubkey,
+fn insert_vote_and_create_bls_message(
     vote: Vote,
     is_refresh: bool,
     context: &mut VotingContext,
@@ -234,7 +278,11 @@ pub(crate) fn insert_vote_and_create_bls_message(
     let bls_message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
         e => {
-            return Err(VoteError::GenerationError(Box::new(e)));
+            if e.is_transient_error() {
+                return Err(VoteError::TransientError(Box::new(e)));
+            } else {
+                return Err(VoteError::InvalidConfig(Box::new(e)));
+            }
         }
     };
     context
@@ -244,16 +292,7 @@ pub(crate) fn insert_vote_and_create_bls_message(
 
     // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
     let saved_vote_history =
-        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair).unwrap_or_else(
-            |err| {
-                error!(
-                    "{my_pubkey}: Unable to create saved vote history: {:?}",
-                    err
-                );
-                // TODO: maybe unify this with exit flag instead
-                std::process::exit(1);
-            },
-        );
+        SavedVoteHistory::new(&context.vote_history, &context.identity_keypair)?;
 
     // Return vote for sending
     Ok(BLSOp::PushVote {
@@ -261,4 +300,27 @@ pub(crate) fn insert_vote_and_create_bls_message(
         slot: vote.slot(),
         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
     })
+}
+
+pub fn generate_vote_message(
+    vote: Vote,
+    is_refresh: bool,
+    vctx: &mut VotingContext,
+) -> Result<Option<BLSOp>, VoteError> {
+    let bls_op = match insert_vote_and_create_bls_message(vote, is_refresh, vctx) {
+        Ok(bls_op) => bls_op,
+        Err(VoteError::InvalidConfig(e)) => {
+            warn!("Failed to generate vote and push to votes: {:?}", e);
+            // These are not fatal errors, just skip the vote for now. But they are misconfigurations
+            // that should be warned about.
+            return Ok(None);
+        }
+        Err(VoteError::TransientError(e)) => {
+            info!("Failed to generate vote and push to votes: {:?}", e);
+            // These are transient errors, just skip the vote for now.
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(Some(bls_op))
 }
