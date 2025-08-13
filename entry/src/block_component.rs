@@ -46,6 +46,8 @@
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
 /// ├─────────────────────────────────────────┤
+/// │ Byte Length                  (2 bytes)  │
+/// ├─────────────────────────────────────────┤
 /// │ Variant Data              (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
@@ -54,6 +56,8 @@
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ Byte Length                  (2 bytes)  │
 /// ├─────────────────────────────────────────┤
 /// │ Variant Data              (variable)    │
 /// └─────────────────────────────────────────┘
@@ -215,9 +219,14 @@ pub enum VersionedBlockMarker {
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
 /// ├─────────────────────────────────────────┤
+/// │ Byte Length                  (2 bytes)  │
+/// ├─────────────────────────────────────────┤
 /// │ Variant Data              (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
+///
+/// The byte length field indicates the size of the variant data that follows,
+/// allowing for proper parsing even if unknown variants are encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
@@ -232,9 +241,14 @@ pub enum BlockMarkerV1 {
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
 /// ├─────────────────────────────────────────┤
+/// │ Byte Length                  (2 bytes)  │
+/// ├─────────────────────────────────────────┤
 /// │ Variant Data              (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
+///
+/// The byte length field indicates the size of the variant data that follows,
+/// allowing for proper parsing even if unknown variants are encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockMarkerV2 {
     BlockFooter(VersionedBlockFooter),
@@ -597,6 +611,12 @@ impl<'de> Deserialize<'de> for VersionedBlockMarker {
 // ============================================================================
 
 /// Writes a variant ID and byte length prefix, then appends the data.
+/// 
+/// # Format
+/// - Byte 0: Variant ID (u8)
+/// - Bytes 1-2: Data length in little-endian (u16)
+/// - Bytes 3+: Variant data
+/// 
 /// Returns the complete serialized bytes.
 fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, BlockComponentError> {
     let num_bytes: u16 = data
@@ -613,6 +633,12 @@ fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, Blo
 }
 
 /// Reads a variant ID and byte length prefix from data.
+/// 
+/// # Format Expected
+/// - Byte 0: Variant ID (u8)
+/// - Bytes 1-2: Data length in little-endian (u16)
+/// - Bytes 3+: Variant data (exactly `length` bytes)
+/// 
 /// Returns (variant_id, payload_data) or an error.
 fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), BlockComponentError> {
     // Get variant ID
@@ -643,14 +669,14 @@ fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), BlockComponentEr
 }
 
 impl BlockMarkerV1 {
-    /// Serializes to bytes with variant prefix.
+    /// Serializes to bytes with variant ID and byte length prefix.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let Self::BlockFooter(footer) = self;
         let footer_bytes = footer.to_bytes()?;
         write_variant_with_length(0_u8, &footer_bytes)
     }
 
-    /// Deserializes from bytes, validating variant ID.
+    /// Deserializes from bytes, validating variant ID and byte length.
     fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (variant_id, payload) = read_variant_with_length(data)?;
 
@@ -712,7 +738,7 @@ impl BlockMarkerV2 {
         2
     }
 
-    /// Serializes to bytes with variant prefix.
+    /// Serializes to bytes with variant ID and byte length prefix.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let (variant_id, data_bytes) = match self {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
@@ -722,7 +748,7 @@ impl BlockMarkerV2 {
         write_variant_with_length(variant_id, &data_bytes)
     }
 
-    /// Deserializes from bytes, validating variant ID.
+    /// Deserializes from bytes, validating variant ID and byte length.
     fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (variant_id, payload) = read_variant_with_length(data)?;
 
