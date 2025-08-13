@@ -458,10 +458,13 @@ impl BlockComponent {
         let entries = bincode::deserialize::<Vec<Entry>>(data)
             .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
         let cursor = bincode::serialized_size(&entries)
-            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))? as usize;
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?
+            as usize;
 
         // Handle remaining data
-        let remaining_bytes = data.get(cursor..).ok_or(BlockComponentError::CursorOutOfBounds)?;
+        let remaining_bytes = data
+            .get(cursor..)
+            .ok_or(BlockComponentError::CursorOutOfBounds)?;
 
         match (entries.is_empty(), remaining_bytes.is_empty()) {
             (true, true) => Ok(Self::Entries(Vec::new())),
@@ -611,12 +614,12 @@ impl<'de> Deserialize<'de> for VersionedBlockMarker {
 // ============================================================================
 
 /// Writes a variant ID and byte length prefix, then appends the data.
-/// 
+///
 /// # Format
 /// - Byte 0: Variant ID (u8)
 /// - Bytes 1-2: Data length in little-endian (u16)
 /// - Bytes 3+: Variant data
-/// 
+///
 /// Returns the complete serialized bytes.
 fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, BlockComponentError> {
     let num_bytes: u16 = data
@@ -633,12 +636,12 @@ fn write_variant_with_length(variant_id: u8, data: &[u8]) -> Result<Vec<u8>, Blo
 }
 
 /// Reads a variant ID and byte length prefix from data.
-/// 
+///
 /// # Format Expected
 /// - Byte 0: Variant ID (u8)
 /// - Bytes 1-2: Data length in little-endian (u16)
 /// - Bytes 3+: Variant data (exactly `length` bytes)
-/// 
+///
 /// Returns (variant_id, payload_data) or an error.
 fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), BlockComponentError> {
     // Get variant ID
@@ -1856,18 +1859,24 @@ mod tests {
         // First test that MAX_ENTRIES itself fails
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
-            count: BlockComponent::MAX_ENTRIES,
-            max: BlockComponent::MAX_ENTRIES,
-        });
+        assert_eq!(
+            result.unwrap_err(),
+            BlockComponentError::TooManyEntries {
+                count: BlockComponent::MAX_ENTRIES,
+                max: BlockComponent::MAX_ENTRIES,
+            }
+        );
 
         // Test that MAX_ENTRIES + 1 also fails
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES + 1);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
-            count: BlockComponent::MAX_ENTRIES + 1,
-            max: BlockComponent::MAX_ENTRIES,
-        });
+        assert_eq!(
+            result.unwrap_err(),
+            BlockComponentError::TooManyEntries {
+                count: BlockComponent::MAX_ENTRIES + 1,
+                max: BlockComponent::MAX_ENTRIES,
+            }
+        );
 
         // Test that MAX_ENTRIES - 1 succeeds
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES - 1);
@@ -1925,10 +1934,13 @@ mod tests {
         // So we'll test the validation logic directly
         let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BlockComponentError::TooManyEntries {
-            count: BlockComponent::MAX_ENTRIES,
-            max: BlockComponent::MAX_ENTRIES,
-        });
+        assert_eq!(
+            result.unwrap_err(),
+            BlockComponentError::TooManyEntries {
+                count: BlockComponent::MAX_ENTRIES,
+                max: BlockComponent::MAX_ENTRIES,
+            }
+        );
     }
 
     #[test]
