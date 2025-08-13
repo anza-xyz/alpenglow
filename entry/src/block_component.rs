@@ -211,8 +211,9 @@ pub struct BlockFooterV1 {
 
 /// Versioned parent ready update for optimistic block packing in Alpenglow.
 ///
-/// Used to signal when a parent block is ready for building upon. Always deserializes
-/// to the `Current` variant for forward compatibility.
+/// Used to signal when the parent changes due to ParentReady being triggered on an earlier parent
+/// in optimistic block packing. Always deserializes to the `Current` variant for forward
+/// compatibility.
 ///
 /// # Serialization Format
 /// ```text
@@ -361,12 +362,8 @@ impl BlockComponent {
         );
 
         // Validate entry count
-        if entry_count as usize >= Self::MAX_ENTRIES {
-            return Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
-                "BlockComponent entry count {entry_count} exceeds maximum {}",
-                Self::MAX_ENTRIES
-            ))));
-        };
+        Self::validate_entries_length(entry_count as usize)
+            .map_err(|e| bincode::Error::new(bincode::ErrorKind::Custom(e)))?;
 
         let entries = bincode::deserialize::<Vec<Entry>>(data)?;
         let cursor = bincode::serialized_size(&entries)? as usize;
@@ -384,6 +381,8 @@ impl BlockComponent {
                 let marker = VersionedBlockMarker::from_bytes(remaining_bytes)?;
                 Ok(Self::BlockMarker(marker))
             }
+            // This is the "everything is empty" case, which means there are no entries and no
+            // marker data.
             (false, true) => Ok(Self::Entries(entries)),
             (false, false) => Err(bincode::Error::new(bincode::ErrorKind::Custom(
                 "BlockComponent cannot have both entries and marker data".to_string(),
@@ -535,6 +534,14 @@ impl BlockMarkerV1 {
 
         let mut buffer = Vec::with_capacity(1 + footer_bytes.len());
         buffer.push(0_u8); // BlockFooter variant ID
+
+        let num_bytes: u16 = footer_bytes
+            .len()
+            .try_into()
+            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+
+        buffer.extend_from_slice(&num_bytes.to_le_bytes());
+
         buffer.extend_from_slice(&footer_bytes);
 
         Ok(buffer)
@@ -546,9 +553,21 @@ impl BlockMarkerV1 {
             .split_first()
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
+        let (bytes_left, remaining) = remaining.split_at(2);
+
+        let bytes_left = u16::from_le_bytes(
+            bytes_left
+                .try_into()
+                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+        );
+
+        if remaining.len() < bytes_left as usize {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
+
         match variant_id {
             0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
-                remaining,
+                &remaining[..bytes_left as usize],
             )?)),
             _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
                 "Unknown BlockMarkerV1 variant: {variant_id}"
@@ -612,6 +631,14 @@ impl BlockMarkerV2 {
 
         let mut buffer = Vec::with_capacity(1 + data_bytes.len());
         buffer.push(variant_id);
+
+        let num_bytes: u16 = data_bytes
+            .len()
+            .try_into()
+            .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+
+        buffer.extend_from_slice(&num_bytes.to_le_bytes());
+
         buffer.extend_from_slice(&data_bytes);
 
         Ok(buffer)
@@ -623,12 +650,24 @@ impl BlockMarkerV2 {
             .split_first()
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
+        let (bytes_left, remaining) = remaining.split_at(2);
+
+        let bytes_left = u16::from_le_bytes(
+            bytes_left
+                .try_into()
+                .map_err(|_| bincode::Error::new(bincode::ErrorKind::SizeLimit))?,
+        );
+
+        if remaining.len() < bytes_left as usize {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
+
         match variant_id {
             0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
-                remaining,
+                &remaining[..bytes_left as usize],
             )?)),
             1 => Ok(Self::ParentReadyUpdate(
-                VersionedParentReadyUpdate::from_bytes(remaining)?,
+                VersionedParentReadyUpdate::from_bytes(&remaining[..bytes_left as usize])?,
             )),
             _ => Err(bincode::Error::new(bincode::ErrorKind::Custom(format!(
                 "Unknown BlockMarkerV2 variant: {variant_id}"
