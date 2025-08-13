@@ -553,6 +553,11 @@ impl BlockMarkerV1 {
             .split_first()
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
 
+        // Check we have at least 2 bytes for the length field
+        if remaining.len() < 2 {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
+
         let (bytes_left, remaining) = remaining.split_at(2);
 
         let bytes_left = u16::from_le_bytes(
@@ -649,6 +654,11 @@ impl BlockMarkerV2 {
         let (variant_id, remaining) = data
             .split_first()
             .ok_or_else(|| bincode::Error::new(bincode::ErrorKind::SizeLimit))?;
+
+        // Check we have at least 2 bytes for the length field
+        if remaining.len() < 2 {
+            return Err(bincode::Error::new(bincode::ErrorKind::SizeLimit));
+        }
 
         let (bytes_left, remaining) = remaining.split_at(2);
 
@@ -1315,14 +1325,16 @@ mod tests {
         bad_marker_data.extend_from_slice(&[0u8; 10]);
         assert!(VersionedBlockMarker::from_bytes(&bad_marker_data).is_err());
 
-        // Test unknown BlockMarkerV1 variant
+        // Test unknown BlockMarkerV1 variant with proper byte length field
         let mut bad_v1_data = vec![99u8]; // Unknown variant
-        bad_v1_data.extend_from_slice(&[0u8; 10]);
+        bad_v1_data.extend_from_slice(&[10, 0]); // byte length = 10
+        bad_v1_data.extend_from_slice(&[0u8; 10]); // 10 bytes of data
         assert!(BlockMarkerV1::from_bytes(&bad_v1_data).is_err());
 
-        // Test unknown BlockMarkerV2 variant
+        // Test unknown BlockMarkerV2 variant with proper byte length field
         let mut bad_v2_data = vec![99u8]; // Unknown variant
-        bad_v2_data.extend_from_slice(&[0u8; 10]);
+        bad_v2_data.extend_from_slice(&[10, 0]); // byte length = 10
+        bad_v2_data.extend_from_slice(&[0u8; 10]); // 10 bytes of data
         assert!(BlockMarkerV2::from_bytes(&bad_v2_data).is_err());
     }
 
@@ -1435,14 +1447,26 @@ mod tests {
         // Empty data
         assert!(BlockMarkerV1::from_bytes(&[]).is_err());
 
-        // Only variant ID
+        // Only variant ID (missing byte length)
         assert!(BlockMarkerV1::from_bytes(&[0u8]).is_err());
 
-        // Unknown variant ID
-        assert!(BlockMarkerV1::from_bytes(&[255u8, 0, 0, 0]).is_err());
+        // Variant ID + only 1 byte of length (need 2)
+        assert!(BlockMarkerV1::from_bytes(&[0u8, 0]).is_err());
 
-        // Invalid footer data for valid variant
-        assert!(BlockMarkerV1::from_bytes(&[0u8, 1, 2, 3]).is_err());
+        // Unknown variant ID with byte length
+        assert!(BlockMarkerV1::from_bytes(&[255u8, 4, 0, 1, 2, 3, 4]).is_err());
+
+        // Valid variant ID and byte length but insufficient data
+        assert!(BlockMarkerV1::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
+
+        // Valid variant ID and byte length but invalid footer data
+        assert!(BlockMarkerV1::from_bytes(&[0u8, 3, 0, 1, 2, 3]).is_err());
+
+        // Byte length mismatch - claims 0 bytes but has data
+        assert!(BlockMarkerV1::from_bytes(&[0u8, 0, 0]).is_err());
+
+        // Byte length exceeds actual data available
+        assert!(BlockMarkerV1::from_bytes(&[0u8, 255, 255, 1, 2]).is_err());
     }
 
     #[test]
@@ -1450,18 +1474,32 @@ mod tests {
         // Empty data
         assert!(BlockMarkerV2::from_bytes(&[]).is_err());
 
-        // Only variant ID
+        // Only variant ID (missing byte length)
         assert!(BlockMarkerV2::from_bytes(&[0u8]).is_err());
         assert!(BlockMarkerV2::from_bytes(&[1u8]).is_err());
 
-        // Unknown variant ID
-        assert!(BlockMarkerV2::from_bytes(&[255u8, 0, 0, 0]).is_err());
+        // Variant ID + only 1 byte of length (need 2)
+        assert!(BlockMarkerV2::from_bytes(&[0u8, 0]).is_err());
+        assert!(BlockMarkerV2::from_bytes(&[1u8, 0]).is_err());
 
-        // Invalid data for BlockFooter variant
-        assert!(BlockMarkerV2::from_bytes(&[0u8, 1, 2, 3]).is_err());
+        // Unknown variant ID with byte length
+        assert!(BlockMarkerV2::from_bytes(&[255u8, 4, 0, 1, 2, 3, 4]).is_err());
 
-        // Invalid data for ParentReadyUpdate variant
-        assert!(BlockMarkerV2::from_bytes(&[1u8, 1, 2, 3]).is_err());
+        // Valid BlockFooter variant ID and byte length but insufficient data
+        assert!(BlockMarkerV2::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
+
+        // Valid ParentReadyUpdate variant ID and byte length but insufficient data  
+        assert!(BlockMarkerV2::from_bytes(&[1u8, 10, 0, 1, 2, 3]).is_err());
+
+        // Valid BlockFooter variant but invalid footer data
+        assert!(BlockMarkerV2::from_bytes(&[0u8, 3, 0, 1, 2, 3]).is_err());
+
+        // Valid ParentReadyUpdate variant but invalid update data
+        assert!(BlockMarkerV2::from_bytes(&[1u8, 3, 0, 1, 2, 3]).is_err());
+
+        // Byte length exceeds actual data available
+        assert!(BlockMarkerV2::from_bytes(&[0u8, 255, 255, 1, 2]).is_err());
+        assert!(BlockMarkerV2::from_bytes(&[1u8, 255, 255, 1, 2]).is_err());
     }
 
     #[test]
@@ -1474,12 +1512,28 @@ mod tests {
 
         // Version bytes but no marker data
         assert!(VersionedBlockMarker::from_bytes(&[0u8, 0u8]).is_err());
+        assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8]).is_err());
 
-        // Invalid marker data for version 0
-        assert!(VersionedBlockMarker::from_bytes(&[0u8, 0u8, 1, 2]).is_err());
+        // Version 1 with invalid marker data (missing byte length)
+        assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 0u8]).is_err());
 
-        // Invalid marker data for version 1
-        assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 1, 2]).is_err());
+        // Version 1 with variant ID and partial byte length
+        assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 0u8, 0u8]).is_err());
+
+        // Version 2 with invalid marker data (missing byte length) 
+        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8]).is_err());
+
+        // Version 2 with variant ID and partial byte length
+        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8, 0u8]).is_err());
+
+        // Version 1 with valid structure but invalid inner data
+        assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 0u8, 10, 0, 1, 2]).is_err());
+
+        // Version 2 with valid structure but invalid inner data
+        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8, 10, 0, 1, 2]).is_err());
+
+        // Unknown version
+        assert!(VersionedBlockMarker::from_bytes(&[99u8, 0u8, 0u8, 1, 0]).is_err());
     }
 
     #[test]
@@ -2164,6 +2218,99 @@ mod tests {
         assert!(BlockMarkerV1::from_bytes(&[]).is_err());
         assert!(VersionedBlockMarker::from_bytes(&[1]).is_err());
         assert!(BlockComponent::from_bytes(&[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn test_byte_length_validation() {
+        // Test BlockMarkerV1 byte length serialization/deserialization
+        let footer = BlockFooterV1 {
+            block_producer_time_nanos: 123456789,
+            block_user_agent: b"test-validator".to_vec(),
+        };
+        let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer.clone()));
+        
+        let bytes = marker_v1.to_bytes().unwrap();
+        // Check that byte length is included
+        assert!(bytes.len() >= 3); // At least variant ID + 2 bytes for length
+        
+        // Extract and verify the byte length field
+        let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
+        assert_eq!(byte_length as usize, bytes.len() - 3); // Length should match remaining data
+        
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(marker_v1, deserialized);
+
+        // Test BlockMarkerV2 with BlockFooter
+        let marker_v2_footer = BlockMarkerV2::BlockFooter(VersionedBlockFooter::new(footer));
+        let bytes = marker_v2_footer.to_bytes().unwrap();
+        
+        // Check that byte length is included
+        assert!(bytes.len() >= 3); // At least variant ID + 2 bytes for length
+        
+        // Extract and verify the byte length field
+        let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
+        assert_eq!(byte_length as usize, bytes.len() - 3); // Length should match remaining data
+        
+        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
+        assert_eq!(marker_v2_footer, deserialized);
+
+        // Test BlockMarkerV2 with ParentReadyUpdate
+        let update = ParentReadyUpdateV1 {
+            new_parent_slot: 987654321,
+            new_parent_block_id: Hash::new_unique(),
+        };
+        let marker_v2_update = BlockMarkerV2::ParentReadyUpdate(VersionedParentReadyUpdate::new(update));
+        let bytes = marker_v2_update.to_bytes().unwrap();
+        
+        // Check that byte length is included
+        assert!(bytes.len() >= 3); // At least variant ID + 2 bytes for length
+        
+        // Extract and verify the byte length field
+        let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
+        assert_eq!(byte_length as usize, bytes.len() - 3); // Length should match remaining data
+        
+        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
+        assert_eq!(marker_v2_update, deserialized);
+    }
+
+    #[test]
+    fn test_byte_length_edge_cases() {
+        // Test with maximum allowed byte length (just under u16::MAX)
+        let large_user_agent = vec![b'x'; 255]; // Max user agent size
+        let footer = BlockFooterV1 {
+            block_producer_time_nanos: u64::MAX,
+            block_user_agent: large_user_agent,
+        };
+        let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
+        
+        let bytes = marker.to_bytes().unwrap();
+        let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
+        
+        // Verify the byte length is reasonable
+        assert!(byte_length > 0);
+        assert!(byte_length < u16::MAX);
+        assert_eq!(byte_length as usize, bytes.len() - 3);
+        
+        // Should round-trip successfully
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(marker, deserialized);
+
+        // Test with minimum byte length
+        let min_footer = BlockFooterV1 {
+            block_producer_time_nanos: 0,
+            block_user_agent: vec![],
+        };
+        let min_marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(min_footer));
+        
+        let bytes = min_marker.to_bytes().unwrap();
+        let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
+        
+        // Even with minimal data, there should be some bytes for the versioned footer
+        assert!(byte_length > 0);
+        assert_eq!(byte_length as usize, bytes.len() - 3);
+        
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(min_marker, deserialized);
     }
 
     #[test]
