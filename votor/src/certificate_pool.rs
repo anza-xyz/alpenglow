@@ -1686,12 +1686,12 @@ mod tests {
         let (my_vote_key, _, _) =
             get_key_and_stakes(bank.epoch_schedule(), bank.epoch_stakes_map(), 0, 0).unwrap();
 
-        // Create bank 2
-        let slot = 2;
+        // Create bank 4
+        let slot = 4;
         let block_id = Hash::new_unique();
 
         // Add a skip from myself.
-        let vote = Vote::new_skip_vote(2);
+        let vote = Vote::new_skip_vote(slot);
         let mut new_events = vec![];
         assert!(pool
             .add_message(
@@ -1707,7 +1707,7 @@ mod tests {
 
         // 40% notarized, should succeed
         for rank in 1..5 {
-            let vote = Vote::new_notarization_vote(2, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
             assert!(pool
                 .add_message(
                     bank.epoch_schedule(),
@@ -1728,13 +1728,13 @@ mod tests {
         }
         new_events.clear();
 
-        // Create bank 3
-        let slot = 3;
+        // Create bank 8
+        let slot = 8;
         let block_id = Hash::new_unique();
 
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
-            let vote = Vote::new_notarization_vote(3, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
             assert!(pool
                 .add_message(
                     bank.epoch_schedule(),
@@ -1749,7 +1749,7 @@ mod tests {
         assert!(new_events.is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
-        let vote = Vote::new_notarization_vote(3, Hash::new_unique());
+        let vote = Vote::new_notarization_vote(slot, Hash::new_unique());
         assert!(pool
             .add_message(
                 bank.epoch_schedule(),
@@ -1763,9 +1763,9 @@ mod tests {
         assert!(new_events.is_empty());
 
         // Now add 40% skip, should succeed
-        // Funny thing is in this case we will also get SafeToSkip(3)
+        // Funny thing is in this case we will also get SafeToSkip(slot)
         for rank in 3..7 {
-            let vote = Vote::new_skip_vote(3);
+            let vote = Vote::new_skip_vote(slot);
             assert!(pool
                 .add_message(
                     bank.epoch_schedule(),
@@ -1795,7 +1795,7 @@ mod tests {
         // but not on the same block_id because we already sent the event
         let duplicate_block_id = Hash::new_unique();
         for rank in 7..9 {
-            let vote = Vote::new_notarization_vote(3, duplicate_block_id);
+            let vote = Vote::new_notarization_vote(slot, duplicate_block_id);
             assert!(pool
                 .add_message(
                     bank.epoch_schedule(),

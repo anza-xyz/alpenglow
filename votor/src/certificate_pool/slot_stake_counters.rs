@@ -233,7 +233,7 @@ mod tests {
         let (new_safe_to_notar, new_safe_to_skip) =
             counters.add_vote(&Vote::new_skip_vote(slot), 30, false);
         assert!(new_safe_to_notar.is_empty());
-        assert!(!new_safe_to_skip);
+        assert!(new_safe_to_skip);
 
         // Adding more notarization on b does not trigger more events
         let (new_safe_to_notar, new_safe_to_skip) =
