@@ -24,7 +24,7 @@ use {
     solana_perf::{
         self,
         deduper::Deduper,
-        packet::{PacketBatch, PacketRefMut},
+        packet::{PacketBatch, PacketRef, PacketRefMut},
         recycler_cache::RecyclerCache,
     },
     solana_pubkey::Pubkey,
@@ -247,27 +247,7 @@ fn run_shred_sigverify<const K: usize>(
         .iter()
         .flat_map(|batch| batch.iter())
         .filter(|packet| !packet.meta().discard())
-        .filter_map(|packet| {
-            let (shred, nonce) = shred::layout::get_shred_and_repair_nonce(packet)?;
-            let Some(nonce) = nonce else {
-                // Turbine shred
-                return Some((shred.to_vec(), None));
-            };
-
-            // Repaired shred
-            if let Some(location) = block_location_lookup.get_location(nonce) {
-                Some((shred.to_vec(), Some(location)))
-            } else {
-                // Although we requested repair of this shred (nonce was previously verified),
-                // The location is missing. This means we have oversaturated the cache. We should
-                // throw away this shred
-                error!(
-                    "block location lookup is saturated, discarding repaired shred nonce {nonce}"
-                );
-                stats.num_unknown_block_location += 1;
-                None
-            }
-        })
+        .filter_map(|packet| extract_shred_and_location(packet, block_location_lookup, stats))
         .partition_map(|(shred, location)| {
             if let Some(location) = location {
                 // No need for Arc overhead here because repaired shreds are
@@ -301,6 +281,33 @@ fn run_shred_sigverify<const K: usize>(
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     shred_buffer.clear();
     Ok(())
+}
+
+/// Extracts the shred and repair nonce for `packet`.
+/// If `packet` has a nonce, looks up the location in which to insert this shred.
+/// If the location is missing from the cache, we return None
+fn extract_shred_and_location(
+    packet: PacketRef,
+    block_location_lookup: &BlockLocationLookup,
+    stats: &mut ShredSigVerifyStats,
+) -> Option<(Vec<u8>, Option<BlockLocation>)> {
+    let (shred, nonce) = shred::layout::get_shred_and_repair_nonce(packet)?;
+    let Some(nonce) = nonce else {
+        // Turbine shred
+        return Some((shred.to_vec(), None));
+    };
+
+    // Repaired shred
+    if let Some(location) = block_location_lookup.get_location(nonce) {
+        Some((shred.to_vec(), Some(location)))
+    } else {
+        // Although we requested repair of this shred (nonce was previously verified),
+        // The location is missing. This means we have oversaturated the cache. We should
+        // throw away this shred
+        error!("block location lookup is saturated, discarding repaired shred nonce {nonce}");
+        stats.num_unknown_block_location += 1;
+        None
+    }
 }
 
 /// Checks whether the shred in the given `packet` is of resigned variant. If
