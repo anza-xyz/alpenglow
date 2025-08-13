@@ -1069,6 +1069,9 @@ pub fn execute(
     vote_quic_server_config.max_unstaked_connections = 0;
     vote_quic_server_config.num_threads = tpu_vote_transaction_receive_threads;
 
+    // Alpenglow config is now the same as TPU vote config, accept 1 connection per peer and no unstaked connections.
+    let alpenglow_quic_server_config = vote_quic_server_config.clone();
+
     let validator = match Validator::new(
         node,
         identity_keypair,
@@ -1089,6 +1092,7 @@ pub fn execute(
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
+            alpenglow_quic_server_config,
         },
         admin_service_post_init,
     ) {

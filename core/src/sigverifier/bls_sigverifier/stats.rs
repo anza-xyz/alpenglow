@@ -57,6 +57,7 @@ impl BLSSigVerifierStats {
         if time_since_last_log < STATS_INTERVAL_DURATION {
             return;
         }
+        trace!("BLS Sig Verifier Stats: {:?}", self);
         datapoint_info!(
             "bls_sig_verifier_stats",
             ("sent", self.sent as i64, i64),
