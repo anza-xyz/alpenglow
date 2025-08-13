@@ -22,6 +22,14 @@ pub struct LeaderWindowInfo {
     pub skip_timer: Instant,
 }
 
+pub type BlockParentReceiver = Receiver<BlockParentInfo>;
+pub type BlockParentSender = Sender<BlockParentInfo>;
+#[derive(Debug)]
+pub struct BlockParentInfo {
+    pub my_block: Block,
+    pub parent_block: Block,
+}
+
 pub type VotorEventSender = Sender<VotorEvent>;
 pub type VotorEventReceiver = Receiver<VotorEvent>;
 

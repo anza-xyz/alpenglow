@@ -4,7 +4,7 @@
 use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
-        event::{CompletedBlock, VotorEvent, VotorEventReceiver},
+        event::{BlockParentInfo, CompletedBlock, VotorEvent, VotorEventReceiver},
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
@@ -177,6 +177,12 @@ impl EventHandler {
                 debug_assert!(bank.is_frozen());
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
+                ctx.block_parent_sender
+                    .send(BlockParentInfo {
+                        my_block: block,
+                        parent_block,
+                    })
+                    .map_err(|_| SendError(()))?;
                 if Self::try_notar(
                     my_pubkey,
                     block,

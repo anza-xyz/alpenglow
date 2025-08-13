@@ -1,8 +1,8 @@
 use {
     crate::{
-        certificate_pool::stats::CertificatePoolStats, event::VotorEvent, Stake,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
-        SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
+        Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
+        SAFE_TO_SKIP_THRESHOLD,
     },
     solana_hash::Hash,
     solana_votor_messages::vote::Vote,
@@ -34,9 +34,7 @@ impl SlotStakeCounters {
         vote: &Vote,
         entry_stake: Stake,
         is_my_own_vote: bool,
-        events: &mut Vec<VotorEvent>,
-        stats: &mut CertificatePoolStats,
-    ) {
+    ) -> (Vec<Hash>, bool) {
         match vote {
             Vote::Skip(_) => self.skip_total = entry_stake,
             Vote::Notarize(vote) => {
@@ -50,31 +48,37 @@ impl SlotStakeCounters {
                     .saturating_add(entry_stake);
                 self.top_notarized_stake = self.top_notarized_stake.max(entry_stake);
             }
-            _ => return, // Not interested in other vote types
+            _ => return (vec![], false), // Not interested in other vote types
         }
         if self.my_first_vote.is_none() && is_my_own_vote {
             self.my_first_vote = Some(*vote);
         }
         if self.my_first_vote.is_none() {
             // We have not voted yet, no need to check safe to notarize or skip
-            return;
+            return (vec![], false);
         }
-        let slot = vote.slot();
         // Check safe to notar
-        for (block_id, stake) in &self.notarize_entry_total {
-            if !self.safe_to_notar_sent.contains(block_id) && self.is_safe_to_notar(block_id, stake)
-            {
-                events.push(VotorEvent::SafeToNotar((slot, *block_id)));
-                stats.event_safe_to_notarize = stats.event_safe_to_notarize.saturating_add(1);
-                self.safe_to_notar_sent.push(*block_id);
-            }
-        }
+        let new_safe_to_notar_stake_reached: Vec<Hash> = self
+            .notarize_entry_total
+            .iter()
+            .filter_map(|(block_id, stake)| {
+                if !self.safe_to_notar_sent.contains(block_id)
+                    && self.is_safe_to_notar(block_id, stake)
+                {
+                    Some(*block_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.safe_to_notar_sent
+            .extend(&new_safe_to_notar_stake_reached);
         // Check safe to skip
-        if !self.safe_to_skip_sent && self.is_safe_to_skip() {
-            events.push(VotorEvent::SafeToSkip(slot));
+        let new_safe_to_skip = !self.safe_to_skip_sent && self.is_safe_to_skip();
+        if new_safe_to_skip {
             self.safe_to_skip_sent = true;
-            stats.event_safe_to_skip = stats.event_safe_to_skip.saturating_add(1);
         }
+        (new_safe_to_notar_stake_reached, new_safe_to_skip)
     }
 
     fn is_safe_to_notar(&self, block_id: &Hash, stake: &Stake) -> bool {
@@ -133,177 +137,108 @@ mod tests {
     fn test_safe_to_notar() {
         let mut counters = SlotStakeCounters::new(100);
 
-        let mut events = vec![];
-        let mut stats = CertificatePoolStats::default();
         let slot = 2;
         // I voted for skip
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            10,
-            true,
-            &mut events,
-            &mut stats,
-        );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_notarize, 0);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_skip_vote(slot), 10, true);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // 40% of stake holders voted notarize
-        counters.add_vote(
+        let (new_safe_to_notar, new_safe_to_skip) = counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
             40,
             false,
-            &mut events,
-            &mut stats,
         );
-        assert_eq!(events.len(), 1);
-        assert!(
-            matches!(events[0], VotorEvent::SafeToNotar((s, block_id)) if s == slot && block_id == Hash::default())
-        );
-        assert_eq!(stats.event_safe_to_notarize, 1);
-        events.clear();
+        assert_eq!(new_safe_to_notar, [Hash::default()]);
+        assert!(!new_safe_to_skip);
 
         // Adding more notarizations does not trigger more events
-        counters.add_vote(
+        let (new_safe_to_notar, new_safe_to_skip) = counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
             20,
             false,
-            &mut events,
-            &mut stats,
         );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_notarize, 1);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // Reset counters
         counters = SlotStakeCounters::new(100);
-        events.clear();
-        stats = CertificatePoolStats::default();
 
         // I voted for notarize b
         let hash_1 = Hash::new_unique();
-        counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
-            1,
-            true,
-            &mut events,
-            &mut stats,
-        );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_notarize, 0);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_notarization_vote(slot, hash_1), 1, true);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // 25% of stake holders voted notarize b'
         let hash_2 = Hash::new_unique();
-        counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_2),
-            25,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_notarize, 0);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_notarization_vote(slot, hash_2), 25, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // 35% more of stake holders voted skip
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            35,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert_eq!(events.len(), 1);
-        assert!(
-            matches!(events[0], VotorEvent::SafeToNotar((s, block_id)) if s == slot && block_id == hash_2)
-        );
-        assert_eq!(stats.event_safe_to_notarize, 1);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_skip_vote(slot), 35, false);
+        assert_eq!(new_safe_to_notar, [hash_2]);
+        assert!(!new_safe_to_skip);
     }
 
     #[test]
     fn test_safe_to_skip() {
         let mut counters = SlotStakeCounters::new(100);
 
-        let mut events = vec![];
-        let mut stats = CertificatePoolStats::default();
         let slot = 2;
         // I voted for notarize b
-        counters.add_vote(
+        let (new_safe_to_notar, new_safe_to_skip) = counters.add_vote(
             &Vote::new_notarization_vote(slot, Hash::default()),
             10,
             true,
-            &mut events,
-            &mut stats,
         );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_skip, 0);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // 40% of stake holders voted skip
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            40,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], VotorEvent::SafeToSkip(s) if s == slot));
-        assert_eq!(stats.event_safe_to_skip, 1);
-        events.clear();
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_skip_vote(slot), 40, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(new_safe_to_skip);
 
         // Adding more skips does not trigger more events
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            20,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_skip, 1);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_skip_vote(slot), 20, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // Reset counters
         counters = SlotStakeCounters::new(100);
-        events.clear();
-        stats = CertificatePoolStats::default();
 
         // I voted for notarize b, 10% of stake holders voted with me
         let hash_1 = Hash::new_unique();
-        counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
-            10,
-            true,
-            &mut events,
-            &mut stats,
-        );
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_notarization_vote(slot, hash_1), 10, true);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
+
         // 20% of stake holders voted a different notarization b'
         let hash_2 = Hash::new_unique();
-        counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_2),
-            20,
-            false,
-            &mut events,
-            &mut stats,
-        );
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_notarization_vote(slot, hash_2), 20, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
+
         // 30% of stake holders voted skip
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            30,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], VotorEvent::SafeToSkip(s) if s == slot));
-        assert_eq!(stats.event_safe_to_skip, 1);
-        events.clear();
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_skip_vote(slot), 30, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
 
         // Adding more notarization on b does not trigger more events
-        counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
-            10,
-            false,
-            &mut events,
-            &mut stats,
-        );
-        assert!(events.is_empty());
-        assert_eq!(stats.event_safe_to_skip, 1);
+        let (new_safe_to_notar, new_safe_to_skip) =
+            counters.add_vote(&Vote::new_notarization_vote(slot, hash_1), 10, false);
+        assert!(new_safe_to_notar.is_empty());
+        assert!(!new_safe_to_skip);
     }
 }

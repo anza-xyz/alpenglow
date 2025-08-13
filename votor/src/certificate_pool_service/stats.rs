@@ -8,6 +8,8 @@ const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 #[derive(Debug)]
 pub(crate) struct CertificatePoolServiceStats {
     pub(crate) add_message_failed: u32,
+    pub(crate) block_parent_added: u16,
+    pub(crate) block_parent_add_failed: u16,
     pub(crate) certificates_sent: u16,
     pub(crate) certificates_dropped: u16,
     pub(crate) new_finalized_slot: u16,
@@ -24,6 +26,8 @@ impl CertificatePoolServiceStats {
     pub fn new() -> Self {
         Self {
             add_message_failed: 0,
+            block_parent_added: 0,
+            block_parent_add_failed: 0,
             certificates_sent: 0,
             certificates_dropped: 0,
             new_finalized_slot: 0,
@@ -51,6 +55,8 @@ impl CertificatePoolServiceStats {
 
     fn reset(&mut self) {
         self.add_message_failed = 0;
+        self.block_parent_added = 0;
+        self.block_parent_add_failed = 0;
         self.certificates_sent = 0;
         self.certificates_dropped = 0;
         self.new_finalized_slot = 0;
@@ -67,6 +73,8 @@ impl CertificatePoolServiceStats {
         datapoint_info!(
             "cert_pool_service",
             ("add_message_failed", self.add_message_failed, i64),
+            ("block_parent_added", self.block_parent_added, i64),
+            ("block_parent_add_failed", self.block_parent_add_failed, i64),
             ("certificates_sent", self.certificates_sent, i64),
             ("certificates_dropped", self.certificates_dropped, i64),
             ("new_finalized_slot", self.new_finalized_slot, i64),

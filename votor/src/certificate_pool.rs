@@ -3,6 +3,7 @@ use {
         certificate_limits_and_vote_types,
         certificate_pool::{
             parent_ready_tracker::ParentReadyTracker,
+            safe_to_notar_parent_tracker::SafeToNotarParentTracker,
             slot_stake_counters::SlotStakeCounters,
             stats::CertificatePoolStats,
             vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
@@ -10,7 +11,7 @@ use {
         },
         commitment::AlpenglowCommitmentError,
         conflicting_types,
-        event::VotorEvent,
+        event::{BlockParentInfo, VotorEvent},
         vote_to_certificate_ids, Certificate, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
     },
@@ -35,6 +36,7 @@ use {
 };
 
 pub mod parent_ready_tracker;
+mod safe_to_notar_parent_tracker;
 mod slot_stake_counters;
 mod stats;
 mod vote_certificate_builder;
@@ -121,6 +123,8 @@ pub struct CertificatePool {
     /// - They have a potential parent block with a NotarizeFallback certificate
     /// - All slots from the parent have a Skip certificate
     pub parent_ready_tracker: ParentReadyTracker,
+    /// Tracks block parents for the safe to notar checks
+    safe_to_notar_parent_tracker: SafeToNotarParentTracker,
     /// Highest block that has a NotarizeFallback certificate, for use in producing our leader window
     highest_notarized_fallback: Option<(Slot, Hash)>,
     /// Highest slot that has a Finalized variant certificate
@@ -158,6 +162,7 @@ impl CertificatePool {
             parent_ready_tracker,
             stats: CertificatePoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
+            safe_to_notar_parent_tracker: SafeToNotarParentTracker::new(),
         }
     }
 
@@ -329,6 +334,8 @@ impl CertificatePool {
                 {
                     self.highest_notarized_fallback = Some((slot, block_id));
                 }
+                self.safe_to_notar_parent_tracker
+                    .mark_block_notarized((slot, block_id));
             }
             Certificate::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot, events),
             Certificate::Notarize(slot, block_id) => {
@@ -409,6 +416,7 @@ impl CertificatePool {
         } else {
             None
         };
+        self.check_safe_to_notar(events);
         Ok((new_finalized_slot, new_certficates_to_send))
     }
 
@@ -474,13 +482,14 @@ impl CertificatePool {
                     .slot_stake_counters_map
                     .entry(vote_slot)
                     .or_insert_with(|| SlotStakeCounters::new(total_stake));
-                fallback_vote_counters.add_vote(
-                    vote,
-                    entry_stake,
-                    my_vote_pubkey == &validator_vote_key,
-                    events,
-                    &mut self.stats,
-                );
+                let (new_safe_to_notar_stake_reached, new_safe_to_skip) = fallback_vote_counters
+                    .add_vote(vote, entry_stake, my_vote_pubkey == &validator_vote_key);
+                self.safe_to_notar_parent_tracker
+                    .mark_safe_to_notar_stake_reached(vote_slot, new_safe_to_notar_stake_reached);
+                if new_safe_to_skip {
+                    events.push(VotorEvent::SafeToSkip(vote_slot));
+                    self.stats.event_safe_to_skip = self.stats.event_safe_to_skip.saturating_add(1);
+                }
             }
         }
         self.stats.incr_ingested_vote_type(vote_type);
@@ -661,6 +670,7 @@ impl CertificatePool {
         self.vote_pools = self.vote_pools.split_off(&(root_slot, VoteType::Finalize));
         self.slot_stake_counters_map = self.slot_stake_counters_map.split_off(&root_slot);
         self.parent_ready_tracker.set_root(root_slot);
+        self.safe_to_notar_parent_tracker.prune_old_state(root_slot);
     }
 
     /// Updates the pubkey used for logging purposes only.
@@ -704,6 +714,24 @@ impl CertificatePool {
                 cert_to_send
             })
             .collect()
+    }
+
+    pub fn add_block_parent_info(
+        &mut self,
+        block_parent_info: &BlockParentInfo,
+        votor_events: &mut Vec<VotorEvent>,
+    ) -> Result<(), AddVoteError> {
+        self.safe_to_notar_parent_tracker
+            .add_block_parent_info(block_parent_info);
+        self.check_safe_to_notar(votor_events);
+        Ok(())
+    }
+
+    fn check_safe_to_notar(&mut self, votor_events: &mut Vec<VotorEvent>) {
+        for block in self.safe_to_notar_parent_tracker.get_new_safe_to_notar() {
+            votor_events.push(VotorEvent::SafeToNotar(block));
+            self.stats.event_safe_to_notarize = self.stats.event_safe_to_notarize.saturating_add(1);
+        }
     }
 }
 

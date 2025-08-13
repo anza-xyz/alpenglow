@@ -12,7 +12,7 @@ use {
             alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
             AlpenglowCommitmentType,
         },
-        event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
+        event::{BlockParentReceiver, LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_utils::BLSOp,
         votor::Votor,
         Certificate, DELTA_STANDSTILL,
@@ -56,6 +56,7 @@ pub(crate) struct CertificatePoolContext {
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
     pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) block_parent_receiver: BlockParentReceiver,
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
@@ -169,6 +170,24 @@ impl CertificatePoolService {
         )
     }
 
+    fn handle_block_parent_info(
+        block_parent_receiver: &BlockParentReceiver,
+        cert_pool: &mut CertificatePool,
+        votor_events: &mut Vec<VotorEvent>,
+        stats: &mut CertificatePoolServiceStats,
+    ) -> Result<(), AddVoteError> {
+        for block_parent_info in block_parent_receiver.try_iter() {
+            if let Err(e) = cert_pool.add_block_parent_info(&block_parent_info, votor_events) {
+                warn!("Unable to add block parent {block_parent_info:?}: {e}");
+                CertificatePoolServiceStats::incr_u16(&mut stats.block_parent_add_failed);
+                return Err(e);
+            } else {
+                CertificatePoolServiceStats::incr_u16(&mut stats.block_parent_added);
+            }
+        }
+        Ok(())
+    }
+
     fn handle_channel_disconnected(
         ctx: &mut CertificatePoolContext,
         channel_name: &str,
@@ -251,6 +270,25 @@ impl CertificatePoolService {
                             e
                         );
                     }
+                }
+            }
+
+            match Self::handle_block_parent_info(
+                &ctx.block_parent_receiver,
+                &mut cert_pool,
+                &mut events,
+                &mut stats,
+            ) {
+                Ok(()) => {}
+                Err(AddVoteError::ChannelDisconnected(channel_name)) => {
+                    return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str());
+                }
+                Err(e) => {
+                    trace!(
+                        "{}: unable to add block parent info into pool {}",
+                        &my_pubkey,
+                        e
+                    );
                 }
             }
 

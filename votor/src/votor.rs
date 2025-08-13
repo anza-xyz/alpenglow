@@ -44,7 +44,7 @@ use {
     crate::{
         certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
-        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
+        event::{BlockParentSender, LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
         timer_manager::TimerManager,
@@ -131,6 +131,7 @@ pub(crate) struct SharedContext {
     pub(crate) rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub(crate) leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub(crate) vote_history_storage: Arc<dyn VoteHistoryStorage>,
+    pub(crate) block_parent_sender: BlockParentSender,
 }
 
 pub struct Votor {
@@ -177,6 +178,8 @@ impl Votor {
         let identity_keypair = cluster_info.keypair().clone();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
+        let (block_parent_sender, block_parent_receiver) = crossbeam_channel::unbounded();
+
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
             bank_forks: bank_forks.clone(),
@@ -184,6 +187,7 @@ impl Votor {
             rpc_subscriptions,
             leader_window_notifier,
             vote_history_storage,
+            block_parent_sender,
         };
 
         let voting_context = VotingContext {
@@ -235,6 +239,7 @@ impl Votor {
             event_sender,
             commitment_sender,
             certificate_sender,
+            block_parent_receiver,
         };
 
         let event_handler = EventHandler::new(event_handler_context);
