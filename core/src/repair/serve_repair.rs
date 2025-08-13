@@ -128,7 +128,7 @@ impl ShredRepairType {
         }
     }
 
-    pub fn location_to_insert_response(&self) -> BlockLocation {
+    pub fn block_location(&self) -> BlockLocation {
         match self {
             // AG repair ingests into an alternate column
             ShredRepairType::OrphanForBlockId(_, bid)
@@ -1257,7 +1257,7 @@ impl ServeRepair {
         };
         let peer = repair_peers.sample(&mut rand::thread_rng());
         let nonce = outstanding_requests.add_request(repair_request, timestamp());
-        let location = repair_request.location_to_insert_response();
+        let location = repair_request.block_location();
         repair_info
             .block_location_lookup
             .add_location(nonce, location);
