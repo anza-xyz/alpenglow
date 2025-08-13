@@ -405,7 +405,7 @@ impl StandardBroadcastRun {
 
         broadcast_shreds(
             sock,
-            shreds,
+            &shreds,
             &self.cluster_nodes_cache,
             &self.last_datapoint_submit,
             &mut transmit_stats,
