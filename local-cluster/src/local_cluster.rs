@@ -525,10 +525,6 @@ impl LocalCluster {
         mut voting_keypair: Option<Arc<Keypair>>,
         socket_addr_space: SocketAddrSpace,
     ) -> Pubkey {
-        let client = self
-            .build_validator_tpu_quic_client(self.entry_point_info.pubkey())
-            .expect("tpu_client");
-
         // Must have enough tokens to fund vote account and set delegate
         let should_create_vote_pubkey = voting_keypair.is_none();
         if voting_keypair.is_none() {
@@ -547,6 +543,10 @@ impl LocalCluster {
             // setup as a listener
             info!("listener {validator_pubkey} ",);
         } else if should_create_vote_pubkey {
+            let client = self
+                .build_validator_tpu_quic_client(self.entry_point_info.pubkey())
+                .expect("tpu_client");
+
             Self::transfer_with_client(
                 &client,
                 &self.funding_keypair,
