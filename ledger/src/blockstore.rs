@@ -580,8 +580,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<SlotMeta>> {
         match location {
-            BlockLocation::Turbine => self.meta_cf.get(slot),
-            BlockLocation::Repair { block_id } => self.alt_meta_cf.get((slot, block_id)),
+            BlockLocation::Original => self.meta_cf.get(slot),
+            BlockLocation::Alternate { block_id } => self.alt_meta_cf.get((slot, block_id)),
         }
     }
 
@@ -635,8 +635,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<ErasureMeta>> {
         match location {
-            BlockLocation::Turbine => self.erasure_meta(erasure_set),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.erasure_meta(erasure_set),
+            BlockLocation::Alternate { block_id } => {
                 let (slot, fec_set_index) = erasure_set.store_key();
                 self.alt_erasure_meta_cf
                     .get((slot, fec_set_index, block_id))
@@ -733,8 +733,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<MerkleRootMeta>> {
         match location {
-            BlockLocation::Turbine => self.merkle_root_meta_cf.get(erasure_set.store_key()),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.merkle_root_meta_cf.get(erasure_set.store_key()),
+            BlockLocation::Alternate { block_id } => {
                 let (slot, fec_set_index) = erasure_set.store_key();
                 self.alt_merkle_root_meta_cf
                     .get((slot, fec_set_index, block_id))
@@ -2472,8 +2472,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<Vec<u8>>> {
         match location {
-            BlockLocation::Turbine => self.get_data_shred(slot, index),
-            BlockLocation::Repair { block_id } => {
+            BlockLocation::Original => self.get_data_shred(slot, index),
+            BlockLocation::Alternate { block_id } => {
                 self.alt_data_shred_cf.get_bytes((slot, index, block_id))
             }
         }
@@ -2583,8 +2583,8 @@ impl Blockstore {
         location: BlockLocation,
     ) -> Result<Option<Index>> {
         match location {
-            BlockLocation::Turbine => self.get_index(slot),
-            BlockLocation::Repair { block_id } => self.alt_index_cf.get((slot, block_id)),
+            BlockLocation::Original => self.get_index(slot),
+            BlockLocation::Alternate { block_id } => self.alt_index_cf.get((slot, block_id)),
         }
     }
 
