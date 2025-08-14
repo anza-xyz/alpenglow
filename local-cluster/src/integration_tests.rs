@@ -71,7 +71,6 @@ pub const AG_DEBUG_LOG_FILTER: &str = "error,solana_core::replay_stage=info,\
         solana_core::block_creation_loop=trace,\
         solana_votor=trace,\
         solana_votor::vote_history_storage=info,\
-        solana_core::sigverifier::bls_sigverifier=trace,\
         solana_core::validator=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
