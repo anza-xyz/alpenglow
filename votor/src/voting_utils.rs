@@ -226,7 +226,7 @@ pub fn generate_vote_tx(
 
     let bls_keypair = get_bls_keypair(context, &authorized_voter_keypair)
         .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
-    let my_bls_pubkey: BLSPubkey = bls_keypair.public.into();
+    let my_bls_pubkey: BLSPubkey = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
         panic!(
             "Vote account bls_pubkey mismatch: {:?} (expected: {:?}).  Unable to vote",

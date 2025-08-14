@@ -3,12 +3,13 @@ use {
     log::*,
     solana_account::{Account, AccountSharedData},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_cluster_type::ClusterType,
     solana_feature_gate_interface::{self as feature, Feature},
     solana_fee_calculator::FeeRateGovernor,
-    solana_genesis_config::{ClusterType, GenesisConfig},
+    solana_genesis_config::GenesisConfig,
     solana_keypair::Keypair,
     solana_loader_v3_interface::state::UpgradeableLoaderState,
-    solana_native_token::sol_to_lamports,
+    solana_native_token::LAMPORTS_PER_SOL,
     solana_pubkey::Pubkey,
     solana_rent::Rent,
     solana_seed_derivable::SeedDerivable,
@@ -147,7 +148,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         &validator_pubkey,
         &voting_keypairs[0].borrow().vote_keypair.pubkey(),
         &voting_keypairs[0].borrow().stake_keypair.pubkey(),
-        Some(&voting_keypairs[0].borrow().bls_keypair.public.into()),
+        Some(&voting_keypairs[0].borrow().bls_keypair.public),
         stakes[0],
         VALIDATOR_LAMPORTS,
         FeeRateGovernor::new(0, 0), // most tests can't handle transaction fees
@@ -168,7 +169,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         let node_pubkey = validator_voting_keypairs.borrow().node_keypair.pubkey();
         let vote_pubkey = validator_voting_keypairs.borrow().vote_keypair.pubkey();
         let stake_pubkey = validator_voting_keypairs.borrow().stake_keypair.pubkey();
-        let bls_pubkey = validator_voting_keypairs.borrow().bls_keypair.public.into();
+        let bls_pubkey = validator_voting_keypairs.borrow().bls_keypair.public;
 
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
@@ -279,7 +280,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
 
     let bls_keypair =
         BLSKeypair::derive_from_signer(&voting_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-    let bls_pubkey: BLSPubkey = bls_keypair.public.into();
+    let bls_pubkey: BLSPubkey = bls_keypair.public;
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
         &mint_keypair.pubkey(),
@@ -467,7 +468,7 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     let native_mint_account = solana_account::AccountSharedData::from(Account {
         owner: spl_generic_token::token::id(),
         data: spl_generic_token::token::native_mint::ACCOUNT_DATA.to_vec(),
-        lamports: sol_to_lamports(1.),
+        lamports: LAMPORTS_PER_SOL,
         executable: false,
         rent_epoch: 1,
     });

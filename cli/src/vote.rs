@@ -27,12 +27,11 @@ use {
         offline::*,
     },
     solana_cli_output::{
-        return_signers_with_config, CliEpochVotingHistory, CliLandedVote, CliVoteAccount,
-        ReturnSignersConfig,
+        display::build_balance_message, return_signers_with_config, CliEpochVotingHistory,
+        CliLandedVote, CliVoteAccount, ReturnSignersConfig,
     },
     solana_commitment_config::CommitmentConfig,
     solana_message::Message,
-    solana_native_token::lamports_to_sol,
     solana_pubkey::Pubkey,
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_rpc_client::rpc_client::RpcClient,
@@ -45,7 +44,7 @@ use {
         vote_error::VoteError,
         vote_instruction::{self, withdraw, CreateVoteAccountConfig},
         vote_state::{
-            BlockTimestamp, VoteAuthorize, VoteInit, VoteState, VoteStateVersions,
+            BlockTimestamp, VoteAuthorize, VoteInit, VoteStateV3, VoteStateVersions,
             VOTE_CREDITS_MAXIMUM_PER_SLOT,
         },
     },
@@ -851,7 +850,7 @@ pub fn process_create_vote_account(
         .get_minimum_balance_for_rent_exemption(if is_alpenglow {
             solana_votor_messages::state::VoteState::size()
         } else {
-            VoteState::size_of()
+            VoteStateV3::size_of()
         })?
         .max(1);
 
@@ -874,7 +873,7 @@ pub fn process_create_vote_account(
         let mut ixs = if is_alpenglow {
             let bls_keypair =
                 BLSKeypair::derive_from_signer(&identity_account, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-            let bls_pubkey: BLSPubkey = bls_keypair.public.into();
+            let bls_pubkey: BLSPubkey = bls_keypair.public;
             let initialize_account_ixn_meta = InitializeAccountInstructionData {
                 node_pubkey,
                 authorized_voter,
@@ -1318,7 +1317,7 @@ pub fn process_vote_update_commission(
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum VoteStateWrapper {
-    VoteState(VoteState),
+    VoteState(VoteStateV3),
     AlpenglowVoteState(AlpenglowVoteState),
 }
 
@@ -1390,7 +1389,7 @@ pub(crate) fn get_vote_account(
 
     let vote_state_wrapper = match vote_account.owner {
         SOLANA_VOTE_PROGRAM_ID => VoteStateWrapper::VoteState(
-            VoteState::deserialize(&vote_account.data).map_err(|_| {
+            VoteStateV3::deserialize(&vote_account.data).map_err(|_| {
                 CliError::RpcRequestError(
                     "Account data could not be deserialized to vote state".to_string(),
                 )
@@ -1579,14 +1578,14 @@ pub fn process_withdraw_from_vote_account(
     if !sign_only {
         let current_balance = rpc_client.get_balance(vote_account_pubkey)?;
         let minimum_balance =
-            rpc_client.get_minimum_balance_for_rent_exemption(VoteState::size_of())?;
+            rpc_client.get_minimum_balance_for_rent_exemption(VoteStateV3::size_of())?;
         if let SpendAmount::Some(withdraw_amount) = withdraw_amount {
             let balance_remaining = current_balance.saturating_sub(withdraw_amount);
             if balance_remaining < minimum_balance && balance_remaining != 0 {
                 return Err(CliError::BadParameter(format!(
                     "Withdraw amount too large. The vote account balance must be at least {} SOL \
                      to remain rent exempt",
-                    lamports_to_sol(minimum_balance)
+                    build_balance_message(minimum_balance, false, false)
                 ))
                 .into());
             }

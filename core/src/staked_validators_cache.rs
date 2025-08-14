@@ -287,7 +287,7 @@ mod tests {
         solana_streamer::socket::SocketAddrSpace,
         solana_time_utils::timestamp,
         solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
-        solana_vote_program::vote_state::{VoteInit, VoteState, VoteStateVersions},
+        solana_vote_program::vote_state::{VoteInit, VoteStateV3, VoteStateVersions},
         std::{
             collections::HashMap,
             iter::{repeat, repeat_with},
@@ -301,7 +301,7 @@ mod tests {
     fn new_rand_vote_account<R: rand::Rng>(
         rng: &mut R,
         node_pubkey: Option<Pubkey>,
-    ) -> (AccountSharedData, VoteState) {
+    ) -> (AccountSharedData, VoteStateV3) {
         let vote_init = VoteInit {
             node_pubkey: node_pubkey.unwrap_or_else(Pubkey::new_unique),
             authorized_voter: Pubkey::new_unique(),
@@ -315,10 +315,10 @@ mod tests {
             leader_schedule_epoch: rng.gen(),
             unix_timestamp: rng.gen(),
         };
-        let vote_state = VoteState::new(&vote_init, &clock);
+        let vote_state = VoteStateV3::new(&vote_init, &clock);
         let account = AccountSharedData::new_data(
             rng.gen(), // lamports
-            &VoteStateVersions::new_current(vote_state.clone()),
+            &VoteStateVersions::new_v3(vote_state.clone()),
             &solana_sdk_ids::vote::id(), // owner
         )
         .unwrap();

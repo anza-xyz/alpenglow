@@ -1,6 +1,7 @@
 use {
     crate::{certificate_limits_and_vote_types, VoteType},
     bitvec::prelude::*,
+    itertools::Itertools,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{decode, encode_base2, encode_base3, DecodeError, Decoded, EncodeError},
     solana_votor_messages::consensus_message::{Certificate, CertificateMessage, VoteMessage},
@@ -101,8 +102,11 @@ impl VoteCertificateBuilder {
             target_bitmap.set(rank, true);
         }
 
-        let signature_iter = messages.iter().map(|vote_message| &vote_message.signature);
-        Ok(self.signature.aggregate_with(signature_iter)?)
+        let signature_iter = messages
+            .iter()
+            .map(|vote_message| &vote_message.signature)
+            .collect_vec();
+        Ok(self.signature.aggregate_with(&signature_iter)?)
     }
 
     pub fn build(self) -> Result<CertificateMessage, CertificateError> {
