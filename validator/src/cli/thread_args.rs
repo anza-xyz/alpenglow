@@ -105,6 +105,7 @@ pub struct NumThreadConfig {
     pub tpu_transaction_forward_receive_threads: NonZeroUsize,
     pub tpu_transaction_receive_threads: NonZeroUsize,
     pub tpu_vote_transaction_receive_threads: NonZeroUsize,
+    pub tpu_alpenglow_receive_threads: NonZeroUsize,
     pub tvu_receive_threads: NonZeroUsize,
     pub tvu_retransmit_threads: NonZeroUsize,
     pub tvu_sigverify_threads: NonZeroUsize,
@@ -157,6 +158,11 @@ pub fn parse_num_threads_args(matches: &ArgMatches) -> NumThreadConfig {
         tpu_vote_transaction_receive_threads: value_t_or_exit!(
             matches,
             TpuVoteTransactionReceiveThreads::NAME,
+            NonZeroUsize
+        ),
+        tpu_alpenglow_receive_threads: value_t_or_exit!(
+            matches,
+            TpuAlpenglowReceiveThreads::NAME,
             NonZeroUsize
         ),
         tvu_receive_threads: value_t_or_exit!(matches, TvuReceiveThreadsArg::NAME, NonZeroUsize),
@@ -357,6 +363,18 @@ impl ThreadArg for TpuVoteTransactionReceiveThreads {
 
     fn default() -> usize {
         solana_streamer::quic::default_num_tpu_vote_transaction_receive_threads()
+    }
+}
+
+struct TpuAlpenglowReceiveThreads;
+impl ThreadArg for TpuAlpenglowReceiveThreads {
+    const NAME: &'static str = "tpu_alpenglow_receive_threads";
+    const LONG_NAME: &'static str = "tpu-alpenglow-receive-threads";
+    const HELP: &'static str =
+        "Number of threads to use for receiving transactions on the TPU Alpenglow port";
+
+    fn default() -> usize {
+        solana_streamer::quic::default_num_tpu_alpenglow_receive_threads()
     }
 }
 

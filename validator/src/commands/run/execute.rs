@@ -112,6 +112,7 @@ pub fn execute(
         replay_transactions_threads,
         tpu_transaction_forward_receive_threads,
         tpu_transaction_receive_threads,
+        tpu_alpenglow_receive_threads,
         tpu_vote_transaction_receive_threads,
         tvu_receive_threads,
         tvu_retransmit_threads,
@@ -928,6 +929,8 @@ pub fn execute(
     let tpu_max_fwd_unstaked_connections =
         value_t_or_exit!(matches, "tpu_max_fwd_unstaked_connections", u64);
 
+    let tpu_max_alpenglow_connections =
+        value_t_or_exit!(matches, "tpu_max_alpenglow_connections", u64);
     let tpu_max_connections_per_ipaddr_per_minute: u64 =
         value_t_or_exit!(matches, "tpu_max_connections_per_ipaddr_per_minute", u64);
     let max_streams_per_ms = value_t_or_exit!(matches, "tpu_max_streams_per_ms", u64);
@@ -1069,8 +1072,17 @@ pub fn execute(
     vote_quic_server_config.max_unstaked_connections = 0;
     vote_quic_server_config.num_threads = tpu_vote_transaction_receive_threads;
 
-    // Alpenglow config is now the same as TPU vote config, accept 1 connection per peer and no unstaked connections.
-    let alpenglow_quic_server_config = vote_quic_server_config.clone();
+    // Alpenglow quic config, accept 1 connection per peer and no unstaked connections.
+    let alpenglow_quic_server_config = QuicServerParams {
+        max_connections_per_peer: 1,
+        max_staked_connections: tpu_max_alpenglow_connections.try_into().unwrap(),
+        max_unstaked_connections: 0,
+        max_streams_per_ms,
+        max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
+        coalesce: tpu_coalesce,
+        num_threads: tpu_alpenglow_receive_threads,
+        ..Default::default()
+    };
 
     let validator = match Validator::new(
         node,
