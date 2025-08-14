@@ -128,18 +128,14 @@ impl ShredRepairType {
         }
     }
 
-    pub fn block_location(&self) -> BlockLocation {
+    pub fn block_id(&self) -> Option<Hash> {
         match self {
-            // AG repair ingests into an alternate column
             ShredRepairType::OrphanForBlockId(_, bid)
             | ShredRepairType::HighestShredForBlockId(_, _, bid)
-            | ShredRepairType::ShredForBlockId(_, _, bid) => {
-                BlockLocation::Alternate { block_id: *bid }
-            }
-            // TowerBFT repair ingests into the original column populated by turbine
+            | ShredRepairType::ShredForBlockId(_, _, bid) => Some(*bid),
             ShredRepairType::Orphan(_)
             | ShredRepairType::HighestShred(_, _)
-            | ShredRepairType::Shred(_, _) => BlockLocation::Original,
+            | ShredRepairType::Shred(_, _) => None,
         }
     }
 }
@@ -1257,7 +1253,11 @@ impl ServeRepair {
         };
         let peer = repair_peers.sample(&mut rand::thread_rng());
         let nonce = outstanding_requests.add_request(repair_request, timestamp());
-        let location = repair_request.block_location();
+        let location = repair_request
+            .block_id()
+            .map_or(BlockLocation::Original, |block_id| {
+                BlockLocation::Alternate { block_id }
+            });
         repair_info
             .block_location_lookup
             .add_location(nonce, location);
