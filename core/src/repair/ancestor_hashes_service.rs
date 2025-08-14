@@ -922,8 +922,8 @@ mod test {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore::make_many_slot_entries, get_tmp_ledger_path,
-            get_tmp_ledger_path_auto_delete, shred::Nonce,
+            block_location_lookup::BlockLocationLookup, blockstore::make_many_slot_entries,
+            get_tmp_ledger_path, get_tmp_ledger_path_auto_delete, shred::Nonce,
         },
         solana_net_utils::{sockets::bind_to_localhost_unique, SocketAddrSpace},
         solana_perf::packet::Packet,
@@ -1396,6 +1396,7 @@ mod test {
                 ancestor_duplicate_slots_sender,
                 repair_validators: None,
                 repair_whitelist,
+                block_location_lookup: BlockLocationLookup::new_arc(),
             };
 
             let (ancestor_hashes_replay_update_sender, ancestor_hashes_replay_update_receiver) =

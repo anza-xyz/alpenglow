@@ -72,7 +72,7 @@ pub trait RepairHandler {
         nonce: Nonce,
     ) -> Option<PacketBatch> {
         let location = match block_id {
-            None => BlockLocation::Turbine,
+            None => BlockLocation::Original,
             Some(block_id) => self
                 .blockstore()
                 .get_block_location(slot, block_id)

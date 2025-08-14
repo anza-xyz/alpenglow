@@ -29,6 +29,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Signer,
     solana_ledger::{
+        block_location_lookup::BlockLocationLookup,
         blockstore::{Blockstore, SlotMeta},
         shred,
     },
@@ -372,6 +373,7 @@ pub struct RepairInfo {
     pub bank_forks: Arc<RwLock<BankForks>>,
     pub cluster_info: Arc<ClusterInfo>,
     pub cluster_slots: Arc<ClusterSlots>,
+    pub block_location_lookup: Arc<BlockLocationLookup>,
     pub epoch_schedule: EpochSchedule,
     pub ancestor_duplicate_slots_sender: AncestorDuplicateSlotsSender,
     // Validators from which repairs are requested
@@ -646,11 +648,10 @@ impl RepairService {
                 .filter_map(|repair_request| {
                     let (to, req) = serve_repair
                         .repair_request(
-                            &repair_info.cluster_slots,
+                            repair_info,
                             repair_request,
                             peers_cache,
                             &mut repair_metrics.stats,
-                            &repair_info.repair_validators,
                             &mut outstanding_requests,
                             &identity_keypair,
                             repair_request_quic_sender,

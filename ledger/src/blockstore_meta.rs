@@ -430,39 +430,39 @@ pub enum BlockStatus {
 
 #[derive(Deserialize, Serialize)]
 pub struct BlockVersions {
-    /// The version that was ingested by turbine
-    pub turbine_version: BlockStatus,
-    /// The versions that were requested by repair, populated during
-    /// catchup, safeToNotar, and by notarize-fallback certificates during duplicate blocke events.
+    /// The version that was ingested by turbine or TowerBFT repair
+    pub original_version: BlockStatus,
+    /// The versions that were requested by AG repair, populated during
+    /// catchup, safeToNotar, and by notarize-fallback certificates during duplicate block events.
     /// In rare cases there can be overlap with the Turbine version, if for example we were heavily delayed
     /// in the turbine ingest and ended up repairing the same block via a certificate condition.
-    pub repaired_versions: [(Hash, BlockStatus); 3],
+    pub alternate_versions: [(Hash, BlockStatus); 3],
 }
 
 /// Which column an associated block currently resides
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BlockLocation {
-    Turbine,
-    Repair { block_id: Hash },
+    Original,
+    Alternate { block_id: Hash },
 }
 
 impl BlockVersions {
     pub(crate) fn get_location(self, block_id: Hash) -> Option<BlockLocation> {
-        match self.turbine_version {
+        match self.original_version {
             BlockStatus::Complete { block_id: bid } if bid == block_id => {
-                return Some(BlockLocation::Turbine);
+                return Some(BlockLocation::Original);
             }
             _ => (),
         };
 
-        self.repaired_versions
+        self.alternate_versions
             .into_iter()
             .find_map(|(bid, block_status)| match block_status {
                 BlockStatus::Complete {
                     block_id: status_bid,
                 } if status_bid == block_id => {
                     assert!(bid == status_bid);
-                    Some(BlockLocation::Repair { block_id })
+                    Some(BlockLocation::Alternate { block_id })
                 }
                 _ => None,
             })
