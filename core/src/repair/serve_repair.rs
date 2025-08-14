@@ -27,7 +27,7 @@ use {
         Rng,
     },
     solana_clock::Slot,
-    solana_genesis_config::ClusterType,
+    solana_cluster_type::ClusterType,
     solana_gossip::{
         cluster_info::{ClusterInfo, ClusterInfoError},
         contact_info::{ContactInfo, Protocol},
@@ -273,7 +273,7 @@ type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
-    frozen_abi(digest = "5j9YtVvUCPubwUDu5cqcvNvx3X4ECNG7Z25jEcerNRss")
+    frozen_abi(digest = "FGw38CCo7vg24qxe7TfGP11WdX2poe6T55BGN1r3XMFA")
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RepairProtocol {

@@ -26,14 +26,14 @@ serde_json = { workspace = true }
 solana-bls-signatures = { workspace = true, features = ["solana-signer-derive"] }
 solana-clap-v3-utils = { workspace = true }
 solana-cli-config = { workspace = true }
-solana-derivation-path = "=2.2.1"
-solana-instruction = { version = "=2.3.0", features = ["bincode"] }
-solana-keypair = "=2.2.1"
-solana-message = { version = "=2.4.0", features = ["bincode"] }
-solana-pubkey = { version = "=2.4.0", default-features = false }
+solana-derivation-path = "=3.0.0"
+solana-instruction = { version = "=3.0.0", features = ["bincode"] }
+solana-keypair = "=3.0.0"
+solana-message = { version = "=3.0.0", features = ["bincode"] }
+solana-pubkey = { version = "=3.0.0", default-features = false }
 solana-remote-wallet = { workspace = true, features = ["default"] }
-solana-seed-derivable = "=2.2.1"
-solana-signer = "=2.2.1"
+solana-seed-derivable = "=3.0.0"
+solana-signer = "=3.0.0"
 solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-votor-messages = { workspace = true }

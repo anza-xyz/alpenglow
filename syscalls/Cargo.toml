@@ -29,7 +29,7 @@ num-traits = { workspace = true }
 solana-account = { workspace = true }
 solana-account-info = { workspace = true }
 solana-big-mod-exp = { workspace = true }
-solana-blake3-hasher = { workspace = true }
+solana-blake3-hasher = { workspace = true, features = ["blake3"] }
 solana-bls12-381 = { workspace = true }
 solana-bn254 = { workspace = true }
 solana-clock = { workspace = true }
@@ -38,7 +38,7 @@ solana-curve-traits = { workspace = true }
 solana-curve25519 = { workspace = true }
 solana-hash = { workspace = true }
 solana-instruction = { workspace = true }
-solana-keccak-hasher = { workspace = true }
+solana-keccak-hasher = { workspace = true, features = ["sha3"] }
 solana-loader-v3-interface = { workspace = true, features = ["serde"] }
 solana-poseidon = { workspace = true }
 solana-program-entrypoint = { workspace = true }
@@ -49,6 +49,7 @@ solana-sdk-ids = { workspace = true }
 solana-secp256k1-recover = { workspace = true }
 solana-sha256-hasher = { workspace = true }
 solana-stable-layout = { workspace = true }
+solana-stake-interface = { workspace = true }
 solana-svm-callback = { workspace = true }
 solana-svm-feature-set = { workspace = true }
 solana-svm-log-collector = { workspace = true }
