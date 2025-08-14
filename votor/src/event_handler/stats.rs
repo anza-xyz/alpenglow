@@ -9,18 +9,18 @@ const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(crate) struct EventHandlerStats {
-    pub(crate) commitment_updates: u32,
-    pub(crate) ignored: u32,
-    pub(crate) leader_window_replaced: u32,
-    pub(crate) set_root: u32,
-    pub(crate) timeout_set: u32,
+    pub(crate) commitment_updates: u16,
+    pub(crate) ignored: u16,
+    pub(crate) leader_window_replaced: u16,
+    pub(crate) set_root: u16,
+    pub(crate) timeout_set: u16,
 
     /// All of the following fields are in microseconds
-    pub(crate) receive_event_time: u64,
-    pub(crate) send_vote_time: u64,
+    pub(crate) receive_event_time: u32,
+    pub(crate) send_vote_time: u32,
 
-    pub(crate) received_events_count_and_timing: Vec<(u32, u64)>,
-    pub(crate) sent_votes: Vec<u32>,
+    pub(crate) received_events_count_and_timing: Vec<(u16, u32)>,
+    pub(crate) sent_votes: Vec<u16>,
 
     pub(crate) last_report_time: Instant,
 }
@@ -72,7 +72,7 @@ impl EventHandlerStats {
         if index < self.received_events_count_and_timing.len() {
             let entry = &mut self.received_events_count_and_timing[index];
             entry.0 = entry.0.saturating_add(1);
-            entry.1 = entry.1.saturating_add(timing);
+            entry.1 = entry.1.saturating_add(timing as u32);
         } else {
             warn!(
                 "Event index {} out of bounds for received_events_count_and_timing",

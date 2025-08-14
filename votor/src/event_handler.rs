@@ -153,7 +153,7 @@ impl EventHandler {
             local_context.stats.receive_event_time = local_context
                 .stats
                 .receive_event_time
-                .saturating_add(receive_event_time.as_us());
+                .saturating_add(receive_event_time.as_us() as u32);
 
             if event.should_ignore(vctx.root_bank_cache.root_bank().slot()) {
                 local_context.stats.ignored = local_context.stats.ignored.saturating_add(1);
@@ -178,7 +178,7 @@ impl EventHandler {
             local_context.stats.send_vote_time = local_context
                 .stats
                 .send_vote_time
-                .saturating_add(send_vote_time.as_us());
+                .saturating_add(send_vote_time.as_us() as u32);
             local_context.stats.maybe_report();
         }
 
