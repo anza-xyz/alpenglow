@@ -32,7 +32,8 @@ use {
     },
     solana_keypair::Keypair,
     solana_ledger::{
-        blockstore::Blockstore, blockstore_cleanup_service::BlockstoreCleanupService,
+        block_location_lookup::BlockLocationLookup, blockstore::Blockstore,
+        blockstore_cleanup_service::BlockstoreCleanupService,
         blockstore_processor::TransactionStatusSender, entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
     },
@@ -207,6 +208,7 @@ impl Tvu {
         let repair_socket = Arc::new(repair_socket);
         let ancestor_hashes_socket = Arc::new(ancestor_hashes_socket);
         let fetch_sockets: Vec<Arc<UdpSocket>> = fetch_sockets.into_iter().map(Arc::new).collect();
+        let block_location_lookup = BlockLocationLookup::new_arc();
         let fetch_stage = ShredFetchStage::new(
             fetch_sockets,
             turbine_quic_endpoint_receiver,
@@ -233,6 +235,7 @@ impl Tvu {
             fetch_receiver,
             retransmit_sender.clone(),
             verified_sender,
+            block_location_lookup.clone(),
             tvu_config.shred_sigverify_threads,
         );
 
@@ -273,6 +276,7 @@ impl Tvu {
                 cluster_info: cluster_info.clone(),
                 cluster_slots: cluster_slots.clone(),
                 wen_restart_repair_slots,
+                block_location_lookup: block_location_lookup.clone(),
             };
             let repair_service_channels = RepairServiceChannels::new(
                 repair_request_quic_sender,
