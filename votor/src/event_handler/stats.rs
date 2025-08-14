@@ -1,5 +1,5 @@
 use {
-    crate::{voting_utils::BLSOp, VoteType},
+    crate::{event::VotorEvent, voting_utils::BLSOp, VoteType},
     solana_metrics::datapoint_info,
     solana_votor_messages::bls_message::BLSMessage,
     std::time::{Duration, Instant},
@@ -9,24 +9,15 @@ const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(crate) struct EventHandlerStats {
-    pub(crate) event_block: u32,
-    pub(crate) event_block_notarized: u32,
-    pub(crate) event_first_shred: u32,
-    pub(crate) event_parent_ready: u32,
-    pub(crate) event_timeout_crashed_leader: u32,
-    pub(crate) event_timeout: u32,
-    pub(crate) event_safe_to_notar: u32,
-    pub(crate) event_safe_to_skip: u32,
-    pub(crate) event_produce_window: u32,
-    pub(crate) event_finalized: u32,
-    pub(crate) event_standstill: u32,
-    pub(crate) event_set_identity: bool,
     pub(crate) commitment_updates: u32,
     pub(crate) ignored: u32,
     pub(crate) leader_window_replaced: u32,
     pub(crate) set_root: u32,
     pub(crate) timeout_set: u32,
-    pub(crate) sentout_votes: Vec<u32>,
+
+    pub(crate) received_events: Vec<u32>,
+    pub(crate) sent_votes: Vec<u32>,
+
     pub(crate) last_report_time: Instant,
 }
 
@@ -37,28 +28,45 @@ impl Default for EventHandlerStats {
 }
 
 impl EventHandlerStats {
+    fn event_to_index(event: &VotorEvent) -> usize {
+        match event {
+            VotorEvent::Block(_) => 0,
+            VotorEvent::BlockNotarized(_) => 1,
+            VotorEvent::FirstShred(_) => 2,
+            VotorEvent::ParentReady { .. } => 3,
+            VotorEvent::TimeoutCrashedLeader(_) => 4,
+            VotorEvent::Timeout(_) => 5,
+            VotorEvent::SafeToNotar(_) => 6,
+            VotorEvent::SafeToSkip(_) => 7,
+            VotorEvent::ProduceWindow(_) => 8,
+            VotorEvent::Finalized(_) => 9,
+            VotorEvent::Standstill(_) => 10,
+            VotorEvent::SetIdentity => 11,
+            // If you add an entry, change num_event_types below.
+        }
+    }
+
     pub fn new() -> Self {
         let num_vote_types = (VoteType::SkipFallback as usize).saturating_add(1);
+        let num_event_types = 12; // Update this if you add more events.
         Self {
-            event_block: 0,
-            event_block_notarized: 0,
-            event_first_shred: 0,
-            event_parent_ready: 0,
-            event_timeout_crashed_leader: 0,
-            event_timeout: 0,
-            event_safe_to_notar: 0,
-            event_safe_to_skip: 0,
-            event_produce_window: 0,
-            event_finalized: 0,
-            event_standstill: 0,
-            event_set_identity: false,
             commitment_updates: 0,
             ignored: 0,
             leader_window_replaced: 0,
             set_root: 0,
             timeout_set: 0,
-            sentout_votes: vec![0; num_vote_types],
+            received_events: vec![0; num_event_types],
+            sent_votes: vec![0; num_vote_types],
             last_report_time: Instant::now(),
+        }
+    }
+
+    pub fn incr_event(&mut self, event: &VotorEvent) {
+        let index = Self::event_to_index(event);
+        if index < self.received_events.len() {
+            self.received_events[index] = self.received_events[index].saturating_add(1);
+        } else {
+            warn!("Event index {} out of bounds for received_events", index);
         }
     }
 
@@ -69,11 +77,11 @@ impl EventHandlerStats {
                 return;
             };
             let vote_index = VoteType::get_type(&vote.vote) as usize;
-            if vote_index < self.sentout_votes.len() {
-                self.sentout_votes[vote_index] = self.sentout_votes[vote_index].saturating_add(1);
+            if vote_index < self.sent_votes.len() {
+                self.sent_votes[vote_index] = self.sent_votes[vote_index].saturating_add(1);
             } else {
                 warn!(
-                    "Vote type index {} out of bounds for sentout_votes",
+                    "Vote type index {} out of bounds for sent_votes",
                     vote_index
                 );
             }
@@ -89,30 +97,6 @@ impl EventHandlerStats {
         }
         datapoint_info!(
             "event_handler_stats",
-            ("event_block", self.event_block as i64, i64),
-            (
-                "event_block_notarized",
-                self.event_block_notarized as i64,
-                i64
-            ),
-            ("event_first_shred", self.event_first_shred as i64, i64),
-            ("event_parent_ready", self.event_parent_ready as i64, i64),
-            (
-                "event_timeout_crashed_leader",
-                self.event_timeout_crashed_leader as i64,
-                i64
-            ),
-            ("event_timeout", self.event_timeout as i64, i64),
-            ("event_safe_to_notar", self.event_safe_to_notar as i64, i64),
-            ("event_safe_to_skip", self.event_safe_to_skip as i64, i64),
-            (
-                "event_produce_window",
-                self.event_produce_window as i64,
-                i64
-            ),
-            ("event_finalized", self.event_finalized as i64, i64),
-            ("event_standstill", self.event_standstill as i64, i64),
-            ("event_set_identity", self.event_set_identity, i64),
             ("commitment_updates", self.commitment_updates as i64, i64),
             ("ignored", self.ignored as i64, i64),
             (
@@ -122,6 +106,109 @@ impl EventHandlerStats {
             ),
             ("set_root", self.set_root as i64, i64),
             ("timeout_set", self.timeout_set as i64, i64),
+        );
+        datapoint_info!(
+            "event_handler_received_events",
+            (
+                "block",
+                *self.received_events.first().unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "block_notarized",
+                *self.received_events.get(1).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "first_shred",
+                *self.received_events.get(2).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "parent_ready",
+                *self.received_events.get(3).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "timeout_crashed_leader",
+                *self.received_events.get(4).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "timeout",
+                *self.received_events.get(5).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "safe_to_notar",
+                *self.received_events.get(6).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "safe_to_skip",
+                *self.received_events.get(7).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "produce_window",
+                *self.received_events.get(8).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "finalized",
+                *self.received_events.get(9).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "standstill",
+                *self.received_events.get(10).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "set_identity",
+                *self.received_events.get(11).unwrap_or(&0) as i64,
+                i64
+            ),
+        );
+        datapoint_info!(
+            "event_handler_sent_votes",
+            (
+                "finalize",
+                *self
+                    .sent_votes
+                    .get(VoteType::Finalize as usize)
+                    .unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "notarize",
+                *self
+                    .sent_votes
+                    .get(VoteType::Notarize as usize)
+                    .unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "notarize_fallback",
+                *self
+                    .sent_votes
+                    .get(VoteType::NotarizeFallback as usize)
+                    .unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "skip",
+                *self.sent_votes.get(VoteType::Skip as usize).unwrap_or(&0) as i64,
+                i64
+            ),
+            (
+                "skip_fallback",
+                *self
+                    .sent_votes
+                    .get(VoteType::SkipFallback as usize)
+                    .unwrap_or(&0) as i64,
+                i64
+            ),
         );
         self.last_report_time = now;
         *self = EventHandlerStats::new();
