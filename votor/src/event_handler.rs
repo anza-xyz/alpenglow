@@ -19,6 +19,7 @@ use {
     solana_ledger::leader_schedule_utils::{
         first_of_consecutive_leader_slots, last_of_consecutive_leader_slots, leader_slot_index,
     },
+    solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
@@ -141,12 +142,18 @@ impl EventHandler {
         }
 
         while !exit.load(Ordering::Relaxed) {
+            let mut receive_event_time = Measure::start("receive_event");
             let event = select! {
                 recv(event_receiver) -> msg => {
                     msg?
                 },
                 default(Duration::from_secs(1))  => continue
             };
+            receive_event_time.stop();
+            local_context.stats.receive_event_time = local_context
+                .stats
+                .receive_event_time
+                .saturating_add(receive_event_time.as_us());
 
             if event.should_ignore(vctx.root_bank_cache.root_bank().slot()) {
                 local_context.stats.ignored = local_context.stats.ignored.saturating_add(1);
@@ -162,10 +169,16 @@ impl EventHandler {
                 &mut local_context,
             )?;
 
+            let mut send_vote_time = Measure::start("send_vote");
             for vote in votes {
                 local_context.stats.incr_vote(&vote);
                 vctx.bls_sender.send(vote).map_err(|_| SendError(()))?;
             }
+            send_vote_time.stop();
+            local_context.stats.send_vote_time = local_context
+                .stats
+                .send_vote_time
+                .saturating_add(send_vote_time.as_us());
             local_context.stats.maybe_report();
         }
 
@@ -189,12 +202,12 @@ impl EventHandler {
             ref mut stats,
         .. // The `..` is a good practice to ignore other fields you don't need
     } = local_context;
-        stats.incr_event(&event);
-        match event {
+        let mut event_processing_time = Measure::start("event_processing");
+        match &event {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
-                let (block, parent_block) = Self::get_block_parent_block(&bank);
+                let (block, parent_block) = Self::get_block_parent_block(bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
                 if Self::try_notar(
                     my_pubkey,
@@ -206,9 +219,9 @@ impl EventHandler {
                     stats,
                 )? {
                     Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes, stats)?;
-                } else if !vctx.vote_history.voted(slot) {
+                } else if !vctx.vote_history.voted(*slot) {
                     pending_blocks
-                        .entry(slot)
+                        .entry(*slot)
                         .or_default()
                         .push((block, parent_block));
                 }
@@ -227,56 +240,56 @@ impl EventHandler {
             // Block has received a notarization certificate
             VotorEvent::BlockNotarized(block) => {
                 info!("{my_pubkey}: Block Notarized {block:?}");
-                vctx.vote_history.add_block_notarized(block);
-                Self::try_final(my_pubkey, block, vctx, &mut votes)?;
+                vctx.vote_history.add_block_notarized(*block);
+                Self::try_final(my_pubkey, *block, vctx, &mut votes)?;
             }
 
             VotorEvent::FirstShred(slot) => {
                 info!("{my_pubkey}: First shred {slot}");
-                received_shred.insert(slot);
+                received_shred.insert(*slot);
             }
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
                 info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
-                let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
+                let should_set_timeouts = vctx.vote_history.add_parent_ready(*slot, *parent_block);
                 Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes, stats)?;
                 if should_set_timeouts {
-                    timer_manager.write().set_timeouts(slot);
+                    timer_manager.write().set_timeouts(*slot);
                     stats.timeout_set = stats.timeout_set.saturating_add(1);
                 }
             }
 
             VotorEvent::TimeoutCrashedLeader(slot) => {
                 info!("{my_pubkey}: TimeoutCrashedLeader {slot}");
-                if vctx.vote_history.voted(slot) || received_shred.contains(&slot) {
+                if vctx.vote_history.voted(*slot) || received_shred.contains(slot) {
                     return Ok(votes);
                 }
-                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
+                Self::try_skip_window(my_pubkey, *slot, vctx, &mut votes)?;
             }
 
             // Skip timer for the slot has fired
             VotorEvent::Timeout(slot) => {
                 info!("{my_pubkey}: Timeout {slot}");
-                if vctx.vote_history.voted(slot) {
+                if vctx.vote_history.voted(*slot) {
                     return Ok(votes);
                 }
-                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
+                Self::try_skip_window(my_pubkey, *slot, vctx, &mut votes)?;
             }
 
             // We have observed the safe to notar condition, and can send a notar fallback vote
             // TODO: update cert pool to check parent block id for intra window slots
             VotorEvent::SafeToNotar(block @ (slot, block_id)) => {
                 info!("{my_pubkey}: SafeToNotar {block:?}");
-                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
-                if vctx.vote_history.its_over(slot)
-                    || vctx.vote_history.voted_notar_fallback(slot, block_id)
+                Self::try_skip_window(my_pubkey, *slot, vctx, &mut votes)?;
+                if vctx.vote_history.its_over(*slot)
+                    || vctx.vote_history.voted_notar_fallback(*slot, *block_id)
                 {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
                 if let Some(bls_op) = generate_vote_message(
-                    Vote::new_notarization_fallback_vote(slot, block_id),
+                    Vote::new_notarization_fallback_vote(*slot, *block_id),
                     false,
                     vctx,
                 )? {
@@ -287,13 +300,14 @@ impl EventHandler {
             // We have observed the safe to skip condition, and can send a skip fallback vote
             VotorEvent::SafeToSkip(slot) => {
                 info!("{my_pubkey}: SafeToSkip {slot}");
-                Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
-                if vctx.vote_history.its_over(slot) || vctx.vote_history.voted_skip_fallback(slot) {
+                Self::try_skip_window(my_pubkey, *slot, vctx, &mut votes)?;
+                if vctx.vote_history.its_over(*slot) || vctx.vote_history.voted_skip_fallback(*slot)
+                {
                     return Ok(votes);
                 }
                 info!("{my_pubkey}: Voting skip-fallback for {slot}");
                 if let Some(bls_op) =
-                    generate_vote_message(Vote::new_skip_fallback_vote(slot), false, vctx)?
+                    generate_vote_message(Vote::new_skip_fallback_vote(*slot), false, vctx)?
                 {
                     votes.push(bls_op);
                 }
@@ -315,14 +329,14 @@ impl EventHandler {
                         old_window_info.end_slot,
                     );
                 }
-                *l_window_info = Some(window_info);
+                *l_window_info = Some(*window_info);
                 ctx.leader_window_notifier.window_notification.notify_one();
             }
 
             // We have finalized this block consider it for rooting
             VotorEvent::Finalized(block) => {
                 info!("{my_pubkey}: Finalized {block:?}");
-                finalized_blocks.insert(block);
+                finalized_blocks.insert(*block);
                 Self::check_rootable_blocks(
                     my_pubkey,
                     ctx,
@@ -339,7 +353,7 @@ impl EventHandler {
             VotorEvent::Standstill(highest_finalized_slot) => {
                 info!("{my_pubkey}: Standstill {highest_finalized_slot}");
                 // certs refresh happens in CertificatePoolService
-                Self::refresh_votes(my_pubkey, highest_finalized_slot, vctx, &mut votes)?;
+                Self::refresh_votes(my_pubkey, *highest_finalized_slot, vctx, &mut votes)?;
             }
 
             // Operator called set identity make sure that our keypair is updated for voting
@@ -357,6 +371,10 @@ impl EventHandler {
                 }
             }
         }
+        event_processing_time.stop();
+        local_context
+            .stats
+            .incr_event_with_timing(&event, event_processing_time.as_us());
         Ok(votes)
     }
 
