@@ -32,7 +32,7 @@ impl Default for EventHandlerStats {
 }
 
 impl EventHandlerStats {
-    fn event_to_index(event: &VotorEvent) -> usize {
+    pub fn event_to_index(event: &VotorEvent) -> usize {
         match event {
             VotorEvent::Block(_) => 0,
             VotorEvent::BlockNotarized(_) => 1,
@@ -67,17 +67,13 @@ impl EventHandlerStats {
         }
     }
 
-    pub fn incr_event_with_timing(&mut self, event: &VotorEvent, timing: u64) {
-        let index = Self::event_to_index(event);
-        if index < self.received_events_count_and_timing.len() {
-            let entry = &mut self.received_events_count_and_timing[index];
+    pub fn incr_event_with_timing(&mut self, event_index: usize, timing: u64) {
+        if event_index < self.received_events_count_and_timing.len() {
+            let entry = &mut self.received_events_count_and_timing[event_index];
             entry.0 = entry.0.saturating_add(1);
             entry.1 = entry.1.saturating_add(timing as u32);
         } else {
-            warn!(
-                "Event index {} out of bounds for received_events_count_and_timing",
-                index
-            );
+            warn!("Event index {event_index} out of bounds for received_events_count_and_timing");
         }
     }
 
