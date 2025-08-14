@@ -247,7 +247,7 @@ impl Tpu {
             thread: alpenglow_quic_t,
             key_updater: alpenglow_stream_key_updater,
         } = spawn_server_multi(
-            "solQuicAlpenglow",
+            "solQuicAlpglw",
             "quic_streamer_alpenglow",
             vec![alpenglow_quic_socket],
             keypair,
