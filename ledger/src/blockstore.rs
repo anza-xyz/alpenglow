@@ -38,7 +38,10 @@ use {
     solana_accounts_db::hardened_unpack::unpack_genesis_archive,
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
-    solana_entry::entry::{create_ticks, Entry},
+    solana_entry::{
+        block_component::BlockComponent,
+        entry::{create_ticks, Entry},
+    },
     solana_genesis_config::{GenesisConfig, DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE},
     solana_hash::Hash,
     solana_keypair::Keypair,
@@ -3882,11 +3885,17 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        bincode::deserialize::<Vec<Entry>>(&payload).map_err(|e| {
-                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                                format!("could not reconstruct entries: {e:?}"),
-                            )))
-                        })
+                        // TODO(karthik): if Alpenglow flag is disabled, return an error on special
+                        // EntryBatches.
+                        BlockComponent::from_bytes(&payload)
+                            .map(|eb| eb.entries().to_vec())
+                            .map_err(|e| {
+                                BlockstoreError::InvalidShredData(Box::new(
+                                    bincode::ErrorKind::Custom(format!(
+                                        "could not reconstruct entries: {e:?}"
+                                    )),
+                                ))
+                            })
                     })
             })
             .flatten_ok()
