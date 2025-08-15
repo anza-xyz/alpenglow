@@ -117,6 +117,7 @@ pub fn execute(
         tpu_sigverify_threads,
         tpu_transaction_forward_receive_threads,
         tpu_transaction_receive_threads,
+        tpu_alpenglow_receive_threads: _,
         tpu_vote_transaction_receive_threads,
         tvu_receive_threads,
         tvu_retransmit_threads,

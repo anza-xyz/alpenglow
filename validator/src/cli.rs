@@ -247,6 +247,7 @@ pub struct DefaultArgs {
     pub tpu_max_unstaked_connections: String,
     pub tpu_max_fwd_staked_connections: String,
     pub tpu_max_fwd_unstaked_connections: String,
+    pub tpu_max_alpenglow_connections: String,
     pub tpu_max_streams_per_ms: String,
 
     pub num_quic_endpoints: String,
@@ -301,6 +302,7 @@ impl DefaultArgs {
                 .saturating_add(DEFAULT_MAX_UNSTAKED_CONNECTIONS)
                 .to_string(),
             tpu_max_fwd_unstaked_connections: 0.to_string(),
+            tpu_max_alpenglow_connections: DEFAULT_MAX_STAKED_CONNECTIONS.to_string(),
             tpu_max_streams_per_ms: DEFAULT_MAX_STREAMS_PER_MS.to_string(),
             num_quic_endpoints: DEFAULT_QUIC_ENDPOINTS.to_string(),
             banking_trace_dir_byte_limit: BANKING_TRACE_DIR_DEFAULT_BYTE_LIMIT.to_string(),
