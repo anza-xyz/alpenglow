@@ -5,7 +5,7 @@ use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
-        event_handler::stats::{EventHandlerStats, StatsEvent},
+        event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
@@ -161,7 +161,7 @@ impl EventHandler {
             }
 
             let mut event_processing_time = Measure::start("event_processing");
-            let stats_event = StatsEvent::new(&event);
+            let stats_event = local_context.stats.handle_event_arrival(&event);
             let votes = Self::handle_event(
                 event,
                 &timer_manager,
@@ -347,8 +347,8 @@ impl EventHandler {
             }
 
             // We have finalized this block consider it for rooting
-            VotorEvent::Finalized(block) => {
-                info!("{my_pubkey}: Finalized {block:?}");
+            VotorEvent::Finalized(block, is_fast_finalization) => {
+                info!("{my_pubkey}: Finalized {block:?} fast: {is_fast_finalization}");
                 finalized_blocks.insert(block);
                 Self::check_rootable_blocks(
                     my_pubkey,
