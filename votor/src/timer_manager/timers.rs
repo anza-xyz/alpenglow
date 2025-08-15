@@ -128,9 +128,10 @@ impl Timers {
         // are multiple ParentReady for the same slot.  Do not insert new timer then.
         self.timers.entry(slot).or_insert_with(|| {
             self.heap.push(Reverse((next_fire, slot)));
+            self.stats
+                .incr_timeout_count_with_heap_size(self.heap.len());
             timer
         });
-        self.stats.set_timeout_with_heap_size(self.heap.len());
     }
 
     /// Call to make progress on the timer states.  If there are still active
@@ -163,7 +164,7 @@ impl Timers {
                 }
             }
         }
-        self.stats.set_heap_size(self.heap.len());
+        self.stats.record_heap_size(self.heap.len());
         ret_timeout
     }
 }
