@@ -90,7 +90,7 @@ pub struct TpuSockets {
     /// Client-side socket for the forwarding votes.
     pub vote_forwarding_client: UdpSocket,
     pub vortexor_receivers: Option<Vec<UdpSocket>>,
-    pub alpenglow: UdpSocket,
+    pub alpenglow_quic: UdpSocket,
 }
 
 /// The `SigVerifier` enum is used to determine whether to use a local or remote signature verifier.
@@ -123,6 +123,7 @@ pub struct Tpu {
     staked_nodes_updater_service: StakedNodesUpdaterService,
     tracer_thread_hdl: TracerThread,
     tpu_vote_quic_t: thread::JoinHandle<()>,
+    alpenglow_quic_t: thread::JoinHandle<()>,
 }
 
 impl Tpu {
@@ -165,6 +166,7 @@ impl Tpu {
         tpu_quic_server_config: QuicServerParams,
         tpu_fwd_quic_server_config: QuicServerParams,
         vote_quic_server_config: QuicServerParams,
+        alpenglow_quic_server_config: QuicServerParams,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         block_production_method: BlockProductionMethod,
         transaction_struct: TransactionStructure,
@@ -182,7 +184,7 @@ impl Tpu {
             vote_quic: tpu_vote_quic_sockets,
             vote_forwarding_client: vote_forwarding_client_socket,
             vortexor_receivers,
-            alpenglow: alpenglow_socket,
+            alpenglow_quic: alpenglow_quic_socket,
         } = sockets;
 
         let (packet_sender, packet_receiver) = unbounded();
@@ -193,7 +195,7 @@ impl Tpu {
             transactions_sockets,
             tpu_forwards_sockets,
             tpu_vote_sockets,
-            alpenglow_socket,
+            alpenglow_quic_socket.try_clone().unwrap(),
             exit.clone(),
             &packet_sender,
             &vote_packet_sender,
@@ -236,6 +238,23 @@ impl Tpu {
             exit.clone(),
             staked_nodes.clone(),
             vote_quic_server_config,
+        )
+        .unwrap();
+
+        // Streamer for Alpenglow
+        let SpawnServerResult {
+            endpoints: _,
+            thread: alpenglow_quic_t,
+            key_updater: alpenglow_stream_key_updater,
+        } = spawn_server_multi(
+            "solQuicAlpglw",
+            "quic_streamer_alpenglow",
+            vec![alpenglow_quic_socket],
+            keypair,
+            bls_packet_sender.clone(),
+            exit.clone(),
+            staked_nodes.clone(),
+            alpenglow_quic_server_config,
         )
         .unwrap();
 
@@ -418,6 +437,7 @@ impl Tpu {
         key_notifiers.add(KeyUpdaterType::TpuVote, vote_streamer_key_updater);
 
         key_notifiers.add(KeyUpdaterType::Forward, client_updater);
+        key_notifiers.add(KeyUpdaterType::TpuAlpenglow, alpenglow_stream_key_updater);
 
         Self {
             fetch_stage,
@@ -434,6 +454,7 @@ impl Tpu {
             staked_nodes_updater_service,
             tracer_thread_hdl,
             tpu_vote_quic_t,
+            alpenglow_quic_t,
         }
     }
 
@@ -450,6 +471,7 @@ impl Tpu {
             self.tpu_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_forwards_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_vote_quic_t.join(),
+            self.alpenglow_quic_t.join(),
         ];
         let broadcast_result = self.broadcast_stage.join();
         for result in results {

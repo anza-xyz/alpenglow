@@ -29,6 +29,8 @@ pub enum KeyUpdaterType {
     Forward,
     /// For the RPC service
     RpcService,
+    /// Tpu alpenglow key updater
+    TpuAlpenglow,
 }
 
 /// Responsible for managing the updaters for identity key change

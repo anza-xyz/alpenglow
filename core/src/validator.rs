@@ -498,6 +498,8 @@ pub struct ValidatorTpuConfig {
     pub tpu_fwd_quic_server_config: QuicServerParams,
     /// QUIC server config for Vote
     pub vote_quic_server_config: QuicServerParams,
+    /// QUIC server config for Alpenglow
+    pub alpenglow_quic_server_config: QuicServerParams,
 }
 
 impl ValidatorTpuConfig {
@@ -517,8 +519,9 @@ impl ValidatorTpuConfig {
             ..Default::default()
         };
 
-        // vote and tpu_fwd share the same characteristics -- disallow non-staked connections:
+        // vote/tpu_fwd/alpenglow share the same characteristics -- disallow non-staked connections:
         let vote_quic_server_config = tpu_fwd_quic_server_config.clone();
+        let alpenglow_quic_server_config = tpu_fwd_quic_server_config.clone();
 
         ValidatorTpuConfig {
             use_quic: DEFAULT_TPU_USE_QUIC,
@@ -528,6 +531,7 @@ impl ValidatorTpuConfig {
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
+            alpenglow_quic_server_config,
         }
     }
 }
@@ -596,6 +600,7 @@ impl Validator {
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
+            alpenglow_quic_server_config,
         } = tpu_config;
 
         let start_time = Instant::now();
@@ -1680,7 +1685,7 @@ impl Validator {
                 vote_quic: node.sockets.tpu_vote_quic,
                 vote_forwarding_client: node.sockets.tpu_vote_forwarding_client,
                 vortexor_receivers: node.sockets.vortexor_receivers,
-                alpenglow: node.sockets.alpenglow,
+                alpenglow_quic: node.sockets.alpenglow,
             },
             rpc_subscriptions.clone(),
             transaction_status_sender,
@@ -1713,6 +1718,7 @@ impl Validator {
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
+            alpenglow_quic_server_config,
             &prioritization_fee_cache,
             config.block_production_method.clone(),
             config.transaction_struct.clone(),
