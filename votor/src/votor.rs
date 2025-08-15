@@ -56,6 +56,7 @@ use {
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_pubkey::Pubkey,
@@ -87,6 +88,7 @@ use {
 pub struct LeaderWindowNotifier {
     pub window_info: Mutex<Option<LeaderWindowInfo>>,
     pub window_notification: Condvar,
+    pub highest_parent_ready: RwLock<(Slot, (Slot, Hash))>,
 }
 
 /// Inputs to Votor

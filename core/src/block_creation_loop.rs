@@ -81,6 +81,7 @@ struct BlockCreationLoopMetrics {
     loop_count: u64,
     bank_timeout_completion_count: u64,
     bank_filled_completion_count: u64,
+    skipped_window_behind_parent_ready_count: u64,
 
     window_production_elapsed: u64,
     bank_filled_completion_elapsed_hist: histogram::Histogram,
@@ -93,6 +94,7 @@ impl BlockCreationLoopMetrics {
             + self.bank_timeout_completion_count
             + self.bank_filled_completion_count
             + self.window_production_elapsed
+            + self.skipped_window_behind_parent_ready_count
             + self.bank_filled_completion_elapsed_hist.entries()
             + self.bank_timeout_completion_elapsed_hist.entries()
     }
@@ -123,6 +125,11 @@ impl BlockCreationLoopMetrics {
                 (
                     "window_production_elapsed",
                     self.window_production_elapsed,
+                    i64
+                ),
+                (
+                    "skipped_window_behind_parent_ready_count",
+                    self.skipped_window_behind_parent_ready_count,
                     i64
                 ),
                 (
@@ -185,6 +192,7 @@ impl BlockCreationLoopMetrics {
             self.bank_timeout_completion_count = 0;
             self.bank_filled_completion_count = 0;
             self.window_production_elapsed = 0;
+            self.skipped_window_behind_parent_ready_count = 0;
             self.bank_filled_completion_elapsed_hist.clear();
             self.bank_timeout_completion_elapsed_hist.clear();
             self.last_report = now;
@@ -300,6 +308,10 @@ enum StartLeaderError {
     /// Haven't landed a vote
     #[error("Have not rooted a block with our vote")]
     VoteNotRooted,
+
+    /// Cluster has confirmed blocks after our leader window
+    #[error("Cluster has confirmed blocks before {0} after our leader window")]
+    ClusterConfirmedBlocksAfterWindow(/* slot */ Slot),
 }
 
 fn start_receive_and_record_loop(
@@ -424,9 +436,16 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             parent: {parent_slot}"
         );
 
-        if let Err(e) =
-            start_leader_retry_replay(start_slot, parent_slot, skip_timer, &ctx, &mut slot_metrics)
-        {
+        if let Err(e) = start_leader_retry_replay(
+            start_slot,
+            parent_slot,
+            skip_timer,
+            &ctx,
+            &leader_window_notifier,
+            end_slot,
+            &mut metrics,
+            &mut slot_metrics,
+        ) {
             // Give up on this leader window
             error!(
                 "{my_pubkey}: Unable to produce first slot {start_slot}, skipping production of our entire leader window \
@@ -438,7 +457,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         // Produce our window
         let mut window_production_start = Measure::start("window_production");
         let mut slot = start_slot;
-        // TODO(ashwin): Handle preemption of leader window during this loop
         while !exit.load(Ordering::Relaxed) {
             let leader_index = leader_slot_index(slot);
             let timeout = block_timeout(leader_index);
@@ -514,9 +532,16 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
             // Although `slot - 1`has been cleared from `poh_recorder`, it might not have finished processing in
             // `replay_stage`, which is why we use `start_leader_retry_replay`
-            if let Err(e) =
-                start_leader_retry_replay(slot, slot - 1, skip_timer, &ctx, &mut slot_metrics)
-            {
+            if let Err(e) = start_leader_retry_replay(
+                slot,
+                slot - 1,
+                skip_timer,
+                &ctx,
+                &leader_window_notifier,
+                end_slot,
+                &mut metrics,
+                &mut slot_metrics,
+            ) {
                 error!("{my_pubkey}: Unable to produce {slot}, skipping rest of leader window {slot} - {end_slot}: {e:?}");
                 break;
             }
@@ -554,6 +579,9 @@ fn start_leader_retry_replay(
     parent_slot: Slot,
     skip_timer: Instant,
     ctx: &LeaderContext,
+    leader_window_notifier: &LeaderWindowNotifier,
+    end_slot: Slot,
+    metrics: &mut BlockCreationLoopMetrics,
     slot_metrics: &mut SlotMetrics,
 ) -> Result<(), StartLeaderError> {
     let my_pubkey = ctx.my_pubkey;
@@ -562,6 +590,22 @@ fn start_leader_retry_replay(
     while !timeout.saturating_sub(skip_timer.elapsed()).is_zero() {
         // Count attempts to start a leader block
         slot_metrics.attempt_count += 1;
+
+        // Check if the entire window is skipped.
+        let highest_parent_ready_slot = leader_window_notifier
+            .highest_parent_ready
+            .read()
+            .unwrap()
+            .0;
+        if highest_parent_ready_slot > end_slot {
+            trace!(
+                    "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is {highest_parent_ready_slot} > end slot {end_slot}"
+                );
+            metrics.skipped_window_behind_parent_ready_count += 1;
+            return Err(StartLeaderError::ClusterConfirmedBlocksAfterWindow(
+                highest_parent_ready_slot,
+            ));
+        }
 
         match maybe_start_leader(slot, parent_slot, ctx, slot_metrics) {
             Ok(()) => {
