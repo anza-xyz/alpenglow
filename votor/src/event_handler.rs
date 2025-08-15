@@ -206,8 +206,7 @@ impl EventHandler {
             ref mut finalized_blocks,
             ref mut received_shred,
             ref mut stats,
-        .. // The `..` is a good practice to ignore other fields you don't need
-    } = local_context;
+        } = local_context;
         match event {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
@@ -221,9 +220,8 @@ impl EventHandler {
                     pending_blocks,
                     vctx,
                     &mut votes,
-                    stats,
                 )? {
-                    Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes, stats)?;
+                    Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes)?;
                 } else if !vctx.vote_history.voted(slot) {
                     pending_blocks
                         .entry(slot)
@@ -258,7 +256,7 @@ impl EventHandler {
             VotorEvent::ParentReady { slot, parent_block } => {
                 info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
                 let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
-                Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes, stats)?;
+                Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes)?;
                 if should_set_timeouts {
                     timer_manager.write().set_timeouts(slot);
                     stats.timeout_set = stats.timeout_set.saturating_add(1);
@@ -442,7 +440,6 @@ impl EventHandler {
         pending_blocks: &mut PendingBlocks,
         voting_context: &mut VotingContext,
         votes: &mut Vec<BLSOp>,
-        stats: &mut EventHandlerStats,
     ) -> Result<bool, VoteError> {
         if voting_context.vote_history.voted(slot) {
             return Ok(false);
@@ -480,7 +477,6 @@ impl EventHandler {
             slot,
             &voting_context.commitment_sender,
         )?;
-        stats.commitment_updates = stats.commitment_updates.saturating_add(1);
         pending_blocks.remove(&slot);
 
         Ok(true)
@@ -493,7 +489,6 @@ impl EventHandler {
         pending_blocks: &mut PendingBlocks,
         voting_context: &mut VotingContext,
         votes: &mut Vec<BLSOp>,
-        stats: &mut EventHandlerStats,
     ) -> Result<(), VoteError> {
         let blocks_to_check: Vec<(Block, Block)> = pending_blocks
             .values()
@@ -509,7 +504,6 @@ impl EventHandler {
                 pending_blocks,
                 voting_context,
                 votes,
-                stats,
             )?;
         }
         Ok(())
