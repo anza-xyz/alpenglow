@@ -84,8 +84,8 @@ impl ParentReadyTracker {
         }
     }
 
-    /// Adds a new notar-fallback certificate
-    pub fn add_new_notar_fallback(
+    /// Adds a new notarize fallback certificate, we can use Notarize/NotarizeFallback/FastFinalize
+    pub fn add_new_notar_fallback_or_equivalent(
         &mut self,
         block @ (slot, _): Block,
         events: &mut Vec<VotorEvent>,
@@ -258,7 +258,7 @@ mod tests {
 
         for i in 1..2 * NUM_CONSECUTIVE_LEADER_SLOTS {
             let block = (i, Hash::new_unique());
-            tracker.add_new_notar_fallback(block, &mut events);
+            tracker.add_new_notar_fallback_or_equivalent(block, &mut events);
             assert_eq!(tracker.highest_parent_ready(), i + 1);
             assert!(tracker.parent_ready(i + 1, block));
         }
@@ -271,7 +271,7 @@ mod tests {
         let mut events = vec![];
         let block = (1, Hash::new_unique());
 
-        tracker.add_new_notar_fallback(block, &mut events);
+        tracker.add_new_notar_fallback_or_equivalent(block, &mut events);
         tracker.add_new_skip(1, &mut events);
         tracker.add_new_skip(2, &mut events);
         tracker.add_new_skip(3, &mut events);
@@ -291,7 +291,7 @@ mod tests {
         tracker.add_new_skip(3, &mut events);
         tracker.add_new_skip(2, &mut events);
 
-        tracker.add_new_notar_fallback(block, &mut events);
+        tracker.add_new_notar_fallback_or_equivalent(block, &mut events);
         assert!(tracker.parent_ready(4, block));
         assert!(!tracker.parent_ready(4, genesis));
 
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(tracker.highest_parent_ready(), root_slot + 3);
 
         let block = (root_slot + 4, Hash::new_unique());
-        tracker.add_new_notar_fallback(block, &mut events);
+        tracker.add_new_notar_fallback_or_equivalent(block, &mut events);
         assert!(tracker.parent_ready(root_slot + 3, root_block));
         assert!(tracker.parent_ready(root_slot + 5, block));
         assert_eq!(tracker.highest_parent_ready(), root_slot + 5);
@@ -361,7 +361,7 @@ mod tests {
             BlockProductionParent::ParentNotReady
         );
 
-        tracker.add_new_notar_fallback((4, Hash::new_unique()), &mut events);
+        tracker.add_new_notar_fallback_or_equivalent((4, Hash::new_unique()), &mut events);
         assert_eq!(tracker.highest_parent_ready(), 5);
         assert_eq!(
             tracker.block_production_parent(4),
@@ -372,7 +372,7 @@ mod tests {
             tracker.block_production_parent(8),
             BlockProductionParent::ParentNotReady
         );
-        tracker.add_new_notar_fallback((64, Hash::new_unique()), &mut events);
+        tracker.add_new_notar_fallback_or_equivalent((64, Hash::new_unique()), &mut events);
         assert_eq!(tracker.highest_parent_ready(), 65);
         assert_eq!(
             tracker.block_production_parent(8),
