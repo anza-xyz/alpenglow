@@ -1,11 +1,12 @@
 use {
-    crate::event::VotorEvent,
+    crate::{event::VotorEvent, timer_manager::stats::TimerManagerStats},
     crossbeam_channel::Sender,
     solana_clock::Slot,
     solana_ledger::leader_schedule_utils::last_of_consecutive_leader_slots,
     std::{
         cmp::Reverse,
         collections::{BinaryHeap, HashMap, VecDeque},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -98,6 +99,8 @@ pub(super) struct Timers {
     heap: BinaryHeap<Reverse<(Instant, Slot)>>,
     /// Channel to send events on.
     event_sender: Sender<VotorEvent>,
+    /// Stats for the timer manager.
+    stats: Arc<TimerManagerStats>,
 }
 
 impl Timers {
@@ -105,6 +108,7 @@ impl Timers {
         delta_timeout: Duration,
         delta_block: Duration,
         event_sender: Sender<VotorEvent>,
+        stats: Arc<TimerManagerStats>,
     ) -> Self {
         Self {
             delta_timeout,
@@ -112,6 +116,7 @@ impl Timers {
             timers: HashMap::new(),
             heap: BinaryHeap::new(),
             event_sender,
+            stats,
         }
     }
 
@@ -125,6 +130,7 @@ impl Timers {
             self.heap.push(Reverse((next_fire, slot)));
             timer
         });
+        self.stats.set_timeout_with_heap_size(self.heap.len());
     }
 
     /// Call to make progress on the timer states.  If there are still active
@@ -157,6 +163,7 @@ impl Timers {
                 }
             }
         }
+        self.stats.set_heap_size(self.heap.len());
         ret_timeout
     }
 }
@@ -212,7 +219,8 @@ mod tests {
         let one_micro = Duration::from_micros(1);
         let mut now = Instant::now();
         let (sender, receiver) = unbounded();
-        let mut timers = Timers::new(one_micro, one_micro, sender);
+        let stats = Arc::new(TimerManagerStats::new());
+        let mut timers = Timers::new(one_micro, one_micro, sender, stats.clone());
         assert!(timers.progress(now).is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
@@ -231,5 +239,6 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
+        assert_eq!(stats.get_numbers_for_tests(), (1, 1));
     }
 }
