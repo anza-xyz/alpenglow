@@ -2398,9 +2398,8 @@ mod tests {
             with_mock_invoke_context!($invoke_context, transaction_context, transaction_accounts);
             $invoke_context
                 .transaction_context
-                .get_next_instruction_context_mut()
-                .unwrap()
-                .configure_for_tests(1, vec![], &[]);
+                .configure_next_instruction_for_tests(1, vec![], &[])
+                .unwrap();
             $invoke_context.push().unwrap();
         };
     }
@@ -4630,9 +4629,12 @@ mod tests {
                 )];
                 invoke_context
                     .transaction_context
-                    .get_next_instruction_context_mut()
-                    .unwrap()
-                    .configure_for_tests(0, instruction_accounts, &[index_in_trace as u8]);
+                    .configure_next_instruction_for_tests(
+                        0,
+                        instruction_accounts,
+                        &[index_in_trace as u8],
+                    )
+                    .unwrap();
                 invoke_context.transaction_context.push().unwrap();
             }
         }
