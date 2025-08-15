@@ -21,8 +21,8 @@ pub(crate) struct EventHandlerStats {
     pub(crate) receive_event_time: u32,
     pub(crate) send_vote_time: u32,
 
-    pub(crate) received_events_count_and_timing: HashMap<usize, (u16, u32)>,
-    pub(crate) sent_votes: Vec<u16>,
+    pub(crate) received_events_count_and_timing: HashMap<StatsEvent, (u16, u32)>,
+    pub(crate) sent_votes: HashMap<VoteType, u16>,
 
     pub(crate) last_report_time: Instant,
 }
@@ -33,27 +33,43 @@ impl Default for EventHandlerStats {
     }
 }
 
-impl EventHandlerStats {
-    pub fn event_to_index(event: &VotorEvent) -> usize {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatsEvent {
+    Block,
+    BlockNotarized,
+    FirstShred,
+    ParentReady,
+    TimeoutCrashedLeader,
+    Timeout,
+    SafeToNotar,
+    SafeToSkip,
+    ProduceWindow,
+    Finalized,
+    Standstill,
+    SetIdentity,
+}
+
+impl StatsEvent {
+    pub fn new(event: &VotorEvent) -> Self {
         match event {
-            VotorEvent::Block(_) => 0,
-            VotorEvent::BlockNotarized(_) => 1,
-            VotorEvent::FirstShred(_) => 2,
-            VotorEvent::ParentReady { .. } => 3,
-            VotorEvent::TimeoutCrashedLeader(_) => 4,
-            VotorEvent::Timeout(_) => 5,
-            VotorEvent::SafeToNotar(_) => 6,
-            VotorEvent::SafeToSkip(_) => 7,
-            VotorEvent::ProduceWindow(_) => 8,
-            VotorEvent::Finalized(_) => 9,
-            VotorEvent::Standstill(_) => 10,
-            VotorEvent::SetIdentity => 11,
-            // If you add an entry, change num_event_types below.
+            VotorEvent::Block(_) => StatsEvent::Block,
+            VotorEvent::BlockNotarized(_) => StatsEvent::BlockNotarized,
+            VotorEvent::FirstShred(_) => StatsEvent::FirstShred,
+            VotorEvent::ParentReady { .. } => StatsEvent::ParentReady,
+            VotorEvent::TimeoutCrashedLeader(_) => StatsEvent::TimeoutCrashedLeader,
+            VotorEvent::Timeout(_) => StatsEvent::Timeout,
+            VotorEvent::SafeToNotar(_) => StatsEvent::SafeToNotar,
+            VotorEvent::SafeToSkip(_) => StatsEvent::SafeToSkip,
+            VotorEvent::ProduceWindow(_) => StatsEvent::ProduceWindow,
+            VotorEvent::Finalized(_) => StatsEvent::Finalized,
+            VotorEvent::Standstill(_) => StatsEvent::Standstill,
+            VotorEvent::SetIdentity => StatsEvent::SetIdentity,
         }
     }
+}
 
+impl EventHandlerStats {
     pub fn new() -> Self {
-        let num_vote_types = (VoteType::SkipFallback as usize).saturating_add(1);
         Self {
             ignored: 0,
             leader_window_replaced: 0,
@@ -62,15 +78,15 @@ impl EventHandlerStats {
             receive_event_time: 0,
             send_vote_time: 0,
             received_events_count_and_timing: HashMap::new(),
-            sent_votes: vec![0; num_vote_types],
+            sent_votes: HashMap::new(),
             last_report_time: Instant::now(),
         }
     }
 
-    pub fn incr_event_with_timing(&mut self, event_index: usize, timing: u64) {
+    pub fn incr_event_with_timing(&mut self, stats_event: StatsEvent, timing: u64) {
         let entry = self
             .received_events_count_and_timing
-            .entry(event_index)
+            .entry(stats_event)
             .or_insert((0, 0));
         entry.0 = entry.0.saturating_add(1);
         entry.1 = entry.1.saturating_add(timing as u32);
@@ -82,15 +98,9 @@ impl EventHandlerStats {
                 warn!("Unexpected BLS message type: {:?}", bls_message);
                 return;
             };
-            let vote_index = VoteType::get_type(&vote.vote) as usize;
-            if vote_index < self.sent_votes.len() {
-                self.sent_votes[vote_index] = self.sent_votes[vote_index].saturating_add(1);
-            } else {
-                warn!(
-                    "Vote type index {} out of bounds for sent_votes",
-                    vote_index
-                );
-            }
+            let vote_type = VoteType::get_type(&vote.vote);
+            let entry = self.sent_votes.entry(vote_type).or_insert(0);
+            *entry = entry.saturating_add(1);
         } else {
             warn!("Unexpected BLS operation: {:?}", bls_op);
         }
@@ -112,225 +122,26 @@ impl EventHandlerStats {
             ("set_root", self.set_root as i64, i64),
             ("timeout_set", self.timeout_set as i64, i64),
         );
-        datapoint_info!(
-            "event_handler_received_events_count_and_timing",
-            (
-                "block",
-                self.received_events_count_and_timing
-                    .get(&0)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "block_notarized",
-                self.received_events_count_and_timing
-                    .get(&1)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "first_shred",
-                self.received_events_count_and_timing
-                    .get(&2)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "parent_ready",
-                self.received_events_count_and_timing
-                    .get(&3)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "timeout_crashed_leader",
-                self.received_events_count_and_timing
-                    .get(&4)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "timeout",
-                self.received_events_count_and_timing
-                    .get(&5)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "safe_to_notar",
-                self.received_events_count_and_timing
-                    .get(&6)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "safe_to_skip",
-                self.received_events_count_and_timing
-                    .get(&7)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "produce_window",
-                self.received_events_count_and_timing
-                    .get(&8)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "finalized",
-                self.received_events_count_and_timing
-                    .get(&9)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "standstill",
-                self.received_events_count_and_timing
-                    .get(&10)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-            (
-                "set_identity",
-                self.received_events_count_and_timing
-                    .get(&11)
-                    .map_or(0, |(count, _)| *count) as i64,
-                i64
-            ),
-        );
-        datapoint_info!(
-            "event_handler_handle_events_timing",
-            (
-                "block",
-                self.received_events_count_and_timing
-                    .get(&0)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "block_notarized",
-                self.received_events_count_and_timing
-                    .get(&1)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "first_shred",
-                self.received_events_count_and_timing
-                    .get(&2)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "parent_ready",
-                self.received_events_count_and_timing
-                    .get(&3)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "timeout_crashed_leader",
-                self.received_events_count_and_timing
-                    .get(&4)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "timeout",
-                self.received_events_count_and_timing
-                    .get(&5)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "safe_to_notar",
-                self.received_events_count_and_timing
-                    .get(&6)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "safe_to_skip",
-                self.received_events_count_and_timing
-                    .get(&7)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "produce_window",
-                self.received_events_count_and_timing
-                    .get(&8)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "finalized",
-                self.received_events_count_and_timing
-                    .get(&9)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "standstill",
-                self.received_events_count_and_timing
-                    .get(&10)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-            (
-                "set_identity",
-                self.received_events_count_and_timing
-                    .get(&11)
-                    .map_or(0, |(_, ms)| *ms) as i64,
-                i64
-            ),
-        );
+        for (event, (count, ms)) in &self.received_events_count_and_timing {
+            datapoint_info!(
+                "event_handler_received_event_count_and_timing",
+                ("event", format!("{:?}", event), String),
+                ("count", *count as i64, i64),
+                ("elapsed", *ms as i64, i64)
+            );
+        }
         datapoint_info!(
             "event_handler_timing",
             ("receive_event_time", self.receive_event_time as i64, i64),
             ("send_vote_time", self.send_vote_time as i64, i64),
         );
-        datapoint_info!(
-            "event_handler_sent_votes",
-            (
-                "finalize",
-                *self
-                    .sent_votes
-                    .get(VoteType::Finalize as usize)
-                    .unwrap_or(&0) as i64,
-                i64
-            ),
-            (
-                "notarize",
-                *self
-                    .sent_votes
-                    .get(VoteType::Notarize as usize)
-                    .unwrap_or(&0) as i64,
-                i64
-            ),
-            (
-                "notarize_fallback",
-                *self
-                    .sent_votes
-                    .get(VoteType::NotarizeFallback as usize)
-                    .unwrap_or(&0) as i64,
-                i64
-            ),
-            (
-                "skip",
-                *self.sent_votes.get(VoteType::Skip as usize).unwrap_or(&0) as i64,
-                i64
-            ),
-            (
-                "skip_fallback",
-                *self
-                    .sent_votes
-                    .get(VoteType::SkipFallback as usize)
-                    .unwrap_or(&0) as i64,
-                i64
-            ),
-        );
+        for (vote_type, count) in &self.sent_votes {
+            datapoint_info!(
+                "event_handler_sent_vote_count",
+                ("vote", format!("{:?}", vote_type), String),
+                ("count", *count as i64, i64)
+            );
+        }
         self.last_report_time = now;
         *self = EventHandlerStats::new();
     }

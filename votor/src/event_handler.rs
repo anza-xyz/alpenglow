@@ -5,7 +5,7 @@ use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
-        event_handler::stats::EventHandlerStats,
+        event_handler::stats::{EventHandlerStats, StatsEvent},
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
         vote_history::{VoteHistory, VoteHistoryError},
@@ -161,7 +161,7 @@ impl EventHandler {
             }
 
             let mut event_processing_time = Measure::start("event_processing");
-            let event_index = EventHandlerStats::event_to_index(&event);
+            let stats_event = StatsEvent::new(&event);
             let votes = Self::handle_event(
                 event,
                 &timer_manager,
@@ -173,7 +173,7 @@ impl EventHandler {
             event_processing_time.stop();
             local_context
                 .stats
-                .incr_event_with_timing(event_index, event_processing_time.as_us());
+                .incr_event_with_timing(stats_event, event_processing_time.as_us());
 
             let mut send_vote_time = Measure::start("send_vote");
             for vote in votes {
