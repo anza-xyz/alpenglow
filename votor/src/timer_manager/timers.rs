@@ -126,12 +126,14 @@ impl Timers {
         let (timer, next_fire) = TimerState::new(slot, self.delta_timeout, now);
         // It is possible that this slot already has a timer set e.g. if there
         // are multiple ParentReady for the same slot.  Do not insert new timer then.
+        let mut new_timer_inserted = false;
         self.timers.entry(slot).or_insert_with(|| {
             self.heap.push(Reverse((next_fire, slot)));
-            self.stats
-                .incr_timeout_count_with_heap_size(self.heap.len());
+            new_timer_inserted = true;
             timer
         });
+        self.stats
+            .incr_timeout_count_with_heap_size(self.heap.len(), new_timer_inserted);
     }
 
     /// Call to make progress on the timer states.  If there are still active
@@ -240,6 +242,9 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
-        assert_eq!(stats.get_numbers_for_tests(), (1, 1));
+        let numbers = stats.get_numbers_for_tests();
+        assert_eq!(numbers.max_heap_size(), 1);
+        assert_eq!(numbers.set_timeout_count(), 1);
+        assert_eq!(numbers.set_timeout_succeed_count(), 1);
     }
 }
