@@ -3,6 +3,7 @@ use {
     log::*,
     solana_account::ReadableAccount,
     solana_accounts_db::accounts_index::{AccountIndex, IndexKey, ScanConfig, ScanResult},
+    solana_cluster_type::ClusterType,
     solana_pubkey::Pubkey,
     solana_stake_interface::{self as stake, state::StakeStateV2},
     solana_stake_program::stake_state,
