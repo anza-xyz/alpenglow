@@ -334,7 +334,9 @@ impl CertificatePool {
             Certificate::Notarize(slot, block_id) => {
                 events.push(VotorEvent::BlockNotarized((slot, block_id)));
                 if self.is_finalized(slot) {
-                    events.push(VotorEvent::Finalized((slot, block_id)));
+                    // It's fine to set FastFinalization to false here, because
+                    // we will report correctly as long as we have FastFinalization cert.
+                    events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self
                         .highest_finalized_with_notarize
                         .is_none_or(|(s, _)| s < slot)
@@ -345,7 +347,7 @@ impl CertificatePool {
             }
             Certificate::Finalize(slot) => {
                 if let Some(block) = self.get_notarized_block(slot) {
-                    events.push(VotorEvent::Finalized(block));
+                    events.push(VotorEvent::Finalized(block, false));
                     if self
                         .highest_finalized_with_notarize
                         .is_none_or(|(s, _)| s < slot)
@@ -358,7 +360,7 @@ impl CertificatePool {
                 }
             }
             Certificate::FinalizeFast(slot, block_id) => {
-                events.push(VotorEvent::Finalized((slot, block_id)));
+                events.push(VotorEvent::Finalized((slot, block_id), true));
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
                 }

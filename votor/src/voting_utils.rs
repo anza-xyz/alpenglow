@@ -94,6 +94,7 @@ impl GenerateVoteTxResult {
     }
 }
 
+#[derive(Debug)]
 pub enum BLSOp {
     PushVote {
         bls_message: Arc<BLSMessage>,

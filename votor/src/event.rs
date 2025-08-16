@@ -59,7 +59,8 @@ pub enum VotorEvent {
     ProduceWindow(LeaderWindowInfo),
 
     /// The block has received a slow or fast finalization certificate and is eligble for rooting
-    Finalized(Block),
+    /// The second bool indicates whether the block is a fast finalization
+    Finalized(Block, bool),
 
     /// We have not observed a finalization and reached the standstill timeout
     /// The slot is the highest finalized slot
@@ -79,7 +80,7 @@ impl VotorEvent {
             | VotorEvent::TimeoutCrashedLeader(s)
             | VotorEvent::FirstShred(s)
             | VotorEvent::SafeToNotar((s, _))
-            | VotorEvent::Finalized((s, _))
+            | VotorEvent::Finalized((s, _), _)
             | VotorEvent::BlockNotarized((s, _))
             | VotorEvent::ParentReady {
                 slot: s,
