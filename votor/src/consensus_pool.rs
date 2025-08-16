@@ -2327,4 +2327,5 @@ mod tests {
         assert_eq!(pool.my_pubkey(), new_pubkey);
         assert_eq!(pool.parent_ready_tracker.my_pubkey(), new_pubkey);
     }
+
 }
