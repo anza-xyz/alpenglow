@@ -18,7 +18,7 @@ struct TimerManagerStatsInner {
 }
 
 impl TimerManagerStatsInner {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             max_heap_size: 0,
             set_timeout_count: 0,
