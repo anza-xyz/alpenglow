@@ -21,7 +21,10 @@ dev-context-only-utils = []
 dummy-for-ci-check = ["metrics"]
 frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
 metrics = ["dep:solana-metrics"]
-shuttle-test = ["solana-type-overrides/shuttle-test", "solana-sbpf/shuttle-test"]
+shuttle-test = [
+    "solana-type-overrides/shuttle-test",
+    "solana-sbpf/shuttle-test",
+]
 
 [dependencies]
 base64 = { workspace = true }
@@ -55,12 +58,13 @@ solana-rent = { workspace = true }
 solana-sbpf = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-slot-hashes = { workspace = true }
+solana-stake-interface = { workspace = true }
 solana-stable-layout = { workspace = true }
 solana-svm-callback = { workspace = true }
 solana-svm-feature-set = { workspace = true }
 solana-svm-transaction = { workspace = true }
 solana-system-interface = { workspace = true }
-solana-sysvar = { workspace = true }
+solana-sysvar = { workspace = true, features = ["bincode"] }
 solana-sysvar-id = { workspace = true }
 solana-timings = { workspace = true }
 solana-transaction-context = { workspace = true }
@@ -71,6 +75,7 @@ thiserror = { workspace = true }
 assert_matches = { workspace = true }
 solana-account-info = { workspace = true }
 solana-instruction = { workspace = true, features = ["bincode"] }
+solana-instruction-error = { workspace = true, features = ["serde"] }
 solana-program-runtime = { path = ".", features = ["dev-context-only-utils"] }
 solana-pubkey = { workspace = true, features = ["rand"] }
 solana-transaction-context = { workspace = true, features = [
