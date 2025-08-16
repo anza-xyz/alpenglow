@@ -13,13 +13,19 @@ const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct SlotTracking {
+    /// The time when the slot tracking started
     start: Instant,
+    /// The time when the first shred for this slot was received
     first_shred: Option<Instant>,
+    /// The time when the parent block for this slot was ready
     parent_ready: Option<Instant>,
+    /// The time when the notarization vote for this slot was sent
     vote_notarize: Option<Instant>,
+    /// The time when the skip vote for this slot was sent
     vote_skip: Option<Instant>,
-    finalized: Option<Instant>,
-    is_fast_finalization: bool,
+    /// If the slot was finalized, this is the time when it was finalized,
+    /// the bool indicates if it was fast finalized
+    finalized: Option<(Instant, bool)>,
 }
 
 impl Default for SlotTracking {
@@ -31,7 +37,6 @@ impl Default for SlotTracking {
             vote_notarize: None,
             vote_skip: None,
             finalized: None,
-            is_fast_finalization: false,
         }
     }
 }
@@ -40,7 +45,7 @@ impl Default for SlotTracking {
 pub(crate) struct EventHandlerStats {
     pub(crate) ignored: u16,
     pub(crate) leader_window_replaced: u16,
-    pub(crate) set_root: u16,
+    pub(crate) set_root_count: u16,
     pub(crate) timeout_set: u16,
 
     /// All of the following fields are in microseconds
@@ -52,7 +57,7 @@ pub(crate) struct EventHandlerStats {
 
     slot_tracking_map: BTreeMap<Slot, SlotTracking>,
 
-    highest_parent_ready: Slot,
+    root_slot: Slot,
     last_report_time: Instant,
 }
 
@@ -102,14 +107,14 @@ impl EventHandlerStats {
         Self {
             ignored: 0,
             leader_window_replaced: 0,
-            set_root: 0,
+            set_root_count: 0,
             timeout_set: 0,
             receive_event_time: 0,
             send_vote_time: 0,
             received_events_count_and_timing: HashMap::new(),
             sent_votes: HashMap::new(),
             slot_tracking_map: BTreeMap::new(),
-            highest_parent_ready: 0,
+            root_slot: 0,
             last_report_time: Instant::now(),
         }
     }
@@ -123,23 +128,26 @@ impl EventHandlerStats {
             VotorEvent::ParentReady { slot, .. } => {
                 let entry = self.slot_tracking_map.entry(*slot).or_default();
                 entry.parent_ready = Some(Instant::now());
-                if *slot > self.highest_parent_ready {
-                    self.highest_parent_ready = *slot;
-                }
             }
             VotorEvent::Finalized((slot, _), is_fast_finalization) => {
                 let entry = self.slot_tracking_map.entry(*slot).or_default();
                 if entry.finalized.is_none() {
-                    entry.finalized = Some(Instant::now());
-                }
-                // We can accept Notarize and FastFinalization, never set the flag from true to false
-                if *is_fast_finalization {
-                    entry.is_fast_finalization = true;
+                    entry.finalized = Some((Instant::now(), *is_fast_finalization));
+                } else if *is_fast_finalization {
+                    // We can accept Notarize and FastFinalization, never set the flag from true to false
+                    if let Some((instant, false)) = entry.finalized {
+                        entry.finalized = Some((instant, true));
+                    }
                 }
             }
             _ => (),
         }
         StatsEvent::new(event)
+    }
+
+    pub fn set_root(&mut self, new_root: Slot) {
+        self.root_slot = new_root;
+        self.set_root_count = self.set_root_count.saturating_add(1);
     }
 
     pub fn incr_event_with_timing(&mut self, stats_event: StatsEvent, timing: u64) {
@@ -185,7 +193,7 @@ impl EventHandlerStats {
                 self.leader_window_replaced as i64,
                 i64
             ),
-            ("set_root", self.set_root as i64, i64),
+            ("set_root_count", self.set_root_count as i64, i64),
             ("timeout_set", self.timeout_set as i64, i64),
         );
         for (event, (count, ms)) in &self.received_events_count_and_timing {
@@ -208,8 +216,8 @@ impl EventHandlerStats {
                 ("count", *count as i64, i64)
             );
         }
-        // Only report if the slot is lower than highest_parent_ready
-        let split_off_map = self.slot_tracking_map.split_off(&self.highest_parent_ready);
+        // Only report if the slot is lower than root_slot
+        let split_off_map = self.slot_tracking_map.split_off(&self.root_slot);
         for (slot, tracking) in &self.slot_tracking_map {
             let start = tracking.start;
             datapoint_info!(
@@ -254,17 +262,19 @@ impl EventHandlerStats {
                 (
                     "finalized",
                     tracking.finalized.map(|t| {
-                        t.saturating_duration_since(start)
+                        t.0.saturating_duration_since(start)
                             .as_micros()
                             .min(i64::MAX as u128) as i64
                     }),
                     Option<i64>
                 ),
-                ("is_fast_finalization", tracking.finalized.map(|_| tracking.is_fast_finalization), Option<bool>)
+                ("is_fast_finalization", tracking.finalized.map(|t| t.1), Option<bool>)
             );
         }
         self.last_report_time = now;
+        let root_slot = self.root_slot;
         *self = EventHandlerStats::new();
+        self.root_slot = root_slot;
         self.slot_tracking_map = split_off_map;
     }
 }

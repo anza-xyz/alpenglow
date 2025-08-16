@@ -628,7 +628,6 @@ impl EventHandler {
             return Ok(());
         };
         drop(bank_forks_r);
-        stats.set_root = stats.set_root.saturating_add(1);
         root_utils::set_root(
             my_pubkey,
             new_root,
@@ -638,7 +637,9 @@ impl EventHandler {
             pending_blocks,
             finalized_blocks,
             received_shred,
-        )
+        )?;
+        stats.set_root(new_root);
+        Ok(())
     }
 
     pub(crate) fn join(self) -> thread::Result<()> {
