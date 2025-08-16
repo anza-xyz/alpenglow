@@ -1,15 +1,12 @@
 use {
     solana_metrics::datapoint_info,
-    std::{
-        sync::Mutex,
-        time::{Duration, Instant},
-    },
+    std::time::{Duration, Instant},
 };
 
 const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TimerManagerStatsInner {
+pub(crate) struct TimerManagerStats {
     /// The maximum heap size of the timers since the last report
     max_heap_size: u64,
     /// The number of times `set_timeout` was called.
@@ -21,8 +18,8 @@ pub(crate) struct TimerManagerStatsInner {
     last_report: Instant,
 }
 
-impl TimerManagerStatsInner {
-    fn new() -> Self {
+impl TimerManagerStats {
+    pub fn new() -> Self {
         Self {
             max_heap_size: 0,
             set_timeout_count: 0,
@@ -45,54 +42,33 @@ impl TimerManagerStatsInner {
     pub fn set_timeout_succeed_count(&self) -> u64 {
         self.set_timeout_succeed_count
     }
-}
 
-pub struct TimerManagerStats {
-    inner: Mutex<TimerManagerStatsInner>,
-}
-
-impl TimerManagerStats {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(TimerManagerStatsInner::new()),
-        }
-    }
-
-    pub fn incr_timeout_count_with_heap_size(&self, size: usize, new_timer_inserted: bool) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.set_timeout_count = inner.set_timeout_count.saturating_add(1);
-        inner.max_heap_size = inner.max_heap_size.max(size as u64);
+    pub fn incr_timeout_count_with_heap_size(&mut self, size: usize, new_timer_inserted: bool) {
+        self.set_timeout_count = self.set_timeout_count.saturating_add(1);
+        self.max_heap_size = self.max_heap_size.max(size as u64);
         if new_timer_inserted {
-            inner.set_timeout_succeed_count = inner.set_timeout_succeed_count.saturating_add(1);
+            self.set_timeout_succeed_count = self.set_timeout_succeed_count.saturating_add(1);
         }
     }
 
-    pub fn record_heap_size(&self, size: usize) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.max_heap_size = inner.max_heap_size.max(size as u64);
+    pub fn record_heap_size(&mut self, size: usize) {
+        self.max_heap_size = self.max_heap_size.max(size as u64);
     }
 
-    pub fn maybe_report(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.last_report.elapsed() < STATS_REPORT_INTERVAL {
+    pub fn maybe_report(&mut self) {
+        if self.last_report.elapsed() < STATS_REPORT_INTERVAL {
             return;
         }
         datapoint_info!(
             "votor_timer_manager",
-            ("max_heap_size", inner.max_heap_size as i64, i64),
-            ("set_timeout_count", inner.set_timeout_count as i64, i64),
+            ("max_heap_size", self.max_heap_size as i64, i64),
+            ("set_timeout_count", self.set_timeout_count as i64, i64),
             (
                 "set_timeout_succeed_count",
-                inner.set_timeout_succeed_count as i64,
+                self.set_timeout_succeed_count as i64,
                 i64
             ),
         );
-        *inner = TimerManagerStatsInner::new();
-    }
-
-    #[cfg(test)]
-    pub fn get_numbers_for_tests(&self) -> TimerManagerStatsInner {
-        let inner = self.inner.lock().unwrap();
-        inner.clone()
+        *self = TimerManagerStats::new();
     }
 }

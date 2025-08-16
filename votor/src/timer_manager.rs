@@ -15,7 +15,7 @@ use {
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         thread::{self, JoinHandle},
         time::{Duration, Instant},
@@ -32,7 +32,7 @@ pub(crate) struct TimerManager {
 
 impl TimerManager {
     pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
-        let stats = Arc::new(TimerManagerStats::new());
+        let stats = Arc::new(Mutex::new(TimerManagerStats::new()));
         let timers = Arc::new(RwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
@@ -52,7 +52,7 @@ impl TimerManager {
                         }
                         Some(next_fire) => next_fire.duration_since(Instant::now()),
                     };
-                    stats.maybe_report();
+                    stats.lock().unwrap().maybe_report();
                     thread::sleep(duration);
                 }
             })

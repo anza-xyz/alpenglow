@@ -6,7 +6,7 @@ use {
     std::{
         cmp::Reverse,
         collections::{BinaryHeap, HashMap, VecDeque},
-        sync::Arc,
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     },
 };
@@ -100,7 +100,7 @@ pub(super) struct Timers {
     /// Channel to send events on.
     event_sender: Sender<VotorEvent>,
     /// Stats for the timer manager.
-    stats: Arc<TimerManagerStats>,
+    stats: Arc<Mutex<TimerManagerStats>>,
 }
 
 impl Timers {
@@ -108,7 +108,7 @@ impl Timers {
         delta_timeout: Duration,
         delta_block: Duration,
         event_sender: Sender<VotorEvent>,
-        stats: Arc<TimerManagerStats>,
+        stats: Arc<Mutex<TimerManagerStats>>,
     ) -> Self {
         Self {
             delta_timeout,
@@ -133,6 +133,8 @@ impl Timers {
             timer
         });
         self.stats
+            .lock()
+            .unwrap()
             .incr_timeout_count_with_heap_size(self.heap.len(), new_timer_inserted);
     }
 
@@ -166,7 +168,7 @@ impl Timers {
                 }
             }
         }
-        self.stats.record_heap_size(self.heap.len());
+        self.stats.lock().unwrap().record_heap_size(self.heap.len());
         ret_timeout
     }
 }
@@ -222,7 +224,7 @@ mod tests {
         let one_micro = Duration::from_micros(1);
         let mut now = Instant::now();
         let (sender, receiver) = unbounded();
-        let stats = Arc::new(TimerManagerStats::new());
+        let stats = Arc::new(Mutex::new(TimerManagerStats::new()));
         let mut timers = Timers::new(one_micro, one_micro, sender, stats.clone());
         assert!(timers.progress(now).is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
@@ -242,9 +244,9 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
-        let numbers = stats.get_numbers_for_tests();
-        assert_eq!(numbers.max_heap_size(), 1);
-        assert_eq!(numbers.set_timeout_count(), 1);
-        assert_eq!(numbers.set_timeout_succeed_count(), 1);
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.max_heap_size(), 1);
+        assert_eq!(stats.set_timeout_count(), 1);
+        assert_eq!(stats.set_timeout_succeed_count(), 1);
     }
 }
