@@ -21,13 +21,13 @@ use {
         error::StakeError,
         instruction::LockupArgs,
         stake_flags::StakeFlags,
+        stake_history::{StakeHistory, StakeHistoryEntry},
         tools::{acceptable_reference_epoch_credits, eligible_for_deactivate_delinquent},
     },
-    solana_sysvar::stake_history::{StakeHistory, StakeHistoryEntry},
     solana_transaction_context::{
         BorrowedAccount, IndexOfAccount, InstructionContext, TransactionContext,
     },
-    solana_vote_interface::state::{VoteState, VoteStateVersions},
+    solana_vote_interface::state::{VoteStateV3, VoteStateVersions},
     solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{collections::HashSet, convert::TryFrom},
 };
@@ -90,7 +90,7 @@ fn redelegate_stake(
     stake: &mut Stake,
     stake_lamports: u64,
     voter_pubkey: &Pubkey,
-    vote_state: &VoteState,
+    vote_state: &VoteStateV3,
     clock: &Clock,
     stake_history: &StakeHistory,
 ) -> Result<(), StakeError> {
@@ -205,7 +205,7 @@ fn move_stake_or_lamports_shared_checks(
 pub(crate) fn new_stake(
     stake: u64,
     voter_pubkey: &Pubkey,
-    vote_state: &VoteState,
+    vote_state: &VoteStateV3,
     activation_epoch: Epoch,
 ) -> Stake {
     Stake {
@@ -305,11 +305,13 @@ pub fn authorize_with_seed(
             instruction_context
                 .get_index_of_instruction_account_in_transaction(authority_base_index)?,
         )?;
-        signers.insert(Pubkey::create_with_seed(
-            base_pubkey,
-            authority_seed,
-            authority_owner,
-        )?);
+
+        // The conversion from `PubkeyError` to `InstructionError` through
+        // num-traits is incorrect, but it's the existing behavior.
+        signers.insert(
+            Pubkey::create_with_seed(base_pubkey, authority_seed, authority_owner)
+                .map_err(|e| e as u64)?,
+        );
     }
     authorize(
         stake_account,
@@ -351,7 +353,7 @@ pub fn delegate(
             let stake = new_stake(
                 stake_amount,
                 &vote_pubkey,
-                &vote_state?.convert_to_current(),
+                &vote_state?.convert_to_v3(),
                 clock.epoch,
             );
             stake_account.set_state(&StakeStateV2::Stake(meta, stake, StakeFlags::empty()))
@@ -364,7 +366,7 @@ pub fn delegate(
                 &mut stake,
                 stake_amount,
                 &vote_pubkey,
-                &vote_state?.convert_to_current(),
+                &vote_state?.convert_to_v3(),
                 clock,
                 stake_history,
             )?;
@@ -930,7 +932,7 @@ pub(crate) fn deactivate_delinquent(
     }
     let delinquent_vote_state = delinquent_vote_account
         .get_state::<VoteStateVersions>()?
-        .convert_to_current();
+        .convert_to_v3();
 
     let reference_vote_account = instruction_context
         .try_borrow_instruction_account(transaction_context, reference_vote_account_index)?;
@@ -939,7 +941,7 @@ pub(crate) fn deactivate_delinquent(
     }
     let reference_vote_state = reference_vote_account
         .get_state::<VoteStateVersions>()?
-        .convert_to_current();
+        .convert_to_v3();
 
     if !acceptable_reference_epoch_credits(&reference_vote_state.epoch_credits, current_epoch) {
         return Err(StakeError::InsufficientReferenceVotes.into());
@@ -1439,7 +1441,7 @@ fn do_create_account(
             .epoch_credits()
             .credits()
     } else {
-        VoteState::deserialize(vote_account.data())
+        VoteStateV3::deserialize(vote_account.data())
             .expect("vote_state")
             .credits()
     };
