@@ -1,11 +1,12 @@
 use {
-    crate::event::VotorEvent,
+    crate::{event::VotorEvent, timer_manager::stats::TimerManagerStats},
     crossbeam_channel::Sender,
     solana_clock::Slot,
     solana_ledger::leader_schedule_utils::last_of_consecutive_leader_slots,
     std::{
         cmp::Reverse,
         collections::{BinaryHeap, HashMap, VecDeque},
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     },
 };
@@ -98,6 +99,8 @@ pub(super) struct Timers {
     heap: BinaryHeap<Reverse<(Instant, Slot)>>,
     /// Channel to send events on.
     event_sender: Sender<VotorEvent>,
+    /// Stats for the timer manager.
+    stats: Arc<Mutex<TimerManagerStats>>,
 }
 
 impl Timers {
@@ -105,6 +108,7 @@ impl Timers {
         delta_timeout: Duration,
         delta_block: Duration,
         event_sender: Sender<VotorEvent>,
+        stats: Arc<Mutex<TimerManagerStats>>,
     ) -> Self {
         Self {
             delta_timeout,
@@ -112,6 +116,7 @@ impl Timers {
             timers: HashMap::new(),
             heap: BinaryHeap::new(),
             event_sender,
+            stats,
         }
     }
 
@@ -121,10 +126,16 @@ impl Timers {
         let (timer, next_fire) = TimerState::new(slot, self.delta_timeout, now);
         // It is possible that this slot already has a timer set e.g. if there
         // are multiple ParentReady for the same slot.  Do not insert new timer then.
+        let mut new_timer_inserted = false;
         self.timers.entry(slot).or_insert_with(|| {
             self.heap.push(Reverse((next_fire, slot)));
+            new_timer_inserted = true;
             timer
         });
+        self.stats
+            .lock()
+            .unwrap()
+            .incr_timeout_count_with_heap_size(self.heap.len(), new_timer_inserted);
     }
 
     /// Call to make progress on the timer states.  If there are still active
@@ -157,6 +168,7 @@ impl Timers {
                 }
             }
         }
+        self.stats.lock().unwrap().record_heap_size(self.heap.len());
         ret_timeout
     }
 }
@@ -212,7 +224,8 @@ mod tests {
         let one_micro = Duration::from_micros(1);
         let mut now = Instant::now();
         let (sender, receiver) = unbounded();
-        let mut timers = Timers::new(one_micro, one_micro, sender);
+        let stats = Arc::new(Mutex::new(TimerManagerStats::new()));
+        let mut timers = Timers::new(one_micro, one_micro, sender, stats.clone());
         assert!(timers.progress(now).is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
@@ -231,5 +244,9 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.max_heap_size(), 1);
+        assert_eq!(stats.set_timeout_count(), 1);
+        assert_eq!(stats.set_timeout_succeed_count(), 1);
     }
 }

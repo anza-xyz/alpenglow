@@ -2,17 +2,20 @@
 //! in the event loop.
 // TODO: Make this mockable in event_handler for tests
 
+mod stats;
 mod timers;
 
 use {
-    crate::{event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
+    crate::{
+        event::VotorEvent, timer_manager::stats::TimerManagerStats, DELTA_BLOCK, DELTA_TIMEOUT,
+    },
     crossbeam_channel::Sender,
     parking_lot::RwLock,
     solana_clock::Slot,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
         thread::{self, JoinHandle},
         time::{Duration, Instant},
@@ -29,10 +32,12 @@ pub(crate) struct TimerManager {
 
 impl TimerManager {
     pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
+        let stats = Arc::new(Mutex::new(TimerManagerStats::new()));
         let timers = Arc::new(RwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
             event_sender,
+            stats.clone(),
         )));
         let handle = {
             let timers = Arc::clone(&timers);
@@ -47,6 +52,7 @@ impl TimerManager {
                         }
                         Some(next_fire) => next_fire.duration_since(Instant::now()),
                     };
+                    stats.lock().unwrap().maybe_report();
                     thread::sleep(duration);
                 }
             })
