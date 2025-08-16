@@ -322,7 +322,7 @@ impl CertificatePool {
         match cert_id {
             Certificate::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
-                    .add_new_notar_fallback_or_equivalent((slot, block_id), events);
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self
                     .highest_notarized_fallback
                     .is_none_or(|(s, _)| s < slot)
@@ -334,7 +334,7 @@ impl CertificatePool {
             Certificate::Notarize(slot, block_id) => {
                 events.push(VotorEvent::BlockNotarized((slot, block_id)));
                 self.parent_ready_tracker
-                    .add_new_notar_fallback_or_equivalent((slot, block_id), events);
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self.is_finalized(slot) {
                     // It's fine to set FastFinalization to false here, because
                     // we will report correctly as long as we have FastFinalization cert.
@@ -364,7 +364,7 @@ impl CertificatePool {
             Certificate::FinalizeFast(slot, block_id) => {
                 events.push(VotorEvent::Finalized((slot, block_id), true));
                 self.parent_ready_tracker
-                    .add_new_notar_fallback_or_equivalent((slot, block_id), events);
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
                 }
