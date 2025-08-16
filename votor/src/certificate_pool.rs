@@ -322,7 +322,7 @@ impl CertificatePool {
         match cert_id {
             Certificate::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
-                    .add_new_notar_fallback((slot, block_id), events);
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self
                     .highest_notarized_fallback
                     .is_none_or(|(s, _)| s < slot)
@@ -333,6 +333,8 @@ impl CertificatePool {
             Certificate::Skip(slot) => self.parent_ready_tracker.add_new_skip(slot, events),
             Certificate::Notarize(slot, block_id) => {
                 events.push(VotorEvent::BlockNotarized((slot, block_id)));
+                self.parent_ready_tracker
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self.is_finalized(slot) {
                     // It's fine to set FastFinalization to false here, because
                     // we will report correctly as long as we have FastFinalization cert.
@@ -361,6 +363,8 @@ impl CertificatePool {
             }
             Certificate::FinalizeFast(slot, block_id) => {
                 events.push(VotorEvent::Finalized((slot, block_id), true));
+                self.parent_ready_tracker
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
                 }
@@ -2178,5 +2182,112 @@ mod tests {
             && cert.certificate.certificate_type() == CertificateType::Notarize));
         assert!(certs.iter().any(|cert| cert.certificate.slot() == 7
             && cert.certificate.certificate_type() == CertificateType::Skip));
+    }
+
+    #[test]
+    fn test_new_parent_ready_with_certificates() {
+        solana_logger::setup();
+        let (_, mut pool, bank_forks) = create_initial_state();
+        let bank = bank_forks.read().unwrap().root_bank();
+        let mut events = vec![];
+
+        // Add a notarization cert on slot 1 to 3
+        let hash = Hash::new_unique();
+        for slot in 1..=3 {
+            let cert = CertificateMessage {
+                certificate: Certificate::new(CertificateType::Notarize, slot, Some(hash)),
+                signature: BLSSignature::default(),
+                bitmap: Vec::new(),
+            };
+            assert!(pool
+                .add_message(
+                    bank.epoch_schedule(),
+                    bank.epoch_stakes_map(),
+                    bank.slot(),
+                    &Pubkey::new_unique(),
+                    &BLSMessage::Certificate(cert),
+                    &mut events,
+                )
+                .is_ok());
+        }
+        // events should now contain ParentReady for slot 4
+        error!("Events: {:?}", events);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, VotorEvent::ParentReady {
+                slot: 4,
+                parent_block: (3, h)
+            } if h == &hash)));
+        events.clear();
+
+        // Also works if we add FinalizeFast for slot 4 to 7
+        for slot in 4..=7 {
+            let cert = CertificateMessage {
+                certificate: Certificate::new(CertificateType::FinalizeFast, slot, Some(hash)),
+                signature: BLSSignature::default(),
+                bitmap: Vec::new(),
+            };
+            assert!(pool
+                .add_message(
+                    bank.epoch_schedule(),
+                    bank.epoch_stakes_map(),
+                    bank.slot(),
+                    &Pubkey::new_unique(),
+                    &BLSMessage::Certificate(cert),
+                    &mut events,
+                )
+                .is_ok());
+        }
+        // events should now contain ParentReady for slot 8
+        error!("Events: {:?}", events);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, VotorEvent::ParentReady {
+                slot: 8,
+                parent_block: (7, h)
+            } if h == &hash)));
+        events.clear();
+
+        // NotarizeFallback on slot 8 to 10 and FinalizeFast on slot 11
+        for slot in 8..=10 {
+            let cert = CertificateMessage {
+                certificate: Certificate::new(CertificateType::NotarizeFallback, slot, Some(hash)),
+                signature: BLSSignature::default(),
+                bitmap: Vec::new(),
+            };
+            assert!(pool
+                .add_message(
+                    bank.epoch_schedule(),
+                    bank.epoch_stakes_map(),
+                    bank.slot(),
+                    &Pubkey::new_unique(),
+                    &BLSMessage::Certificate(cert),
+                    &mut events,
+                )
+                .is_ok());
+        }
+        let cert = CertificateMessage {
+            certificate: Certificate::new(CertificateType::FinalizeFast, 11, Some(hash)),
+            signature: BLSSignature::default(),
+            bitmap: Vec::new(),
+        };
+        assert!(pool
+            .add_message(
+                bank.epoch_schedule(),
+                bank.epoch_stakes_map(),
+                bank.slot(),
+                &Pubkey::new_unique(),
+                &BLSMessage::Certificate(cert),
+                &mut events,
+            )
+            .is_ok());
+        // events should now contain ParentReady for slot 12
+        error!("Events: {:?}", events);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, VotorEvent::ParentReady {
+            slot: 12,
+            parent_block: (11, h)
+        } if h == &hash)));
     }
 }
