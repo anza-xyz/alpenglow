@@ -45,9 +45,10 @@ use {
     },
     solana_client::connection_cache::{ConnectionCache, Protocol},
     solana_clock::Slot,
+    solana_cluster_type::ClusterType,
     solana_entry::poh::compute_hash_time,
     solana_epoch_schedule::MAX_LEADER_SCHEDULE_EPOCH_OFFSET,
-    solana_genesis_config::{ClusterType, GenesisConfig},
+    solana_genesis_config::GenesisConfig,
     solana_geyser_plugin_manager::{
         geyser_plugin_service::GeyserPluginService, GeyserPluginManagerRequest,
     },
@@ -2110,7 +2111,7 @@ fn post_process_restored_vote_history(
             datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{}", message);
 
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(
                 hard_fork_restart_slot,
@@ -2118,7 +2119,7 @@ fn post_process_restored_vote_history(
         }
 
         if let Some(warp_slot) = config.warp_slot {
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(warp_slot));
         }
