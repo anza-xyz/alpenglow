@@ -381,6 +381,7 @@ dependencies = [
  "solana-sha256-hasher 3.0.0",
  "solana-slot-hashes 3.0.0",
  "solana-stable-layout 3.0.0",
+ "solana-stake-interface 2.0.0",
  "solana-svm-callback",
  "solana-svm-feature-set",
  "solana-sysvar 3.0.0",
@@ -548,12 +549,12 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-cli-output",
- "solana-hash 2.3.0",
+ "solana-hash 3.0.0",
  "solana-logger 2.3.1",
  "solana-metrics",
- "solana-native-token 2.2.2",
+ "solana-native-token 3.0.0",
  "solana-notifier",
- "solana-pubkey 2.4.0",
+ "solana-pubkey 3.0.0",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-version",
@@ -11804,6 +11805,7 @@ dependencies = [
  "solana-account 3.0.0",
  "solana-clap-utils",
  "solana-cli-config",
+ "solana-cli-output",
  "solana-client-traits",
  "solana-clock 3.0.0",
  "solana-commitment-config",
@@ -12491,6 +12493,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
+ "solana-cli-output",
  "solana-clock 3.0.0",
  "solana-commitment-config",
  "solana-hash 3.0.0",
@@ -12513,7 +12516,7 @@ dependencies = [
  "solana-transaction-error 3.0.0",
  "solana-transaction-status",
  "solana-version",
- "spl-associated-token-account-interface 1.0.0",
+ "spl-associated-token-account-interface",
  "spl-token",
  "tempfile",
  "thiserror 2.0.12",
@@ -12770,7 +12773,7 @@ dependencies = [
  "solana-transaction-error 3.0.0",
  "solana-transaction-status-client-types",
  "solana-vote-interface 3.0.0",
- "spl-associated-token-account-interface 2.0.0",
+ "spl-associated-token-account-interface",
  "spl-memo",
  "spl-token",
  "spl-token-2022",
@@ -13316,10 +13319,10 @@ dependencies = [
  "solana-clap-v3-utils",
  "solana-pubkey 3.0.0",
  "solana-remote-wallet",
- "solana-seed-derivable 2.2.1",
- "solana-signer 2.2.1",
+ "solana-seed-derivable 3.0.0",
+ "solana-signer 3.0.0",
  "solana-version",
- "solana-zk-token-sdk",
+ "solana-zk-sdk 4.0.0",
  "tempfile",
  "thiserror 2.0.12",
  "tiny-bip39",
@@ -13474,16 +13477,6 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
-]
-
-[[package]]
-name = "spl-associated-token-account-interface"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e6bbe0794e532ac08428d3abf5bf8ae75bd81dfddd785c388e326c00c92c6f5"
-dependencies = [
- "solana-instruction 2.3.0",
- "solana-pubkey 2.4.0",
 ]
 
 [[package]]

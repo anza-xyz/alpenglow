@@ -26,7 +26,7 @@ use {
 #[cfg(feature = "dev-context-only-utils")]
 use {
     solana_account::WritableAccount,
-    solana_vote_interface::state::{VoteState, VoteStateVersions},
+    solana_vote_interface::state::{VoteStateV3, VoteStateVersions},
 };
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -210,7 +210,7 @@ impl VoteAccount {
         use {
             rand::Rng as _,
             solana_clock::Clock,
-            solana_vote_interface::state::{VoteInit, VoteState, VoteStateVersions},
+            solana_vote_interface::state::{VoteInit, VoteStateV3, VoteStateVersions},
         };
 
         let mut rng = rand::thread_rng();
@@ -228,10 +228,10 @@ impl VoteAccount {
             leader_schedule_epoch: rng.gen(),
             unix_timestamp: rng.gen(),
         };
-        let vote_state = VoteState::new(&vote_init, &clock);
+        let vote_state = VoteStateV3::new(&vote_init, &clock);
         let account = AccountSharedData::new_data(
             rng.gen(), // lamports
-            &VoteStateVersions::new_current(vote_state.clone()),
+            &VoteStateVersions::new_v3(vote_state.clone()),
             &solana_sdk_ids::vote::id(), // owner
         )
         .unwrap();
@@ -240,10 +240,10 @@ impl VoteAccount {
     }
 
     #[cfg(feature = "dev-context-only-utils")]
-    pub fn new_from_vote_state(vote_state: &VoteState) -> VoteAccount {
+    pub fn new_from_vote_state(vote_state: &VoteStateV3) -> VoteAccount {
         let account = AccountSharedData::new_data(
             100, // lamports
-            &VoteStateVersions::new_current(vote_state.clone()),
+            &VoteStateVersions::new_v3(vote_state.clone()),
             &solana_sdk_ids::vote::id(), // owner
         )
         .unwrap();
@@ -602,7 +602,7 @@ mod tests {
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_clock::Clock,
         solana_pubkey::Pubkey,
-        solana_vote_interface::state::{VoteInit, VoteState, VoteStateVersions},
+        solana_vote_interface::state::{VoteInit, VoteStateV3, VoteStateVersions},
         std::iter::repeat_with,
     };
 
@@ -623,10 +623,10 @@ mod tests {
             leader_schedule_epoch: rng.gen(),
             unix_timestamp: rng.gen(),
         };
-        let vote_state = VoteState::new(&vote_init, &clock);
+        let vote_state = VoteStateV3::new(&vote_init, &clock);
         AccountSharedData::new_data(
             rng.gen(), // lamports
-            &VoteStateVersions::new_current(vote_state.clone()),
+            &VoteStateVersions::new_v3(vote_state.clone()),
             &solana_sdk_ids::vote::id(), // owner
         )
         .unwrap()

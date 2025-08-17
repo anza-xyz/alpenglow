@@ -5,9 +5,9 @@ use {
     },
     console::style,
     solana_account_decoder::parse_token::{real_number_string, real_number_string_trimmed},
+    solana_cli_output::display::build_balance_message,
     solana_instruction::Instruction,
     solana_message::Message,
-    solana_native_token::lamports_to_sol,
     solana_rpc_client::rpc_client::RpcClient,
     spl_associated_token_account_interface::{
         address::get_associated_token_address, instruction::create_associated_token_account,
@@ -96,7 +96,7 @@ pub(crate) fn check_spl_token_balances(
     if fee_payer_balance < fees + account_creation_amount {
         return Err(Error::InsufficientFunds(
             vec![FundingSource::FeePayer].into(),
-            lamports_to_sol(fees + account_creation_amount).to_string(),
+            build_balance_message(fees + account_creation_amount, false, false).to_string(),
         ));
     }
     let source_token_account = client
