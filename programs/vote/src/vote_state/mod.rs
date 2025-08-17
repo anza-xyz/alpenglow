@@ -53,7 +53,7 @@ fn set_vote_account_state(
         )));
     }
     // Vote account is large enough to store the newest version of vote state
-    vote_account.set_state(&VoteStateVersions::new_current(vote_state))
+    vote_account.set_state(&VoteStateVersions::new_v3(vote_state))
 }
 
 /// Checks the proposed vote state with the current and

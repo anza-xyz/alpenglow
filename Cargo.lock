@@ -230,17 +230,17 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-output",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-compute-budget",
  "solana-core",
  "solana-cost-model",
  "solana-entry",
  "solana-feature-gate-interface 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-geyser-plugin-manager",
  "solana-gossip",
  "solana-hash 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
  "solana-ledger",
@@ -258,7 +258,7 @@ dependencies = [
  "solana-runtime-transaction",
  "solana-sbpf",
  "solana-sdk-ids 3.0.0",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signature 3.0.0",
  "solana-stake-interface 2.0.0",
  "solana-stake-program",
@@ -485,7 +485,7 @@ dependencies = [
  "solana-geyser-plugin-manager",
  "solana-gossip",
  "solana-hash 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-keypair 3.0.0",
  "solana-ledger",
  "solana-logger 2.3.1",
@@ -512,7 +512,7 @@ dependencies = [
  "solana-streamer",
  "solana-system-interface 2.0.0",
  "solana-test-validator",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-turbine",
  "solana-unified-scheduler-pool",
@@ -7131,7 +7131,7 @@ dependencies = [
  "solana-message 3.0.0",
  "solana-native-token 3.0.0",
  "solana-net-utils",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-program-pack 3.0.0",
  "solana-pubkey 3.0.0",
  "solana-rpc-client",
@@ -7199,7 +7199,7 @@ dependencies = [
  "solana-fee-calculator 3.0.0",
  "solana-frozen-abi 3.0.0",
  "solana-frozen-abi-macro 2.2.1",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
@@ -7212,7 +7212,6 @@ dependencies = [
  "solana-pubkey 3.0.0",
  "solana-rayon-threadlimit",
  "solana-rent 3.0.0",
- "solana-rent-collector",
  "solana-reward-info",
  "solana-sdk-ids 3.0.0",
  "solana-sha256-hasher 3.0.0",
@@ -7221,10 +7220,11 @@ dependencies = [
  "solana-slot-hashes 3.0.0",
  "solana-slot-history 3.0.0",
  "solana-stake-program",
+ "solana-svm",
  "solana-svm-transaction",
  "solana-system-interface 2.0.0",
  "solana-sysvar 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction",
  "solana-transaction-context",
  "solana-transaction-error 3.0.0",
@@ -7348,7 +7348,7 @@ dependencies = [
  "solana-streamer",
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-transaction",
  "solana-version",
@@ -7471,7 +7471,7 @@ dependencies = [
  "solana-faucet",
  "solana-fee-calculator 3.0.0",
  "solana-genesis",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-gossip",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
@@ -7498,7 +7498,7 @@ dependencies = [
  "solana-streamer",
  "solana-system-interface 2.0.0",
  "solana-test-validator",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tps-client",
  "solana-tpu-client",
  "solana-transaction",
@@ -7618,7 +7618,7 @@ dependencies = [
  "solana-sanitize 3.0.0",
  "solana-sha256-hasher 3.0.0",
  "solana-signature 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
 ]
 
 [[package]]
@@ -7874,7 +7874,7 @@ dependencies = [
  "rpassword",
  "solana-bls-signatures",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-derivation-path 3.0.0",
  "solana-hash 3.0.0",
@@ -7904,7 +7904,7 @@ dependencies = [
  "clap 3.2.23",
  "rpassword",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-derivation-path 3.0.0",
  "solana-hash 3.0.0",
@@ -7964,7 +7964,7 @@ dependencies = [
  "solana-cli-output",
  "solana-client",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-compute-budget-interface",
  "solana-config-interface 2.0.0",
@@ -8082,7 +8082,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-transaction-status-client-types",
  "solana-vote-program",
- "spl-memo",
+ "spl-memo-interface",
 ]
 
 [[package]]
@@ -8122,7 +8122,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-streamer",
  "solana-thin-client",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-transaction",
  "solana-transaction-error 3.0.0",
@@ -8214,15 +8214,6 @@ dependencies = [
  "solana-sdk-ids 3.0.0",
  "solana-sdk-macro 3.0.0",
  "solana-sysvar-id 3.0.0",
-]
-
-[[package]]
-name = "solana-cluster-type"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ace9fea2daa28354d107ea879cff107181d85cd4e0f78a2bedb10e1a428c97e"
-dependencies = [
- "solana-hash 2.3.0",
 ]
 
 [[package]]
@@ -8385,7 +8376,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-net-utils",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction-error 3.0.0",
  "thiserror 2.0.12",
  "tokio",
@@ -8451,7 +8442,7 @@ dependencies = [
  "solana-builtins-default-costs",
  "solana-client",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-compute-budget-interface",
@@ -8466,10 +8457,10 @@ dependencies = [
  "solana-fee-structure",
  "solana-frozen-abi 3.0.0",
  "solana-frozen-abi-macro 2.2.1",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-geyser-plugin-manager",
  "solana-gossip",
- "solana-hard-forks 3.0.0",
+ "solana-hard-forks",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
@@ -8486,7 +8477,7 @@ dependencies = [
  "solana-packet",
  "solana-perf",
  "solana-poh",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-quic-client",
@@ -8502,7 +8493,7 @@ dependencies = [
  "solana-send-transaction-service",
  "solana-sha256-hasher 3.0.0",
  "solana-short-vec 3.0.0",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signature 3.0.0",
  "solana-signer 3.0.0",
  "solana-slot-hashes 3.0.0",
@@ -8515,7 +8506,7 @@ dependencies = [
  "solana-system-program",
  "solana-system-transaction",
  "solana-sysvar 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-timings",
  "solana-tls-utils",
  "solana-tpu-client",
@@ -8533,7 +8524,7 @@ dependencies = [
  "solana-votor",
  "solana-votor-messages",
  "solana-wen-restart",
- "spl-memo",
+ "spl-memo-interface",
  "static_assertions",
  "strum",
  "strum_macros",
@@ -8732,7 +8723,7 @@ dependencies = [
  "solana-stake-interface 2.0.0",
  "solana-streamer",
  "solana-system-interface 2.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tps-client",
  "solana-tpu-client",
  "solana-transaction",
@@ -8746,7 +8737,7 @@ dependencies = [
  "log",
  "solana-clock 3.0.0",
  "solana-file-download",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-runtime",
 ]
 
@@ -9153,20 +9144,20 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-entry",
  "solana-epoch-schedule 3.0.0",
  "solana-feature-gate-interface 3.0.0",
  "solana-fee-calculator 3.0.0",
- "solana-genesis-config 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-genesis-config",
+ "solana-inflation",
  "solana-keypair 3.0.0",
  "solana-ledger",
  "solana-loader-v3-interface 6.1.0",
  "solana-logger 2.3.1",
  "solana-native-token 3.0.0",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-pubkey 3.0.0",
  "solana-rent 3.0.0",
  "solana-rpc-client",
@@ -9176,40 +9167,12 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-stake-interface 2.0.0",
  "solana-stake-program",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-version",
  "solana-vote",
  "solana-vote-program",
  "solana-votor-messages",
  "tempfile",
-]
-
-[[package]]
-name = "solana-genesis-config"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3725085d47b96d37fef07a29d78d2787fc89a0b9004c66eed7753d1e554989f"
-dependencies = [
- "bincode",
- "chrono",
- "memmap2 0.5.10",
- "solana-account 2.2.1",
- "solana-clock 2.2.2",
- "solana-cluster-type 2.2.1",
- "solana-epoch-schedule 2.2.1",
- "solana-fee-calculator 2.2.1",
- "solana-hash 2.3.0",
- "solana-inflation 2.2.1",
- "solana-keypair 2.2.1",
- "solana-logger 2.3.1",
- "solana-poh-config 2.2.1",
- "solana-pubkey 2.4.0",
- "solana-rent 2.2.1",
- "solana-sdk-ids 2.2.1",
- "solana-sha256-hasher 2.3.0",
- "solana-shred-version 2.2.1",
- "solana-signer 2.2.1",
- "solana-time-utils 2.2.1",
 ]
 
 [[package]]
@@ -9225,20 +9188,20 @@ dependencies = [
  "serde_derive",
  "solana-account 3.0.0",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-epoch-schedule 3.0.0",
  "solana-fee-calculator 3.0.0",
  "solana-hash 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-keypair 3.0.0",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-pubkey 3.0.0",
  "solana-rent 3.0.0",
  "solana-sdk-ids 3.0.0",
  "solana-sha256-hasher 3.0.0",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signer 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
 ]
 
 [[package]]
@@ -9248,7 +9211,7 @@ dependencies = [
  "log",
  "solana-accounts-db",
  "solana-download-utils",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-hash 3.0.0",
  "solana-rpc-client",
 ]
@@ -9319,7 +9282,7 @@ dependencies = [
  "solana-clap-utils",
  "solana-client",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-connection-cache",
  "solana-entry",
  "solana-epoch-schedule 3.0.0",
@@ -9348,7 +9311,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-streamer",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-transaction",
  "solana-version",
@@ -9359,12 +9322,6 @@ dependencies = [
  "test-case",
  "thiserror 2.0.12",
 ]
-
-[[package]]
-name = "solana-hard-forks"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6c28371f878e2ead55611d8ba1b5fb879847156d04edea13693700ad1a28baf"
 
 [[package]]
 name = "solana-hard-forks"
@@ -9413,12 +9370,6 @@ dependencies = [
  "solana-frozen-abi-macro 3.0.0",
  "solana-sanitize 3.0.0",
 ]
-
-[[package]]
-name = "solana-inflation"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23eef6a09eb8e568ce6839573e4966850e85e9ce71e6ae1a6c930c1c43947de3"
 
 [[package]]
 name = "solana-inflation"
@@ -9692,7 +9643,7 @@ dependencies = [
  "solana-epoch-schedule 3.0.0",
  "solana-frozen-abi 3.0.0",
  "solana-frozen-abi-macro 2.2.1",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
@@ -9714,7 +9665,7 @@ dependencies = [
  "solana-runtime-transaction",
  "solana-seed-derivable 3.0.0",
  "solana-sha256-hasher 3.0.0",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signature 3.0.0",
  "solana-signer 3.0.0",
  "solana-stake-interface 2.0.0",
@@ -9726,7 +9677,7 @@ dependencies = [
  "solana-svm-transaction",
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-timings",
  "solana-transaction",
  "solana-transaction-context",
@@ -9886,16 +9837,16 @@ dependencies = [
  "solana-client",
  "solana-client-traits",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-connection-cache",
  "solana-core",
  "solana-download-utils",
  "solana-entry",
  "solana-epoch-schedule 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-gossip",
- "solana-hard-forks 3.0.0",
+ "solana-hard-forks",
  "solana-hash 3.0.0",
  "solana-keypair 3.0.0",
  "solana-ledger",
@@ -9904,7 +9855,7 @@ dependencies = [
  "solana-message 3.0.0",
  "solana-native-token 3.0.0",
  "solana-net-utils",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-pubkey 3.0.0",
  "solana-pubsub-client",
  "solana-quic-client",
@@ -9912,7 +9863,7 @@ dependencies = [
  "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk-ids 3.0.0",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signer 3.0.0",
  "solana-slot-hashes 3.0.0",
  "solana-stake-interface 2.0.0",
@@ -9921,7 +9872,7 @@ dependencies = [
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
  "solana-thin-client",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-transaction",
  "solana-transaction-error 3.0.0",
@@ -10057,9 +10008,9 @@ dependencies = [
  "rand 0.8.5",
  "reqwest 0.12.22",
  "serial_test",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-sha256-hasher 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "thiserror 2.0.12",
 ]
 
@@ -10254,7 +10205,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction",
  "solana-vote",
  "solana-vote-program",
@@ -10285,13 +10236,13 @@ dependencies = [
  "solana-metrics",
  "solana-perf",
  "solana-poh",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-pubkey 3.0.0",
  "solana-runtime",
  "solana-sha256-hasher 3.0.0",
  "solana-signer 3.0.0",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction",
  "thiserror 2.0.12",
  "tikv-jemallocator",
@@ -10312,12 +10263,6 @@ dependencies = [
  "solana-sha256-hasher 3.0.0",
  "solana-version",
 ]
-
-[[package]]
-name = "solana-poh-config"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d650c3b4b9060082ac6b0efbbb66865089c58405bfb45de449f3f2b91eccee75"
 
 [[package]]
 name = "solana-poh-config"
@@ -10655,14 +10600,14 @@ dependencies = [
  "solana-banks-interface",
  "solana-banks-server",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-compute-budget",
  "solana-cpi 3.0.0",
  "solana-epoch-rewards 3.0.0",
  "solana-epoch-schedule 3.0.0",
  "solana-fee-calculator 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
@@ -10672,7 +10617,7 @@ dependencies = [
  "solana-message 3.0.0",
  "solana-msg 3.0.0",
  "solana-native-token 3.0.0",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-program 3.0.0",
  "solana-program-entrypoint 3.1.0",
  "solana-program-error 3.0.0",
@@ -10865,25 +10810,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-rent-collector"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c1e19f5d5108b0d824244425e43bc78bbb9476e2199e979b0230c9f632d3bf4"
-dependencies = [
- "serde",
- "serde_derive",
- "solana-account 2.2.1",
- "solana-clock 2.2.2",
- "solana-epoch-schedule 2.2.1",
- "solana-frozen-abi 2.3.0",
- "solana-frozen-abi-macro 2.2.1",
- "solana-genesis-config 2.3.0",
- "solana-pubkey 2.4.0",
- "solana-rent 2.2.1",
- "solana-sdk-ids 2.2.1",
-]
-
-[[package]]
 name = "solana-reward-info"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10926,7 +10852,7 @@ dependencies = [
  "solana-cli-output",
  "solana-client",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-compute-budget-interface",
  "solana-entry",
@@ -10936,7 +10862,7 @@ dependencies = [
  "solana-faucet",
  "solana-fee-calculator 3.0.0",
  "solana-fee-structure",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-gossip",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
@@ -10952,7 +10878,7 @@ dependencies = [
  "solana-nonce-account",
  "solana-perf",
  "solana-poh",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-program-option 3.0.0",
  "solana-program-pack 3.0.0",
  "solana-program-runtime",
@@ -10978,7 +10904,7 @@ dependencies = [
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
  "solana-sysvar 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client",
  "solana-transaction",
  "solana-transaction-context",
@@ -11114,7 +11040,7 @@ dependencies = [
  "solana-clock 3.0.0",
  "solana-commitment-config",
  "solana-fee-calculator 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-pubkey 3.0.0",
  "solana-transaction-error 3.0.0",
  "solana-transaction-status-client-types",
@@ -11221,7 +11147,7 @@ dependencies = [
  "solana-builtins",
  "solana-client-traits",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-compute-budget",
  "solana-compute-budget-instruction",
@@ -11238,10 +11164,10 @@ dependencies = [
  "solana-fee-structure",
  "solana-frozen-abi 3.0.0",
  "solana-frozen-abi-macro 2.2.1",
- "solana-genesis-config 3.0.0",
- "solana-hard-forks 3.0.0",
+ "solana-genesis-config",
+ "solana-hard-forks",
  "solana-hash 3.0.0",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-instruction 3.0.0",
  "solana-instruction-error",
  "solana-keypair 3.0.0",
@@ -11258,14 +11184,13 @@ dependencies = [
  "solana-nonce-account",
  "solana-packet",
  "solana-perf",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-precompile-error",
  "solana-program 3.0.0",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-rayon-threadlimit",
  "solana-rent 3.0.0",
- "solana-rent-collector",
  "solana-reward-info",
  "solana-runtime",
  "solana-runtime-transaction",
@@ -11282,14 +11207,13 @@ dependencies = [
  "solana-stake-program",
  "solana-svm",
  "solana-svm-callback",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface 2.0.0",
  "solana-system-program",
  "solana-system-transaction",
  "solana-sysvar 3.0.0",
  "solana-sysvar-id 3.0.0",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-timings",
  "solana-transaction",
  "solana-transaction-context",
@@ -11529,7 +11453,7 @@ dependencies = [
  "solana-clock 3.0.0",
  "solana-connection-cache",
  "solana-fee-calculator 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-hash 3.0.0",
  "solana-keypair 3.0.0",
  "solana-logger 2.3.1",
@@ -11545,7 +11469,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-system-interface 2.0.0",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tpu-client-next",
  "tokio",
  "tokio-util 0.7.15",
@@ -11644,22 +11568,11 @@ dependencies = [
 
 [[package]]
 name = "solana-shred-version"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afd3db0461089d1ad1a78d9ba3f15b563899ca2386351d38428faa5350c60a98"
-dependencies = [
- "solana-hard-forks 2.2.1",
- "solana-hash 2.3.0",
- "solana-sha256-hasher 2.3.0",
-]
-
-[[package]]
-name = "solana-shred-version"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94953e22ca28fe4541a3447d6baeaf519cc4ddc063253bfa673b721f34c136bb"
 dependencies = [
- "solana-hard-forks 3.0.0",
+ "solana-hard-forks",
  "solana-hash 3.0.0",
  "solana-sha256-hasher 3.0.0",
 ]
@@ -11810,7 +11723,7 @@ dependencies = [
  "solana-clock 3.0.0",
  "solana-commitment-config",
  "solana-fee-calculator 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
  "solana-message 3.0.0",
@@ -11889,7 +11802,7 @@ dependencies = [
  "solana-config-interface 2.0.0",
  "solana-epoch-rewards 3.0.0",
  "solana-epoch-schedule 3.0.0",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-instruction 3.0.0",
  "solana-log-collector",
  "solana-native-token 3.0.0",
@@ -11968,7 +11881,7 @@ dependencies = [
  "solana-signature 3.0.0",
  "solana-storage-proto",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction",
  "solana-transaction-context",
  "solana-transaction-error 3.0.0",
@@ -12044,7 +11957,7 @@ dependencies = [
  "solana-signature 3.0.0",
  "solana-signer 3.0.0",
  "solana-streamer",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tls-utils",
  "solana-transaction-error 3.0.0",
  "solana-transaction-metrics-tracker",
@@ -12108,7 +12021,6 @@ dependencies = [
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-rent 3.0.0",
- "solana-rent-collector",
  "solana-sbpf",
  "solana-sdk-ids 3.0.0",
  "solana-secp256k1-program",
@@ -12120,7 +12032,6 @@ dependencies = [
  "solana-svm-callback",
  "solana-svm-conformance",
  "solana-svm-feature-set",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface 2.0.0",
  "solana-system-program",
@@ -12159,21 +12070,6 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "3.0.0"
-
-[[package]]
-name = "solana-svm-rent-collector"
-version = "3.0.0"
-dependencies = [
- "solana-account 3.0.0",
- "solana-clock 3.0.0",
- "solana-epoch-schedule 3.0.0",
- "solana-pubkey 3.0.0",
- "solana-rent 3.0.0",
- "solana-rent-collector",
- "solana-sdk-ids 3.0.0",
- "solana-transaction-context",
- "solana-transaction-error 3.0.0",
-]
 
 [[package]]
 name = "solana-svm-transaction"
@@ -12380,7 +12276,7 @@ dependencies = [
  "solana-bls-signatures",
  "solana-cli-output",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-commitment-config",
  "solana-compute-budget",
  "solana-core",
@@ -12389,7 +12285,7 @@ dependencies = [
  "solana-fee-calculator 3.0.0",
  "solana-geyser-plugin-manager",
  "solana-gossip",
- "solana-inflation 3.0.0",
+ "solana-inflation",
  "solana-instruction 3.0.0",
  "solana-keypair 3.0.0",
  "solana-ledger",
@@ -12441,12 +12337,6 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-error 3.0.0",
 ]
-
-[[package]]
-name = "solana-time-utils"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af261afb0e8c39252a04d026e3ea9c405342b08c871a2ad8aa5448e068c784c"
 
 [[package]]
 name = "solana-time-utils"
@@ -12609,7 +12499,7 @@ dependencies = [
  "solana-rpc-client",
  "solana-signer 3.0.0",
  "solana-streamer",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tls-utils",
  "solana-tpu-client",
  "thiserror 2.0.12",
@@ -12684,7 +12574,7 @@ dependencies = [
  "solana-message 3.0.0",
  "solana-net-utils",
  "solana-packet",
- "solana-poh-config 3.0.0",
+ "solana-poh-config",
  "solana-pubkey 3.0.0",
  "solana-rpc-client",
  "solana-runtime",
@@ -12774,7 +12664,7 @@ dependencies = [
  "solana-transaction-status-client-types",
  "solana-vote-interface 3.0.0",
  "spl-associated-token-account-interface",
- "spl-memo",
+ "spl-memo-interface",
  "spl-token",
  "spl-token-2022",
  "spl-token-confidential-transfer-proof-extraction 0.5.0",
@@ -12831,9 +12721,9 @@ dependencies = [
  "rayon",
  "rustls 0.23.31",
  "solana-clock 3.0.0",
- "solana-cluster-type 3.0.0",
+ "solana-cluster-type",
  "solana-entry",
- "solana-genesis-config 3.0.0",
+ "solana-genesis-config",
  "solana-gossip",
  "solana-hash 3.0.0",
  "solana-keypair 3.0.0",
@@ -12855,7 +12745,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-streamer",
  "solana-system-transaction",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-tls-utils",
  "solana-transaction",
  "solana-transaction-error 3.0.0",
@@ -13207,7 +13097,7 @@ dependencies = [
  "solana-signature 3.0.0",
  "solana-signer 3.0.0",
  "solana-signer-store",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-transaction",
  "solana-vote",
  "solana-vote-program",
@@ -13261,10 +13151,10 @@ dependencies = [
  "solana-logger 2.3.1",
  "solana-pubkey 3.0.0",
  "solana-runtime",
- "solana-shred-version 3.0.0",
+ "solana-shred-version",
  "solana-signer 3.0.0",
  "solana-streamer",
- "solana-time-utils 3.0.0",
+ "solana-time-utils",
  "solana-timings",
  "solana-vote",
  "solana-vote-interface 3.0.0",

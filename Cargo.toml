@@ -109,7 +109,6 @@ members = [
     "svm-callback",
     "svm-conformance",
     "svm-feature-set",
-    "svm-rent-collector",
     "svm-transaction",
     "syscalls",
     "syscalls/gen-syscall-list",
@@ -508,7 +507,6 @@ solana-quic-definitions = "3.0.0"
 solana-rayon-threadlimit = { path = "rayon-threadlimit", version = "=3.0.0" }
 solana-remote-wallet = { path = "remote-wallet", version = "=3.0.0", default-features = false }
 solana-rent = "3.0.0"
-solana-rent-collector = "2.2.1"
 solana-reward-info = "3.0.0"
 solana-rpc = { path = "rpc", version = "=3.0.0" }
 solana-rpc-client = { path = "rpc-client", version = "=3.0.0", default-features = false }
@@ -547,7 +545,6 @@ solana-svm = { path = "svm", version = "=3.0.0" }
 solana-svm-callback = { path = "svm-callback", version = "=3.0.0" }
 solana-svm-conformance = { path = "svm-conformance", version = "=3.0.0" }
 solana-svm-feature-set = { path = "svm-feature-set", version = "=3.0.0" }
-solana-svm-rent-collector = { path = "svm-rent-collector", version = "=3.0.0" }
 solana-svm-transaction = { path = "svm-transaction", version = "=3.0.0" }
 solana-system-interface = "2.0"
 solana-system-program = { path = "programs/system", version = "=3.0.0" }
@@ -591,7 +588,6 @@ solana-zk-token-sdk = { path = "zk-token-sdk", version = "=3.0.0" }
 spl-associated-token-account-interface = "2.0.0"
 spl-generic-token = "2.0.0"
 spl-instruction-padding = "0.3.0"
-spl-memo = "6.0.0"
 spl-memo-interface = "2.0.0"
 spl-pod = "0.7.0"
 spl-token = "8.0.0"
@@ -673,9 +669,9 @@ crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "fd279d
 
 # We include the following crates as our dependencies above from crates.io:
 #
-#  * spl-associated-token-account
+#  * spl-associated-token-account-interface
 #  * spl-instruction-padding
-#  * spl-memo
+#  * spl-memo-interface
 #  * spl-pod
 #  * spl-token
 #  * spl-token-2022
