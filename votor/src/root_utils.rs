@@ -102,6 +102,8 @@ pub(crate) fn set_root(
 ///                                                             |
 ///                                                             v
 /// ReplayStage::handle_new_root           -> root_utils::set_bank_forks_root(callback) -> callback()
+///
+/// Votor does not need the progress map or other tower bft structures, so it will not use the callback.
 #[allow(clippy::too_many_arguments)]
 pub fn check_and_handle_new_root<CB>(
     parent_slot: Slot,
@@ -168,7 +170,7 @@ where
         sender
             .sender
             .send((BankNotification::NewRootBank(root_bank), dependency_work))
-            .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
+            .unwrap_or_else(|err| warn!("bank_notification_sender failed: {err:?}"));
 
         if let Some(new_chain) = rooted_slots_with_parents {
             let dependency_work = sender
@@ -178,10 +180,10 @@ where
             sender
                 .sender
                 .send((BankNotification::NewRootedChain(new_chain), dependency_work))
-                .unwrap_or_else(|err| warn!("bank_notification_sender failed: {:?}", err));
+                .unwrap_or_else(|err| warn!("bank_notification_sender failed: {err:?}"));
         }
     }
-    info!("{} new root {}", my_pubkey, new_root);
+    info!("{my_pubkey}: new root {new_root}");
     Ok(())
 }
 
@@ -209,11 +211,8 @@ where
 
     drop_bank_sender
         .send(removed_banks)
-        .unwrap_or_else(|err| warn!("bank drop failed: {:?}", err));
+        .unwrap_or_else(|err| warn!("bank drop failed: {err:?}"));
 
-    // Dropping the bank_forks write lock and reacquiring as a read lock is
-    // safe because updates to bank_forks are only made by a single thread.
-    // TODO(ashwin): Once PR #245 lands move this back to ReplayStage
     let r_bank_forks = bank_forks.read().unwrap();
     callback(&r_bank_forks);
     Ok(())

@@ -4434,6 +4434,7 @@ impl ReplayStage {
         snapshot_controller: Option<&SnapshotController>,
         highest_super_majority_root: Option<Slot>,
         has_new_vote_been_rooted: &mut bool,
+        tracked_vote_transactions: &mut Vec<TrackedVoteTransaction>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
@@ -4449,7 +4450,7 @@ impl ReplayStage {
                     bank_forks,
                     progress,
                     has_new_vote_been_rooted,
-                    &mut vec![],
+                    tracked_vote_transactions,
                     tbft_structs,
                 )
             },
@@ -5026,6 +5027,7 @@ pub(crate) mod tests {
             None, // snapshot_controller
             None,
             &mut true,
+            &mut vec![],
             &drop_bank_sender,
             &mut tbft_structs,
         )
@@ -5114,6 +5116,7 @@ pub(crate) mod tests {
             None, // snapshot_controller
             Some(confirmed_root),
             &mut true,
+            &mut vec![],
             &drop_bank_sender,
             &mut tbft_structs,
         )
