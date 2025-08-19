@@ -49,13 +49,10 @@ impl TimerManagerStats {
         if new_timer_inserted {
             self.set_timeout_succeed_count = self.set_timeout_succeed_count.saturating_add(1);
         }
+        self.maybe_report();
     }
 
-    pub fn record_heap_size(&mut self, size: usize) {
-        self.max_heap_size = self.max_heap_size.max(size as u64);
-    }
-
-    pub fn maybe_report(&mut self) {
+    fn maybe_report(&mut self) {
         if self.last_report.elapsed() < STATS_REPORT_INTERVAL {
             return;
         }

@@ -6,7 +6,6 @@ use {
     std::{
         cmp::Reverse,
         collections::{BinaryHeap, HashMap, VecDeque},
-        sync::{Arc, Mutex},
         time::{Duration, Instant},
     },
 };
@@ -100,7 +99,7 @@ pub(super) struct Timers {
     /// Channel to send events on.
     event_sender: Sender<VotorEvent>,
     /// Stats for the timer manager.
-    stats: Arc<Mutex<TimerManagerStats>>,
+    stats: TimerManagerStats,
 }
 
 impl Timers {
@@ -108,7 +107,6 @@ impl Timers {
         delta_timeout: Duration,
         delta_block: Duration,
         event_sender: Sender<VotorEvent>,
-        stats: Arc<Mutex<TimerManagerStats>>,
     ) -> Self {
         Self {
             delta_timeout,
@@ -116,7 +114,7 @@ impl Timers {
             timers: HashMap::new(),
             heap: BinaryHeap::new(),
             event_sender,
-            stats,
+            stats: TimerManagerStats::new(),
         }
     }
 
@@ -133,8 +131,6 @@ impl Timers {
             timer
         });
         self.stats
-            .lock()
-            .unwrap()
             .incr_timeout_count_with_heap_size(self.heap.len(), new_timer_inserted);
     }
 
@@ -168,8 +164,12 @@ impl Timers {
                 }
             }
         }
-        self.stats.lock().unwrap().record_heap_size(self.heap.len());
         ret_timeout
+    }
+
+    #[cfg(test)]
+    pub(super) fn stats(&self) -> TimerManagerStats {
+        self.stats.clone()
     }
 }
 
@@ -224,8 +224,7 @@ mod tests {
         let one_micro = Duration::from_micros(1);
         let mut now = Instant::now();
         let (sender, receiver) = unbounded();
-        let stats = Arc::new(Mutex::new(TimerManagerStats::new()));
-        let mut timers = Timers::new(one_micro, one_micro, sender, stats.clone());
+        let mut timers = Timers::new(one_micro, one_micro, sender);
         assert!(timers.progress(now).is_none());
         assert!(receiver.try_recv().unwrap_err().is_empty());
 
@@ -244,9 +243,9 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
-        let stats = stats.lock().unwrap();
-        assert_eq!(stats.max_heap_size(), 1);
+        let stats = timers.stats();
         assert_eq!(stats.set_timeout_count(), 1);
         assert_eq!(stats.set_timeout_succeed_count(), 1);
+        assert_eq!(stats.max_heap_size(), 1);
     }
 }
