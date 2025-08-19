@@ -440,6 +440,20 @@ impl EventHandler {
     /// we never saw the parent ready for the first slot and haven't voted for first slot
     /// so we can't keep processing rest of the window. This is especially a problem for
     /// cluster standstill.
+    /// For example:
+    ///    A 40%
+    ///    B 40%
+    ///    C 30%
+    /// A and B finalize block together up to slot 9, now A exited and C joined.
+    /// C sees block 9 as finalized, but it never had parent ready triggered for slot 8.
+    /// C can't vote for any slot in the window because there is no parent ready for slot 8.
+    /// While B is stuck because it is waiting for >60% of the votes to finalize slot 9.
+    /// The cluster will get stuck.
+    /// After we add the following function, C will see that block 9 is finalized yet
+    /// it never had parent ready for slot 8, so it will find the block id of 8 from
+    /// finalized block 9, then trigger parent ready for slot 8, this means C will immediately
+    /// vote Notarize for both slot 8 and slot 9, then vote Notarize for all later slots.
+    /// So B and C together can keep finalizing the blocks and unstuck the cluster.
     /// If we get a finalization cert for later slots of the window and we have the block
     /// replayed, trace back to the first slot of the window and emit parent ready.
     fn add_missing_parent_ready(
