@@ -52,14 +52,20 @@ use {
     solana_keypair::{signable::Signable, Keypair},
     solana_ledger::shred::Shred,
     solana_net_utils::{
-        bind_in_range, bind_to_unspecified, sockets::bind_gossip_port_in_range, PortRange,
-        VALIDATOR_PORT_RANGE,
+        bind_in_range, bind_to_unspecified, find_available_ports_in_range,
+        sockets::{
+            bind_gossip_port_in_range, bind_in_range_with_config, bind_more_with_config,
+            bind_to_with_config, bind_two_in_range_with_offset_and_config,
+            localhost_port_range_for_tests, multi_bind_in_range_with_config, SocketConfiguration,
+        },
+        PortRange, VALIDATOR_PORT_RANGE,
     },
     solana_perf::{
         data_budget::DataBudget,
         packet::{Packet, PacketBatch, PacketBatchRecycler, PacketRef, PinnedPacketBatch},
     },
     solana_pubkey::Pubkey,
+    solana_quic_definitions::QUIC_PORT_OFFSET,
     solana_rayon_threadlimit::get_thread_count,
     solana_runtime::bank_forks::BankForks,
     solana_sanitize::Sanitize,
@@ -68,6 +74,7 @@ use {
     solana_streamer::{
         atomic_udp_socket::AtomicUdpSocket,
         packet,
+        quic::DEFAULT_QUIC_ENDPOINTS,
         socket::SocketAddrSpace,
         streamer::{ChannelSend, PacketBatchReceiver},
     },
@@ -82,7 +89,7 @@ use {
         io::{BufReader, BufWriter, Write},
         iter::repeat,
         net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket},
-        num::NonZeroUsize,
+        num::{NonZero, NonZeroUsize},
         ops::{Deref, Div},
         path::{Path, PathBuf},
         rc::Rc,
@@ -2492,6 +2499,7 @@ impl Node {
         node
     }
 
+    #[allow(deprecated)]
     pub fn new_with_external_ip(pubkey: &Pubkey, config: NodeConfig) -> Node {
         let NodeConfig {
             advertised_ip,
@@ -2511,7 +2519,7 @@ impl Node {
         let (gossip_port, (gossip, ip_echo)) =
             bind_gossip_port_in_range(&gossip_addr, port_range, bind_ip_addr);
 
-        let socket_config = SocketConfig::default();
+        let socket_config = SocketConfiguration::default();
 
         let (tvu_port, tvu_sockets) = multi_bind_in_range_with_config(
             bind_ip_addr,

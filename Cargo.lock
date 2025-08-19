@@ -12483,11 +12483,7 @@ dependencies = [
  "solana-program-pack",
  "solana-pubkey",
  "solana-sdk-ids",
-<<<<<<< HEAD
  "solana-zk-sdk 2.3.7",
-=======
- "solana-zk-sdk 2.3.6",
->>>>>>> c1ce9db99c (SPL: Use token-2022-interface crate (#7298))
  "spl-pod",
  "spl-token-confidential-transfer-proof-extraction",
  "spl-token-confidential-transfer-proof-generation",
@@ -12499,15 +12495,9 @@ dependencies = [
 
 [[package]]
 name = "spl-token-confidential-transfer-proof-extraction"
-<<<<<<< HEAD
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "512c85bdbbb4cbcc2038849a9e164c958b16541f252b53ea1a3933191c0a4a1a"
-=======
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bedc4675c80409a004da46978674e4073c65c4b1c611bf33d120381edeffe036"
->>>>>>> c1ce9db99c (SPL: Use token-2022-interface crate (#7298))
 dependencies = [
  "bytemuck",
  "solana-account-info",
@@ -12518,11 +12508,7 @@ dependencies = [
  "solana-program-error",
  "solana-pubkey",
  "solana-sdk-ids",
-<<<<<<< HEAD
  "solana-zk-sdk 2.3.7",
-=======
- "solana-zk-sdk 2.3.6",
->>>>>>> c1ce9db99c (SPL: Use token-2022-interface crate (#7298))
  "spl-pod",
  "thiserror 2.0.12",
 ]
@@ -12534,11 +12520,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae5b124840d4aed474cef101d946a798b806b46a509ee4df91021e1ab1cef3ef"
 dependencies = [
  "curve25519-dalek 4.1.3",
-<<<<<<< HEAD
  "solana-zk-sdk 2.3.7",
-=======
- "solana-zk-sdk 2.3.6",
->>>>>>> c1ce9db99c (SPL: Use token-2022-interface crate (#7298))
  "thiserror 2.0.12",
 ]
 

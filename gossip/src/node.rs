@@ -176,6 +176,9 @@ impl Node {
         )
         .expect("retransmit multi_bind");
 
+        let (alpenglow_port, alpenglow) =
+            bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
+                .expect("alpenglow bind");
         let (_, repair) = bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
             .expect("repair bind");
         let (_, repair_quic) = bind_in_range_with_config(bind_ip_addr, port_range, socket_config)
@@ -231,6 +234,7 @@ impl Node {
             .unwrap();
         info.set_serve_repair(QUIC, (advertised_ip, serve_repair_quic_port))
             .unwrap();
+        info.set_alpenglow((advertised_ip, alpenglow_port)).unwrap();
 
         let vortexor_receivers = vortexor_receiver_addr.map(|vortexor_receiver_addr| {
             multi_bind_in_range_with_config(
@@ -274,6 +278,7 @@ impl Node {
             tpu_transaction_forwarding_client,
             rpc_sts_client,
             vortexor_receivers,
+            alpenglow,
         };
         info!("Bound all network sockets as follows: {:#?}", &sockets);
         Node { info, sockets }
