@@ -244,6 +244,10 @@ impl VoteHistory {
         }
     }
 
+    pub fn highest_parent_ready_slot(&self) -> Option<Slot> {
+        self.parent_ready_slots.keys().max().copied()
+    }
+
     /// Sets the new root slot and cleans up outdated slots < `root`
     pub fn set_root(&mut self, root: Slot) {
         self.root = root;
