@@ -2,6 +2,7 @@
 //! in the event loop.
 // TODO: Make this mockable in event_handler for tests
 
+mod stats;
 mod timers;
 
 use {

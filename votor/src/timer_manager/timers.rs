@@ -1,5 +1,5 @@
 use {
-    crate::event::VotorEvent,
+    crate::{event::VotorEvent, timer_manager::stats::TimerManagerStats},
     crossbeam_channel::Sender,
     solana_clock::Slot,
     solana_ledger::leader_schedule_utils::last_of_consecutive_leader_slots,
@@ -98,6 +98,8 @@ pub(super) struct Timers {
     heap: BinaryHeap<Reverse<(Instant, Slot)>>,
     /// Channel to send events on.
     event_sender: Sender<VotorEvent>,
+    /// Stats for the timer manager.
+    stats: TimerManagerStats,
 }
 
 impl Timers {
@@ -112,6 +114,7 @@ impl Timers {
             timers: HashMap::new(),
             heap: BinaryHeap::new(),
             event_sender,
+            stats: TimerManagerStats::new(),
         }
     }
 
@@ -121,10 +124,14 @@ impl Timers {
         let (timer, next_fire) = TimerState::new(slot, self.delta_timeout, now);
         // It is possible that this slot already has a timer set e.g. if there
         // are multiple ParentReady for the same slot.  Do not insert new timer then.
+        let mut new_timer_inserted = false;
         self.timers.entry(slot).or_insert_with(|| {
             self.heap.push(Reverse((next_fire, slot)));
+            new_timer_inserted = true;
             timer
         });
+        self.stats
+            .incr_timeout_count_with_heap_size(self.heap.len(), new_timer_inserted);
     }
 
     /// Call to make progress on the timer states.  If there are still active
@@ -158,6 +165,11 @@ impl Timers {
             }
         }
         ret_timeout
+    }
+
+    #[cfg(test)]
+    pub(super) fn stats(&self) -> TimerManagerStats {
+        self.stats.clone()
     }
 }
 
@@ -231,5 +243,9 @@ mod tests {
         assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
         assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
         assert!(events.is_empty());
+        let stats = timers.stats();
+        assert_eq!(stats.set_timeout_count(), 1);
+        assert_eq!(stats.set_timeout_succeed_count(), 1);
+        assert_eq!(stats.max_heap_size(), 1);
     }
 }
