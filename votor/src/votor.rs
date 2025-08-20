@@ -42,6 +42,7 @@
 //!
 use {
     crate::{
+        alpenglow_metrics::AgMetrics,
         commitment::AlpenglowCommitmentAggregationData,
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
@@ -189,6 +190,7 @@ impl Votor {
             vote_history_storage,
         };
 
+        let ag_metrics = Arc::new(PlRwLock::new(AgMetrics::default()));
         let voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -201,6 +203,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             root_bank: root_bank.clone(),
+            ag_metrics: ag_metrics.clone(),
         };
 
         let root_context = RootContext {
@@ -213,6 +216,7 @@ impl Votor {
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
+            ag_metrics,
         )));
 
         let event_handler_context = EventHandlerContext {
