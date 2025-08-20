@@ -311,7 +311,10 @@ fn retransmit(
         Ok(shreds) => {
             shred_buf.push(shreds);
         }
-        Err(TryRecvError::Disconnected) => return Err(()),
+        Err(TryRecvError::Disconnected) => {
+            warn!("retransmit_receiver became disconnected.");
+            return Err(());
+        }
         Err(TryRecvError::Empty) => {
             if cache_retransmit_addrs(
                 thread_pool,
@@ -323,7 +326,10 @@ fn retransmit(
             ) {
                 return Ok(());
             }
-            shred_buf.push(retransmit_receiver.recv().map_err(|_| ())?);
+            let shreds = retransmit_receiver.recv().map_err(|err| {
+                warn!("retransmit_receiver.recv() failed with {err:?}");
+            })?;
+            shred_buf.push(shreds);
         }
     };
     // now the batch has started
@@ -430,7 +436,7 @@ fn retransmit(
         })
     };
 
-    stats.upsert_slot_stats(
+    let () = stats.upsert_slot_stats(
         slot_stats,
         root_bank.slot(),
         addr_cache,
@@ -665,10 +671,10 @@ impl RetransmitStage {
 
         let retransmit_thread_handle = Builder::new()
             .name("solRetransmittr".to_string())
-            .spawn({
-                move || {
-                    let mut shred_buf = Vec::with_capacity(RETRANSMIT_BATCH_SIZE);
-                    while retransmit(
+            .spawn(move || {
+                let mut shred_buf = Vec::with_capacity(RETRANSMIT_BATCH_SIZE);
+                loop {
+                    let res = retransmit(
                         &thread_pool,
                         &bank_forks,
                         &leader_schedule_cache,
@@ -686,9 +692,14 @@ impl RetransmitStage {
                         &mut shred_buf,
                         &votor_event_sender,
                         &migration_status,
-                    )
-                    .is_ok()
-                    {}
+                    );
+                    match res {
+                        Ok(()) => (),
+                        Err(()) => {
+                            warn!("retransmit() loop exited");
+                            break;
+                        }
+                    }
                 }
             })
             .unwrap();
@@ -777,7 +788,7 @@ impl RetransmitStats {
             match self.slot_stats.get_mut(&slot) {
                 None => {
                     if slot > root {
-                        notify_subscribers(
+                        let () = notify_subscribers(
                             slot,
                             slot_stats.outset,
                             rpc_subscriptions,
@@ -892,7 +903,6 @@ fn notify_subscribers(
             .unwrap()
             .notify_first_shred_received(slot);
     }
-
     if migration_status.should_send_votor_event(slot) {
         match votor_event_sender.try_send(VotorEvent::FirstShred(slot)) {
             Ok(()) => (),
