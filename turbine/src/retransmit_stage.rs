@@ -270,7 +270,6 @@ fn retransmit(
             }
             let shreds = retransmit_receiver.recv().map_err(|err| {
                 warn!("retransmit_receiver.recv() failed with {err:?}");
-                ()
             })?;
             shred_buf.push(shreds);
         }
@@ -862,7 +861,6 @@ fn notify_subscribers(
                 "Sending {:?} failed as channel became disconnected.  Ignoring.",
                 err.into_inner()
             );
-            ()
         })
 }
 
