@@ -7,7 +7,7 @@ use {
         xdp::{XdpSender, XdpShredPayload},
     },
     bytes::Bytes,
-    crossbeam_channel::{Receiver, RecvError, Sender, TryRecvError},
+    crossbeam_channel::{Receiver, Sender, TryRecvError},
     lru::LruCache,
     rand::Rng,
     rayon::{prelude::*, ThreadPool, ThreadPoolBuilder},
@@ -244,7 +244,7 @@ fn retransmit(
     slot_status_notifier: Option<&SlotStatusNotifier>,
     shred_buf: &mut Vec<Vec<shred::Payload>>,
     votor_event_sender: &Sender<VotorEvent>,
-) -> Result<(), RecvError> {
+) -> Result<(), ()> {
     // Try to receive shreds from the channel without blocking. If the channel
     // is empty precompute turbine trees speculatively. If no cache updates are
     // made then block on the channel until some shreds are received.
@@ -252,7 +252,11 @@ fn retransmit(
         Ok(shreds) => {
             shred_buf.push(shreds);
         }
-        Err(TryRecvError::Disconnected) => return Err(RecvError),
+        Err(TryRecvError::Disconnected) => {
+            warn!("retransmint_receiver became disconnected.");
+            return Err(());
+        }
+
         Err(TryRecvError::Empty) => {
             if cache_retransmit_addrs(
                 thread_pool,
@@ -264,7 +268,11 @@ fn retransmit(
             ) {
                 return Ok(());
             }
-            shred_buf.push(retransmit_receiver.recv()?);
+            let shreds = retransmit_receiver.recv().map_err(|err| {
+                warn!("retransmit_receiver.recv() failed with {err:?}");
+                ()
+            })?;
+            shred_buf.push(shreds);
         }
     };
     // now the batch has started
@@ -376,14 +384,14 @@ fn retransmit(
         })
     };
 
-    stats.upsert_slot_stats(
+    let () = stats.upsert_slot_stats(
         slot_stats,
         root_bank.slot(),
         addr_cache,
         rpc_subscriptions,
         slot_status_notifier,
         votor_event_sender,
-    );
+    )?;
     timer_start.stop();
     stats.total_time += timer_start.as_us();
     stats.maybe_submit(&root_bank, &working_bank, cluster_info, cluster_nodes_cache);
@@ -620,27 +628,34 @@ impl RetransmitStage {
             .name("solRetransmittr".to_string())
             .spawn(move || {
                 let mut shred_buf = Vec::with_capacity(RETRANSMIT_BATCH_SIZE);
-                while retransmit(
-                    &thread_pool,
-                    &bank_forks,
-                    &leader_schedule_cache,
-                    &cluster_info,
-                    &retransmit_receiver,
-                    &retransmit_sockets,
-                    &quic_endpoint_sender,
-                    xdp_sender.as_ref(),
-                    &mut stats,
-                    &cluster_nodes_cache,
-                    &mut addr_cache,
-                    &mut shred_deduper,
-                    &max_slots,
-                    rpc_subscriptions.as_deref(),
-                    slot_status_notifier.as_ref(),
-                    &mut shred_buf,
-                    &votor_event_sender,
-                )
-                .is_ok()
-                {}
+                loop {
+                    let res = retransmit(
+                        &thread_pool,
+                        &bank_forks,
+                        &leader_schedule_cache,
+                        &cluster_info,
+                        &retransmit_receiver,
+                        &retransmit_sockets,
+                        &quic_endpoint_sender,
+                        xdp_sender.as_ref(),
+                        &mut stats,
+                        &cluster_nodes_cache,
+                        &mut addr_cache,
+                        &mut shred_deduper,
+                        &max_slots,
+                        rpc_subscriptions.as_deref(),
+                        slot_status_notifier.as_ref(),
+                        &mut shred_buf,
+                        &votor_event_sender,
+                    );
+                    match res {
+                        Ok(()) => (),
+                        Err(()) => {
+                            warn!("retransmit() loop exited");
+                            break;
+                        }
+                    }
+                }
             })
             .unwrap();
 
@@ -721,19 +736,19 @@ impl RetransmitStats {
         rpc_subscriptions: Option<&RpcSubscriptions>,
         slot_status_notifier: Option<&SlotStatusNotifier>,
         votor_event_sender: &Sender<VotorEvent>,
-    ) {
+    ) -> Result<(), ()> {
         for (slot, mut slot_stats) in feed {
             addr_cache.record(slot, &mut slot_stats);
             match self.slot_stats.get_mut(&slot) {
                 None => {
                     if slot > root {
-                        notify_subscribers(
+                        let () = notify_subscribers(
                             slot,
                             slot_stats.outset,
                             rpc_subscriptions,
                             slot_status_notifier,
                             votor_event_sender,
-                        );
+                        )?;
                     }
                     self.slot_stats.put(slot, slot_stats);
                 }
@@ -751,6 +766,7 @@ impl RetransmitStats {
                 None => break,
             }
         }
+        Ok(())
     }
 }
 
@@ -827,7 +843,7 @@ fn notify_subscribers(
     rpc_subscriptions: Option<&RpcSubscriptions>,
     slot_status_notifier: Option<&SlotStatusNotifier>,
     votor_event_sender: &Sender<VotorEvent>,
-) {
+) -> Result<(), ()> {
     if let Some(rpc_subscriptions) = rpc_subscriptions {
         let slot_update = SlotUpdate::FirstShredReceived { slot, timestamp };
         rpc_subscriptions.notify_slot_update(slot_update);
@@ -841,7 +857,13 @@ fn notify_subscribers(
     }
     votor_event_sender
         .send(VotorEvent::FirstShred(slot))
-        .unwrap();
+        .map_err(|err| {
+            warn!(
+                "Sending {:?} failed as channel became disconnected.  Ignoring.",
+                err.into_inner()
+            );
+            ()
+        })
 }
 
 #[cfg(test)]
