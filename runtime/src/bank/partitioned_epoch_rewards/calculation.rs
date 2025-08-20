@@ -117,17 +117,12 @@ impl Bank {
         let rewards_calculation = epoch_rewards_calculation_cache
             .entry(self.parent_hash)
             .or_insert_with(|| {
-                let calculation = self.calculate_rewards_for_partitioning(
+                Arc::new(self.calculate_rewards_for_partitioning(
                     prev_epoch,
                     reward_calc_tracer,
                     thread_pool,
                     metrics,
-                );
-                info!(
-                    "calculated rewards for epoch: {}, parent_slot: {}, parent_hash: {}",
-                    self.epoch, self.parent_slot, self.parent_hash
-                );
-                Arc::new(calculation)
+                ))
             })
             .clone();
         drop(epoch_rewards_calculation_cache);
@@ -248,6 +243,11 @@ impl Bank {
                 metrics,
             )
             .unwrap_or_default();
+
+        info!(
+            "calculated rewards for epoch: {}, parent_slot: {}, parent_hash: {}",
+            self.epoch, self.parent_slot, self.parent_hash
+        );
 
         PartitionedRewardsCalculation {
             vote_account_rewards,
