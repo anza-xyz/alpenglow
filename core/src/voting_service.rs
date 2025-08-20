@@ -152,6 +152,7 @@ pub struct VotingServiceOverride {
 }
 
 impl VotingService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         vote_receiver: Receiver<VoteOp>,
         bls_receiver: Receiver<BLSOp>,
