@@ -253,7 +253,7 @@ fn retransmit(
             shred_buf.push(shreds);
         }
         Err(TryRecvError::Disconnected) => {
-            warn!("retransmint_receiver became disconnected.");
+            warn!("retransmit_receiver became disconnected.");
             return Err(());
         }
 
