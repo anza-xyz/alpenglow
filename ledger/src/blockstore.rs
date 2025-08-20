@@ -730,44 +730,49 @@ impl Blockstore {
         }
 
         // Consecutive set was not found in memory, scan blockstore for a potential candidate
-        let Some((candidate_fec_set_index, candidate_erasure_meta)) = (match location {
-            BlockLocation::Original => self
-                .erasure_meta_cf
-                .iter(IteratorMode::From(
-                    (slot, u64::from(fec_set_index)),
-                    IteratorDirection::Reverse,
-                ))?
-                // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
-                .find(|((_, candidate_fec_set_index), _)| {
-                    *candidate_fec_set_index != u64::from(fec_set_index)
-                })
-                // Do not consider sets from the previous slot
-                .and_then(|((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
-                    (candidate_slot == slot).then_some((
-                        u32::try_from(candidate_fec_set_index)
-                        .expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
-                        candidate_erasure_meta
-                    ))
-                }),
-            BlockLocation::Alternate { block_id } => self
-                .alt_erasure_meta_cf
-                .iter(IteratorMode::From(
-                    (slot, fec_set_index, block_id),
-                    IteratorDirection::Reverse,
-                ))?
-                // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
-                .find(|((_, candidate_fec_set_index, _), _)| {
-                    *candidate_fec_set_index != fec_set_index
-                })
-                // Do not consider sets from the previous slot
-                .and_then(|((candidate_slot, candidate_fec_set_index, bid), candidate_erasure_meta)| {
-                    debug_assert!(bid == block_id);
-                    (candidate_slot == slot).then_some((
-                        candidate_fec_set_index,
-                        candidate_erasure_meta
-                    ))
-                }),
-        }) else {
+        type ErasureMetaIter<'a> = Box<dyn Iterator<Item = ((Slot, u32), Box<[u8]>)> + 'a>;
+        let mut erasure_meta_column_iter: ErasureMetaIter<'_> = match location {
+            BlockLocation::Original => {
+                Box::new(
+                    self
+                        .erasure_meta_cf
+                        .iter(IteratorMode::From(
+                                (slot, u64::from(fec_set_index)),
+                                IteratorDirection::Reverse,
+                        ))?
+                        .map(|((slot, fec_set_index), erasure_meta)| {
+                            ((
+                                slot,
+                                u32::try_from(fec_set_index).expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
+                            ), erasure_meta)
+                        })
+                )
+            }
+            BlockLocation::Alternate { block_id } => {
+                Box::new(
+                    self.alt_erasure_meta_cf
+                    .iter(IteratorMode::From(
+                        (slot, fec_set_index, block_id),
+                        IteratorDirection::Reverse,
+                    ))?
+                    .map(move |((slot, fec_set_index, bid), erasure_meta)| {
+                        debug_assert!(bid == block_id);
+                        ((slot, fec_set_index), erasure_meta)
+                    })
+                )
+            }
+        };
+        let Some((candidate_fec_set_index, candidate_erasure_meta)) = erasure_meta_column_iter
+            // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
+            .find(|((_, candidate_fec_set_index), _)| *candidate_fec_set_index != fec_set_index)
+            // Do not consider sets from the previous slot
+            .and_then(
+                |((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
+                    (candidate_slot == slot)
+                        .then_some((candidate_fec_set_index, candidate_erasure_meta))
+                },
+            )
+        else {
             // No potential candidates
             return Ok(None);
         };
@@ -2125,8 +2130,7 @@ impl Blockstore {
                 .map(shred::Payload::from)
                 .map(Cow::Owned),
             (_, ShredType::Code) => {
-                // Coding shred repair is not implemented so we can only ask for coding shreds from the
-                // original column
+                // No coding shreds are ever inserted outside of the BlockLocation::Original
                 assert_matches!(location, BlockLocation::Original);
                 self.get_coding_shred(slot, u64::from(index))
                     .unwrap()
