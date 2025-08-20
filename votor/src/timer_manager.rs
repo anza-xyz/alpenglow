@@ -6,9 +6,9 @@ mod stats;
 mod timers;
 
 use {
-    crate::{event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
+    crate::{alpenglow_metrics::AgMetrics, event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
     crossbeam_channel::Sender,
-    parking_lot::RwLock,
+    parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     std::{
         sync::{
@@ -24,16 +24,21 @@ use {
 /// A manager of timer states.  Uses a background thread to trigger next ready
 /// timers and send events.
 pub(crate) struct TimerManager {
-    timers: Arc<RwLock<Timers>>,
+    timers: Arc<PlRwLock<Timers>>,
     handle: JoinHandle<()>,
 }
 
 impl TimerManager {
-    pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
-        let timers = Arc::new(RwLock::new(Timers::new(
+    pub(crate) fn new(
+        event_sender: Sender<VotorEvent>,
+        exit: Arc<AtomicBool>,
+        ag_metrics: Arc<PlRwLock<AgMetrics>>,
+    ) -> Self {
+        let timers = Arc::new(PlRwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
             event_sender,
+            ag_metrics,
         )));
         let handle = {
             let timers = Arc::clone(&timers);

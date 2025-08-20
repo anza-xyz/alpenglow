@@ -4,6 +4,7 @@ use {
     std::time::Duration,
 };
 
+pub mod alpenglow_metrics;
 pub mod commitment;
 pub mod consensus_pool;
 mod consensus_pool_service;
