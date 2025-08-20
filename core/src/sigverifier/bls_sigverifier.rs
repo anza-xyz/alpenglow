@@ -9,13 +9,15 @@ use {
         sigverify_stage::{SigVerifier, SigVerifyServiceError},
     },
     crossbeam_channel::{Sender, TrySendError},
+    parking_lot::RwLock,
     solana_clock::Slot,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
+    solana_votor::alpenglow_metrics::AlpenglowMetrics,
     solana_votor_messages::consensus_message::ConsensusMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
-    std::{collections::HashMap, sync::Arc},
+    std::{collections::HashMap, sync::Arc, time::Duration},
 };
 
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
@@ -27,6 +29,7 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMa
 }
 
 pub struct BLSSigVerifier {
+    ag_metrics: Arc<RwLock<AlpenglowMetrics>>,
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<ConsensusMessage>,
     root_bank: SharableBank,
@@ -88,6 +91,9 @@ impl SigVerifier for BLSSigVerifier {
                         stats_updater.received_malformed += 1;
                         continue;
                     };
+                    self.ag_metrics
+                        .write()
+                        .record_vote(*pubkey, vote, Duration::MAX);
                     let cur_slots: &mut Vec<Slot> = verified_votes.entry(*pubkey).or_default();
                     if !cur_slots.contains(&slot) {
                         cur_slots.push(slot);
@@ -118,12 +124,14 @@ impl BLSSigVerifier {
         root_bank: SharableBank,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
+        ag_metrics: Arc<RwLock<AlpenglowMetrics>>,
     ) -> Self {
         Self {
             root_bank,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
+            ag_metrics,
         }
     }
 
@@ -191,9 +199,10 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let ag_metrics = Arc::new(RwLock::new(AlpenglowMetrics::default()));
         (
             validator_keypairs,
-            BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender, ag_metrics),
         )
     }
 

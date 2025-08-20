@@ -33,6 +33,7 @@ use {
         window_service::DuplicateSlotReceiver,
     },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    parking_lot::RwLock as PlRwLock,
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
         ThreadPool,
@@ -79,6 +80,7 @@ use {
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
+        alpenglow_metrics::AlpenglowMetrics,
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
         vote_history::VoteHistory,
@@ -280,6 +282,7 @@ pub struct ReplayStageConfig {
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub ag_metrics: Arc<PlRwLock<AlpenglowMetrics>>,
 }
 
 pub struct ReplaySenders {
@@ -596,6 +599,7 @@ impl ReplayStage {
             snapshot_controller,
             replay_highest_frozen,
             leader_window_notifier,
+            ag_metrics,
         } = config;
 
         let ReplaySenders {
@@ -665,6 +669,7 @@ impl ReplayStage {
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,
             consensus_message_receiver,
+            ag_metrics,
         };
         let votor = Votor::new(votor_config);
 
@@ -3618,6 +3623,8 @@ impl ReplayStage {
                 //
                 // For non leader banks (2) is always true, so notify here
                 if *is_alpenglow_migration_complete && bank.block_id().is_some() {
+                    // XXX: this is the leader producing the block?
+
                     // Leader blocks will not have a block id, broadcast stage will
                     // take care of notifying the voting loop
                     let _ = votor_event_sender.send(VotorEvent::Block(CompletedBlock {

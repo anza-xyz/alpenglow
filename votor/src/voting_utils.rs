@@ -1,10 +1,12 @@
 use {
     crate::{
+        alpenglow_metrics::AlpenglowMetrics,
         commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
     },
     crossbeam_channel::{SendError, Sender},
+    parking_lot::RwLock as PlRwLock,
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
     solana_clock::Slot,
     solana_keypair::Keypair,
@@ -18,7 +20,7 @@ use {
         },
         vote::Vote,
     },
-    std::{collections::HashMap, sync::Arc},
+    std::{collections::HashMap, sync::Arc, time::Duration},
     thiserror::Error,
 };
 
@@ -138,6 +140,7 @@ pub struct VotingContext {
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
     pub root_bank: SharableBank,
+    pub ag_metrics: Arc<PlRwLock<AlpenglowMetrics>>,
 }
 
 pub fn get_bls_keypair(
@@ -294,6 +297,11 @@ fn insert_vote_and_create_bls_message(
     // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
     let saved_vote_history =
         SavedVoteHistory::new(&context.vote_history, &context.identity_keypair)?;
+
+    context
+        .ag_metrics
+        .write()
+        .record_vote(context.vote_account_pubkey, &vote, Duration::MAX);
 
     // Return vote for sending
     Ok(BLSOp::PushVote {

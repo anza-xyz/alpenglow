@@ -34,6 +34,7 @@ use {
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
+    parking_lot::RwLock as PlRwLock,
     quinn::Endpoint,
     solana_accounts_db::{
         accounts_db::{AccountsDbConfig, ACCOUNTS_DB_CONFIG_FOR_TESTING},
@@ -137,6 +138,7 @@ use {
     solana_validator_exit::Exit,
     solana_vote_program::vote_state,
     solana_votor::{
+        alpenglow_metrics::AlpenglowMetrics,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         votor::LeaderWindowNotifier,
@@ -914,6 +916,7 @@ impl Validator {
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
         let (bls_verified_message_sender, bls_verified_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
+        let ag_metrics = Arc::new(PlRwLock::new(AlpenglowMetrics::default()));
 
         // block min prioritization fee cache should be readable by RPC, and writable by validator
         // (by both replay stage and banking stage)
@@ -1630,6 +1633,7 @@ impl Validator {
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
+            ag_metrics.clone(),
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1726,6 +1730,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
+            ag_metrics,
         );
 
         datapoint_info!(

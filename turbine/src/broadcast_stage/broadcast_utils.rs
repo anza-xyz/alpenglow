@@ -201,6 +201,8 @@ pub(super) fn set_block_id_and_send(
 ) -> Result<()> {
     bank.set_block_id(Some(block_id));
     if bank.is_frozen() {
+        // XXX: this is where the block was received over the network?
+
         votor_event_sender.send(VotorEvent::Block(CompletedBlock {
             slot: bank.slot(),
             bank,
