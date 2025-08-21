@@ -281,7 +281,7 @@ impl VotingService {
         let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
             .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
         let sockets = additional_listeners
-            .into_iter()
+            .iter()
             .chain(staked_validator_alpenglow_sockets.iter());
 
         // We use send_message in a loop right now because we worry that sending packets too fast
