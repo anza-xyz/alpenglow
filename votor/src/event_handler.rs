@@ -450,12 +450,11 @@ impl EventHandler {
     /// While B is stuck because it is waiting for >60% of the votes to finalize slot 9.
     /// The cluster will get stuck.
     /// After we add the following function, C will see that block 9 is finalized yet
-    /// it never had parent ready for slot 8, so it will find the block id of 8 from
-    /// finalized block 9, then trigger parent ready for slot 8, this means C will immediately
-    /// vote Notarize for both slot 8 and slot 9, then vote Notarize for all later slots.
-    /// So B and C together can keep finalizing the blocks and unstuck the cluster.
-    /// If we get a finalization cert for later slots of the window and we have the block
-    /// replayed, trace back to the first slot of the window and emit parent ready.
+    /// it never had parent ready for slot 9, so it will trigger parent ready for slot 9,
+    /// this means C will immediately vote Notarize for  slot 9, then vote Notarize for
+    /// all later slots. So B and C together can keep finalizing the blocks and unstuck the
+    /// cluster. If we get a finalization cert for later slots of the window and we have the
+    /// block replayed, trace back to the first slot of the window and emit parent ready.
     fn add_missing_parent_ready(
         block: Block,
         ctx: &SharedContext,
@@ -476,7 +475,6 @@ impl EventHandler {
         // If the block is missing, we can't trigger parent ready
         let bank_forks_r = ctx.bank_forks.read().unwrap();
         let bank = bank_forks_r.get(slot)?;
-        let first_slot_of_window_bank = bank_forks_r.get(first_slot_of_window)?;
         drop(bank_forks_r);
         if !bank.is_frozen() {
             // We haven't finished replay for the block, so we can't trigger parent ready
@@ -486,7 +484,7 @@ impl EventHandler {
             // We have a different block id for the slot, repair should kick in later
             return None;
         }
-        let parent_bank = first_slot_of_window_bank.parent()?;
+        let parent_bank = bank.parent()?;
         let parent_slot = parent_bank.slot();
         let Some(parent_block_id) = parent_bank.block_id() else {
             // Maybe this bank is set to root after we drop bank_forks.
@@ -497,11 +495,11 @@ impl EventHandler {
             return None;
         };
         info!(
-            "{}: Triggering parent ready for missing first slot of window {first_slot_of_window} \
+            "{}: Triggering parent ready for missing first slot of window {slot} \
             with parent {parent_slot} {parent_block_id}",
             local_context.my_pubkey
         );
-        Some((first_slot_of_window, (parent_slot, parent_block_id)))
+        Some((slot, (parent_slot, parent_block_id)))
     }
 
     fn handle_set_identity(
