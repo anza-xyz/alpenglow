@@ -371,7 +371,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
     // get latest identity pubkey during startup
     let mut my_pubkey = cluster_info.id();
-    // let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
 
     let mut ctx = LeaderContext {
         my_pubkey,
@@ -478,7 +477,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             // (1) We hit the block timeout, the bank is still present we must clear it
             // (2) The bank has filled up and been cleared by banking stage
             {
-                // We timed out - need to clear the bank ourselves
                 let mut w_poh_recorder = poh_recorder.write().unwrap();
                 if let Some(bank) = w_poh_recorder.bank() {
                     assert_eq!(bank.slot(), slot);
