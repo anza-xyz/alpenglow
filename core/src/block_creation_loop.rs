@@ -469,67 +469,54 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 remaining_slot_time.as_millis(),
             );
 
-            // Get the notifier at the start
-            let bank_cleared_notifier = poh_recorder.read().unwrap().bank_cleared_notifier.clone();
-
             // Start measuring bank completion time
             let mut bank_completion_measure = Measure::start("bank_completion");
-
-            let (lock, cvar) = &*bank_cleared_notifier;
-            let cleared = lock.lock().unwrap();
-            let (mut guard, timeout_result) = cvar
-                .wait_timeout_while(cleared, remaining_slot_time, |c| !*c)
-                .unwrap();
-
-            // Reset the flag for next iteration
-            *guard = false;
-            drop(guard);
-
+            std::thread::sleep(remaining_slot_time);
             bank_completion_measure.stop();
 
             // Time to complete the bank, there are two possibilities:
             // (1) We hit the block timeout, the bank is still present we must clear it
             // (2) The bank has filled up and been cleared by banking stage
-            if timeout_result.timed_out() {
+            {
                 // We timed out - need to clear the bank ourselves
                 let mut w_poh_recorder = poh_recorder.write().unwrap();
-                let bank = w_poh_recorder.bank().unwrap();
-                assert_eq!(bank.slot(), slot);
-                trace!(
-                    "{}: bank {} has reached block timeout, ticking",
-                    bank.collector_id(),
-                    bank.slot()
-                );
+                if let Some(bank) = w_poh_recorder.bank() {
+                    assert_eq!(bank.slot(), slot);
+                    trace!(
+                        "{}: bank {} has reached block timeout, ticking",
+                        bank.collector_id(),
+                        bank.slot()
+                    );
 
-                // Record timeout completion metric
-                metrics.bank_timeout_completion_count += 1;
+                    // Record timeout completion metric
+                    metrics.bank_timeout_completion_count += 1;
 
-                // Record bank timeout completion time
-                let _ = metrics
-                    .bank_timeout_completion_elapsed_hist
-                    .increment(bank_completion_measure.as_us());
+                    // Record bank timeout completion time
+                    let _ = metrics
+                        .bank_timeout_completion_elapsed_hist
+                        .increment(bank_completion_measure.as_us());
 
-                let max_tick_height = bank.max_tick_height();
-                // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
-                // will properly increment the tick_height to max_tick_height.
-                bank.set_tick_height(max_tick_height - 1);
-                // Write the single tick for this slot
-                // TODO: handle migration slot because we need to provide the PoH
-                // for slots from the previous epoch, but `tick_alpenglow()` will
-                // delete those ticks from the cache
-                drop(bank);
-                w_poh_recorder.tick_alpenglow(max_tick_height);
-            } else {
-                // Banking stage cleared the bank (it filled up)
-                trace!("{my_pubkey}: {slot} reached max tick height, moving to next block");
+                    let max_tick_height = bank.max_tick_height();
+                    // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
+                    // will properly increment the tick_height to max_tick_height.
+                    bank.set_tick_height(max_tick_height - 1);
+                    // Write the single tick for this slot
+                    // TODO: handle migration slot because we need to provide the PoH
+                    // for slots from the previous epoch, but `tick_alpenglow()` will
+                    // delete those ticks from the cache
+                    drop(bank);
+                    w_poh_recorder.tick_alpenglow(max_tick_height);
+                } else {
+                    trace!("{my_pubkey}: {slot} reached max tick height, moving to next block");
 
-                // Record filled completion metric
-                metrics.bank_filled_completion_count += 1;
+                    // Record filled completion metric
+                    metrics.bank_filled_completion_count += 1;
 
-                // Record bank filled completion time
-                let _ = metrics
-                    .bank_filled_completion_elapsed_hist
-                    .increment(bank_completion_measure.as_us());
+                    // Record bank filled completion time
+                    let _ = metrics
+                        .bank_filled_completion_elapsed_hist
+                        .increment(bank_completion_measure.as_us());
+                }
             }
 
             // Assert that the bank has been cleared

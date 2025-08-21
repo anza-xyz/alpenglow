@@ -29,7 +29,7 @@ use {
     solana_transaction::versioned::VersionedTransaction,
     std::{
         cmp,
-        sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
+        sync::{atomic::AtomicBool, Arc, Mutex},
         time::Instant,
     },
     thiserror::Error,
@@ -215,7 +215,6 @@ pub struct PohRecorder {
     track_transaction_indexes: bool,
     pub is_alpenglow_enabled: bool,
     pub use_alpenglow_tick_producer: bool,
-    pub bank_cleared_notifier: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl PohRecorder {
@@ -307,7 +306,6 @@ impl PohRecorder {
                 track_transaction_indexes: false,
                 is_alpenglow_enabled,
                 use_alpenglow_tick_producer: is_alpenglow_enabled,
-                bank_cleared_notifier: Arc::new((Mutex::new(false), Condvar::new())),
             },
             working_bank_receiver,
         )
@@ -462,13 +460,6 @@ impl PohRecorder {
     pub fn set_bank(&mut self, bank: BankWithScheduler) -> BankStart {
         assert!(self.working_bank.is_none());
 
-        // Reset the bank cleared flag for the new bank
-        {
-            let (lock, _cvar) = &*self.bank_cleared_notifier;
-            let mut cleared = lock.lock().unwrap();
-            *cleared = false;
-        }
-
         let working_bank = WorkingBank {
             min_tick_height: bank.tick_height(),
             max_tick_height: bank.max_tick_height(),
@@ -528,12 +519,6 @@ impl PohRecorder {
                 ("slot", bank.slot(), i64),
                 ("elapsed", start.elapsed().as_millis(), i64),
             );
-
-            // Notify that bank has been cleared
-            let (lock, cvar) = &*self.bank_cleared_notifier;
-            let mut cleared = lock.lock().unwrap();
-            *cleared = true;
-            cvar.notify_all();
         }
 
         if let Some(ref signal) = self.clear_bank_signal {
