@@ -92,6 +92,7 @@ impl VotingService {
         bank_forks: Arc<RwLock<BankForks>>,
         additional_listeners: Option<Vec<SocketAddr>>,
     ) -> Self {
+        let additional_listeners = additional_listeners.unwrap_or_default();
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
@@ -111,7 +112,7 @@ impl VotingService {
                         vote_history_storage.as_ref(),
                         vote_op,
                         connection_cache.clone(),
-                        additional_listeners.as_ref(),
+                        &additional_listeners,
                         &mut staked_validators_cache,
                     );
                 }
@@ -163,7 +164,7 @@ impl VotingService {
         cluster_info: &ClusterInfo,
         tx: &Transaction,
         connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
+        additional_listeners: &[SocketAddr],
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         let (staked_validator_tpu_sockets, _) = staked_validators_cache
@@ -173,8 +174,6 @@ impl VotingService {
             let _ = send_vote_transaction(cluster_info, tx, None, &connection_cache);
         } else {
             let sockets = additional_listeners
-                .map(|v| v.as_slice())
-                .unwrap_or(&[])
                 .iter()
                 .chain(staked_validator_tpu_sockets.iter());
 
@@ -196,7 +195,7 @@ impl VotingService {
         vote_history_storage: &dyn VoteHistoryStorage,
         vote_op: VoteOp,
         connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
+        additional_listeners: &[SocketAddr],
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         match vote_op {
