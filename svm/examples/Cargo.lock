@@ -548,9 +548,9 @@ dependencies = [
 
 [[package]]
 name = "async-lock"
-version = "3.4.0"
+version = "3.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff6e472cdea888a4bd64f342f09b3f50e1886d32afe8df3d663c01140b811b18"
+checksum = "5fd03604047cee9b6ce9de9f70c6cd540a0520c813cbd49bae61f33ab80ed1dc"
 dependencies = [
  "event-listener 5.4.0",
  "event-listener-strategy",
@@ -2323,7 +2323,7 @@ dependencies = [
  "indexmap 2.10.0",
  "slab",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tracing",
 ]
 
@@ -3092,6 +3092,7 @@ dependencies = [
  "solana-perf",
  "solana-program-runtime",
  "solana-pubkey",
+ "solana-rent",
  "solana-rpc-client-api",
  "solana-sdk-ids",
  "solana-signature",
@@ -3109,7 +3110,7 @@ dependencies = [
  "solana-version",
  "spl-token-2022-interface",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -4734,7 +4735,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-rustls 0.26.2",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tower 0.5.2",
  "tower-http",
  "tower-service",
@@ -5923,7 +5924,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-transaction-status-client-types",
  "solana-vote-program",
- "spl-memo",
+ "spl-memo-interface",
 ]
 
 [[package]]
@@ -6258,7 +6259,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "trees",
 ]
 
@@ -6494,7 +6495,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-version",
- "spl-memo",
+ "spl-memo-interface",
  "thiserror 2.0.12",
  "tokio",
 ]
@@ -7714,7 +7715,7 @@ dependencies = [
  "stream-cancel",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -7922,7 +7923,6 @@ dependencies = [
  "solana-stake-program",
  "solana-svm",
  "solana-svm-callback",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-system-transaction",
@@ -8098,7 +8098,7 @@ dependencies = [
  "solana-time-utils",
  "solana-tpu-client-next",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -8390,7 +8390,7 @@ dependencies = [
  "solana-transaction-metrics-tracker",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "x509-parser",
 ]
 
@@ -8428,7 +8428,6 @@ dependencies = [
  "solana-slot-hashes",
  "solana-svm-callback",
  "solana-svm-feature-set",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-sysvar-id",
@@ -8470,7 +8469,7 @@ dependencies = [
  "solana-program-pack",
  "solana-program-runtime",
  "solana-pubkey",
- "solana-rent-collector",
+ "solana-rent",
  "solana-sdk-ids",
  "solana-signer",
  "solana-svm",
@@ -8489,20 +8488,6 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "3.0.0"
-
-[[package]]
-name = "solana-svm-rent-collector"
-version = "3.0.0"
-dependencies = [
- "solana-account",
- "solana-clock",
- "solana-pubkey",
- "solana-rent",
- "solana-rent-collector",
- "solana-sdk-ids",
- "solana-transaction-context",
- "solana-transaction-error",
-]
 
 [[package]]
 name = "solana-svm-transaction"
@@ -8776,7 +8761,7 @@ dependencies = [
  "solana-tpu-client",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -8880,7 +8865,7 @@ dependencies = [
  "solana-transaction-status-client-types",
  "solana-vote-interface",
  "spl-associated-token-account-interface",
- "spl-memo",
+ "spl-memo-interface",
  "spl-token",
  "spl-token-2022-interface",
  "spl-token-group-interface",
@@ -9448,6 +9433,16 @@ dependencies = [
  "solana-msg",
  "solana-program-entrypoint",
  "solana-program-error",
+ "solana-pubkey",
+]
+
+[[package]]
+name = "spl-memo-interface"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24af0730130fea732616be9425fe8eb77782e2aab2f0e76837b6a66aaba96c6b"
+dependencies = [
+ "solana-instruction",
  "solana-pubkey",
 ]
 
@@ -10036,9 +10031,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.47.0"
+version = "1.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43864ed400b6043a4757a25c7a64a8efde741aed79a056a2fb348a406701bb35"
+checksum = "89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038"
 dependencies = [
  "backtrace",
  "bytes",
@@ -10164,9 +10159,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
+checksum = "14307c986784f72ef81c89db7d9e28d6ac26d16213b109ea501696195e6e3ce5"
 dependencies = [
  "bytes",
  "futures-core",
@@ -10277,7 +10272,7 @@ dependencies = [
  "rand 0.8.5",
  "slab",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tower-layer",
  "tower-service",
  "tracing",

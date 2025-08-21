@@ -45,7 +45,6 @@ use {
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
-        rent_collector::RentCollectorWithMetrics,
         runtime_config::RuntimeConfig,
         snapshot_hash::SnapshotHash,
         stake_account::StakeAccount,
@@ -58,7 +57,7 @@ use {
         transaction_batch::{OwnedOrBorrowed, TransactionBatch},
     },
     accounts_lt_hash::{CacheValue as AccountsLtHashCacheValue, Stats as AccountsLtHashStats},
-    agave_feature_set::{self as feature_set, FeatureSet},
+    agave_feature_set::{self as feature_set, raise_cpi_nesting_limit_to_8, FeatureSet},
     agave_precompiles::{get_precompile, get_precompiles, is_precompile},
     agave_reserved_account_keys::ReservedAccountKeys,
     agave_syscalls::{
@@ -77,7 +76,10 @@ use {
     solana_accounts_db::{
         account_locks::validate_account_locks,
         accounts::{AccountAddressFilter, Accounts, PubkeyAccountSlot},
-        accounts_db::{AccountStorageEntry, AccountsDb, AccountsDbConfig, DuplicatesLtHash},
+        accounts_db::{
+            make_hash_thread_pool, AccountStorageEntry, AccountsDb, AccountsDbConfig,
+            DuplicatesLtHash,
+        },
         accounts_hash::AccountsLtHash,
         accounts_index::{IndexKey, ScanConfig, ScanResult},
         accounts_update_notifier_interface::AccountsUpdateNotifier,
@@ -1477,8 +1479,13 @@ impl Bank {
     fn prepare_program_cache_for_upcoming_feature_set(&self) {
         let (_epoch, slot_index) = self.epoch_schedule.get_epoch_and_slot_index(self.slot);
         let slots_in_epoch = self.epoch_schedule.get_slots_in_epoch(self.epoch);
-        let compute_budget = self.compute_budget.unwrap_or_default().to_budget();
         let (upcoming_feature_set, _newly_activated) = self.compute_active_feature_set(true);
+        let compute_budget = self
+            .compute_budget
+            .unwrap_or(ComputeBudget::new_with_defaults(
+                upcoming_feature_set.is_active(&raise_cpi_nesting_limit_to_8::id()),
+            ))
+            .to_budget();
 
         // Recompile loaded programs one at a time before the next epoch hits
         let slots_in_recompilation_phase =
@@ -3271,14 +3278,12 @@ impl Bank {
 
         let (blockhash, blockhash_lamports_per_signature) =
             self.last_blockhash_and_lamports_per_signature();
-        let rent_collector_with_metrics =
-            RentCollectorWithMetrics::new(self.rent_collector.clone());
         let processing_environment = TransactionProcessingEnvironment {
             blockhash,
             blockhash_lamports_per_signature,
             epoch_total_stake: self.get_current_epoch_total_stake(),
             feature_set: self.feature_set.runtime_features(),
-            rent_collector: Some(&rent_collector_with_metrics),
+            rent: self.rent_collector.rent.clone(),
         };
 
         let sanitized_output = self
@@ -4114,19 +4119,29 @@ impl Bank {
             }
         }
 
+        let simd_0296_active = self
+            .feature_set
+            .is_active(&raise_cpi_nesting_limit_to_8::id());
+
         self.transaction_processor
             .configure_program_runtime_environments(
                 Some(Arc::new(
                     create_program_runtime_environment_v1(
                         &self.feature_set.runtime_features(),
-                        &self.compute_budget().unwrap_or_default().to_budget(),
+                        &self
+                            .compute_budget()
+                            .unwrap_or(ComputeBudget::new_with_defaults(simd_0296_active))
+                            .to_budget(),
                         false, /* deployment */
                         false, /* debugging_features */
                     )
                     .unwrap(),
                 )),
                 Some(Arc::new(create_program_runtime_environment_v2(
-                    &self.compute_budget().unwrap_or_default().to_budget(),
+                    &self
+                        .compute_budget()
+                        .unwrap_or(ComputeBudget::new_with_defaults(simd_0296_active))
+                        .to_budget(),
                     false, /* debugging_features */
                 ))),
             );
@@ -4604,17 +4619,20 @@ impl Bank {
         let expected_accounts_lt_hash = self.accounts_lt_hash.lock().unwrap().clone();
         if config.run_in_background {
             let accounts_db_ = Arc::clone(accounts_db);
+            let num_hash_threads = accounts_db.num_hash_threads;
             accounts_db.verify_accounts_hash_in_bg.start(|| {
                 Builder::new()
                     .name("solBgHashVerify".into())
                     .spawn(move || {
                         info!("Initial background accounts hash verification has started");
                         let start = Instant::now();
+                        let thread_pool_hash = make_hash_thread_pool(num_hash_threads);
                         let (calculated_accounts_lt_hash, lattice_verify_time) =
-                            meas_dur!(accounts_db_.thread_pool_hash.install(|| {
+                            meas_dur!(thread_pool_hash.install(|| {
                                 accounts_db_.calculate_accounts_lt_hash_at_startup_from_storages(
                                     snapshot_storages.0.as_slice(),
                                     &duplicates_lt_hash.unwrap(),
+                                    slot,
                                 )
                             }));
                         let is_ok =
@@ -4643,6 +4661,7 @@ impl Bank {
                 accounts_db.calculate_accounts_lt_hash_at_startup_from_storages(
                     snapshot_storages.0.as_slice(),
                     &duplicates_lt_hash,
+                    slot,
                 )
             } else {
                 accounts_db.calculate_accounts_lt_hash_at_startup_from_index(&self.ancestors, slot)

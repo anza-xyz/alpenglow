@@ -999,9 +999,9 @@ dependencies = [
 
 [[package]]
 name = "async-lock"
-version = "3.4.0"
+version = "3.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff6e472cdea888a4bd64f342f09b3f50e1886d32afe8df3d663c01140b811b18"
+checksum = "5fd03604047cee9b6ce9de9f70c6cd540a0520c813cbd49bae61f33ab80ed1dc"
 dependencies = [
  "event-listener 5.3.1",
  "event-listener-strategy",
@@ -3338,7 +3338,7 @@ dependencies = [
  "indexmap 2.10.0",
  "slab",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tracing",
 ]
 
@@ -5991,7 +5991,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls 0.24.1",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tower-service",
  "url 2.5.4",
  "wasm-bindgen",
@@ -6032,7 +6032,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-rustls 0.26.2",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tower 0.5.2",
  "tower-http",
  "tower-service",
@@ -7266,7 +7266,7 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-status",
  "solana-version",
- "spl-instruction-padding",
+ "spl-instruction-padding-interface",
  "tempfile",
  "thiserror 2.0.12",
  "tikv-jemallocator",
@@ -7742,7 +7742,7 @@ dependencies = [
  "solana-vote",
  "solana-vote-program",
  "solana-votor-messages",
- "spl-memo",
+ "spl-memo-interface",
  "tempfile",
  "test-case",
  "thiserror 2.0.12",
@@ -7806,7 +7806,7 @@ dependencies = [
  "solana-transaction-status",
  "solana-transaction-status-client-types",
  "solana-vote-program",
- "spl-memo",
+ "spl-memo-interface",
 ]
 
 [[package]]
@@ -8217,7 +8217,7 @@ dependencies = [
  "solana-votor",
  "solana-votor-messages",
  "solana-wen-restart",
- "spl-memo",
+ "spl-memo-interface",
  "static_assertions",
  "strum",
  "strum_macros",
@@ -8228,7 +8228,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "trees",
 ]
 
@@ -8566,7 +8566,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-version",
- "spl-memo",
+ "spl-memo-interface",
  "thiserror 2.0.12",
  "tokio",
 ]
@@ -10204,7 +10204,7 @@ dependencies = [
  "test-case",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -10486,7 +10486,6 @@ dependencies = [
  "solana-stake-program",
  "solana-svm",
  "solana-svm-callback",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-system-program",
@@ -10692,7 +10691,7 @@ dependencies = [
  "solana-time-utils",
  "solana-tpu-client-next",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -11064,7 +11063,7 @@ dependencies = [
  "solana-transaction-metrics-tracker",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "x509-parser",
 ]
 
@@ -11134,7 +11133,6 @@ dependencies = [
  "solana-svm-callback",
  "solana-svm-conformance",
  "solana-svm-feature-set",
- "solana-svm-rent-collector",
  "solana-svm-transaction",
  "solana-system-interface",
  "solana-system-program",
@@ -11173,21 +11171,6 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "3.0.0"
-
-[[package]]
-name = "solana-svm-rent-collector"
-version = "3.0.0"
-dependencies = [
- "solana-account",
- "solana-clock",
- "solana-epoch-schedule",
- "solana-pubkey",
- "solana-rent",
- "solana-rent-collector",
- "solana-sdk-ids",
- "solana-transaction-context",
- "solana-transaction-error",
-]
 
 [[package]]
 name = "solana-svm-transaction"
@@ -11560,7 +11543,7 @@ dependencies = [
  "solana-tpu-client",
  "thiserror 2.0.12",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
 ]
 
 [[package]]
@@ -11716,7 +11699,7 @@ dependencies = [
  "solana-transaction-status-client-types",
  "solana-vote-interface",
  "spl-associated-token-account-interface",
- "spl-memo",
+ "spl-memo-interface",
  "spl-token",
  "spl-token-2022-interface",
  "spl-token-confidential-transfer-proof-extraction",
@@ -12441,31 +12424,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "spl-instruction-padding"
-version = "0.3.0"
+name = "spl-instruction-padding-interface"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5352d4c4a6d455fc96320342aeab9f522f057e2666ebe40b2e079d054339ab8f"
+checksum = "0f738b75144edbb32c01de832632eecad71113b62a48ef8e55e60c5a692bae4e"
 dependencies = [
  "num_enum",
- "solana-account-info",
- "solana-cpi",
  "solana-instruction",
- "solana-program-entrypoint",
  "solana-program-error",
  "solana-pubkey",
 ]
 
 [[package]]
-name = "spl-memo"
-version = "6.0.0"
+name = "spl-memo-interface"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f09647c0974e33366efeb83b8e2daebb329f0420149e74d3a4bd2c08cf9f7cb"
+checksum = "24af0730130fea732616be9425fe8eb77782e2aab2f0e76837b6a66aaba96c6b"
 dependencies = [
- "solana-account-info",
  "solana-instruction",
- "solana-msg",
- "solana-program-entrypoint",
- "solana-program-error",
  "solana-pubkey",
 ]
 
@@ -13131,9 +13107,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.47.0"
+version = "1.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43864ed400b6043a4757a25c7a64a8efde741aed79a056a2fb348a406701bb35"
+checksum = "89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038"
 dependencies = [
  "backtrace",
  "bytes",
@@ -13259,9 +13235,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
+checksum = "14307c986784f72ef81c89db7d9e28d6ac26d16213b109ea501696195e6e3ce5"
 dependencies = [
  "bytes",
  "futures-core",
@@ -13383,7 +13359,7 @@ dependencies = [
  "rand 0.8.5",
  "slab",
  "tokio",
- "tokio-util 0.7.15",
+ "tokio-util 0.7.16",
  "tower-layer",
  "tower-service",
  "tracing",

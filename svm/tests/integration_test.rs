@@ -7,7 +7,7 @@ use {
         program_data_size, register_builtins, MockBankCallback, MockForkGraph, EXECUTION_EPOCH,
         EXECUTION_SLOT, WALLCLOCK_TIME,
     },
-    agave_feature_set::{self as feature_set, FeatureSet},
+    agave_feature_set::{self as feature_set, raise_cpi_nesting_limit_to_8, FeatureSet},
     solana_account::{AccountSharedData, ReadableAccount, WritableAccount, PROGRAM_OWNERS},
     solana_clock::Slot,
     solana_compute_budget_instruction::instructions_processor::process_compute_budget_instructions,
@@ -70,7 +70,7 @@ pub struct SvmTestEnvironment<'a> {
     pub fork_graph: Arc<RwLock<MockForkGraph>>,
     pub batch_processor: TransactionBatchProcessor<MockForkGraph>,
     pub processing_config: TransactionProcessingConfig<'a>,
-    pub processing_environment: TransactionProcessingEnvironment<'a>,
+    pub processing_environment: TransactionProcessingEnvironment,
     pub test_entry: SvmTestEntry,
 }
 
@@ -465,6 +465,8 @@ impl SvmTestEntry {
                                 signature_count.saturating_mul(LAMPORTS_PER_SIGNATURE),
                                 v.get_prioritization_fee(),
                             ),
+                            self.feature_set()
+                                .is_active(&raise_cpi_nesting_limit_to_8::id()),
                         )
                     });
                     CheckedTransactionDetails::new(tx_details.nonce, compute_budget)
@@ -3215,7 +3217,7 @@ mod balance_collector {
 
                         vec![instruction]
                     }
-                    // use a non-existant program to fail loading
+                    // use a non-existent program to fail loading
                     // token22 is very convenient because its presence ensures token bals are recorded
                     // if we had to use a random program id we would need to push a token program onto account keys
                     ExecutionStatus::ProcessedFailed => {
@@ -3225,7 +3227,7 @@ mod balance_collector {
 
                         vec![instruction]
                     }
-                    // use a non-existant fee-payer to trigger a discard
+                    // use a non-existent fee-payer to trigger a discard
                     ExecutionStatus::Discarded => {
                         let mut instruction = transfer.to_instruction(&fee_payer, use_tokens);
                         if use_tokens {
