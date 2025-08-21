@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 use {
-    solana_votor_messages::{bls_message::Certificate, vote::Vote},
+    solana_votor_messages::{consensus_message::Certificate, vote::Vote},
     std::time::Duration,
 };
 

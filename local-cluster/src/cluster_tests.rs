@@ -40,7 +40,7 @@ use {
         vote_transaction::{self},
     },
     solana_vote_program::vote_state::TowerSync,
-    solana_votor_messages::bls_message::BLSMessage,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::{HashMap, HashSet, VecDeque},
         net::{SocketAddr, TcpListener, UdpSocket},
@@ -569,8 +569,8 @@ pub fn check_for_new_notarized_votes(
                     .recv_from(&mut buf)
                     .expect("Failed to receive vote message")
                     .0;
-                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
-                let BLSMessage::Vote(vote_message) = bls_message else {
+                let message = bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
+                let ConsensusMessage::Vote(vote_message) = message else {
                     continue;
                 };
                 let vote = vote_message.vote;

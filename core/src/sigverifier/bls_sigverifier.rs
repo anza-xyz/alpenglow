@@ -15,7 +15,7 @@ use {
         bank::Bank, epoch_stakes::BLSPubkeyToRankMap, root_bank_cache::RootBankCache,
     },
     solana_streamer::packet::PacketBatch,
-    solana_votor_messages::bls_message::BLSMessage,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
     std::{collections::HashMap, sync::Arc},
 };
@@ -30,13 +30,13 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMa
 
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
-    message_sender: Sender<BLSMessage>,
+    message_sender: Sender<ConsensusMessage>,
     root_bank_cache: RootBankCache,
     stats: BLSSigVerifierStats,
 }
 
 impl SigVerifier for BLSSigVerifier {
-    type SendType = BLSMessage;
+    type SendType = ConsensusMessage;
 
     // TODO(wen): just a placeholder without any verification.
     fn verify_batches(&self, batches: Vec<PacketBatch>, _valid_packets: usize) -> Vec<PacketBatch> {
@@ -69,8 +69,8 @@ impl SigVerifier for BLSSigVerifier {
             };
 
             let slot = match &message {
-                BLSMessage::Vote(vote_message) => vote_message.vote.slot(),
-                BLSMessage::Certificate(certificate_message) => {
+                ConsensusMessage::Vote(vote_message) => vote_message.vote.slot(),
+                ConsensusMessage::Certificate(certificate_message) => {
                     certificate_message.certificate.slot()
                 }
             };
@@ -81,7 +81,7 @@ impl SigVerifier for BLSSigVerifier {
                 continue;
             };
 
-            if let BLSMessage::Vote(vote_message) = &message {
+            if let ConsensusMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
                 stats_updater.received_votes += 1;
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
@@ -119,7 +119,7 @@ impl BLSSigVerifier {
     pub fn new(
         root_bank_cache: RootBankCache,
         verified_votes_sender: VerifiedVoteSender,
-        message_sender: Sender<BLSMessage>,
+        message_sender: Sender<ConsensusMessage>,
     ) -> Self {
         Self {
             root_bank_cache,
@@ -165,8 +165,8 @@ mod tests {
         },
         solana_signer::Signer,
         solana_votor_messages::{
-            bls_message::{
-                BLSMessage, Certificate, CertificateMessage, CertificateType, VoteMessage,
+            consensus_message::{
+                Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
             },
             vote::Vote,
         },
@@ -176,7 +176,7 @@ mod tests {
 
     fn create_keypairs_and_bls_sig_verifier(
         verified_vote_sender: VerifiedVoteSender,
-        message_sender: Sender<BLSMessage>,
+        message_sender: Sender<ConsensusMessage>,
     ) -> (Vec<ValidatorVoteKeypairs>, BLSSigVerifier) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
@@ -201,8 +201,8 @@ mod tests {
 
     fn test_bls_message_transmission(
         verifier: &mut BLSSigVerifier,
-        receiver: Option<&Receiver<BLSMessage>>,
-        messages: &[BLSMessage],
+        receiver: Option<&Receiver<ConsensusMessage>>,
+        messages: &[ConsensusMessage],
         expect_send_packets_ok: bool,
     ) {
         let packets = messages
@@ -249,12 +249,12 @@ mod tests {
         let certificate = Certificate::new(CertificateType::Finalize, 4, None);
 
         let messages = vec![
-            BLSMessage::Vote(VoteMessage {
+            ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
                 signature: Signature::default(),
                 rank: vote_rank as u16,
             }),
-            BLSMessage::Certificate(CertificateMessage {
+            ConsensusMessage::Certificate(CertificateMessage {
                 certificate,
                 signature: Signature::default(),
                 bitmap,
@@ -271,7 +271,7 @@ mod tests {
         );
 
         let vote_rank: usize = 3;
-        let messages = vec![BLSMessage::Vote(VoteMessage {
+        let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_vote(6, Hash::new_unique()),
             signature: Signature::default(),
             rank: vote_rank as u16,
@@ -289,7 +289,7 @@ mod tests {
         // Pretend 10 seconds have passed, make sure stats are reset
         verifier.stats.last_stats_logged = Instant::now() - STATS_INTERVAL_DURATION;
         let vote_rank: usize = 9;
-        let messages = vec![BLSMessage::Vote(VoteMessage {
+        let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique()),
             signature: Signature::default(),
             rank: vote_rank as u16,
@@ -324,7 +324,7 @@ mod tests {
         assert!(receiver.is_empty());
 
         // Send a packet with no epoch stakes
-        let messages = vec![BLSMessage::Vote(VoteMessage {
+        let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5_000_000_000),
             signature: Signature::default(),
             rank: 0,
@@ -339,7 +339,7 @@ mod tests {
         assert!(receiver.is_empty());
 
         // Send a packet with invalid rank
-        let messages = vec![BLSMessage::Vote(VoteMessage {
+        let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
             signature: Signature::default(),
             rank: 1000, // Invalid rank
@@ -361,12 +361,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
         let messages = vec![
-            BLSMessage::Vote(VoteMessage {
+            ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
                 signature: Signature::default(),
                 rank: 0,
             }),
-            BLSMessage::Vote(VoteMessage {
+            ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
                 signature: Signature::default(),
                 rank: 2,
@@ -387,7 +387,7 @@ mod tests {
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
         // Close the receiver, should get panic on next send
         drop(receiver);
-        let messages = vec![BLSMessage::Vote(VoteMessage {
+        let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
             signature: Signature::default(),
             rank: 0,
@@ -400,7 +400,7 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
-        let message = BLSMessage::Vote(VoteMessage {
+        let message = ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
             signature: Signature::default(),
             rank: 0,

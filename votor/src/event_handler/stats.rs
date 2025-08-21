@@ -2,7 +2,7 @@ use {
     crate::{event::VotorEvent, voting_utils::BLSOp, VoteType},
     solana_clock::Slot,
     solana_metrics::datapoint_info,
-    solana_votor_messages::bls_message::BLSMessage,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::{BTreeMap, HashMap},
         time::{Duration, Instant},
@@ -160,9 +160,9 @@ impl EventHandlerStats {
     }
 
     pub fn incr_vote(&mut self, bls_op: &BLSOp) {
-        if let BLSOp::PushVote { bls_message, .. } = bls_op {
-            let BLSMessage::Vote(vote) = **bls_message else {
-                warn!("Unexpected BLS message type: {:?}", bls_message);
+        if let BLSOp::PushVote { message, .. } = bls_op {
+            let ConsensusMessage::Vote(vote) = **message else {
+                warn!("Unexpected BLS message type: {:?}", message);
                 return;
             };
             let vote_type = VoteType::get_type(&vote.vote);

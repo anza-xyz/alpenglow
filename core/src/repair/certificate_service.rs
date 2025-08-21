@@ -7,7 +7,7 @@ use {
     crate::result::{Error, Result},
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_ledger::blockstore::Blockstore,
-    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
+    solana_votor_messages::consensus_message::{Certificate, CertificateMessage},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

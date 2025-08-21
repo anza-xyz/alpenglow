@@ -3,7 +3,7 @@ use {
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{decode, encode_base2, encode_base3, DecodeError, Decoded, EncodeError},
-    solana_votor_messages::bls_message::{Certificate, CertificateMessage, VoteMessage},
+    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, VoteMessage},
     thiserror::Error,
 };
 
@@ -148,7 +148,7 @@ mod tests {
         solana_bls_signatures::{Keypair as BLSKeypair, Signature as BLSSignature},
         solana_hash::Hash,
         solana_votor_messages::{
-            bls_message::{Certificate, CertificateType, VoteMessage},
+            consensus_message::{Certificate, CertificateType, VoteMessage},
             vote::Vote,
         },
     };

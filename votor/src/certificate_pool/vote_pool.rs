@@ -2,7 +2,7 @@ use {
     crate::{certificate_pool::vote_certificate_builder::VoteCertificateBuilder, Stake},
     solana_hash::Hash,
     solana_pubkey::Pubkey,
-    solana_votor_messages::bls_message::VoteMessage,
+    solana_votor_messages::consensus_message::VoteMessage,
     std::collections::{HashMap, HashSet},
 };
 
@@ -177,7 +177,7 @@ mod test {
     use {
         super::*,
         solana_bls_signatures::Signature as BLSSignature,
-        solana_votor_messages::{bls_message::VoteMessage, vote::Vote},
+        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     };
 
     #[test]

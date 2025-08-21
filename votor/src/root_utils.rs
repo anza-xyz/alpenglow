@@ -15,7 +15,7 @@ use {
         snapshot_controller::SnapshotController,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::bls_message::Block,
+    solana_votor_messages::consensus_message::Block,
     std::{
         collections::BTreeSet,
         sync::{Arc, RwLock},

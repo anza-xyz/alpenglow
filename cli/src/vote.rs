@@ -50,7 +50,7 @@ use {
         },
     },
     solana_votor_messages::{
-        bls_message::BLS_KEYPAIR_DERIVE_SEED, instruction::InitializeAccountInstructionData,
+        consensus_message::BLS_KEYPAIR_DERIVE_SEED, instruction::InitializeAccountInstructionData,
         state::VoteState as AlpenglowVoteState,
     },
     std::rc::Rc,

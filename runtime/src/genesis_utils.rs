@@ -18,7 +18,7 @@ use {
     solana_system_interface::program as system_program,
     solana_vote_program::vote_state,
     solana_votor_messages::{
-        self, bls_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
+        self, consensus_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
     },
     std::{borrow::Borrow, fs::File, io::Read},
 };

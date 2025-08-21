@@ -9,13 +9,13 @@ use {
     solana_clock::Slot,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageSender,
-    },
+    solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
     solana_signer::Signer,
     solana_transaction::Transaction,
     solana_votor_messages::{
-        bls_message::{BLSMessage, CertificateMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        consensus_message::{
+            CertificateMessage, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+        },
         vote::Vote,
     },
     std::{collections::HashMap, sync::Arc},
@@ -52,8 +52,8 @@ pub enum GenerateVoteTxResult {
     // The following are the successful cases
     // Generated a vote transaction
     Tx(Transaction),
-    // Generated a BLS message
-    BLSMessage(BLSMessage),
+    // Generated a ConsensusMessage
+    Consensus(ConsensusMessage),
 }
 
 impl GenerateVoteTxResult {
@@ -75,7 +75,7 @@ impl GenerateVoteTxResult {
             | Self::WaitForStartupVerification
             | Self::WaitToVoteSlot(_)
             | Self::NoRankFound => false,
-            Self::Tx(_) | Self::BLSMessage(_) => false,
+            Self::Tx(_) | Self::Consensus(_) => false,
         }
     }
 
@@ -89,7 +89,7 @@ impl GenerateVoteTxResult {
             | Self::WaitForStartupVerification
             | Self::WaitToVoteSlot(_)
             | Self::NoRankFound => true,
-            Self::Tx(_) | Self::BLSMessage(_) => false,
+            Self::Tx(_) | Self::Consensus(_) => false,
         }
     }
 }
@@ -97,7 +97,7 @@ impl GenerateVoteTxResult {
 #[derive(Debug)]
 pub enum BLSOp {
     PushVote {
-        bls_message: Arc<BLSMessage>,
+        message: Arc<ConsensusMessage>,
         slot: Slot,
         saved_vote_history: SavedVoteHistoryVersions,
     },
@@ -133,7 +133,7 @@ pub struct VotingContext {
     // The BLS keypair should always change with authorized_voter_keypairs.
     pub derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
     pub has_new_vote_been_rooted: bool,
-    pub own_vote_sender: BLSVerifiedMessageSender,
+    pub own_vote_sender: Sender<ConsensusMessage>,
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
@@ -248,7 +248,7 @@ pub fn generate_vote_tx(
     else {
         return GenerateVoteTxResult::NoRankFound;
     };
-    GenerateVoteTxResult::BLSMessage(BLSMessage::Vote(VoteMessage {
+    GenerateVoteTxResult::Consensus(ConsensusMessage::Vote(VoteMessage {
         vote: *vote,
         signature: bls_keypair.sign(&vote_serialized).into(),
         rank: *my_rank,
@@ -276,8 +276,8 @@ fn insert_vote_and_create_bls_message(
     }
 
     let bank = context.root_bank_cache.root_bank();
-    let bls_message = match generate_vote_tx(&vote, &bank, context) {
-        GenerateVoteTxResult::BLSMessage(bls_message) => bls_message,
+    let message = match generate_vote_tx(&vote, &bank, context) {
+        GenerateVoteTxResult::Consensus(m) => m,
         e => {
             if e.is_transient_error() {
                 return Err(VoteError::TransientError(Box::new(e)));
@@ -288,7 +288,7 @@ fn insert_vote_and_create_bls_message(
     };
     context
         .own_vote_sender
-        .send(bls_message.clone())
+        .send(message.clone())
         .map_err(|_| SendError(()))?;
 
     // TODO: for refresh votes use a different BLSOp so we don't have to rewrite the same vote history to file
@@ -297,7 +297,7 @@ fn insert_vote_and_create_bls_message(
 
     // Return vote for sending
     Ok(BLSOp::PushVote {
-        bls_message: Arc::new(bls_message),
+        message: Arc::new(message),
         slot: vote.slot(),
         saved_vote_history: SavedVoteHistoryVersions::from(saved_vote_history),
     })

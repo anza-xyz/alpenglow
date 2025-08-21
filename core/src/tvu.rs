@@ -44,13 +44,9 @@ use {
         rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier,
     },
     solana_runtime::{
-        bank_forks::BankForks,
-        commitment::BlockCommitmentCache,
-        prioritization_fee_cache::PrioritizationFeeCache,
-        snapshot_controller::SnapshotController,
-        vote_sender_types::{
-            BLSVerifiedMessageReceiver, BLSVerifiedMessageSender, ReplayVoteSender,
-        },
+        bank_forks::BankForks, commitment::BlockCommitmentCache,
+        prioritization_fee_cache::PrioritizationFeeCache, snapshot_controller::SnapshotController,
+        vote_sender_types::ReplayVoteSender,
     },
     solana_streamer::evicting_sender::EvictingSender,
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
@@ -60,6 +56,7 @@ use {
         vote_history_storage::VoteHistoryStorage,
         votor::LeaderWindowNotifier,
     },
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -166,8 +163,8 @@ impl Tvu {
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slots_receiver: DuplicateConfirmedSlotsReceiver,
-        own_vote_sender: BLSVerifiedMessageSender,
-        bls_verified_message_receiver: BLSVerifiedMessageReceiver,
+        own_vote_sender: Sender<ConsensusMessage>,
+        consensus_message_receiver: Receiver<ConsensusMessage>,
         tvu_config: TvuConfig,
         max_slots: &Arc<MaxSlots>,
         block_metadata_notifier: Option<BlockMetadataNotifierArc>,
@@ -353,7 +350,7 @@ impl Tvu {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            bls_verified_message_receiver,
+            consensus_message_receiver,
             votor_event_receiver,
         };
 
