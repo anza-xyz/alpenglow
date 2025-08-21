@@ -7710,6 +7710,7 @@ dependencies = [
  "agave-feature-set",
  "ahash 0.8.12",
  "log",
+ "qualifier_attr",
  "rand 0.8.5",
  "solana-bpf-loader-program",
  "solana-compute-budget-program",
@@ -8338,6 +8339,7 @@ dependencies = [
  "solana-perf",
  "solana-poh",
  "solana-poh-config",
+ "solana-program-binaries",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-quic-client",
@@ -9686,9 +9688,11 @@ dependencies = [
  "solana-native-token 3.0.0",
  "solana-net-utils",
  "solana-poh-config",
+ "solana-program-binaries",
  "solana-pubkey 3.0.0",
  "solana-pubsub-client",
  "solana-quic-client",
+ "solana-rent 3.0.0",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-runtime",
@@ -10228,6 +10232,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-program-binaries"
+version = "3.0.0"
+dependencies = [
+ "bincode",
+ "serde",
+ "solana-account 3.0.0",
+ "solana-loader-v3-interface 6.1.0",
+ "solana-pubkey 3.0.0",
+ "solana-rent 3.0.0",
+ "solana-sdk-ids 3.0.0",
+ "spl-generic-token",
+]
+
+[[package]]
 name = "solana-program-entrypoint"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10415,6 +10433,7 @@ dependencies = [
  "solana-native-token 3.0.0",
  "solana-poh-config",
  "solana-program 3.0.0",
+ "solana-program-binaries",
  "solana-program-entrypoint 3.1.0",
  "solana-program-error 3.0.0",
  "solana-program-runtime",
@@ -10985,6 +11004,7 @@ dependencies = [
  "solana-poh-config",
  "solana-precompile-error",
  "solana-program 3.0.0",
+ "solana-program-binaries",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-rayon-threadlimit",
@@ -11520,6 +11540,7 @@ dependencies = [
  "solana-keypair 3.0.0",
  "solana-message 3.0.0",
  "solana-native-token 3.0.0",
+ "solana-program-binaries",
  "solana-pubkey 3.0.0",
  "solana-remote-wallet",
  "solana-rpc-client",
@@ -11529,6 +11550,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-stake-interface 2.0.0",
  "solana-stake-program",
+ "solana-sysvar 3.0.0",
  "solana-transaction",
  "solana-version",
 ]
@@ -11614,29 +11636,6 @@ dependencies = [
  "solana-vote-interface 3.0.0",
  "solana-vote-program",
  "solana-votor-messages",
- "test-case",
-]
-
-[[package]]
-name = "solana-stake-program-tests"
-version = "3.0.0"
-dependencies = [
- "agave-feature-set",
- "assert_matches",
- "bincode",
- "solana-account 3.0.0",
- "solana-instruction 3.0.0",
- "solana-keypair 3.0.0",
- "solana-program-error 3.0.0",
- "solana-program-test",
- "solana-pubkey 3.0.0",
- "solana-signer 3.0.0",
- "solana-stake-interface 2.0.0",
- "solana-system-interface 2.0.0",
- "solana-sysvar 3.0.0",
- "solana-transaction",
- "solana-transaction-error 3.0.0",
- "solana-vote-program",
  "test-case",
 ]
 
@@ -11802,6 +11801,7 @@ dependencies = [
  "solana-nonce 3.0.0",
  "solana-nonce-account",
  "solana-precompile-error",
+ "solana-program-binaries",
  "solana-program-entrypoint 3.1.0",
  "solana-program-pack 3.0.0",
  "solana-program-runtime",
@@ -12119,6 +12119,7 @@ dependencies = [
  "solana-message 3.0.0",
  "solana-native-token 3.0.0",
  "solana-net-utils",
+ "solana-program-binaries",
  "solana-program-test",
  "solana-pubkey 3.0.0",
  "solana-rent 3.0.0",
