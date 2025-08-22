@@ -154,7 +154,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         client: ForwardingClientOption,
-        consensus_message_sender: Sender<ConsensusMessage>,
+        verified_consensus_message_sender: Sender<ConsensusMessage>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         votor_event_sender: VotorEventSender,
         keypair: &Keypair,
@@ -348,7 +348,7 @@ impl Tpu {
             let verifier = BLSSigVerifier::new(
                 root_bank_cache,
                 verified_vote_sender.clone(),
-                consensus_message_sender,
+                verified_consensus_message_sender,
             );
             SigVerifyStage::new(
                 bls_packet_receiver,

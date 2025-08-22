@@ -53,7 +53,7 @@ pub enum GenerateVoteTxResult {
     // Generated a vote transaction
     Tx(Transaction),
     // Generated a ConsensusMessage
-    Consensus(ConsensusMessage),
+    ConsensusMessage(ConsensusMessage),
 }
 
 impl GenerateVoteTxResult {
@@ -75,7 +75,7 @@ impl GenerateVoteTxResult {
             | Self::WaitForStartupVerification
             | Self::WaitToVoteSlot(_)
             | Self::NoRankFound => false,
-            Self::Tx(_) | Self::Consensus(_) => false,
+            Self::Tx(_) | Self::ConsensusMessage(_) => false,
         }
     }
 
@@ -89,7 +89,7 @@ impl GenerateVoteTxResult {
             | Self::WaitForStartupVerification
             | Self::WaitToVoteSlot(_)
             | Self::NoRankFound => true,
-            Self::Tx(_) | Self::Consensus(_) => false,
+            Self::Tx(_) | Self::ConsensusMessage(_) => false,
         }
     }
 }
@@ -248,7 +248,7 @@ pub fn generate_vote_tx(
     else {
         return GenerateVoteTxResult::NoRankFound;
     };
-    GenerateVoteTxResult::Consensus(ConsensusMessage::Vote(VoteMessage {
+    GenerateVoteTxResult::ConsensusMessage(ConsensusMessage::Vote(VoteMessage {
         vote: *vote,
         signature: bls_keypair.sign(&vote_serialized).into(),
         rank: *my_rank,
@@ -277,7 +277,7 @@ fn insert_vote_and_create_bls_message(
 
     let bank = context.root_bank_cache.root_bank();
     let message = match generate_vote_tx(&vote, &bank, context) {
-        GenerateVoteTxResult::Consensus(m) => m,
+        GenerateVoteTxResult::ConsensusMessage(m) => m,
         e => {
             if e.is_transient_error() {
                 return Err(VoteError::TransientError(Box::new(e)));
