@@ -315,7 +315,7 @@ pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
 pub fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive() {
-        if IS_ALPENGLOW || *feature_id != agave_feature_set::secp256k1_program_enabled::id() {
+        if IS_ALPENGLOW || *feature_id != agave_feature_set::alpenglow::id() {
             activate_feature(genesis_config, *feature_id);
         }
     }
@@ -331,8 +331,8 @@ pub fn deactivate_features(
             genesis_config.accounts.remove(deactivate_feature_pk);
         } else {
             warn!(
-                "Feature {:?} set for deactivation is not a known Feature public key",
-                deactivate_feature_pk
+                "Feature {deactivate_feature_pk:?} set for deactivation is not a known Feature \
+                 public key"
             );
         }
     }

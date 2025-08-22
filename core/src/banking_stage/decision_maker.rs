@@ -6,7 +6,13 @@ use {
     solana_poh::poh_recorder::{BankStart, PohRecorder},
     solana_unified_scheduler_pool::{BankingStageMonitor, BankingStageStatus},
     std::{
-        sync::{atomic::{AtomicBool, Ordering::{self, Relaxed}}, Arc, RwLock},
+        sync::{
+            atomic::{
+                AtomicBool,
+                Ordering::{self, Relaxed},
+            },
+            Arc, RwLock,
+        },
         time::{Duration, Instant},
     },
 };
@@ -105,7 +111,7 @@ impl DecisionMaker {
             let first_alpenglow_slot = bank_start
                 .working_bank
                 .feature_set
-                .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+                .activated_slot(&agave_feature_set::alpenglow::id())
                 .unwrap_or(u64::MAX);
             let contains_valid_certificate =
                 if bank_start.working_bank.slot() >= first_alpenglow_slot {
@@ -139,7 +145,12 @@ pub(crate) struct DecisionMakerWrapper {
 impl DecisionMakerWrapper {
     pub(crate) fn new(decision_maker: DecisionMaker) -> Self {
         // Clone-off before hand to avoid lock contentions.
-        let is_exited = decision_maker.poh_recorder.read().unwrap().is_exited.clone();
+        let is_exited = decision_maker
+            .poh_recorder
+            .read()
+            .unwrap()
+            .is_exited
+            .clone();
 
         Self {
             is_exited,
@@ -169,7 +180,10 @@ mod tests {
         super::*,
         core::panic,
         solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
-        solana_ledger::{blockstore::Blockstore, genesis_utils::create_genesis_config, get_tmp_ledger_path_auto_delete},
+        solana_ledger::{
+            blockstore::Blockstore, genesis_utils::create_genesis_config,
+            get_tmp_ledger_path_auto_delete,
+        },
         solana_poh::poh_recorder::create_test_recorder,
         solana_pubkey::Pubkey,
         solana_runtime::bank::Bank,
@@ -287,7 +301,7 @@ mod tests {
         poh_recorder.write().unwrap().reset(bank.clone(), None);
         let slot = bank.slot() + 1;
         let mut bank = Bank::new_from_parent(bank, &my_pubkey, slot);
-        bank.activate_feature(&agave_feature_set::secp256k1_program_enabled::id());
+        bank.activate_feature(&agave_feature_set::alpenglow::id());
         let bank = Arc::new(bank);
 
         // Currently Leader, with alpenglow enabled, no certificate - Hold
@@ -382,11 +396,7 @@ mod tests {
         );
         // Leader other than me, forward the packets
         assert_matches!(
-            DecisionMaker::consume_or_forward_packets(
-                || None,
-                || false,
-                || false,
-            ),
+            DecisionMaker::consume_or_forward_packets(|| None, || false, || false,),
             BufferedPacketsDecision::Forward
         );
         // Will be leader shortly, hold the packets
@@ -400,11 +410,7 @@ mod tests {
         );
         // Will be leader (not shortly), forward and hold
         assert_matches!(
-            DecisionMaker::consume_or_forward_packets(
-                || None,
-                || false,
-                || true,
-            ),
+            DecisionMaker::consume_or_forward_packets(|| None, || false, || true,),
             BufferedPacketsDecision::ForwardAndHold
         );
     }

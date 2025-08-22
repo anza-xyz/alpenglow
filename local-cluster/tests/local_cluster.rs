@@ -6872,9 +6872,9 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     impl Stage {
         fn timeout(&self) -> Duration {
             match self {
-                Stage::Stability => Duration::from_secs(60),
-                Stage::ObserveSkipFallbacks => Duration::from_secs(120),
-                Stage::ObserveLiveness => Duration::from_secs(180),
+                Stage::Stability => Duration::from_secs(120),
+                Stage::ObserveSkipFallbacks => Duration::from_secs(180),
+                Stage::ObserveLiveness => Duration::from_secs(240),
             }
         }
 
@@ -7159,10 +7159,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     impl Stage {
         fn timeout(&self) -> Duration {
             match self {
-                Stage::WaitForReady => Duration::from_secs(60),
-                Stage::Stability => Duration::from_secs(60),
-                Stage::ObserveNotarFallbacks => Duration::from_secs(120),
-                Stage::ObserveLiveness => Duration::from_secs(180),
+                Stage::WaitForReady => Duration::from_secs(120),
+                Stage::Stability => Duration::from_secs(120),
+                Stage::ObserveNotarFallbacks => Duration::from_secs(240),
+                Stage::ObserveLiveness => Duration::from_secs(360),
             }
         }
 

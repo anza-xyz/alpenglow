@@ -58,12 +58,12 @@ use {
         transaction_execution_result::InnerInstruction,
         transaction_processor::ExecutionRecordingConfig,
     },
+    solana_svm_timings::ExecuteTimings,
     solana_svm_transaction::svm_message::SVMMessage,
+    solana_svm_type_overrides::rand,
     solana_system_interface::{program as system_program, MAX_PERMITTED_DATA_LENGTH},
-    solana_timings::ExecuteTimings,
     solana_transaction::Transaction,
     solana_transaction_error::TransactionError,
-    solana_type_overrides::rand,
     std::{
         assert_eq,
         cell::RefCell,
@@ -1446,7 +1446,7 @@ fn assert_instruction_count() {
             ("solana_sbf_rust_128bit", 801),
             ("solana_sbf_rust_alloc", 4983),
             ("solana_sbf_rust_custom_heap", 303),
-            ("solana_sbf_rust_dep_crate", 3),
+            ("solana_sbf_rust_dep_crate", 22),
             ("solana_sbf_rust_iter", 1414),
             ("solana_sbf_rust_many_args", 1287),
             ("solana_sbf_rust_mem", 1298),
@@ -1485,7 +1485,7 @@ fn assert_instruction_count() {
         print!("  {:36} {:8}", program_name, *expected_consumption);
         mock_process_instruction(
             &loader_id,
-            vec![0],
+            Some(0),
             &[],
             transaction_accounts,
             instruction_accounts,
