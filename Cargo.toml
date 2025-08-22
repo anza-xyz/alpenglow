@@ -107,13 +107,11 @@ members = [
     "streamer",
     "svm",
     "svm-callback",
-    "svm-conformance",
     "svm-feature-set",
     "svm-transaction",
     "syscalls",
     "syscalls/gen-syscall-list",
     "test-validator",
-    "thin-client",
     "thread-manager",
     "timings",
     "tls-utils",
@@ -541,7 +539,6 @@ solana-storage-proto = { path = "storage-proto", version = "=3.0.0" }
 solana-streamer = { path = "streamer", version = "=3.0.0" }
 solana-svm = { path = "svm", version = "=3.0.0" }
 solana-svm-callback = { path = "svm-callback", version = "=3.0.0" }
-solana-svm-conformance = { path = "svm-conformance", version = "=3.0.0" }
 solana-svm-feature-set = { path = "svm-feature-set", version = "=3.0.0" }
 solana-svm-transaction = { path = "svm-transaction", version = "=3.0.0" }
 solana-system-interface = "1.0"
@@ -550,7 +547,6 @@ solana-system-transaction = "2.2.1"
 solana-sysvar = "2.2.2"
 solana-sysvar-id = "2.2.1"
 solana-test-validator = { path = "test-validator", version = "=3.0.0" }
-solana-thin-client = { path = "thin-client", version = "=3.0.0" }
 solana-time-utils = "2.2.1"
 solana-timings = { path = "timings", version = "=3.0.0" }
 solana-tls-utils = { path = "tls-utils", version = "=3.0.0" }
@@ -585,10 +581,10 @@ spl-associated-token-account-interface = "1.0.0"
 spl-generic-token = "1.0.1"
 spl-memo-interface = "1.0.0"
 spl-pod = "0.5.1"
-spl-token = "8.0.0"
 spl-token-2022-interface = "1.0.0"
 spl-token-confidential-transfer-proof-extraction = "0.4.0"
 spl-token-group-interface = "0.6.0"
+spl-token-interface = "1.0.0"
 spl-token-metadata-interface = "0.7.0"
 static_assertions = "1.1.0"
 stream-cancel = "0.8.2"

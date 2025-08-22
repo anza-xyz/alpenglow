@@ -345,7 +345,7 @@ pub fn create_program_runtime_environment_v1<'a>(
         sanitize_user_provided_values: true,
         enabled_sbpf_versions: min_sbpf_version..=max_sbpf_version,
         optimize_rodata: false,
-        aligned_memory_mapping: !feature_set.bpf_account_data_direct_mapping,
+        aligned_memory_mapping: !feature_set.stricter_abi_and_runtime_constraints,
         // Warning, do not use `Config::default()` so that configuration here is explicit.
     };
     let mut result = BuiltinProgram::new_loader(config);
@@ -2401,7 +2401,7 @@ mod tests {
                 .transaction_context
                 .get_next_instruction_context_mut()
                 .unwrap()
-                .configure(vec![0, 1], vec![], &[]);
+                .configure_for_tests(vec![0, 1], vec![], &[]);
             $invoke_context.push().unwrap();
         };
     }
@@ -4626,7 +4626,6 @@ mod tests {
             {
                 let instruction_accounts = vec![InstructionAccount::new(
                     index_in_trace.saturating_add(1) as IndexOfAccount,
-                    0,
                     false,
                     false,
                 )];
@@ -4634,7 +4633,7 @@ mod tests {
                     .transaction_context
                     .get_next_instruction_context_mut()
                     .unwrap()
-                    .configure(vec![0], instruction_accounts, &[index_in_trace as u8]);
+                    .configure_for_tests(vec![0], instruction_accounts, &[index_in_trace as u8]);
                 invoke_context.transaction_context.push().unwrap();
             }
         }

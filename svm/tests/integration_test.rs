@@ -24,7 +24,7 @@ use {
     solana_nonce::{self as nonce, state::DurableNonce},
     solana_program_entrypoint::MAX_PERMITTED_DATA_INCREASE,
     solana_program_runtime::execution_budget::SVMTransactionExecutionAndFeeBudgetLimits,
-    solana_pubkey::{pubkey, Pubkey},
+    solana_pubkey::Pubkey,
     solana_sdk_ids::{bpf_loader_upgradeable, native_loader},
     solana_signer::Signer,
     solana_svm::{
@@ -296,7 +296,7 @@ impl SvmTestEnvironment<'_> {
 }
 
 // container for a transaction batch and all data needed to run and verify it against svm
-#[derive(Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct SvmTestEntry {
     // features are enabled by default; these will be disabled
     pub disabled_features: Vec<Pubkey>,
@@ -494,21 +494,6 @@ impl SvmTestEntry {
         }
 
         feature_set
-    }
-}
-
-// NOTE `1ncomp1ete111111111111111111111111111111111` corresponds to `bpf_account_data_direct_mapping::id()`
-// by hardcoding the string, we ensure when the feature is finished, it will automatically be tested
-impl Default for SvmTestEntry {
-    fn default() -> Self {
-        Self {
-            disabled_features: vec![pubkey!("1ncomp1ete111111111111111111111111111111111")],
-            with_loader_v4: false,
-            initial_programs: vec![],
-            initial_accounts: AccountsMap::default(),
-            transaction_batch: vec![],
-            final_accounts: AccountsMap::default(),
-        }
     }
 }
 
@@ -3020,7 +3005,9 @@ mod balance_collector {
         solana_program_pack::Pack,
         solana_sdk_ids::bpf_loader,
         spl_generic_token::token_2022,
-        spl_token::state::{Account as TokenAccount, AccountState as TokenAccountState, Mint},
+        spl_token_interface::state::{
+            Account as TokenAccount, AccountState as TokenAccountState, Mint,
+        },
         test_case::test_case,
     };
 
@@ -3064,8 +3051,8 @@ mod balance_collector {
             // we use a common account owner, the fee-payer, to conveniently reuse account state
             // so why do we sign? to force the sender and receiver to be in a consistent order in account keys
             // which means we can grab them by index in our final test instead of searching by key
-            let mut instruction = spl_token::instruction::transfer(
-                &spl_token::id(),
+            let mut instruction = spl_token_interface::instruction::transfer(
+                &spl_token_interface::id(),
                 &self.from,
                 &self.to,
                 fee_payer,
@@ -3121,8 +3108,13 @@ mod balance_collector {
         }
         .pack_into_slice(&mut mint_buf);
 
-        let mint_state =
-            AccountSharedData::create(LAMPORTS_PER_SOL, mint_buf, spl_token::id(), false, u64::MAX);
+        let mint_state = AccountSharedData::create(
+            LAMPORTS_PER_SOL,
+            mint_buf,
+            spl_token_interface::id(),
+            false,
+            u64::MAX,
+        );
 
         let token_account_for_tests = || TokenAccount {
             mint,
@@ -3138,7 +3130,7 @@ mod balance_collector {
         let token_state = AccountSharedData::create(
             LAMPORTS_PER_SOL,
             token_buf,
-            spl_token::id(),
+            spl_token_interface::id(),
             false,
             u64::MAX,
         );
@@ -3156,7 +3148,7 @@ mod balance_collector {
             test_entry.add_initial_account(fee_payer, &native_state.clone());
 
             if use_tokens {
-                test_entry.add_initial_account(spl_token::id(), &spl_token);
+                test_entry.add_initial_account(spl_token_interface::id(), &spl_token);
                 test_entry.add_initial_account(mint, &mint_state);
                 test_entry.add_initial_account(alice, &token_state);
                 test_entry.add_initial_account(bob, &token_state);
@@ -3273,7 +3265,7 @@ mod balance_collector {
                 let final_token_state = AccountSharedData::create(
                     LAMPORTS_PER_SOL,
                     token_buf.clone(),
-                    spl_token::id(),
+                    spl_token_interface::id(),
                     false,
                     u64::MAX,
                 );
@@ -3284,7 +3276,7 @@ mod balance_collector {
                 let final_token_state = AccountSharedData::create(
                     LAMPORTS_PER_SOL,
                     token_buf.clone(),
-                    spl_token::id(),
+                    spl_token_interface::id(),
                     false,
                     u64::MAX,
                 );
@@ -3295,7 +3287,7 @@ mod balance_collector {
                 let final_token_state = AccountSharedData::create(
                     LAMPORTS_PER_SOL,
                     token_buf.clone(),
-                    spl_token::id(),
+                    spl_token_interface::id(),
                     false,
                     u64::MAX,
                 );

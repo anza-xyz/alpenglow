@@ -1,5 +1,7 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![allow(clippy::arithmetic_side_effects)]
+// TODO(ksn): remove this
+#![allow(deprecated)]
 
 mod account_saver;
 pub mod accounts_background_service;
@@ -18,7 +20,6 @@ pub mod loader_utils;
 pub mod non_circulating_supply;
 pub mod prioritization_fee;
 pub mod prioritization_fee_cache;
-pub mod root_bank_cache;
 pub mod runtime_config;
 pub mod serde_snapshot;
 pub mod snapshot_archive_info;

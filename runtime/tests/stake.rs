@@ -1,4 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
+// TODO(ksn): remove this
+#![allow(deprecated)]
 
 use {
     solana_account::{from_account, state_traits::StateMut},

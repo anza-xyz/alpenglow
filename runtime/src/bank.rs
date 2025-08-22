@@ -76,10 +76,7 @@ use {
     solana_accounts_db::{
         account_locks::validate_account_locks,
         accounts::{AccountAddressFilter, Accounts, PubkeyAccountSlot},
-        accounts_db::{
-            make_hash_thread_pool, AccountStorageEntry, AccountsDb, AccountsDbConfig,
-            DuplicatesLtHash,
-        },
+        accounts_db::{self, AccountStorageEntry, AccountsDb, AccountsDbConfig, DuplicatesLtHash},
         accounts_hash::AccountsLtHash,
         accounts_index::{IndexKey, ScanConfig, ScanResult},
         accounts_update_notifier_interface::AccountsUpdateNotifier,
@@ -4619,16 +4616,25 @@ impl Bank {
         let expected_accounts_lt_hash = self.accounts_lt_hash.lock().unwrap().clone();
         if config.run_in_background {
             let accounts_db_ = Arc::clone(accounts_db);
-            let num_hash_threads = accounts_db.num_hash_threads;
             accounts_db.verify_accounts_hash_in_bg.start(|| {
                 Builder::new()
-                    .name("solBgHashVerify".into())
+                    .name("solBgVerfyAccts".into())
                     .spawn(move || {
-                        info!("Initial background accounts hash verification has started");
+                        info!("Verifying accounts in background...");
                         let start = Instant::now();
-                        let thread_pool_hash = make_hash_thread_pool(num_hash_threads);
+                        let thread_pool = {
+                            let num_threads = accounts_db_
+                                .num_hash_threads
+                                .unwrap_or_else(accounts_db::default_num_hash_threads)
+                                .get();
+                            ThreadPoolBuilder::new()
+                                .thread_name(|i| format!("solVerfyAccts{i:02}"))
+                                .num_threads(num_threads)
+                                .build()
+                                .unwrap()
+                        };
                         let (calculated_accounts_lt_hash, lattice_verify_time) =
-                            meas_dur!(thread_pool_hash.install(|| {
+                            meas_dur!(thread_pool.install(|| {
                                 accounts_db_.calculate_accounts_lt_hash_at_startup_from_storages(
                                     snapshot_storages.0.as_slice(),
                                     &duplicates_lt_hash.unwrap(),
@@ -4645,18 +4651,20 @@ impl Bank {
                             "startup_verify_accounts",
                             ("total_us", total_time.as_micros(), i64),
                             (
-                                "verify_accounts_lt_hash_us",
+                                "calculate_accounts_lt_hash_us",
                                 lattice_verify_time.as_micros(),
                                 i64
                             ),
                         );
-                        info!("Initial background accounts hash verification has stopped in {total_time:?}");
+                        info!("Verifying accounts in background... Done in {total_time:?}");
                         is_ok
                     })
                     .unwrap()
             });
             true // initial result is true. We haven't failed yet. If verification fails, we'll panic from bg thread.
         } else {
+            info!("Verifying accounts in foreground...");
+            let start = Instant::now();
             let calculated_accounts_lt_hash = if let Some(duplicates_lt_hash) = duplicates_lt_hash {
                 accounts_db.calculate_accounts_lt_hash_at_startup_from_storages(
                     snapshot_storages.0.as_slice(),
@@ -4668,6 +4676,10 @@ impl Bank {
             };
             let is_ok = check_lt_hash(&expected_accounts_lt_hash, &calculated_accounts_lt_hash);
             self.set_initial_accounts_hash_verification_completed();
+            info!(
+                "Verifying accounts in foreground... Done in {:?}",
+                start.elapsed(),
+            );
             is_ok
         }
     }
@@ -4840,16 +4852,13 @@ impl Bank {
         let (verified_accounts, verify_accounts_time_us) = measure_us!({
             let should_verify_accounts = !self.rc.accounts.accounts_db.skip_initial_hash_calc;
             if should_verify_accounts {
-                info!("Verifying accounts...");
-                let verified = self.verify_accounts_hash(
+                self.verify_accounts_hash(
                     VerifyAccountsHashConfig {
                         require_rooted_bank: false,
                         run_in_background: true,
                     },
                     duplicates_lt_hash,
-                );
-                info!("Verifying accounts... In background.");
-                verified
+                )
             } else {
                 info!("Verifying accounts... Skipped.");
                 self.set_initial_accounts_hash_verification_completed();

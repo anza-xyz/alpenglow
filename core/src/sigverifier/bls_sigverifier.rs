@@ -11,9 +11,7 @@ use {
     crossbeam_channel::{Sender, TrySendError},
     solana_clock::Slot,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, epoch_stakes::BLSPubkeyToRankMap, root_bank_cache::RootBankCache,
-    },
+    solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::bls_message::BLSMessage,
     stats::{BLSSigVerifierStats, StatsUpdater},
@@ -31,7 +29,7 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMa
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<BLSMessage>,
-    root_bank_cache: RootBankCache,
+    root_bank: SharableBank,
     stats: BLSSigVerifierStats,
 }
 
@@ -75,7 +73,7 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let bank = self.root_bank_cache.root_bank();
+            let bank = self.root_bank.load();
             let Some(rank_to_pubkey_map) = get_key_to_rank_map(&bank, slot) else {
                 stats_updater.received_no_epoch_stakes += 1;
                 continue;
@@ -117,12 +115,12 @@ impl SigVerifier for BLSSigVerifier {
 
 impl BLSSigVerifier {
     pub fn new(
-        root_bank_cache: RootBankCache,
+        root_bank: SharableBank,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<BLSMessage>,
     ) -> Self {
         Self {
-            root_bank_cache,
+            root_bank,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
@@ -192,10 +190,10 @@ mod tests {
         );
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
-        let root_bank_cache = RootBankCache::new(bank_forks);
+        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
         (
             validator_keypairs,
-            BLSSigVerifier::new(root_bank_cache, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender),
         )
     }
 

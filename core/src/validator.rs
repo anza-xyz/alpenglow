@@ -53,12 +53,13 @@ use {
     },
     solana_gossip::{
         cluster_info::{
-            ClusterInfo, Node, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
+            ClusterInfo, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
             DEFAULT_CONTACT_SAVE_INTERVAL_MILLIS,
         },
         contact_info::ContactInfo,
         crds_gossip_pull::CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
         gossip_service::GossipService,
+        node::Node,
     },
     solana_hard_forks::HardForks,
     solana_hash::Hash,
@@ -1335,7 +1336,7 @@ impl Validator {
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
-            bank_forks.clone(),
+            bank_forks.read().unwrap().sharable_root_bank(),
             config.repair_whitelist.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
