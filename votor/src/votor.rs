@@ -52,7 +52,7 @@ use {
         vote_history_storage::VoteHistoryStorage,
         voting_utils::{BLSOp, VotingContext},
     },
-    crossbeam_channel::Sender,
+    crossbeam_channel::{Receiver, Sender},
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -65,12 +65,10 @@ use {
         rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
-        bank_forks::BankForks,
-        installed_scheduler_pool::BankWithScheduler,
+        bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
-        vote_sender_types::{BLSVerifiedMessageReceiver, BLSVerifiedMessageSender},
     },
-    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
+    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
     std::{
         collections::HashMap,
         sync::{
@@ -117,11 +115,11 @@ pub struct VotorConfig {
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub event_sender: VotorEventSender,
-    pub own_vote_sender: BLSVerifiedMessageSender,
+    pub own_vote_sender: Sender<ConsensusMessage>,
 
     // Receivers
     pub event_receiver: VotorEventReceiver,
-    pub bls_receiver: BLSVerifiedMessageReceiver,
+    pub consensus_message_receiver: Receiver<ConsensusMessage>,
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
@@ -170,7 +168,7 @@ impl Votor {
             event_sender,
             event_receiver,
             own_vote_sender,
-            bls_receiver,
+            consensus_message_receiver: bls_receiver,
         } = config;
 
         let start = Arc::new((Mutex::new(false), Condvar::new()));
@@ -234,7 +232,7 @@ impl Votor {
             blockstore,
             root_bank: root_bank.clone(),
             leader_schedule_cache,
-            bls_receiver,
+            consensus_message_receiver: bls_receiver,
             bls_sender,
             event_sender,
             commitment_sender,

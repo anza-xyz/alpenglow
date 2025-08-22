@@ -98,7 +98,9 @@ use {
     solana_vote_interface::state::TowerSync,
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
     solana_votor_messages::{
-        bls_message::{BLSMessage, CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        consensus_message::{
+            CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+        },
         vote::Vote,
     },
     std::{
@@ -6210,7 +6212,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
 }
 
 fn broadcast_vote(
-    bls_message: BLSMessage,
+    message: ConsensusMessage,
     tpu_socket_addrs: &[std::net::SocketAddr],
     additional_listeners: Option<&Vec<std::net::SocketAddr>>,
     connection_cache: Arc<ConnectionCache>,
@@ -6219,7 +6221,7 @@ fn broadcast_vote(
         .iter()
         .chain(additional_listeners.unwrap_or(&vec![]).iter())
     {
-        let buf = bincode::serialize(&bls_message).unwrap();
+        let buf = bincode::serialize(&message).unwrap();
         let client = connection_cache.get_connection(tpu_socket_addr);
         client.send_data_async(buf).unwrap_or_else(|_| {
             panic!("Failed to broadcast vote to {}", tpu_socket_addr);
@@ -6343,8 +6345,8 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
         move || loop {
             let n_bytes = vote_listener.recv(&mut buf).unwrap();
-            let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
-            let BLSMessage::Vote(vote_message) = bls_message else {
+            let message = bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
+            let ConsensusMessage::Vote(vote_message) = message else {
                 continue;
             };
             let vote = vote_message.vote;
@@ -6581,13 +6583,13 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             vote: Vote,
             keypair: &Keypair,
             rank: u16,
-        ) -> BLSMessage {
+        ) -> ConsensusMessage {
             let bls_keypair =
                 BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
             let signature: BLSSignature = bls_keypair
                 .sign(bincode::serialize(&vote).unwrap().as_slice())
                 .into();
-            BLSMessage::new_vote(vote, signature, rank)
+            ConsensusMessage::new_vote(vote, signature, rank)
         }
 
         fn handle_node_a_vote(
@@ -6721,8 +6723,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
         move || {
             loop {
                 let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
-                let BLSMessage::Vote(vote_message) =
-                    bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap()
+                let ConsensusMessage::Vote(vote_message) =
+                    bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap()
                 else {
                     continue;
                 };
@@ -6959,11 +6961,11 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                     .recv(&mut buffer)
                     .expect("Failed to receive vote data");
 
-                let bls_message = bincode::deserialize::<BLSMessage>(&buffer[..bytes_received])
+                let message = bincode::deserialize::<ConsensusMessage>(&buffer[..bytes_received])
                     .expect("Failed to deserialize BLS message");
 
-                match bls_message {
-                    BLSMessage::Vote(vote_message) => {
+                match message {
+                    ConsensusMessage::Vote(vote_message) => {
                         let vote = &vote_message.vote;
                         let node_index = vote_message.rank as usize;
 
@@ -6999,7 +7001,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                             }
                         }
                     }
-                    BLSMessage::Certificate(cert_message) => {
+                    ConsensusMessage::Certificate(cert_message) => {
                         // Stage 3: Verify continued liveness after partition resolution
                         if experiment_state.stage == Stage::ObserveLiveness
                             && [CertificateType::Finalize, CertificateType::FinalizeFast]
@@ -7282,10 +7284,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             loop {
                 let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
 
-                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+                let message = bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
 
-                match bls_message {
-                    BLSMessage::Vote(vote_message) => {
+                match message {
+                    ConsensusMessage::Vote(vote_message) => {
                         let vote = &vote_message.vote;
                         let node_name = vote_message.rank as usize;
 
@@ -7319,7 +7321,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                         );
                     }
 
-                    BLSMessage::Certificate(cert_message) => {
+                    ConsensusMessage::Certificate(cert_message) => {
                         // Wait until the final stage before looking for finalization certificates.
                         if experiment_state.stage != Stage::ObserveLiveness {
                             continue;

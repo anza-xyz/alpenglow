@@ -27,7 +27,7 @@ use {
         vortexor_receiver_adapter::VortexorReceiverAdapter,
     },
     bytes::Bytes,
-    crossbeam_channel::{bounded, unbounded, Receiver},
+    crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
@@ -48,7 +48,7 @@ use {
     solana_runtime::{
         bank_forks::BankForks,
         prioritization_fee_cache::PrioritizationFeeCache,
-        vote_sender_types::{BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender},
+        vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_streamer::{
         quic::{spawn_server, QuicServerParams, SpawnServerResult},
@@ -59,6 +59,7 @@ use {
         xdp::XdpSender,
     },
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -146,7 +147,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         client: ForwardingClientOption,
-        bls_verified_message_sender: BLSVerifiedMessageSender,
+        verified_consensus_message_sender: Sender<ConsensusMessage>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         votor_event_sender: VotorEventSender,
         keypair: &Keypair,
@@ -340,7 +341,7 @@ impl Tpu {
             let verifier = BLSSigVerifier::new(
                 root_bank,
                 verified_vote_sender.clone(),
-                bls_verified_message_sender,
+                verified_consensus_message_sender,
             );
             SigVerifyStage::new(
                 bls_packet_receiver,

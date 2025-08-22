@@ -146,14 +146,14 @@ pub struct CertificateMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 /// BLS message data in Alpenglow
-pub enum BLSMessage {
+pub enum ConsensusMessage {
     /// Vote message, with the vote and the rank of the validator.
     Vote(VoteMessage),
     /// Certificate message
     Certificate(CertificateMessage),
 }
 
-impl BLSMessage {
+impl ConsensusMessage {
     /// Create a new vote message
     pub fn new_vote(vote: Vote, signature: BLSSignature, rank: u16) -> Self {
         Self::Vote(VoteMessage {

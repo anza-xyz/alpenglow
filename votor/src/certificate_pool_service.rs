@@ -17,7 +17,7 @@ use {
         votor::Votor,
         Certificate, DELTA_STANDSTILL,
     },
-    crossbeam_channel::{select, Sender, TrySendError},
+    crossbeam_channel::{select, Receiver, Sender, TrySendError},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -25,10 +25,8 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, bank_forks::SharableBank, vote_sender_types::BLSVerifiedMessageReceiver,
-    },
-    solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
+    solana_runtime::{bank::Bank, bank_forks::SharableBank},
+    solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
     stats::CertificatePoolServiceStats,
     std::{
         sync::{
@@ -55,7 +53,7 @@ pub(crate) struct CertificatePoolContext {
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
-    pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) consensus_message_receiver: Receiver<ConsensusMessage>,
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
@@ -132,20 +130,20 @@ impl CertificatePoolService {
         Ok(())
     }
 
-    fn process_bls_message(
+    fn process_consensus_message(
         ctx: &mut CertificatePoolContext,
         my_pubkey: &Pubkey,
-        message: &BLSMessage,
+        message: &ConsensusMessage,
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         match message {
-            BLSMessage::Certificate(_) => {
+            ConsensusMessage::Certificate(_) => {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_certificates);
             }
-            BLSMessage::Vote(_) => {
+            ConsensusMessage::Vote(_) => {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
@@ -265,18 +263,18 @@ impl CertificatePoolService {
                 return Self::handle_channel_disconnected(&mut ctx, "Votor event receiver");
             }
 
-            let bls_messages: Vec<BLSMessage> = select! {
-                recv(ctx.bls_receiver) -> msg => {
+            let messages: Vec<ConsensusMessage> = select! {
+                recv(ctx.consensus_message_receiver) -> msg => {
                     let Ok(first) = msg else {
                         return Self::handle_channel_disconnected(&mut ctx, "BLS receiver");
                     };
-                    std::iter::once(first).chain(ctx.bls_receiver.try_iter()).collect()
+                    std::iter::once(first).chain(ctx.consensus_message_receiver.try_iter()).collect()
                 },
                 default(Duration::from_secs(1)) => continue
             };
 
-            for message in bls_messages {
-                match Self::process_bls_message(
+            for message in messages {
+                match Self::process_consensus_message(
                     &mut ctx,
                     &my_pubkey,
                     &message,
@@ -309,7 +307,7 @@ impl CertificatePoolService {
         root_bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
-        message: &BLSMessage,
+        message: &ConsensusMessage,
         cert_pool: &mut CertificatePool,
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,

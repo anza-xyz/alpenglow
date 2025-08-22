@@ -71,9 +71,7 @@ use {
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         snapshot_controller::SnapshotController,
-        vote_sender_types::{
-            BLSVerifiedMessageReceiver, BLSVerifiedMessageSender, ReplayVoteSender,
-        },
+        vote_sender_types::ReplayVoteSender,
     },
     solana_signer::Signer,
     solana_svm_timings::ExecuteTimings,
@@ -88,7 +86,7 @@ use {
         voting_utils::{BLSOp, GenerateVoteTxResult},
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
+    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -302,7 +300,7 @@ pub struct ReplaySenders {
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub votor_event_sender: VotorEventSender,
-    pub own_vote_sender: BLSVerifiedMessageSender,
+    pub own_vote_sender: Sender<ConsensusMessage>,
 }
 
 pub struct ReplayReceivers {
@@ -312,7 +310,7 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
-    pub bls_verified_message_receiver: BLSVerifiedMessageReceiver,
+    pub consensus_message_receiver: Receiver<ConsensusMessage>,
     pub votor_event_receiver: VotorEventReceiver,
 }
 
@@ -628,7 +626,7 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            bls_verified_message_receiver,
+            consensus_message_receiver,
             votor_event_receiver,
         } = receivers;
 
@@ -666,7 +664,7 @@ impl ReplayStage {
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,
-            bls_receiver: bls_verified_message_receiver,
+            consensus_message_receiver,
         };
         let votor = Votor::new(votor_config);
 
