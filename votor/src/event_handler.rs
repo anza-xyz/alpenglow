@@ -473,9 +473,7 @@ impl EventHandler {
             return None;
         }
         // If the block is missing, we can't trigger parent ready
-        let bank_forks_r = ctx.bank_forks.read().unwrap();
-        let bank = bank_forks_r.get(slot)?;
-        drop(bank_forks_r);
+        let bank = ctx.bank_forks.read().unwrap().get(slot)?;
         if !bank.is_frozen() {
             // We haven't finished replay for the block, so we can't trigger parent ready
             return None;
@@ -495,8 +493,7 @@ impl EventHandler {
             return None;
         };
         info!(
-            "{}: Triggering parent ready for missing first slot of window {slot} \
-            with parent {parent_slot} {parent_block_id}",
+            "{}: Triggering parent ready for slot {slot} with parent {parent_slot} {parent_block_id}",
             local_context.my_pubkey
         );
         Some((slot, (parent_slot, parent_block_id)))
