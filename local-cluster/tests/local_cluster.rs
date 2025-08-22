@@ -7562,10 +7562,11 @@ fn test_alpenglow_add_missing_parent_ready() {
             loop {
                 let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
 
-                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+                let consensus_message =
+                    bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
 
-                match bls_message {
-                    BLSMessage::Vote(vote_message) => {
+                match consensus_message {
+                    ConsensusMessage::Vote(vote_message) => {
                         let vote = &vote_message.vote;
                         let node_name = vote_message.rank as usize;
 
@@ -7598,7 +7599,7 @@ fn test_alpenglow_add_missing_parent_ready() {
                         experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
                     }
 
-                    BLSMessage::Certificate(cert_message) => {
+                    ConsensusMessage::Certificate(cert_message) => {
                         // Wait until the final stage before looking for finalization certificates.
                         if experiment_state.stage != Stage::ObserveLiveness {
                             continue;
