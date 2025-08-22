@@ -25,9 +25,7 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, bank_forks::SharableBank, vote_sender_types::BLSVerifiedMessageReceiver,
-    },
+    solana_runtime::{bank::Bank, bank_forks::SharableBank},
     solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
     stats::CertificatePoolServiceStats,
     std::{
