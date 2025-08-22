@@ -66,7 +66,7 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
-        root_bank_cache::RootBankCache, snapshot_controller::SnapshotController,
+        snapshot_controller::SnapshotController,
     },
     solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
     std::{
@@ -176,6 +176,9 @@ impl Votor {
         let identity_keypair = cluster_info.keypair().clone();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
+        // Get the sharable root bank
+        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
             bank_forks: bank_forks.clone(),
@@ -196,7 +199,7 @@ impl Votor {
             bls_sender: bls_sender.clone(),
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
-            root_bank_cache: RootBankCache::new(bank_forks.clone()),
+            root_bank: root_bank.clone(),
         };
 
         let root_context = RootContext {
@@ -227,7 +230,7 @@ impl Votor {
             cluster_info: cluster_info.clone(),
             my_vote_pubkey: vote_account,
             blockstore,
-            root_bank_cache: RootBankCache::new(bank_forks.clone()),
+            root_bank: root_bank.clone(),
             leader_schedule_cache,
             consensus_message_receiver: bls_receiver,
             bls_sender,

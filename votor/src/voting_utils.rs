@@ -9,7 +9,7 @@ use {
     solana_clock::Slot,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, root_bank_cache::RootBankCache},
+    solana_runtime::{bank::Bank, bank_forks::SharableBank},
     solana_signer::Signer,
     solana_transaction::Transaction,
     solana_votor_messages::{
@@ -137,7 +137,7 @@ pub struct VotingContext {
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
-    pub root_bank_cache: RootBankCache,
+    pub root_bank: SharableBank,
 }
 
 pub fn get_bls_keypair(
@@ -275,7 +275,7 @@ fn insert_vote_and_create_bls_message(
         context.vote_history.add_vote(vote);
     }
 
-    let bank = context.root_bank_cache.root_bank();
+    let bank = context.root_bank.load();
     let message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::ConsensusMessage(m) => m,
         e => {

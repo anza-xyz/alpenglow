@@ -10,9 +10,9 @@ use {
     solana_entry::entry::Entry,
     solana_hash::Hash,
     solana_keypair::Keypair,
-    solana_ledger::{
-        blockstore::{self},
-        shred::{shred_code, ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder},
+    solana_ledger::shred::{
+        ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder, MAX_CODE_SHREDS_PER_SLOT,
+        MAX_DATA_SHREDS_PER_SLOT,
     },
     solana_time_utils::AtomicInterval,
     solana_votor::event::VotorEventSender,
@@ -279,8 +279,8 @@ impl StandardBroadcastRun {
                 reference_tick as u8,
                 is_last_in_slot,
                 process_stats,
-                blockstore::MAX_DATA_SHREDS_PER_SLOT as u32,
-                shred_code::MAX_CODE_SHREDS_PER_SLOT as u32,
+                MAX_DATA_SHREDS_PER_SLOT as u32,
+                MAX_CODE_SHREDS_PER_SLOT as u32,
             )
             .unwrap();
         // Insert the first data shred synchronously so that blockstore stores
@@ -512,7 +512,7 @@ mod test {
         rand::Rng,
         solana_entry::entry::create_ticks,
         solana_genesis_config::GenesisConfig,
-        solana_gossip::cluster_info::{ClusterInfo, Node},
+        solana_gossip::{cluster_info::ClusterInfo, node::Node},
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
@@ -521,7 +521,7 @@ mod test {
             get_tmp_ledger_path,
             shred::{max_ticks_per_n_shreds, DATA_SHREDS_PER_FEC_BLOCK},
         },
-        solana_net_utils::bind_to_unspecified,
+        solana_net_utils::sockets::bind_to_localhost_unique,
         solana_runtime::bank::Bank,
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
@@ -553,7 +553,7 @@ mod test {
             leader_keypair.clone(),
             SocketAddrSpace::Unspecified,
         ));
-        let socket = bind_to_unspecified().unwrap();
+        let socket = bind_to_localhost_unique().expect("should bind");
         let mut genesis_config = create_genesis_config(10_000).genesis_config;
         genesis_config.ticks_per_slot = max_ticks_per_n_shreds(num_shreds_per_slot, None) + 1;
 

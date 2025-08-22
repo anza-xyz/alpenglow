@@ -51,8 +51,8 @@ use {
         transaction_processing_result::ProcessedTransaction,
         transaction_processor::ExecutionRecordingConfig,
     },
+    solana_svm_timings::{report_execute_timings, ExecuteTimingType, ExecuteTimings},
     solana_svm_transaction::{svm_message::SVMMessage, svm_transaction::SVMTransaction},
-    solana_timings::{report_execute_timings, ExecuteTimingType, ExecuteTimings},
     solana_transaction::{
         sanitized::SanitizedTransaction, versioned::VersionedTransaction,
         TransactionVerificationMode,
@@ -1097,12 +1097,19 @@ fn verify_ticks(
 
     if let Some(first_alpenglow_slot) = bank
         .feature_set
-        .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+        .activated_slot(&agave_feature_set::alpenglow::id())
     {
         if bank.parent_slot() >= first_alpenglow_slot {
+            // If both the parent and the bank slot are in an epoch post alpenglow activation,
+            // no tick verification is needed
             return Ok(());
         }
 
+        // If the bank is in the alpenglow epoch, but the parent is from an epoch
+        // where the feature flag is not active, we must verify ticks that correspond
+        // to the epoch in which PoH is active. This verification is criticial, as otherwise
+        // a leader could jump the gun and publish a block in the alpenglow epoch without waiting
+        // the appropriate time as determined by PoH in the prior epoch.
         if bank.slot() >= first_alpenglow_slot && next_bank_tick_height == max_bank_tick_height {
             if entries.is_empty() {
                 // This shouldn't happen, but good to double check
@@ -1833,13 +1840,14 @@ fn process_next_slots(
 }
 
 /// Set alpenglow bank tick height.
-/// For alpenglow banks this tick height is `max_tick_height` - 1,
-/// For a bank on the boundary of feature activation, we need ticks_per_slot for
-/// TowerBFT ticks, and one extra tick for the alpenglow bank
+///
+/// For alpenglow banks this tick height is `max_tick_height` - 1, for a bank on the epoch boundary
+/// of feature activation, we need ticks_per_slot for each slot between the parent and epoch boundary
+/// and one extra tick for the alpenglow bank
 pub fn set_alpenglow_ticks(bank: &Bank) {
     let Some(first_alpenglow_slot) = bank
         .feature_set
-        .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+        .activated_slot(&agave_feature_set::alpenglow::id())
     else {
         return;
     };
@@ -1854,13 +1862,28 @@ pub fn set_alpenglow_ticks(bank: &Bank) {
     };
 
     info!(
-        "Setting tick height for slot {} to {}",
+        "Alpenglow: Setting tick height for slot {} to {}",
         bank.slot(),
         bank.max_tick_height() - alpenglow_ticks
     );
     bank.set_tick_height(bank.max_tick_height() - alpenglow_ticks);
 }
 
+/// Calculates how many ticks are needed for a block at `slot` with parent `parent_slot`
+///
+/// If both `parent_slot` and `slot` are greater than or equal to `first_alpenglow_slot`, then
+/// only 1 tick is needed. This tick has no hashing guarantees, it is simply used as a signal
+/// for the end of the block.
+///
+/// If both `parent_slot` and `slot` are less than `first_alpenglow_slot`, we need the
+/// appropriate amount of PoH ticks, indicated by a None return value.
+///
+/// If `parent_slot` is less than `first_alpenglow_slot` and `slot` is greater than or equal
+/// to `first_alpenglow_slot` (A block that "straddles" the activation epoch boundary) then:
+///
+/// 1. All slots between `parent_slot` and `first_alpenglow_slot` need to have `ticks_per_slot` ticks
+/// 2. One extra tick for the actual alpenglow slot
+/// 3. There are no ticks for any skipped alpenglow slots
 fn calculate_alpenglow_ticks(
     slot: Slot,
     first_alpenglow_slot: Slot,
@@ -1873,10 +1896,6 @@ fn calculate_alpenglow_ticks(
     }
 
     let alpenglow_ticks = if parent_slot < first_alpenglow_slot && slot >= first_alpenglow_slot {
-        // 1. All slots between the parent and the first alpenglow slot need to
-        // have `ticks_per_slot` ticks
-        // 2. One extra tick for the actual alpenglow slot
-        // 3. There are no ticks for any skipped alpenglow slots
         (first_alpenglow_slot - parent_slot - 1) * ticks_per_slot + 1
     } else {
         1

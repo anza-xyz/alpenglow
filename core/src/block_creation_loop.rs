@@ -371,7 +371,6 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
     // get latest identity pubkey during startup
     let mut my_pubkey = cluster_info.id();
-    let leader_bank_notifier = poh_recorder.read().unwrap().new_leader_bank_notifier();
 
     let mut ctx = LeaderContext {
         my_pubkey,
@@ -471,9 +470,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
             // Start measuring bank completion time
             let mut bank_completion_measure = Measure::start("bank_completion");
-
-            leader_bank_notifier.wait_for_completed(remaining_slot_time);
-
+            std::thread::sleep(remaining_slot_time);
             bank_completion_measure.stop();
 
             // Time to complete the bank, there are two possibilities:
