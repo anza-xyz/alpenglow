@@ -12979,26 +12979,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-zk-keygen"
-version = "3.1.0"
-dependencies = [
- "bs58",
- "clap 3.2.25",
- "dirs-next",
- "solana-bls-signatures 0.2.0",
- "solana-clap-v3-utils",
- "solana-pubkey 3.0.0",
- "solana-remote-wallet",
- "solana-seed-derivable 3.0.0",
- "solana-signer 3.0.0",
- "solana-version",
- "solana-zk-sdk 4.0.0",
- "tempfile",
- "thiserror 2.0.16",
- "tiny-bip39",
-]
-
-[[package]]
 name = "solana-zk-sdk"
 version = "2.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
