@@ -4540,6 +4540,8 @@ impl ReplayStage {
 
         let mut generate_new_bank_forks_write_lock =
             Measure::start("generate_new_bank_forks_write_lock");
+
+        // TODO(ksn): should we have this if-statement check?
         if !new_banks.is_empty() {
             let mut forks = bank_forks.write().unwrap();
             let root = forks.root();
