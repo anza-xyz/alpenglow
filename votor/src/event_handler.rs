@@ -269,12 +269,12 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
-                if let Some((slot, block)) =
+                if let Some((ready_slot, parent_block)) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
                     Self::handle_parent_ready_event(
-                        slot,
-                        block,
+                        ready_slot,
+                        parent_block,
                         vctx,
                         ctx,
                         local_context,
@@ -456,19 +456,19 @@ impl EventHandler {
     /// cluster. If we get a finalization cert for later slots of the window and we have the
     /// block replayed, trace back to the first slot of the window and emit parent ready.
     fn add_missing_parent_ready(
-        block: Block,
+        finalized_block: Block,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         local_context: &mut LocalContext,
     ) -> Option<(Slot, Block)> {
-        let (slot, block_id) = block;
+        let (slot, block_id) = finalized_block;
         let first_slot_of_window = first_of_consecutive_leader_slots(slot);
         if first_slot_of_window == slot || first_slot_of_window == 0 {
             // No need to trigger parent ready for the first slot of the window
             return None;
         }
         if vctx.vote_history.highest_parent_ready_slot() >= Some(first_slot_of_window)
-            || !local_context.finalized_blocks.contains(&block)
+            || !local_context.finalized_blocks.contains(&finalized_block)
         {
             return None;
         }
