@@ -24,21 +24,21 @@ use {
         },
         snapshot_config::SnapshotConfig,
         snapshot_hash::SnapshotHash,
-        snapshot_package::{AccountsPackage, AccountsPackageKind, SnapshotKind, SnapshotPackage},
+        snapshot_package::{SnapshotKind, SnapshotPackage},
         snapshot_utils::{
             self, deserialize_snapshot_data_file, get_highest_bank_snapshot_post,
             get_highest_full_snapshot_archive_info, get_highest_incremental_snapshot_archive_info,
             rebuild_storages_from_snapshot_dir, serialize_snapshot_data_file,
             verify_and_unarchive_snapshots, ArchiveFormat, BankSnapshotInfo, SnapshotError,
             SnapshotVersion, StorageAndNextAccountsFileId, UnarchivedSnapshots,
-            VerifyEpochStakesError, VerifySlotDeltasError,
+            VerifyEpochStakesError, VerifySlotDeltasError, VerifySlotHistoryError,
         },
         status_cache,
     },
     bincode::{config::Options, serialize_into},
     log::*,
     solana_accounts_db::{
-        accounts_db::{AccountStorageEntry, AccountsDbConfig, AtomicAccountsFileId},
+        accounts_db::{AccountsDbConfig, AtomicAccountsFileId},
         accounts_update_notifier_interface::AccountsUpdateNotifier,
         utils::remove_dir_contents,
     },
@@ -233,7 +233,7 @@ pub fn bank_from_snapshot_archives(
         exit,
     )?;
     measure_rebuild.stop();
-    info!("{}", measure_rebuild);
+    info!("{measure_rebuild}");
 
     verify_epoch_stakes(&bank)?;
 
@@ -413,7 +413,7 @@ pub fn bank_from_snapshot_dir(
         )?,
         "rebuild storages from snapshot dir"
     );
-    info!("{}", measure_rebuild_storages);
+    info!("{measure_rebuild_storages}");
 
     let next_append_vec_id =
         Arc::try_unwrap(next_append_vec_id).expect("this is the only strong reference");
@@ -441,7 +441,7 @@ pub fn bank_from_snapshot_dir(
         )?,
         "rebuild bank from snapshot"
     );
-    info!("{}", measure_rebuild_bank);
+    info!("{measure_rebuild_bank}");
 
     verify_epoch_stakes(&bank)?;
 
@@ -643,9 +643,7 @@ fn verify_slot_deltas_with_history(
 ) -> std::result::Result<(), VerifySlotDeltasError> {
     // ensure the slot history is valid (as much as possible), since we're using it to verify the
     // slot deltas
-    if slot_history.newest() != bank_slot {
-        return Err(VerifySlotDeltasError::BadSlotHistory);
-    }
+    verify_slot_history(slot_history, bank_slot)?;
 
     // all slots in the slot deltas should be in the bank's slot history
     let slot_missing_from_history = slots_from_slot_deltas
@@ -669,6 +667,22 @@ fn verify_slot_deltas_with_history(
         .find(|slot| !slots_from_slot_deltas.contains(slot));
     if let Some(slot) = slot_missing_from_deltas {
         return Err(VerifySlotDeltasError::SlotNotFoundInDeltas(slot));
+    }
+
+    Ok(())
+}
+
+/// Verify that the snapshot's SlotHistory is not corrupt/invalid
+fn verify_slot_history(
+    slot_history: &SlotHistory,
+    bank_slot: Slot,
+) -> Result<(), VerifySlotHistoryError> {
+    if slot_history.newest() != bank_slot {
+        return Err(VerifySlotHistoryError::InvalidNewestSlot);
+    }
+
+    if slot_history.bits.len() != solana_slot_history::MAX_ENTRIES {
+        return Err(VerifySlotHistoryError::InvalidNumEntries);
     }
 
     Ok(())
@@ -717,23 +731,6 @@ fn _verify_epoch_stakes(
     }
 
     Ok(())
-}
-
-/// Get the snapshot storages for this bank
-pub fn get_snapshot_storages(bank: &Bank) -> Vec<Arc<AccountStorageEntry>> {
-    let mut measure_snapshot_storages = Measure::start("snapshot-storages");
-    let snapshot_storages = bank.get_snapshot_storages(None);
-    measure_snapshot_storages.stop();
-    datapoint_info!(
-        "get_snapshot_storages",
-        (
-            "snapshot-storages-time-ms",
-            measure_snapshot_storages.as_ms(),
-            i64
-        ),
-    );
-
-    snapshot_storages
 }
 
 /// Convenience function to create a full snapshot archive out of any Bank, regardless of state.
@@ -788,15 +785,12 @@ fn bank_to_full_snapshot_archive_with(
     bank.force_flush_accounts_cache();
     bank.clean_accounts();
 
-    let snapshot_storages = bank.get_snapshot_storages(None);
-    let status_cache_slot_deltas = bank.status_cache.read().unwrap().root_slot_deltas();
-    let accounts_package = AccountsPackage::new_for_snapshot(
-        AccountsPackageKind::Snapshot(SnapshotKind::FullSnapshot),
+    let snapshot_package = SnapshotPackage::new(
+        SnapshotKind::FullSnapshot,
         bank,
-        snapshot_storages,
-        status_cache_slot_deltas,
+        bank.get_snapshot_storages(None),
+        bank.status_cache.read().unwrap().root_slot_deltas(),
     );
-    let snapshot_package = SnapshotPackage::new(accounts_package);
 
     let snapshot_config = SnapshotConfig {
         full_snapshot_archives_dir: full_snapshot_archives_dir.as_ref().to_path_buf(),
@@ -846,15 +840,12 @@ pub fn bank_to_incremental_snapshot_archive(
     bank.force_flush_accounts_cache();
     bank.clean_accounts();
 
-    let snapshot_storages = bank.get_snapshot_storages(Some(full_snapshot_slot));
-    let status_cache_slot_deltas = bank.status_cache.read().unwrap().root_slot_deltas();
-    let accounts_package = AccountsPackage::new_for_snapshot(
-        AccountsPackageKind::Snapshot(SnapshotKind::IncrementalSnapshot(full_snapshot_slot)),
+    let snapshot_package = SnapshotPackage::new(
+        SnapshotKind::IncrementalSnapshot(full_snapshot_slot),
         bank,
-        snapshot_storages,
-        status_cache_slot_deltas,
+        bank.get_snapshot_storages(Some(full_snapshot_slot)),
+        bank.status_cache.read().unwrap().root_slot_deltas(),
     );
-    let snapshot_package = SnapshotPackage::new(accounts_package);
 
     // Note: Since the snapshot_storages above are *only* the incremental storages,
     // this bank snapshot *cannot* be used by fastboot.
@@ -2305,17 +2296,6 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_slot_deltas_with_history_bad_slot_history() {
-        let bank_slot = 444;
-        let result = verify_slot_deltas_with_history(
-            &HashSet::default(),
-            &SlotHistory::default(), // <-- will only have an entry for slot 0
-            bank_slot,
-        );
-        assert_eq!(result, Err(VerifySlotDeltasError::BadSlotHistory));
-    }
-
-    #[test]
     fn test_verify_slot_deltas_with_history_bad_slot_not_in_history() {
         let slots_from_slot_deltas = HashSet::from([
             0, // slot history has slot 0 added by default
@@ -2354,6 +2334,37 @@ mod tests {
             result,
             Err(VerifySlotDeltasError::SlotNotFoundInDeltas(333)),
         );
+    }
+
+    #[test]
+    fn test_verify_slot_history_good() {
+        let mut slot_history = SlotHistory::default();
+        // note: slot history expects slots to be added in numeric order
+        for slot in [0, 111, 222, 333, 444] {
+            slot_history.add(slot);
+        }
+
+        let bank_slot = 444;
+        let result = verify_slot_history(&slot_history, bank_slot);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_verify_slot_history_bad_invalid_newest_slot() {
+        let slot_history = SlotHistory::default();
+        let bank_slot = 444;
+        let result = verify_slot_history(&slot_history, bank_slot);
+        assert_eq!(result, Err(VerifySlotHistoryError::InvalidNewestSlot));
+    }
+
+    #[test]
+    fn test_verify_slot_history_bad_invalid_num_entries() {
+        let mut slot_history = SlotHistory::default();
+        slot_history.bits.truncate(slot_history.bits.len() - 1);
+
+        let bank_slot = 0;
+        let result = verify_slot_history(&slot_history, bank_slot);
+        assert_eq!(result, Err(VerifySlotHistoryError::InvalidNumEntries));
     }
 
     #[test]

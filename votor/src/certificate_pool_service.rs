@@ -17,7 +17,7 @@ use {
         votor::Votor,
         Certificate, DELTA_STANDSTILL,
     },
-    crossbeam_channel::{select, Sender, TrySendError},
+    crossbeam_channel::{select, Receiver, Sender, TrySendError},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -25,10 +25,8 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, root_bank_cache::RootBankCache, vote_sender_types::BLSVerifiedMessageReceiver,
-    },
-    solana_votor_messages::bls_message::{BLSMessage, CertificateMessage},
+    solana_runtime::{bank::Bank, bank_forks::SharableBank},
+    solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
     stats::CertificatePoolServiceStats,
     std::{
         sync::{
@@ -48,14 +46,14 @@ pub(crate) struct CertificatePoolContext {
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
-    pub(crate) root_bank_cache: RootBankCache,
+    pub(crate) root_bank: SharableBank,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     // TODO: for now we ingest our own votes into the certificate pool
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in cert_pool.add_transaction for ingesting own votes
-    pub(crate) bls_receiver: BLSVerifiedMessageReceiver,
+    pub(crate) consensus_message_receiver: Receiver<ConsensusMessage>,
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
@@ -83,7 +81,7 @@ impl CertificatePoolService {
 
     fn maybe_update_root_and_send_new_certificates(
         cert_pool: &mut CertificatePool,
-        root_bank_cache: &mut RootBankCache,
+        root_bank: &SharableBank,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
@@ -96,7 +94,8 @@ impl CertificatePoolService {
             *standstill_timer = Instant::now();
             CertificatePoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
         }
-        cert_pool.prune_old_state(root_bank_cache.root_bank().slot());
+        let bank = root_bank.load();
+        cert_pool.prune_old_state(bank.slot());
         CertificatePoolServiceStats::incr_u64(&mut stats.prune_old_state_called);
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
@@ -131,26 +130,27 @@ impl CertificatePoolService {
         Ok(())
     }
 
-    fn process_bls_message(
+    fn process_consensus_message(
         ctx: &mut CertificatePoolContext,
         my_pubkey: &Pubkey,
-        message: &BLSMessage,
+        message: &ConsensusMessage,
         cert_pool: &mut CertificatePool,
         events: &mut Vec<VotorEvent>,
         standstill_timer: &mut Instant,
         stats: &mut CertificatePoolServiceStats,
     ) -> Result<(), AddVoteError> {
         match message {
-            BLSMessage::Certificate(_) => {
+            ConsensusMessage::Certificate(_) => {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_certificates);
             }
-            BLSMessage::Vote(_) => {
+            ConsensusMessage::Vote(_) => {
                 CertificatePoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
+        let root_bank = ctx.root_bank.load();
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
-                &ctx.root_bank_cache.root_bank(),
+                &root_bank,
                 my_pubkey,
                 &ctx.my_vote_pubkey,
                 message,
@@ -160,7 +160,7 @@ impl CertificatePoolService {
             )?;
         Self::maybe_update_root_and_send_new_certificates(
             cert_pool,
-            &mut ctx.root_bank_cache,
+            &ctx.root_bank,
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
@@ -186,9 +186,10 @@ impl CertificatePoolService {
     fn certificate_pool_ingest_loop(mut ctx: CertificatePoolContext) -> Result<(), ()> {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
+        let root_bank = ctx.root_bank.load();
         let mut cert_pool = certificate_pool::load_from_blockstore(
             &my_pubkey,
-            &ctx.root_bank_cache.root_bank(),
+            &root_bank,
             ctx.blockstore.as_ref(),
             Some(ctx.certificate_sender.clone()),
             &mut events,
@@ -204,7 +205,7 @@ impl CertificatePoolService {
         let mut standstill_timer = Instant::now();
 
         // Kick off parent ready
-        let root_bank = ctx.root_bank_cache.root_bank();
+        let root_bank = ctx.root_bank.load();
         let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
@@ -262,18 +263,18 @@ impl CertificatePoolService {
                 return Self::handle_channel_disconnected(&mut ctx, "Votor event receiver");
             }
 
-            let bls_messages: Vec<BLSMessage> = select! {
-                recv(ctx.bls_receiver) -> msg => {
+            let messages: Vec<ConsensusMessage> = select! {
+                recv(ctx.consensus_message_receiver) -> msg => {
                     let Ok(first) = msg else {
                         return Self::handle_channel_disconnected(&mut ctx, "BLS receiver");
                     };
-                    std::iter::once(first).chain(ctx.bls_receiver.try_iter()).collect()
+                    std::iter::once(first).chain(ctx.consensus_message_receiver.try_iter()).collect()
                 },
                 default(Duration::from_secs(1)) => continue
             };
 
-            for message in bls_messages {
-                match Self::process_bls_message(
+            for message in messages {
+                match Self::process_consensus_message(
                     &mut ctx,
                     &my_pubkey,
                     &message,
@@ -306,7 +307,7 @@ impl CertificatePoolService {
         root_bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
-        message: &BLSMessage,
+        message: &ConsensusMessage,
         cert_pool: &mut CertificatePool,
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
@@ -356,10 +357,11 @@ impl CertificatePoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
-        let Some(leader_pubkey) = ctx.leader_schedule_cache.slot_leader_at(
-            *highest_parent_ready,
-            Some(&ctx.root_bank_cache.root_bank()),
-        ) else {
+        let root_bank = ctx.root_bank.load();
+        let Some(leader_pubkey) = ctx
+            .leader_schedule_cache
+            .slot_leader_at(*highest_parent_ready, Some(&root_bank))
+        else {
             error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
             ctx.exit.store(true, Ordering::Relaxed);
             return;

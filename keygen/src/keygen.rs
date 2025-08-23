@@ -36,7 +36,7 @@ use {
     solana_pubkey::Pubkey,
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_signer::Signer,
-    solana_votor_messages::bls_message::BLS_KEYPAIR_DERIVE_SEED,
+    solana_votor_messages::consensus_message::BLS_KEYPAIR_DERIVE_SEED,
     std::{
         collections::HashSet,
         error,

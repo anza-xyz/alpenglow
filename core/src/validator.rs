@@ -53,12 +53,13 @@ use {
     },
     solana_gossip::{
         cluster_info::{
-            ClusterInfo, Node, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
+            ClusterInfo, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
             DEFAULT_CONTACT_SAVE_INTERVAL_MILLIS,
         },
         contact_info::ContactInfo,
         crds_gossip_pull::CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
         gossip_service::GossipService,
+        node::Node,
     },
     solana_hard_forks::HardForks,
     solana_hash::Hash,
@@ -926,7 +927,7 @@ impl Validator {
             startup_verification_complete = Arc::clone(bank.get_startup_verification_complete());
             let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
                 hfb.feature_set
-                    .activated_slot(&agave_feature_set::secp256k1_program_enabled::id())
+                    .activated_slot(&agave_feature_set::alpenglow::id())
             });
             let is_alpenglow_enabled = highest_frozen_bank
                 .zip(first_alpenglow_slot)
@@ -1001,7 +1002,7 @@ impl Validator {
 
         let is_alpenglow = genesis_config
             .accounts
-            .contains_key(&agave_feature_set::secp256k1_program_enabled::id());
+            .contains_key(&agave_feature_set::alpenglow::id());
 
         let mut process_blockstore = ProcessBlockStore::new(
             &id,
@@ -1335,7 +1336,7 @@ impl Validator {
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
-            bank_forks.clone(),
+            bank_forks.read().unwrap().sharable_root_bank(),
             config.repair_whitelist.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
@@ -1496,7 +1497,7 @@ impl Validator {
         };
         let (tower, vote_history) = if genesis_config
             .accounts
-            .contains_key(&agave_feature_set::secp256k1_program_enabled::id())
+            .contains_key(&agave_feature_set::alpenglow::id())
         {
             let vote_history = match process_blockstore.process_to_create_vote_history() {
                 Ok(vote_history) => {
@@ -2110,7 +2111,7 @@ fn post_process_restored_vote_history(
             datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{}", message);
 
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(
                 hard_fork_restart_slot,
@@ -2118,7 +2119,7 @@ fn post_process_restored_vote_history(
         }
 
         if let Some(warp_slot) = config.warp_slot {
-            // unconditionally relax vote_history requirement 
+            // unconditionally relax vote_history requirement
             should_require_vote_history = false;
             return Err(VoteHistoryError::HardFork(warp_slot));
         }
@@ -2876,7 +2877,7 @@ fn get_stake_percent_in_gossip(bank: &Bank, cluster_info: &ClusterInfo, log: boo
     // Staked nodes entries will not expire until an epoch after. So it
     // is necessary here to filter for recent entries to establish liveness.
     let peers: HashMap<_, _> = cluster_info
-        .tvu_peers(|q| q.clone())
+        .tvu_peers(ContactInfo::clone)
         .into_iter()
         .filter(|node| {
             let age = now.saturating_sub(node.wallclock());

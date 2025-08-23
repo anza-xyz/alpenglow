@@ -71,13 +71,11 @@ use {
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
         snapshot_controller::SnapshotController,
-        vote_sender_types::{
-            BLSVerifiedMessageReceiver, BLSVerifiedMessageSender, ReplayVoteSender,
-        },
+        vote_sender_types::ReplayVoteSender,
     },
     solana_signer::Signer,
+    solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
-    solana_timings::ExecuteTimings,
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
@@ -88,7 +86,7 @@ use {
         voting_utils::{BLSOp, GenerateVoteTxResult},
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::bls_message::{Certificate, CertificateMessage},
+    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -302,7 +300,7 @@ pub struct ReplaySenders {
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub votor_event_sender: VotorEventSender,
-    pub own_vote_sender: BLSVerifiedMessageSender,
+    pub own_vote_sender: Sender<ConsensusMessage>,
 }
 
 pub struct ReplayReceivers {
@@ -312,7 +310,7 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
-    pub bls_verified_message_receiver: BLSVerifiedMessageReceiver,
+    pub consensus_message_receiver: Receiver<ConsensusMessage>,
     pub votor_event_receiver: VotorEventReceiver,
 }
 
@@ -628,7 +626,7 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            bls_verified_message_receiver,
+            consensus_message_receiver,
             votor_event_receiver,
         } = receivers;
 
@@ -666,7 +664,7 @@ impl ReplayStage {
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,
-            bls_receiver: bls_verified_message_receiver,
+            consensus_message_receiver,
         };
         let votor = Votor::new(votor_config);
 
@@ -675,7 +673,7 @@ impl ReplayStage {
             .unwrap()
             .root_bank()
             .feature_set
-            .activated_slot(&agave_feature_set::secp256k1_program_enabled::id());
+            .activated_slot(&agave_feature_set::alpenglow::id());
 
         let mut is_alpenglow_migration_complete = false;
         if let Some(first_alpenglow_slot) = first_alpenglow_slot {
@@ -748,16 +746,19 @@ impl ReplayStage {
             let mut skipped_slots_info = SkippedSlotsInfo::default();
             let mut replay_timing = ReplayLoopTiming::default();
             let duplicate_slots_tracker = DuplicateSlotsTracker::default();
-            let duplicate_confirmed_slots: DuplicateConfirmedSlots =
-                DuplicateConfirmedSlots::default();
-            let epoch_slots_frozen_slots: EpochSlotsFrozenSlots = EpochSlotsFrozenSlots::default();
+            let duplicate_confirmed_slots = DuplicateConfirmedSlots::default();
+            let epoch_slots_frozen_slots = EpochSlotsFrozenSlots::default();
             let mut duplicate_slots_to_repair = DuplicateSlotsToRepair::default();
             let mut purge_repair_slot_counter = PurgeRepairSlotCounter::default();
-            let unfrozen_gossip_verified_vote_hashes: UnfrozenGossipVerifiedVoteHashes =
-                UnfrozenGossipVerifiedVoteHashes::default();
-            let mut latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks =
+            let unfrozen_gossip_verified_vote_hashes = UnfrozenGossipVerifiedVoteHashes::default();
+            let mut latest_validator_votes_for_frozen_banks =
                 LatestValidatorVotesForFrozenBanks::default();
             let mut tracked_vote_transactions: Vec<TrackedVoteTransaction> = Vec::new();
+            let mut has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
+            let mut last_vote_refresh_time = LastVoteRefreshTime {
+                last_refresh_time: Instant::now(),
+                last_print_time: Instant::now(),
+            };
             let mut tbft_structs = TowerBFTStructures {
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
@@ -765,12 +766,6 @@ impl ReplayStage {
                 unfrozen_gossip_verified_vote_hashes,
                 epoch_slots_frozen_slots,
             };
-            let mut has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
-            let mut last_vote_refresh_time = LastVoteRefreshTime {
-                last_refresh_time: Instant::now(),
-                last_print_time: Instant::now(),
-            };
-
             let (working_bank, in_vote_only_mode) = {
                 let r_bank_forks = bank_forks.read().unwrap();
                 (
@@ -2680,7 +2675,7 @@ impl ReplayStage {
                     .unwrap()
                     .root_bank()
                     .feature_set
-                    .activated_slot(&agave_feature_set::secp256k1_program_enabled::id());
+                    .activated_slot(&agave_feature_set::alpenglow::id());
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     info!(
                         "alpenglow feature detected in root bank {}, to be enabled on slot {}",
@@ -4526,7 +4521,6 @@ impl ReplayStage {
                     slot_status_notifier,
                     NewBankOptions::default(),
                 );
-                // Set ticks for received banks, block creation loop will take care of leader banks
                 blockstore_processor::set_alpenglow_ticks(&child_bank);
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(
@@ -4544,6 +4538,8 @@ impl ReplayStage {
 
         let mut generate_new_bank_forks_write_lock =
             Measure::start("generate_new_bank_forks_write_lock");
+
+        // TODO(ksn): should we have this if-statement check?
         if !new_banks.is_empty() {
             let mut forks = bank_forks.write().unwrap();
             let root = forks.root();
@@ -4679,7 +4675,7 @@ pub(crate) mod tests {
         solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
         solana_entry::entry::{self, Entry},
         solana_genesis_config as genesis_config,
-        solana_gossip::{cluster_info::Node, crds::Cursor},
+        solana_gossip::{crds::Cursor, node::Node},
         solana_hash::Hash,
         solana_instruction::error::InstructionError,
         solana_keypair::Keypair,
@@ -4991,6 +4987,8 @@ pub(crate) mod tests {
         let root_hash = root_bank.hash();
         bank_forks.write().unwrap().insert(root_bank);
 
+        let heaviest_subtree_fork_choice = HeaviestSubtreeForkChoice::new((root, root_hash));
+
         let mut progress = ProgressMap::default();
         for i in 0..=root {
             progress.insert(i, ForkProgress::new(Hash::default(), None, None, 0, 0));
@@ -5015,7 +5013,7 @@ pub(crate) mod tests {
             .collect();
         let (drop_bank_sender, _drop_bank_receiver) = unbounded();
         let mut tbft_structs = TowerBFTStructures {
-            heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice::new((root, root_hash)),
+            heaviest_subtree_fork_choice,
             duplicate_slots_tracker,
             duplicate_confirmed_slots,
             unfrozen_gossip_verified_vote_hashes,

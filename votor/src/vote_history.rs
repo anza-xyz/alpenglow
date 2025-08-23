@@ -7,7 +7,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_votor_messages::{bls_message::Block, vote::Vote},
+    solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
@@ -242,6 +242,10 @@ impl VoteHistory {
                 true
             }
         }
+    }
+
+    pub fn highest_parent_ready_slot(&self) -> Option<Slot> {
+        self.parent_ready_slots.keys().max().copied()
     }
 
     /// Sets the new root slot and cleans up outdated slots < `root`

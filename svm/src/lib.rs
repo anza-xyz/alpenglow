@@ -1,11 +1,14 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![allow(clippy::arithmetic_side_effects)]
+// TODO(ksn): remove this
+#![allow(deprecated)]
 
 pub mod account_loader;
 pub mod account_overrides;
 pub mod message_processor;
 pub mod nonce_info;
 pub mod program_loader;
+pub mod rent_calculator;
 pub mod rollback_accounts;
 pub mod transaction_account_state_info;
 pub mod transaction_balances;

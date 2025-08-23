@@ -1,6 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
-    agave_feature_set::{FeatureSet, FEATURE_NAMES},
+    agave_feature_set::{raise_cpi_nesting_limit_to_8, FeatureSet, FEATURE_NAMES},
     base64::{prelude::BASE64_STANDARD, Engine},
     crossbeam_channel::Receiver,
     log::*,
@@ -25,8 +25,9 @@ use {
         geyser_plugin_manager::GeyserPluginManager, GeyserPluginManagerRequest,
     },
     solana_gossip::{
-        cluster_info::{BindIpAddrs, ClusterInfo, Node, NodeConfig},
+        cluster_info::{BindIpAddrs, ClusterInfo, NodeConfig},
         contact_info::Protocol,
+        node::Node,
     },
     solana_inflation::Inflation,
     solana_instruction::{AccountMeta, Instruction},
@@ -961,7 +962,7 @@ impl TestValidator {
 
         for feature in feature_set {
             // TODO remove this
-            if feature != agave_feature_set::secp256k1_program_enabled::id() {
+            if feature != agave_feature_set::alpenglow::id() {
                 genesis_utils::activate_feature(&mut genesis_config, feature);
             }
         }
@@ -1094,7 +1095,11 @@ impl TestValidator {
                 .compute_unit_limit
                 .map(|compute_unit_limit| ComputeBudget {
                     compute_unit_limit,
-                    ..ComputeBudget::default()
+                    ..ComputeBudget::new_with_defaults(
+                        !config
+                            .deactivate_feature_set
+                            .contains(&raise_cpi_nesting_limit_to_8::id()),
+                    )
                 }),
             log_messages_bytes_limit: config.log_messages_bytes_limit,
             transaction_account_lock_limit: config.transaction_account_lock_limit,
@@ -1437,7 +1442,7 @@ mod test {
             agave_feature_set::deprecate_rewards_sysvar::id(),
             agave_feature_set::disable_fees_sysvar::id(),
             // TODO: remove this
-            agave_feature_set::secp256k1_program_enabled::id(),
+            agave_feature_set::alpenglow::id(),
         ]
         .into_iter()
         .for_each(|feature| {

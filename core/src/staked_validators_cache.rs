@@ -272,11 +272,12 @@ mod tests {
         solana_clock::{Clock, Slot},
         solana_genesis_config::GenesisConfig,
         solana_gossip::{
-            cluster_info::{ClusterInfo, Node},
+            cluster_info::ClusterInfo,
             contact_info::{ContactInfo, Protocol},
             crds::GossipRoute,
             crds_data::CrdsData,
             crds_value::CrdsValue,
+            node::Node,
         },
         solana_keypair::Keypair,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},

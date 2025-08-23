@@ -17,7 +17,7 @@ use {
     solana_transaction::Transaction,
     solana_transaction_error::TransportError,
     solana_votor::{vote_history_storage::VoteHistoryStorage, voting_utils::BLSOp},
-    solana_votor_messages::bls_message::BLSMessage,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
         net::SocketAddr,
@@ -162,14 +162,14 @@ impl VotingService {
         bank_forks: Arc<RwLock<BankForks>>,
         test_override: Option<VotingServiceOverride>,
     ) -> Self {
-        let (additional_listeners, alpenglow_port_override) = test_override
-            .map(|test_override| {
-                (
-                    Some(test_override.additional_listeners),
-                    Some(test_override.alpenglow_port_override),
-                )
-            })
-            .unwrap_or((None, None));
+        let (additional_listeners, alpenglow_port_override) = match test_override {
+            None => (Vec::new(), None),
+            Some(VotingServiceOverride {
+                additional_listeners,
+                alpenglow_port_override,
+            }) => (additional_listeners, Some(alpenglow_port_override)),
+        };
+
         let thread_hdl = Builder::new()
             .name("solVoteService".to_string())
             .spawn(move || {
@@ -208,7 +208,7 @@ impl VotingService {
                                         vote_history_storage.as_ref(),
                                         bls_op,
                                         connection_cache.clone(),
-                                        additional_listeners.as_ref(),
+                                        &additional_listeners,
                                         &mut staked_validators_cache,
                                     );
                                 }
@@ -265,20 +265,12 @@ impl VotingService {
     fn broadcast_alpenglow_message(
         slot: Slot,
         cluster_info: &ClusterInfo,
-        bls_message: &BLSMessage,
+        message: &ConsensusMessage,
         connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
+        additional_listeners: &[SocketAddr],
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
-        let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
-
-        let sockets = additional_listeners
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-            .iter()
-            .chain(staked_validator_alpenglow_sockets.iter());
-        let buf = match serialize(bls_message) {
+        let buf = match serialize(message) {
             Ok(buf) => buf,
             Err(err) => {
                 error!("Failed to serialize alpenglow message: {:?}", err);
@@ -286,15 +278,18 @@ impl VotingService {
             }
         };
 
+        let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
+            .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
+        let sockets = additional_listeners
+            .iter()
+            .chain(staked_validator_alpenglow_sockets.iter());
+
         // We use send_message in a loop right now because we worry that sending packets too fast
         // will cause a packet spike and overwhelm the network. If we later find out that this is
         // not an issue, we can optimize this by using multi_targret_send or similar methods.
-        for alpenglow_socket in sockets {
-            if let Err(e) = send_message(buf.clone(), alpenglow_socket, &connection_cache) {
-                warn!(
-                    "Failed to send alpenglow message to {}: {:?}",
-                    alpenglow_socket, e
-                );
+        for socket in sockets {
+            if let Err(e) = send_message(buf.clone(), socket, &connection_cache) {
+                warn!("Failed to send alpenglow message to {}: {:?}", socket, e);
             }
         }
     }
@@ -304,12 +299,12 @@ impl VotingService {
         vote_history_storage: &dyn VoteHistoryStorage,
         bls_op: BLSOp,
         connection_cache: Arc<ConnectionCache>,
-        additional_listeners: Option<&Vec<SocketAddr>>,
+        additional_listeners: &[SocketAddr],
         staked_validators_cache: &mut StakedValidatorsCache,
     ) {
         match bls_op {
             BLSOp::PushVote {
-                bls_message,
+                message,
                 slot,
                 saved_vote_history,
             } => {
@@ -324,7 +319,7 @@ impl VotingService {
                 Self::broadcast_alpenglow_message(
                     slot,
                     cluster_info,
-                    &bls_message,
+                    &message,
                     connection_cache,
                     additional_listeners,
                     staked_validators_cache,
@@ -332,11 +327,11 @@ impl VotingService {
             }
             BLSOp::PushCertificate { certificate } => {
                 let vote_slot = certificate.certificate.slot();
-                let bls_message = BLSMessage::Certificate((*certificate).clone());
+                let message = ConsensusMessage::Certificate((*certificate).clone());
                 Self::broadcast_alpenglow_message(
                     vote_slot,
                     cluster_info,
-                    &bls_message,
+                    &message,
                     connection_cache,
                     additional_listeners,
                     staked_validators_cache,
@@ -411,8 +406,8 @@ mod tests {
             NullVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
         },
         solana_votor_messages::{
-            bls_message::{
-                BLSMessage, Certificate, CertificateMessage, CertificateType, VoteMessage,
+            consensus_message::{
+                Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
             },
             vote::Vote,
         },
@@ -480,14 +475,14 @@ mod tests {
     }
 
     #[test_case(BLSOp::PushVote {
-        bls_message: Arc::new(BLSMessage::Vote(VoteMessage {
+        message: Arc::new(ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_skip_vote(5),
             signature: BLSSignature::default(),
             rank: 1,
         })),
         slot: 5,
         saved_vote_history: SavedVoteHistoryVersions::Current(SavedVoteHistory::default()),
-    }, BLSMessage::Vote(VoteMessage {
+    }, ConsensusMessage::Vote(VoteMessage {
         vote: Vote::new_skip_vote(5),
         signature: BLSSignature::default(),
         rank: 1,
@@ -498,12 +493,12 @@ mod tests {
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         }),
-    }, BLSMessage::Certificate(CertificateMessage {
+    }, ConsensusMessage::Certificate(CertificateMessage {
         certificate: Certificate::new(CertificateType::Skip, 5, None),
         signature: BLSSignature::default(),
         bitmap: Vec::new(),
     }))]
-    fn test_send_bls_message(bls_op: BLSOp, expected_bls_message: BLSMessage) {
+    fn test_send_message(bls_op: BLSOp, expected_message: ConsensusMessage) {
         solana_logger::setup();
         let (_vote_sender, vote_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
@@ -526,15 +521,15 @@ mod tests {
             .unwrap();
         assert!(recv_mmsg(&socket, &mut packets[..]).is_ok());
         let packet = packets.first().expect("No packets received");
-        let received_bls_message = packet
-            .deserialize_slice::<BLSMessage, _>(..)
+        let received_message = packet
+            .deserialize_slice::<ConsensusMessage, _>(..)
             .unwrap_or_else(|err| {
                 panic!(
                     "Failed to deserialize BLSMessage: {:?} {:?}",
-                    size_of::<BLSMessage>(),
+                    size_of::<ConsensusMessage>(),
                     err
                 )
             });
-        assert_eq!(received_bls_message, expected_bls_message);
+        assert_eq!(received_message, expected_message);
     }
 }

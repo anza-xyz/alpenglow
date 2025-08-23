@@ -194,6 +194,24 @@ impl Shredder {
             Ok(data)
         }
     }
+    /// Produce a single shred with no payload
+    /// for use in tests and such
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn single_shred_for_tests(slot: Slot, keypair: &Keypair) -> Shred {
+        let shredder = Shredder::new(slot, slot.saturating_sub(1), 0, 42).unwrap();
+        let reed_solomon_cache = ReedSolomonCache::default();
+        let (mut shreds, _) = shredder.entries_to_merkle_shreds_for_tests(
+            keypair,
+            &[],
+            true,
+            Some(Hash::default()),
+            0,
+            0,
+            &reed_solomon_cache,
+            &mut ProcessShredsStats::default(),
+        );
+        shreds.pop().unwrap()
+    }
 }
 
 impl ReedSolomonCache {
@@ -491,7 +509,8 @@ mod tests {
         let keypair = Arc::new(Keypair::new());
         let shredder = Shredder::new(slot, slot - 5, 0, 0).unwrap();
         // Create enough entries to make > 1 shred
-        let data_buffer_size = ShredData::capacity(/*merkle_proof_size:*/ None).unwrap();
+        let data_buffer_size =
+            ShredData::capacity(/*merkle_proof_size:*/ Some((6, true, false))).unwrap();
         let num_entries = max_ticks_per_n_shreds(1, Some(data_buffer_size)) + 1;
         let entries: Vec<_> = (0..num_entries)
             .map(|_| {

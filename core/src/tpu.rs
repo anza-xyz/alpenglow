@@ -1,12 +1,6 @@
 //! The `tpu` module implements the Transaction Processing Unit, a
 //! multi-stage transaction processing pipeline in software.
 
-// allow multiple connections for NAT and any open/close overlap
-#[deprecated(
-    since = "2.2.0",
-    note = "Use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER instead"
-)]
-pub use solana_streamer::quic::DEFAULT_MAX_QUIC_CONNECTIONS_PER_PEER as MAX_QUIC_CONNECTIONS_PER_PEER;
 pub use {
     crate::forwarding_stage::ForwardingClientOption, solana_streamer::quic::DEFAULT_TPU_COALESCE,
 };
@@ -33,7 +27,7 @@ use {
         vortexor_receiver_adapter::VortexorReceiverAdapter,
     },
     bytes::Bytes,
-    crossbeam_channel::{bounded, unbounded, Receiver},
+    crossbeam_channel::{bounded, unbounded, Receiver, Sender},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
@@ -54,11 +48,10 @@ use {
     solana_runtime::{
         bank_forks::BankForks,
         prioritization_fee_cache::PrioritizationFeeCache,
-        root_bank_cache::RootBankCache,
-        vote_sender_types::{BLSVerifiedMessageSender, ReplayVoteReceiver, ReplayVoteSender},
+        vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_streamer::{
-        quic::{spawn_server_multi, QuicServerParams, SpawnServerResult},
+        quic::{spawn_server, QuicServerParams, SpawnServerResult},
         streamer::StakedNodes,
     },
     solana_turbine::{
@@ -66,6 +59,7 @@ use {
         xdp::XdpSender,
     },
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -153,7 +147,7 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         client: ForwardingClientOption,
-        bls_verified_message_sender: BLSVerifiedMessageSender,
+        verified_consensus_message_sender: Sender<ConsensusMessage>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         votor_event_sender: VotorEventSender,
         keypair: &Keypair,
@@ -229,7 +223,7 @@ impl Tpu {
             endpoints: _,
             thread: tpu_vote_quic_t,
             key_updater: vote_streamer_key_updater,
-        } = spawn_server_multi(
+        } = spawn_server(
             "solQuicTVo",
             "quic_streamer_tpu_vote",
             tpu_vote_quic_sockets,
@@ -246,7 +240,7 @@ impl Tpu {
             endpoints: _,
             thread: alpenglow_quic_t,
             key_updater: alpenglow_stream_key_updater,
-        } = spawn_server_multi(
+        } = spawn_server(
             "solQuicAlpglw",
             "quic_streamer_alpenglow",
             vec![alpenglow_quic_socket],
@@ -264,7 +258,7 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_quic_t,
                 key_updater,
-            } = spawn_server_multi(
+            } = spawn_server(
                 "solQuicTpu",
                 "quic_streamer_tpu",
                 transactions_quic_sockets,
@@ -286,7 +280,7 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_forwards_quic_t,
                 key_updater: forwards_key_updater,
-            } = spawn_server_multi(
+            } = spawn_server(
                 "solQuicTpuFwd",
                 "quic_streamer_tpu_forwards",
                 transactions_forwards_quic_sockets,
@@ -343,11 +337,11 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let root_bank_cache = RootBankCache::new(bank_forks.clone());
+            let root_bank = bank_forks.read().unwrap().sharable_root_bank();
             let verifier = BLSSigVerifier::new(
-                root_bank_cache,
+                root_bank,
                 verified_vote_sender.clone(),
-                bls_verified_message_sender,
+                verified_consensus_message_sender,
             );
             SigVerifyStage::new(
                 bls_packet_receiver,
@@ -394,7 +388,7 @@ impl Tpu {
             forward_stage_receiver,
             client,
             vote_forwarding_client_socket,
-            RootBankCache::new(bank_forks.clone()),
+            bank_forks.read().unwrap().sharable_root_bank(),
             ForwardAddressGetter::new(cluster_info.clone(), poh_recorder.clone()),
             DataBudget::default(),
         );

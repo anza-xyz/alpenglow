@@ -1,6 +1,8 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![allow(clippy::arithmetic_side_effects)]
 #![recursion_limit = "2048"]
+// TODO(ksn): remove this
+#![allow(deprecated)]
 //! The `solana` library implements the Solana high-performance blockchain architecture.
 //! It includes a full Rust implementation of the architecture (see
 //! [Validator](validator/struct.Validator.html)) as well as hooks to GPU implementations of its most

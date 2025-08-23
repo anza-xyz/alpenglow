@@ -23,7 +23,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{bls_message::Block, vote::Vote},
+    solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
@@ -155,7 +155,8 @@ impl EventHandler {
                 .receive_event_time
                 .saturating_add(receive_event_time.as_us() as u32);
 
-            if event.should_ignore(vctx.root_bank_cache.root_bank().slot()) {
+            let root_bank = vctx.root_bank.load();
+            if event.should_ignore(root_bank.slot()) {
                 local_context.stats.ignored = local_context.stats.ignored.saturating_add(1);
                 continue;
             }
@@ -188,6 +189,37 @@ impl EventHandler {
             local_context.stats.maybe_report();
         }
 
+        Ok(())
+    }
+
+    fn handle_parent_ready_event(
+        slot: Slot,
+        parent_block: Block,
+        vctx: &mut VotingContext,
+        ctx: &SharedContext,
+        local_context: &mut LocalContext,
+        timer_manager: &RwLock<TimerManager>,
+        votes: &mut Vec<BLSOp>,
+    ) -> Result<(), EventLoopError> {
+        let my_pubkey = &local_context.my_pubkey;
+        info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
+        let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
+        Self::check_pending_blocks(my_pubkey, &mut local_context.pending_blocks, vctx, votes)?;
+        if should_set_timeouts {
+            timer_manager.write().set_timeouts(slot);
+            local_context.stats.timeout_set = local_context.stats.timeout_set.saturating_add(1);
+        }
+        let mut highest_parent_ready = ctx
+            .leader_window_notifier
+            .highest_parent_ready
+            .write()
+            .unwrap();
+
+        let (current_slot, _) = *highest_parent_ready;
+
+        if slot > current_slot {
+            *highest_parent_ready = (slot, parent_block);
+        }
         Ok(())
     }
 
@@ -238,6 +270,19 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
+                if let Some((ready_slot, parent_block)) =
+                    Self::add_missing_parent_ready(block, ctx, vctx, local_context)
+                {
+                    Self::handle_parent_ready_event(
+                        ready_slot,
+                        parent_block,
+                        vctx,
+                        ctx,
+                        local_context,
+                        timer_manager,
+                        &mut votes,
+                    )?;
+                }
             }
 
             // Block has received a notarization certificate
@@ -254,24 +299,15 @@ impl EventHandler {
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
-                info!("{my_pubkey}: Parent ready {slot} {parent_block:?}");
-                let should_set_timeouts = vctx.vote_history.add_parent_ready(slot, parent_block);
-                Self::check_pending_blocks(my_pubkey, pending_blocks, vctx, &mut votes)?;
-                if should_set_timeouts {
-                    timer_manager.write().set_timeouts(slot);
-                    stats.timeout_set = stats.timeout_set.saturating_add(1);
-                }
-                let mut highest_parent_ready = ctx
-                    .leader_window_notifier
-                    .highest_parent_ready
-                    .write()
-                    .unwrap();
-
-                let (current_slot, _) = *highest_parent_ready;
-
-                if slot > current_slot {
-                    *highest_parent_ready = (slot, parent_block);
-                }
+                Self::handle_parent_ready_event(
+                    slot,
+                    parent_block,
+                    vctx,
+                    ctx,
+                    local_context,
+                    timer_manager,
+                    &mut votes,
+                )?;
             }
 
             VotorEvent::TimeoutCrashedLeader(slot) => {
@@ -360,6 +396,19 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
+                if let Some((slot, block)) =
+                    Self::add_missing_parent_ready(block, ctx, vctx, local_context)
+                {
+                    Self::handle_parent_ready_event(
+                        slot,
+                        block,
+                        vctx,
+                        ctx,
+                        local_context,
+                        timer_manager,
+                        &mut votes,
+                    )?;
+                }
             }
 
             // We have not observed a finalization certificate in a while, refresh our votes
@@ -385,6 +434,70 @@ impl EventHandler {
             }
         }
         Ok(votes)
+    }
+
+    /// Under normal cases we should have a parent ready for first slot of every window.
+    /// But it could be we joined when the later slots of the window are finalized, then
+    /// we never saw the parent ready for the first slot and haven't voted for first slot
+    /// so we can't keep processing rest of the window. This is especially a problem for
+    /// cluster standstill.
+    /// For example:
+    ///    A 40%
+    ///    B 40%
+    ///    C 30%
+    /// A and B finalize block together up to slot 9, now A exited and C joined.
+    /// C sees block 9 as finalized, but it never had parent ready triggered for slot 8.
+    /// C can't vote for any slot in the window because there is no parent ready for slot 8.
+    /// While B is stuck because it is waiting for >60% of the votes to finalize slot 9.
+    /// The cluster will get stuck.
+    /// After we add the following function, C will see that block 9 is finalized yet
+    /// it never had parent ready for slot 9, so it will trigger parent ready for slot 9,
+    /// this means C will immediately vote Notarize for  slot 9, then vote Notarize for
+    /// all later slots. So B and C together can keep finalizing the blocks and unstuck the
+    /// cluster. If we get a finalization cert for later slots of the window and we have the
+    /// block replayed, trace back to the first slot of the window and emit parent ready.
+    fn add_missing_parent_ready(
+        finalized_block: Block,
+        ctx: &SharedContext,
+        vctx: &mut VotingContext,
+        local_context: &mut LocalContext,
+    ) -> Option<(Slot, Block)> {
+        let (slot, block_id) = finalized_block;
+        let first_slot_of_window = first_of_consecutive_leader_slots(slot);
+        if first_slot_of_window == slot || first_slot_of_window == 0 {
+            // No need to trigger parent ready for the first slot of the window
+            return None;
+        }
+        if vctx.vote_history.highest_parent_ready_slot() >= Some(first_slot_of_window)
+            || !local_context.finalized_blocks.contains(&finalized_block)
+        {
+            return None;
+        }
+        // If the block is missing, we can't trigger parent ready
+        let bank = ctx.bank_forks.read().unwrap().get(slot)?;
+        if !bank.is_frozen() {
+            // We haven't finished replay for the block, so we can't trigger parent ready
+            return None;
+        }
+        if bank.block_id() != Some(block_id) {
+            // We have a different block id for the slot, repair should kick in later
+            return None;
+        }
+        let parent_bank = bank.parent()?;
+        let parent_slot = parent_bank.slot();
+        let Some(parent_block_id) = parent_bank.block_id() else {
+            // Maybe this bank is set to root after we drop bank_forks.
+            error!(
+                "{}: Unable to find block id for parent bank {parent_slot} to trigger parent ready",
+                local_context.my_pubkey
+            );
+            return None;
+        };
+        info!(
+            "{}: Triggering parent ready for slot {slot} with parent {parent_slot} {parent_block_id}",
+            local_context.my_pubkey
+        );
+        Some((slot, (parent_slot, parent_block_id)))
     }
 
     fn handle_set_identity(
@@ -556,8 +669,8 @@ impl EventHandler {
         // In case we set root in the middle of a leader window,
         // it's not necessary to vote skip prior to it and we won't
         // be able to check vote history if we've already voted on it
-        let start = first_of_consecutive_leader_slots(slot)
-            .max(voting_context.root_bank_cache.root_bank().slot());
+        let root_bank = voting_context.root_bank.load();
+        let start = first_of_consecutive_leader_slots(slot).max(root_bank.slot());
         for s in start..=last_of_consecutive_leader_slots(slot) {
             if voting_context.vote_history.voted(s) {
                 continue;

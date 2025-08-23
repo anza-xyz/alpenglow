@@ -3,7 +3,7 @@
 #![deny(missing_docs)]
 
 pub mod accounting;
-pub mod bls_message;
+pub mod consensus_message;
 pub mod instruction;
 pub mod state;
 pub mod vote;

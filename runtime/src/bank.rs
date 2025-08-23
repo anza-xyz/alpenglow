@@ -45,7 +45,6 @@ use {
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
-        rent_collector::RentCollectorWithMetrics,
         runtime_config::RuntimeConfig,
         snapshot_hash::SnapshotHash,
         stake_account::StakeAccount,
@@ -58,7 +57,7 @@ use {
         transaction_batch::{OwnedOrBorrowed, TransactionBatch},
     },
     accounts_lt_hash::{CacheValue as AccountsLtHashCacheValue, Stats as AccountsLtHashStats},
-    agave_feature_set::{self as feature_set, FeatureSet},
+    agave_feature_set::{self as feature_set, raise_cpi_nesting_limit_to_8, FeatureSet},
     agave_precompiles::{get_precompile, get_precompiles, is_precompile},
     agave_reserved_account_keys::ReservedAccountKeys,
     agave_syscalls::{
@@ -77,7 +76,7 @@ use {
     solana_accounts_db::{
         account_locks::validate_account_locks,
         accounts::{AccountAddressFilter, Accounts, PubkeyAccountSlot},
-        accounts_db::{AccountStorageEntry, AccountsDb, AccountsDbConfig, DuplicatesLtHash},
+        accounts_db::{self, AccountStorageEntry, AccountsDb, AccountsDbConfig, DuplicatesLtHash},
         accounts_hash::AccountsLtHash,
         accounts_index::{IndexKey, ScanConfig, ScanResult},
         accounts_update_notifier_interface::AccountsUpdateNotifier,
@@ -145,12 +144,12 @@ use {
         },
     },
     solana_svm_callback::{AccountState, InvokeContextCallback, TransactionProcessingCallback},
+    solana_svm_timings::{ExecuteTimingType, ExecuteTimings},
     solana_svm_transaction::svm_message::SVMMessage,
     solana_system_transaction as system_transaction,
     solana_sysvar::{self as sysvar, last_restart_slot::LastRestartSlot, Sysvar},
     solana_sysvar_id::SysvarId,
     solana_time_utils::years_as_slots,
-    solana_timings::{ExecuteTimingType, ExecuteTimings},
     solana_transaction::{
         sanitized::{MessageHash, SanitizedTransaction, MAX_TX_ACCOUNT_LOCKS},
         versioned::VersionedTransaction,
@@ -162,6 +161,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         fmt,
+        num::NonZeroUsize,
         ops::{AddAssign, RangeFull},
         path::PathBuf,
         slice,
@@ -1450,7 +1450,7 @@ impl Bank {
         report_loaded_programs_stats(
             &parent
                 .transaction_processor
-                .program_cache
+                .global_program_cache
                 .read()
                 .unwrap()
                 .stats,
@@ -1458,7 +1458,7 @@ impl Bank {
         );
 
         new.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .stats
@@ -1469,7 +1469,7 @@ impl Bank {
 
     pub fn set_fork_graph_in_program_cache(&self, fork_graph: Weak<RwLock<BankForks>>) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .set_fork_graph(fork_graph);
@@ -1478,8 +1478,13 @@ impl Bank {
     fn prepare_program_cache_for_upcoming_feature_set(&self) {
         let (_epoch, slot_index) = self.epoch_schedule.get_epoch_and_slot_index(self.slot);
         let slots_in_epoch = self.epoch_schedule.get_slots_in_epoch(self.epoch);
-        let compute_budget = self.compute_budget.unwrap_or_default().to_budget();
         let (upcoming_feature_set, _newly_activated) = self.compute_active_feature_set(true);
+        let compute_budget = self
+            .compute_budget
+            .unwrap_or(ComputeBudget::new_with_defaults(
+                upcoming_feature_set.is_active(&raise_cpi_nesting_limit_to_8::id()),
+            ))
+            .to_budget();
 
         // Recompile loaded programs one at a time before the next epoch hits
         let slots_in_recompilation_phase =
@@ -1488,7 +1493,11 @@ impl Bank {
                 .checked_div(2)
                 .unwrap();
 
-        let mut program_cache = self.transaction_processor.program_cache.write().unwrap();
+        let mut program_cache = self
+            .transaction_processor
+            .global_program_cache
+            .write()
+            .unwrap();
 
         if program_cache.upcoming_environments.is_some() {
             if let Some((key, program_to_recompile)) = program_cache.programs_to_recompile.pop() {
@@ -1496,7 +1505,7 @@ impl Bank {
                 drop(program_cache);
                 let environments_for_epoch = self
                     .transaction_processor
-                    .program_cache
+                    .global_program_cache
                     .read()
                     .unwrap()
                     .get_environments_for_epoch(effective_epoch);
@@ -1514,14 +1523,11 @@ impl Bank {
                             .load(Ordering::Relaxed),
                         Ordering::Relaxed,
                     );
-                    recompiled.ix_usage_counter.fetch_add(
-                        program_to_recompile
-                            .ix_usage_counter
-                            .load(Ordering::Relaxed),
-                        Ordering::Relaxed,
-                    );
-                    let mut program_cache =
-                        self.transaction_processor.program_cache.write().unwrap();
+                    let mut program_cache = self
+                        .transaction_processor
+                        .global_program_cache
+                        .write()
+                        .unwrap();
                     program_cache.assign_program(key, recompiled);
                 }
             }
@@ -1531,7 +1537,11 @@ impl Bank {
             // Anticipate the upcoming program runtime environment for the next epoch,
             // so we can try to recompile loaded programs before the feature transition hits.
             drop(program_cache);
-            let mut program_cache = self.transaction_processor.program_cache.write().unwrap();
+            let mut program_cache = self
+                .transaction_processor
+                .global_program_cache
+                .write()
+                .unwrap();
             let program_runtime_environment_v1 = create_program_runtime_environment_v1(
                 &upcoming_feature_set.runtime_features(),
                 &compute_budget,
@@ -1565,7 +1575,7 @@ impl Bank {
 
     pub fn prune_program_cache(&self, new_root_slot: Slot, new_root_epoch: Epoch) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .prune(new_root_slot, new_root_epoch);
@@ -1578,7 +1588,7 @@ impl Bank {
         bank_forks: &BankForks,
     ) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .prune_locked(new_root_slot, new_root_epoch, bank_forks);
@@ -1586,7 +1596,7 @@ impl Bank {
 
     pub fn prune_program_cache_by_deployment_slot(&self, deployment_slot: Slot) {
         self.transaction_processor
-            .program_cache
+            .global_program_cache
             .write()
             .unwrap()
             .prune_by_deployment_slot(deployment_slot);
@@ -1744,8 +1754,8 @@ impl Bank {
             Some(account)
         })
         .expect(
-            "Stakes cache is inconsistent with accounts-db. This can indicate \
-            a corrupted snapshot or bugs in cached accounts or accounts-db.",
+            "Stakes cache is inconsistent with accounts-db. This can indicate a corrupted \
+             snapshot or bugs in cached accounts or accounts-db.",
         ));
         info!("Loading Stakes took: {stakes_time}");
         let stakes_accounts_load_duration = now.elapsed();
@@ -1850,8 +1860,8 @@ impl Bank {
         // from the passed in genesis_config instead (as new()/new_with_paths() already do)
         assert_eq!(
             bank.genesis_creation_time, genesis_config.creation_time,
-            "Bank snapshot genesis creation time does not match genesis.bin creation time. \
-             The snapshot and genesis.bin might pertain to different clusters"
+            "Bank snapshot genesis creation time does not match genesis.bin creation time. The \
+             snapshot and genesis.bin might pertain to different clusters"
         );
         assert_eq!(bank.ticks_per_slot, genesis_config.ticks_per_slot);
         assert_eq!(
@@ -2381,7 +2391,7 @@ impl Bank {
                 },
             )| {
                 if let Err(err) = vote_account.checked_add_lamports(vote_rewards) {
-                    debug!("reward redemption failed for {}: {:?}", vote_pubkey, err);
+                    debug!("reward redemption failed for {vote_pubkey}: {err:?}");
                     return;
                 }
 
@@ -2689,8 +2699,9 @@ impl Bank {
 
         assert!(
             !self.freeze_started(),
-            "Can't change frozen bank by adding not-existing new precompiled program ({program_id}). \
-                Maybe, inconsistent program activation is detected on snapshot restore?"
+            "Can't change frozen bank by adding not-existing new precompiled program \
+             ({program_id}). Maybe, inconsistent program activation is detected on snapshot \
+             restore?"
         );
 
         // Add a bogus executable account, which will be loaded and ignored.
@@ -3136,7 +3147,7 @@ impl Bank {
             },
         );
 
-        debug!("simulate_transaction: {:?}", timings);
+        debug!("simulate_transaction: {timings:?}");
 
         let processing_result = processing_results
             .pop()
@@ -3272,14 +3283,12 @@ impl Bank {
 
         let (blockhash, blockhash_lamports_per_signature) =
             self.last_blockhash_and_lamports_per_signature();
-        let rent_collector_with_metrics =
-            RentCollectorWithMetrics::new(self.rent_collector.clone());
         let processing_environment = TransactionProcessingEnvironment {
             blockhash,
             blockhash_lamports_per_signature,
             epoch_total_stake: self.get_current_epoch_total_stake(),
             feature_set: self.feature_set.runtime_features(),
-            rent_collector: Some(&rent_collector_with_metrics),
+            rent: self.rent_collector.rent.clone(),
         };
 
         let sanitized_output = self
@@ -3339,7 +3348,7 @@ impl Bank {
                 }
                 Err(err) => {
                     if err_count.0 == 0 {
-                        debug!("tx error: {:?} {:?}", err, tx);
+                        debug!("tx error: {err:?} {tx:?}");
                     }
                     *err_count += 1;
                 }
@@ -3548,7 +3557,8 @@ impl Bank {
     ) -> Vec<TransactionCommitResult> {
         assert!(
             !self.freeze_started(),
-            "commit_transactions() working on a bank that is already frozen or is undergoing freezing!"
+            "commit_transactions() working on a bank that is already frozen or is undergoing \
+             freezing!"
         );
 
         let ProcessedTransactionCounts {
@@ -3619,7 +3629,10 @@ impl Bank {
                     if executed_tx.was_successful() && !programs_modified_by_tx.is_empty() {
                         cache
                             .get_or_insert_with(|| {
-                                self.transaction_processor.program_cache.write().unwrap()
+                                self.transaction_processor
+                                    .global_program_cache
+                                    .write()
+                                    .unwrap()
                             })
                             .merge(programs_modified_by_tx);
                     }
@@ -3988,40 +4001,32 @@ impl Bank {
         pubkey: &Pubkey,
         new_account: &AccountSharedData,
     ) {
-        let old_account_data_size =
-            if let Some(old_account) = self.get_account_with_fixed_root_no_cache(pubkey) {
-                match new_account.lamports().cmp(&old_account.lamports()) {
-                    std::cmp::Ordering::Greater => {
-                        let increased = new_account.lamports() - old_account.lamports();
-                        trace!(
-                            "store_account_and_update_capitalization: increased: {} {}",
-                            pubkey,
-                            increased
-                        );
-                        self.capitalization.fetch_add(increased, Relaxed);
-                    }
-                    std::cmp::Ordering::Less => {
-                        let decreased = old_account.lamports() - new_account.lamports();
-                        trace!(
-                            "store_account_and_update_capitalization: decreased: {} {}",
-                            pubkey,
-                            decreased
-                        );
-                        self.capitalization.fetch_sub(decreased, Relaxed);
-                    }
-                    std::cmp::Ordering::Equal => {}
+        let old_account_data_size = if let Some(old_account) =
+            self.get_account_with_fixed_root_no_cache(pubkey)
+        {
+            match new_account.lamports().cmp(&old_account.lamports()) {
+                std::cmp::Ordering::Greater => {
+                    let diff = new_account.lamports() - old_account.lamports();
+                    trace!("store_account_and_update_capitalization: increased: {pubkey} {diff}");
+                    self.capitalization.fetch_add(diff, Relaxed);
                 }
-                old_account.data().len()
-            } else {
-                trace!(
-                    "store_account_and_update_capitalization: created: {} {}",
-                    pubkey,
-                    new_account.lamports()
-                );
-                self.capitalization
-                    .fetch_add(new_account.lamports(), Relaxed);
-                0
-            };
+                std::cmp::Ordering::Less => {
+                    let diff = old_account.lamports() - new_account.lamports();
+                    trace!("store_account_and_update_capitalization: decreased: {pubkey} {diff}");
+                    self.capitalization.fetch_sub(diff, Relaxed);
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+            old_account.data().len()
+        } else {
+            trace!(
+                "store_account_and_update_capitalization: created: {pubkey} {}",
+                new_account.lamports()
+            );
+            self.capitalization
+                .fetch_add(new_account.lamports(), Relaxed);
+            0
+        };
 
         self.store_account(pubkey, new_account);
         self.calculate_and_update_accounts_data_size_delta_off_chain(
@@ -4115,22 +4120,36 @@ impl Bank {
             }
         }
 
+        let simd_0296_active = self
+            .feature_set
+            .is_active(&raise_cpi_nesting_limit_to_8::id());
+
         self.transaction_processor
             .configure_program_runtime_environments(
                 Some(Arc::new(
                     create_program_runtime_environment_v1(
                         &self.feature_set.runtime_features(),
-                        &self.compute_budget().unwrap_or_default().to_budget(),
+                        &self
+                            .compute_budget()
+                            .unwrap_or(ComputeBudget::new_with_defaults(simd_0296_active))
+                            .to_budget(),
                         false, /* deployment */
                         false, /* debugging_features */
                     )
                     .unwrap(),
                 )),
                 Some(Arc::new(create_program_runtime_environment_v2(
-                    &self.compute_budget().unwrap_or_default().to_budget(),
+                    &self
+                        .compute_budget()
+                        .unwrap_or(ComputeBudget::new_with_defaults(simd_0296_active))
+                        .to_budget(),
                     false, /* debugging_features */
                 ))),
             );
+    }
+
+    pub fn set_tick_height(&self, tick_height: u64) {
+        self.tick_height.store(tick_height, Relaxed)
     }
 
     pub fn set_inflation(&self, inflation: Inflation) {
@@ -4149,14 +4168,14 @@ impl Bank {
         let bank_frozen = *lock != Hash::default();
         if new_hard_fork_slot < bank_slot {
             warn!(
-                "Hard fork at slot {new_hard_fork_slot} ignored, the hard fork is older \
-                than the bank at slot {bank_slot} that attempted to register it."
+                "Hard fork at slot {new_hard_fork_slot} ignored, the hard fork is older than the \
+                 bank at slot {bank_slot} that attempted to register it."
             );
         } else if (new_hard_fork_slot == bank_slot) && bank_frozen {
             warn!(
-                "Hard fork at slot {new_hard_fork_slot} ignored, the hard fork is the same \
-                slot as the bank at slot {bank_slot} that attempted to register it, but that \
-                bank is already frozen."
+                "Hard fork at slot {new_hard_fork_slot} ignored, the hard fork is the same slot \
+                 as the bank at slot {bank_slot} that attempted to register it, but that bank is \
+                 already frozen."
             );
         } else {
             self.hard_forks
@@ -4512,8 +4531,8 @@ impl Bank {
         );
         info!(
             "bank frozen: {slot} hash: {hash} signature_count: {} last_blockhash: {} \
-             capitalization: {}, accounts_lt_hash checksum: {accounts_lt_hash_checksum}, \
-             stats: {bank_hash_stats:?}",
+             capitalization: {}, accounts_lt_hash checksum: {accounts_lt_hash_checksum}, stats: \
+             {bank_hash_stats:?}",
             self.signature_count(),
             self.last_blockhash(),
             self.capitalization(),
@@ -4530,7 +4549,7 @@ impl Bank {
     pub fn run_final_hash_calc(&self) {
         self.force_flush_accounts_cache();
         // note that this slot may not be a root
-        _ = self.verify_accounts_hash(
+        _ = self.verify_accounts(
             VerifyAccountsHashConfig {
                 require_rooted_bank: false,
                 run_in_background: false,
@@ -4539,11 +4558,20 @@ impl Bank {
         );
     }
 
-    /// Recalculate the accounts hash from the account stores. Used to verify a snapshot.
-    /// return true if all is good
-    /// Only called from startup or test code.
+    /// Verify the account state as part of startup, typically from a snapshot.
+    ///
+    /// This fn calculates the accounts lt hash and compares it against the stored value in the
+    /// bank.  Normal validator operation will do this calculation in the background, and use the
+    /// account storage files for input. Tests/ledger-tool may opt to either do the calculation in
+    /// the foreground, or use the accounts index for input.
+    ///
+    /// Returns true if all is good.
+    /// Note, if calculation is running in the background, this fn will return as soon as the
+    /// calculation *begins*, not when it has completed.
+    ///
+    /// Only intended to be called at startup, or from tests/ledger-tool.
     #[must_use]
-    fn verify_accounts_hash(
+    fn verify_accounts(
         &self,
         mut config: VerifyAccountsHashConfig,
         duplicates_lt_hash: Option<Box<DuplicatesLtHash>>,
@@ -4574,7 +4602,7 @@ impl Bank {
                 // back to verifying the accounts lt hash with the index (which also means we
                 // cannot run in the background).
                 config.run_in_background = false;
-                return parent.verify_accounts_hash(config, None);
+                return parent.verify_accounts(config, None);
             } else {
                 // this will result in mismatch errors
                 // accounts hash calc doesn't include unrooted slots
@@ -4591,8 +4619,8 @@ impl Bank {
                 let expected = expected_accounts_lt_hash.0.checksum();
                 let calculated = calculated_accounts_lt_hash.0.checksum();
                 error!(
-                    "Verifying accounts failed: accounts lattice hashes do not match, \
-                     expected: {expected}, calculated: {calculated}",
+                    "Verifying accounts failed: accounts lattice hashes do not match, expected: \
+                     {expected}, calculated: {calculated}",
                 );
             }
             is_ok
@@ -4607,17 +4635,21 @@ impl Bank {
             let accounts_db_ = Arc::clone(accounts_db);
             accounts_db.verify_accounts_hash_in_bg.start(|| {
                 Builder::new()
-                    .name("solBgHashVerify".into())
+                    .name("solBgVerfyAccts".into())
                     .spawn(move || {
-                        info!("Initial background accounts hash verification has started");
+                        info!("Verifying accounts in background...");
                         let start = Instant::now();
+                        let num_threads = accounts_db_
+                            .num_hash_threads
+                            .unwrap_or_else(accounts_db::default_num_hash_threads);
                         let (calculated_accounts_lt_hash, lattice_verify_time) =
-                            meas_dur!(accounts_db_.thread_pool_hash.install(|| {
-                                accounts_db_.calculate_accounts_lt_hash_at_startup_from_storages(
+                            meas_dur!(accounts_db_
+                                .calculate_accounts_lt_hash_at_startup_from_storages(
                                     snapshot_storages.0.as_slice(),
                                     &duplicates_lt_hash.unwrap(),
-                                )
-                            }));
+                                    slot,
+                                    num_threads
+                                ));
                         let is_ok =
                             check_lt_hash(&expected_accounts_lt_hash, &calculated_accounts_lt_hash);
                         accounts_db_
@@ -4628,28 +4660,37 @@ impl Bank {
                             "startup_verify_accounts",
                             ("total_us", total_time.as_micros(), i64),
                             (
-                                "verify_accounts_lt_hash_us",
+                                "calculate_accounts_lt_hash_us",
                                 lattice_verify_time.as_micros(),
                                 i64
                             ),
                         );
-                        info!("Initial background accounts hash verification has stopped in {total_time:?}");
+                        info!("Verifying accounts in background... Done in {total_time:?}");
                         is_ok
                     })
                     .unwrap()
             });
             true // initial result is true. We haven't failed yet. If verification fails, we'll panic from bg thread.
         } else {
+            info!("Verifying accounts in foreground...");
+            let start = Instant::now();
+            let num_threads = NonZeroUsize::new(num_cpus::get()).unwrap();
             let calculated_accounts_lt_hash = if let Some(duplicates_lt_hash) = duplicates_lt_hash {
                 accounts_db.calculate_accounts_lt_hash_at_startup_from_storages(
                     snapshot_storages.0.as_slice(),
                     &duplicates_lt_hash,
+                    slot,
+                    num_threads,
                 )
             } else {
                 accounts_db.calculate_accounts_lt_hash_at_startup_from_index(&self.ancestors, slot)
             };
             let is_ok = check_lt_hash(&expected_accounts_lt_hash, &calculated_accounts_lt_hash);
             self.set_initial_accounts_hash_verification_completed();
+            info!(
+                "Verifying accounts in foreground... Done in {:?}",
+                start.elapsed(),
+            );
             is_ok
         }
     }
@@ -4822,16 +4863,13 @@ impl Bank {
         let (verified_accounts, verify_accounts_time_us) = measure_us!({
             let should_verify_accounts = !self.rc.accounts.accounts_db.skip_initial_hash_calc;
             if should_verify_accounts {
-                info!("Verifying accounts...");
-                let verified = self.verify_accounts_hash(
+                self.verify_accounts(
                     VerifyAccountsHashConfig {
                         require_rooted_bank: false,
                         run_in_background: true,
                     },
                     duplicates_lt_hash,
-                );
-                info!("Verifying accounts... In background.");
-                verified
+                )
             } else {
                 info!("Verifying accounts... Skipped.");
                 self.set_initial_accounts_hash_verification_completed();
@@ -4907,10 +4945,6 @@ impl Bank {
     /// Return the number of ticks since genesis.
     pub fn tick_height(&self) -> u64 {
         self.tick_height.load(Relaxed)
-    }
-
-    pub fn set_tick_height(&self, tick_height: u64) {
-        self.tick_height.store(tick_height, Relaxed)
     }
 
     /// Return the inflation parameters of the Bank
@@ -5179,9 +5213,9 @@ impl Bank {
     }
 
     pub fn add_precompile(&mut self, program_id: &Pubkey) {
-        debug!("Adding precompiled program {}", program_id);
+        debug!("Adding precompiled program {program_id}");
         self.add_precompiled_account(program_id);
-        debug!("Added precompiled program {:?}", program_id);
+        debug!("Added precompiled program {program_id:?}");
     }
 
     // Call AccountsDb::clean_accounts()
@@ -5523,7 +5557,7 @@ impl Bank {
 
                 // Unload a program from the bank's cache
                 self.transaction_processor
-                    .program_cache
+                    .global_program_cache
                     .write()
                     .unwrap()
                     .remove_programs([*old_address].into_iter());
@@ -5665,20 +5699,11 @@ impl InvokeContextCallback for Bank {
 }
 
 impl TransactionProcessingCallback for Bank {
-    fn account_matches_owners(&self, account: &Pubkey, owners: &[Pubkey]) -> Option<usize> {
-        self.rc
-            .accounts
-            .accounts_db
-            .account_matches_owners(&self.ancestors, account, owners)
-            .ok()
-    }
-
-    fn get_account_shared_data(&self, pubkey: &Pubkey) -> Option<AccountSharedData> {
+    fn get_account_shared_data(&self, pubkey: &Pubkey) -> Option<(AccountSharedData, Slot)> {
         self.rc
             .accounts
             .accounts_db
             .load_with_fixed_root(&self.ancestors, pubkey)
-            .map(|(acc, _)| acc)
     }
 
     // NOTE: must hold idempotent for the same set of arguments
@@ -5707,8 +5732,9 @@ impl TransactionProcessingCallback for Bank {
 
         assert!(
             !self.freeze_started(),
-            "Can't change frozen bank by adding not-existing new builtin program ({name}, {program_id}). \
-            Maybe, inconsistent program activation is detected on snapshot restore?"
+            "Can't change frozen bank by adding not-existing new builtin program ({name}, \
+             {program_id}). Maybe, inconsistent program activation is detected on snapshot \
+             restore?"
         );
 
         // Add a bogus executable builtin account, which will be loaded and ignored.
@@ -5927,7 +5953,11 @@ impl Bank {
         ProgramCacheForTxBatch::new_from_cache(
             slot,
             self.epoch_schedule.get_epoch(slot),
-            &self.transaction_processor.program_cache.read().unwrap(),
+            &self
+                .transaction_processor
+                .global_program_cache
+                .read()
+                .unwrap(),
         )
     }
 

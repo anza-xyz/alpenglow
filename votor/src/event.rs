@@ -2,7 +2,7 @@ use {
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
     solana_runtime::bank::Bank,
-    solana_votor_messages::bls_message::Block,
+    solana_votor_messages::consensus_message::Block,
     std::{sync::Arc, time::Instant},
 };
 

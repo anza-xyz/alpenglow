@@ -23,7 +23,9 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
-        bls_message::{BLSMessage, Block, CertificateMessage, CertificateType, VoteMessage},
+        consensus_message::{
+            Block, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+        },
         vote::Vote,
     },
     std::{
@@ -392,12 +394,12 @@ impl CertificatePool {
         epoch_stakes_map: &HashMap<Epoch, VersionedEpochStakes>,
         root_slot: Slot,
         my_vote_pubkey: &Pubkey,
-        message: &BLSMessage,
+        message: &ConsensusMessage,
         events: &mut Vec<VotorEvent>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
         let current_highest_finalized_slot = self.highest_finalized_slot;
         let new_certficates_to_send = match message {
-            BLSMessage::Vote(vote_message) => self.add_vote(
+            ConsensusMessage::Vote(vote_message) => self.add_vote(
                 epoch_schedule,
                 epoch_stakes_map,
                 root_slot,
@@ -405,7 +407,7 @@ impl CertificatePool {
                 vote_message,
                 events,
             )?,
-            BLSMessage::Certificate(certificate_message) => {
+            ConsensusMessage::Certificate(certificate_message) => {
                 self.add_certificate(root_slot, certificate_message, events)?
             }
         };
@@ -760,7 +762,7 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_votor_messages::bls_message::{
+        solana_votor_messages::consensus_message::{
             CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
         std::sync::{Arc, RwLock},
@@ -771,14 +773,14 @@ mod tests {
         keypairs: &[ValidatorVoteKeypairs],
         vote: &Vote,
         rank: usize,
-    ) -> BLSMessage {
+    ) -> ConsensusMessage {
         let bls_keypair =
             BLSKeypair::derive_from_signer(&keypairs[rank].vote_keypair, BLS_KEYPAIR_DERIVE_SEED)
                 .unwrap();
         let signature: BLSSignature = bls_keypair
             .sign(bincode::serialize(vote).unwrap().as_slice())
             .into();
-        BLSMessage::new_vote(*vote, signature, rank as u16)
+        ConsensusMessage::new_vote(*vote, signature, rank as u16)
     }
 
     fn create_bank(slot: Slot, parent: Arc<Bank>, pubkey: &Pubkey) -> Bank {
@@ -1210,7 +1212,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    &BLSMessage::Certificate((*cert).clone()),
+                    &ConsensusMessage::Certificate((*cert).clone()),
                     &mut vec![],
                 )
                 .unwrap();
@@ -1244,7 +1246,7 @@ mod tests {
             bitmap: Vec::new(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
-        let bls_message = BLSMessage::Certificate(certificate_message.clone());
+        let message = ConsensusMessage::Certificate(certificate_message.clone());
         // Add the certificate to the pool
         let (new_finalized_slot, certs_to_send) = pool
             .add_message(
@@ -1252,7 +1254,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &bls_message,
+                &message,
                 &mut vec![],
             )
             .unwrap();
@@ -1274,7 +1276,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &bls_message,
+                &message,
                 &mut vec![],
             )
             .unwrap();
@@ -1309,7 +1311,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Vote(VoteMessage {
+                &ConsensusMessage::Vote(VoteMessage {
                     vote: Vote::new_skip_vote(5),
                     rank: 100,
                     signature: BLSSignature::default(),
@@ -1958,7 +1960,7 @@ mod tests {
         // Send a cert on slot 2, it should be rejected
         let certificate = Certificate::new(CertificateType::Notarize, 2, Some(Hash::new_unique()));
 
-        let cert = BLSMessage::Certificate(CertificateMessage {
+        let cert = ConsensusMessage::Certificate(CertificateMessage {
             certificate,
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
@@ -1999,7 +2001,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_3.clone()),
+                &ConsensusMessage::Certificate(cert_3.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2014,7 +2016,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_4.clone()),
+                &ConsensusMessage::Certificate(cert_4.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2038,7 +2040,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_5.clone()),
+                &ConsensusMessage::Certificate(cert_5.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2055,7 +2057,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_5_finalize.clone()),
+                &ConsensusMessage::Certificate(cert_5_finalize.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2076,7 +2078,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_5.clone()),
+                &ConsensusMessage::Certificate(cert_5.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2100,7 +2102,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_6.clone()),
+                &ConsensusMessage::Certificate(cert_6.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2124,7 +2126,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_6_finalize.clone()),
+                &ConsensusMessage::Certificate(cert_6_finalize.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2144,7 +2146,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_6_notarize_fallback.clone()),
+                &ConsensusMessage::Certificate(cert_6_notarize_fallback.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2169,7 +2171,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert_7.clone()),
+                &ConsensusMessage::Certificate(cert_7.clone()),
                 &mut vec![]
             )
             .is_ok());
@@ -2205,7 +2207,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    &BLSMessage::Certificate(cert),
+                    &ConsensusMessage::Certificate(cert),
                     &mut events,
                 )
                 .is_ok());
@@ -2233,7 +2235,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    &BLSMessage::Certificate(cert),
+                    &ConsensusMessage::Certificate(cert),
                     &mut events,
                 )
                 .is_ok());
@@ -2261,7 +2263,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    &BLSMessage::Certificate(cert),
+                    &ConsensusMessage::Certificate(cert),
                     &mut events,
                 )
                 .is_ok());
@@ -2277,7 +2279,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                &BLSMessage::Certificate(cert),
+                &ConsensusMessage::Certificate(cert),
                 &mut events,
             )
             .is_ok());

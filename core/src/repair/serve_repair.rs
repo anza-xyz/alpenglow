@@ -4,6 +4,7 @@ use {
     crossbeam_channel::unbounded,
     solana_ledger::block_location_lookup::BlockLocationLookup,
     solana_ledger::{blockstore::Blockstore, get_tmp_ledger_path_auto_delete},
+    solana_runtime::bank_forks::BankForks,
 };
 use {
     crate::{
@@ -45,7 +46,7 @@ use {
         packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
     },
     solana_pubkey::{Pubkey, PUBKEY_BYTES},
-    solana_runtime::{bank_forks::BankForks, root_bank_cache::RootBankCache},
+    solana_runtime::bank_forks::SharableBank,
     solana_signature::{Signature, SIGNATURE_BYTES},
     solana_signer::Signer,
     solana_streamer::{
@@ -408,7 +409,7 @@ impl RepairProtocol {
 
 pub struct ServeRepair {
     cluster_info: Arc<ClusterInfo>,
-    root_bank_cache: RootBankCache,
+    root_bank: SharableBank,
     repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
     repair_handler: Box<dyn RepairHandler + Send + Sync>,
 }
@@ -471,13 +472,13 @@ struct RepairRequestWithMeta {
 impl ServeRepair {
     pub fn new(
         cluster_info: Arc<ClusterInfo>,
-        bank_forks: Arc<RwLock<BankForks>>,
+        sharable_root_bank: SharableBank,
         repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
         repair_handler: Box<dyn RepairHandler + Send + Sync>,
     ) -> Self {
         Self {
             cluster_info,
-            root_bank_cache: RootBankCache::new(bank_forks),
+            root_bank: sharable_root_bank,
             repair_whitelist,
             repair_handler,
         }
@@ -492,7 +493,12 @@ impl ServeRepair {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
         let repair_handler = Box::new(StandardRepairHandler::new(blockstore));
-        Self::new(cluster_info, bank_forks, repair_whitelist, repair_handler)
+        Self::new(
+            cluster_info,
+            bank_forks.read().unwrap().sharable_root_bank(),
+            repair_whitelist,
+            repair_handler,
+        )
     }
 
     pub(crate) fn my_id(&self) -> Pubkey {
@@ -787,7 +793,7 @@ impl ServeRepair {
         let mut total_requests = requests.len();
 
         let socket_addr_space = *self.cluster_info.socket_addr_space();
-        let root_bank = self.root_bank_cache.root_bank();
+        let root_bank = self.root_bank.load();
         let epoch_staked_nodes = root_bank.epoch_staked_nodes(root_bank.epoch());
         let identity_keypair = self.cluster_info.keypair().clone();
         let my_id = identity_keypair.pubkey();
@@ -1541,7 +1547,9 @@ mod tests {
             blockstore_processor::fill_blockstore_slot_with_ticks,
             genesis_utils::{create_genesis_config, GenesisConfigInfo},
             get_tmp_ledger_path_auto_delete,
-            shred::{max_ticks_per_n_shreds, Shred, ShredFlags},
+            shred::{
+                max_ticks_per_n_shreds, ProcessShredsStats, ReedSolomonCache, Shred, Shredder,
+            },
         },
         solana_perf::packet::{deserialize_from_with_limit, Packet, PacketFlags, PacketRef},
         solana_pubkey::Pubkey,
@@ -1563,19 +1571,8 @@ mod tests {
 
     #[test]
     fn test_deserialize_shred_as_ping() {
-        let data_buf = vec![7u8, 44]; // REPAIR_RESPONSE_SERIALIZED_PING_BYTES - SIZE_OF_DATA_SHRED_HEADERS
         let keypair = Keypair::new();
-        let mut shred = Shred::new_from_data(
-            123, // slot
-            456, // index
-            111, // parent_offset
-            &data_buf,
-            ShredFlags::empty(),
-            222, // reference_tick
-            333, // version
-            444, // fec_set_index
-        );
-        shred.sign(&keypair);
+        let shred = Shredder::single_shred_for_tests(123, &keypair);
         let mut pkt = Packet::default();
         shred.copy_to_packet(&mut pkt);
         pkt.meta_mut().size = REPAIR_RESPONSE_SERIALIZED_PING_BYTES;
@@ -2019,12 +2016,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_window_request() {
-        run_window_request(2, 9);
-    }
-
     /// test window requests respond with the right shred, and do not overrun
-    pub fn run_window_request(slot: Slot, nonce: Nonce) {
+    fn test_run_window_request() {
+        let slot = 2;
+        let nonce = 9;
         let recycler = PacketBatchRecycler::default();
         solana_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
@@ -2032,13 +2027,26 @@ mod tests {
         let handler = StandardRepairHandler::new(blockstore.clone());
         let rv = handler.run_window_request(&recycler, &socketaddr_any!(), slot, 0, None, nonce);
         assert!(rv.is_none());
-        let shred = Shred::new_from_data(slot, 1, 1, &[], ShredFlags::empty(), 0, 2, 0);
+        let shredder = Shredder::new(slot, slot - 1, 0, 2).unwrap();
+        let keypair = Keypair::new();
+        let reed_solomon_cache = ReedSolomonCache::default();
+        let index = 1;
+        let (mut shreds, _) = shredder.entries_to_merkle_shreds_for_tests(
+            &keypair,
+            &[],
+            true,
+            Some(Hash::default()),
+            index as u32,
+            index as u32,
+            &reed_solomon_cache,
+            &mut ProcessShredsStats::default(),
+        );
+        shreds.truncate(1);
 
         blockstore
-            .insert_shreds(vec![shred], None, false)
+            .insert_shreds(shreds, None, false)
             .expect("Expect successful ledger write");
 
-        let index = 1;
         let mut rv = handler
             .run_window_request(&recycler, &socketaddr_any!(), slot, index, None, nonce)
             .expect("packets");
@@ -2501,7 +2509,20 @@ mod tests {
     #[test]
     fn test_verify_shred_response() {
         fn new_test_data_shred(slot: Slot, index: u32) -> Shred {
-            Shred::new_from_data(slot, index, 1, &[], ShredFlags::empty(), 0, 0, 0)
+            let shredder = Shredder::new(slot, slot.saturating_sub(1), 0, 0).unwrap();
+            let keypair = Keypair::new();
+            let reed_solomon_cache = ReedSolomonCache::default();
+            let (mut shreds, _) = shredder.entries_to_merkle_shreds_for_tests(
+                &keypair,
+                &[],
+                true,
+                Some(Hash::default()),
+                0,
+                0,
+                &reed_solomon_cache,
+                &mut ProcessShredsStats::default(),
+            );
+            shreds.remove(index as usize)
         }
         let repair = ShredRepairType::Orphan(9);
         // Ensure new options are added to this test

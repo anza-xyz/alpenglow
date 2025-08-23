@@ -106,7 +106,8 @@ impl FeatureSet {
                 .is_active(&move_precompile_verification_to_svm::id()),
             remove_accounts_executable_flag_checks: self
                 .is_active(&remove_accounts_executable_flag_checks::id()),
-            bpf_account_data_direct_mapping: self.is_active(&bpf_account_data_direct_mapping::id()),
+            stricter_abi_and_runtime_constraints: self
+                .is_active(&stricter_abi_and_runtime_constraints::id()),
             enable_bpf_loader_set_authority_checked_ix: self
                 .is_active(&enable_bpf_loader_set_authority_checked_ix::id()),
             enable_loader_v4: self.is_active(&enable_loader_v4::id()),
@@ -157,6 +158,7 @@ impl FeatureSet {
                 .is_active(&disable_zk_elgamal_proof_program::id()),
             reenable_zk_elgamal_proof_program: self
                 .is_active(&reenable_zk_elgamal_proof_program::id()),
+            raise_cpi_nesting_limit_to_8: self.is_active(&raise_cpi_nesting_limit_to_8::id()),
             limit_validators_for_alpenglow: self.is_active(&limit_validators_for_alpenglow::id()),
         }
     }
@@ -752,8 +754,8 @@ pub mod apply_cost_tracker_during_replay {
     solana_pubkey::declare_id!("2ry7ygxiYURULZCrypHhveanvP5tzZ4toRwVp89oCNSj");
 }
 
-pub mod bpf_account_data_direct_mapping {
-    solana_pubkey::declare_id!("1ncomp1ete111111111111111111111111111111111");
+pub mod stricter_abi_and_runtime_constraints {
+    solana_pubkey::declare_id!("C37iaPi6VE4CZDueU1vL8y6pGp5i8amAbEsF31xzz723");
 }
 
 pub mod add_set_tx_loaded_accounts_data_size_instruction {
@@ -1120,6 +1122,9 @@ pub mod raise_account_cu_limit {
     solana_pubkey::declare_id!("htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8");
 }
 
+pub mod raise_cpi_nesting_limit_to_8 {
+    solana_pubkey::declare_id!("6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj");
+
 pub mod limit_validators_for_alpenglow {
     solana_pubkey::declare_id!("3SJUjJgvYwdH5auT45RXwRnZ5VJVyQCvFU9rFvNpjgsC");
 }
@@ -1279,7 +1284,7 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (clean_up_delegation_errors::id(), "Return InsufficientDelegation instead of InsufficientFunds or InsufficientStake where applicable #31206"),
         (vote_state_add_vote_latency::id(), "replace Lockout with LandedVote (including vote latency) in vote state #31264"),
         (checked_arithmetic_in_fee_validation::id(), "checked arithmetic in fee validation #31273"),
-        (bpf_account_data_direct_mapping::id(), "use memory regions to map account data into the rbpf vm instead of copying the data"),
+        (stricter_abi_and_runtime_constraints::id(), "use memory regions to map account data into the rbpf vm instead of copying the data"),
         (last_restart_slot_sysvar::id(), "enable new sysvar last_restart_slot"),
         (reduce_stake_warmup_cooldown::id(), "reduce stake warmup cooldown from 25% to 9%"),
         (revise_turbine_epoch_stakes::id(), "revise turbine epoch stakes"),
@@ -1364,6 +1369,7 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (reenable_zk_elgamal_proof_program::id(), "Re-enables zk-elgamal-proof program"),
         (raise_block_limits_to_100m::id(), "SIMD-0286: Raise block limit to 100M"),
         (raise_account_cu_limit::id(), "SIMD-0306: Raise account CU limit to 40% max"),
+        (raise_cpi_nesting_limit_to_8::id(), "SIMD-0296: Raise CPI nesting limit from 4 to 8"),
         (limit_validators_for_alpenglow::id(), "SIMD-0306: Limit validators for Alpenglow"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
