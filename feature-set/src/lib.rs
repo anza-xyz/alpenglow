@@ -157,6 +157,7 @@ impl FeatureSet {
                 .is_active(&disable_zk_elgamal_proof_program::id()),
             reenable_zk_elgamal_proof_program: self
                 .is_active(&reenable_zk_elgamal_proof_program::id()),
+            limit_validators_for_alpenglow: self.is_active(&limit_validators_for_alpenglow::id()),
         }
     }
 }
@@ -1119,6 +1120,10 @@ pub mod raise_account_cu_limit {
     solana_pubkey::declare_id!("htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8");
 }
 
+pub mod limit_validators_for_alpenglow {
+    solana_pubkey::declare_id!("3SJUjJgvYwdH5auT45RXwRnZ5VJVyQCvFU9rFvNpjgsC");
+}
+
 pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::new(|| {
     [
         (secp256k1_program_enabled::id(), "secp256k1 program"),
@@ -1359,6 +1364,7 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (reenable_zk_elgamal_proof_program::id(), "Re-enables zk-elgamal-proof program"),
         (raise_block_limits_to_100m::id(), "SIMD-0286: Raise block limit to 100M"),
         (raise_account_cu_limit::id(), "SIMD-0306: Raise account CU limit to 40% max"),
+        (limit_validators_for_alpenglow::id(), "SIMD-0306: Limit validators for Alpenglow"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()

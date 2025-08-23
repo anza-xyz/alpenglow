@@ -10,6 +10,7 @@ use {
         bank_forks::BankForks,
         genesis_utils::{
             self, activate_all_features, activate_feature, bootstrap_validator_stake_lamports,
+            create_genesis_config_with_alpenglow_vote_accounts_no_program,
             create_genesis_config_with_leader, create_genesis_config_with_vote_accounts,
             genesis_sysvar_and_builtin_program_lamports, GenesisConfigInfo, ValidatorVoteKeypairs,
         },
@@ -12229,4 +12230,45 @@ fn test_should_use_vote_keyed_leader_schedule() {
             assert_eq!(test_bank.should_use_vote_keyed_leader_schedule(epoch), None);
         }
     }
+}
+
+#[test]
+fn test_get_stakes_for_epoch_stakes() {
+    let num_of_nodes: u64 = 3000;
+    let stakes = (1..num_of_nodes.checked_add(1).expect("Shouldn't be big")).collect::<Vec<_>>();
+    let voting_keypairs = stakes
+        .iter()
+        .map(|_| ValidatorVoteKeypairs::new_rand())
+        .collect::<Vec<_>>();
+    let GenesisConfigInfo { genesis_config, .. } =
+        create_genesis_config_with_alpenglow_vote_accounts_no_program(
+            1_000_000_000,
+            &voting_keypairs,
+            stakes.clone(),
+        );
+    let create_test_bank = |bank_epoch: Epoch, feature_activation_slot: Option<Slot>| -> Bank {
+        let mut bank = Bank::new_for_tests(&genesis_config);
+        bank.epoch = bank_epoch;
+        let mut feature_set = FeatureSet::default();
+        if let Some(feature_activation_slot) = feature_activation_slot {
+            let feature_activation_epoch = bank.epoch_schedule().get_epoch(feature_activation_slot);
+            assert!(feature_activation_epoch <= bank_epoch);
+            feature_set.activate(
+                &agave_feature_set::limit_validators_for_alpenglow::id(),
+                feature_activation_slot,
+            );
+        }
+        bank.feature_set = Arc::new(feature_set);
+        bank
+    };
+    // Feature deactivated at genesis, return all accounts
+    let test_bank = create_test_bank(0, None);
+    let stakes = test_bank.get_stakes_for_epoch_stakes();
+    assert_eq!(stakes.staked_nodes().len(), 3000);
+
+    // Feature activated at epoch 2, return only 2000 accounts
+    let slot_in_prev_epoch = test_bank.epoch_schedule().get_first_slot_in_epoch(1);
+    let test_bank = create_test_bank(2, Some(slot_in_prev_epoch));
+    let stakes = test_bank.get_stakes_for_epoch_stakes();
+    assert_eq!(stakes.staked_nodes().len(), 2000);
 }
