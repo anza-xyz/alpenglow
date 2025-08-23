@@ -1124,6 +1124,7 @@ pub mod raise_account_cu_limit {
 
 pub mod raise_cpi_nesting_limit_to_8 {
     solana_pubkey::declare_id!("6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj");
+}
 
 pub mod limit_validators_for_alpenglow {
     solana_pubkey::declare_id!("3SJUjJgvYwdH5auT45RXwRnZ5VJVyQCvFU9rFvNpjgsC");
