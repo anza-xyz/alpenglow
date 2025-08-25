@@ -75,6 +75,39 @@ pub struct VoteAccounts {
     >,
 }
 
+impl VoteAccounts {
+    pub fn clone_and_filter_for_alpenglow(&self, maximum_accounts: usize) -> VoteAccounts {
+        let mut pubkeys_and_stakes_to_sort: Vec<(Pubkey, u64)> = self
+            .vote_accounts
+            .iter()
+            .filter_map(|(pubkey, (stake, vote_account))| {
+                if vote_account.bls_pubkey().is_some() && *stake != 0u64 {
+                    Some((*pubkey, *stake))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort by stake descending first, then pubkey descending.
+        pubkeys_and_stakes_to_sort.sort_unstable_by(|(pubkey_a, stake_a), (pubkey_b, stake_b)| {
+            stake_b.cmp(stake_a).then_with(|| pubkey_b.cmp(pubkey_a))
+        });
+        pubkeys_and_stakes_to_sort.truncate(maximum_accounts);
+        let pubkeys_to_keep: HashMap<Pubkey, u64> =
+            pubkeys_and_stakes_to_sort.into_iter().collect();
+        self.vote_accounts
+            .iter()
+            .filter_map(|(pubkey, (stake, vote_account))| {
+                if pubkeys_to_keep.contains_key(pubkey) {
+                    Some((*pubkey, (*stake, vote_account.clone())))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
 impl Clone for VoteAccounts {
     fn clone(&self) -> Self {
         Self {
@@ -673,6 +706,31 @@ mod tests {
         })
     }
 
+    fn new_vote_accounts<R: Rng>(
+        rng: &mut R,
+        num_non_alpenglow_nodes: usize,
+        num_alpenglow_nodes: usize,
+    ) -> VoteAccounts {
+        let nodes: Vec<_> = repeat_with(Pubkey::new_unique)
+            .take(num_non_alpenglow_nodes + num_alpenglow_nodes)
+            .collect();
+        let vote_account_hash_map = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| {
+                let account = if i < num_alpenglow_nodes {
+                    new_rand_alpenglow_vote_account(rng, Some(*node)).0
+                } else {
+                    new_rand_vote_account(rng, Some(*node))
+                };
+                let stake = rng.gen_range(1..1000);
+                let vote_account = VoteAccount::try_from(account).unwrap();
+                (Pubkey::new_unique(), (stake, vote_account))
+            })
+            .collect();
+        VoteAccounts::from(Arc::new(vote_account_hash_map))
+    }
+
     fn staked_nodes<'a, I>(vote_accounts: I) -> HashMap<Pubkey, u64>
     where
         I: IntoIterator<Item = &'a (Pubkey, (u64, VoteAccount))>,
@@ -1067,6 +1125,50 @@ mod tests {
             } else {
                 assert_eq!(value, &other);
             }
+        }
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow() {
+        let mut rng = rand::thread_rng();
+        let vote_accounts = new_vote_accounts(&mut rng, 0, 3000);
+        // All vote accounts should be returned if the limit is high enough.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(3500);
+        assert_eq!(filtered.len(), vote_accounts.len());
+
+        // If the limit is smaller than number of accounts, truncate it.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(2000);
+        assert_eq!(filtered.len(), 2000);
+        // Check that the filtered accounts are the same as the original accounts.
+        for (pubkey, (_, vote_account)) in filtered.vote_accounts.iter() {
+            assert_eq!(vote_accounts.get(pubkey), Some(vote_account));
+        }
+        // Check that the stake in any filtered account is higher than truncated accounts.
+        let min_stake = filtered
+            .vote_accounts
+            .iter()
+            .map(|(_, (stake, _))| *stake)
+            .min()
+            .unwrap();
+        for (pubkey, (stake, _vote_account)) in vote_accounts.vote_accounts.iter() {
+            if *stake < min_stake {
+                assert!(filtered.get(pubkey).is_none());
+            }
+        }
+
+        // Check that non-alpenglow accounts are kicked out, 2000 accounts with bls pubkey, 1000 accounts without.
+        let vote_accounts = new_vote_accounts(&mut rng, 1000, 2000);
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(2500);
+        assert_eq!(filtered.len(), 2000);
+        // Check that all filtered accounts have bls pubkey
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account.bls_pubkey().is_some());
+        }
+        // Now get only 1500 accounts, even some alpenglow accounts are kicked out
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(1500);
+        assert_eq!(filtered.len(), 1500);
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account.bls_pubkey().is_some());
         }
     }
 }
