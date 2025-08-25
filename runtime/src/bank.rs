@@ -212,7 +212,6 @@ pub(crate) mod tests;
 pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
-const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
 
 pub type BankStatusCache = StatusCache<Result<()>>;
 #[cfg_attr(
@@ -5652,11 +5651,8 @@ impl Bank {
         let stakes = if self
             .feature_set
             .is_active(&feature_set::limit_validators_for_alpenglow::id())
-            && self.stakes_cache.stakes().staked_nodes().len() > MAX_ALPENGLOW_VOTE_ACCOUNTS
         {
-            self.stakes_cache
-                .stakes()
-                .clone_and_filter_for_alpenglow(MAX_ALPENGLOW_VOTE_ACCOUNTS)
+            self.stakes_cache.stakes().clone_and_filter_for_alpenglow()
         } else {
             self.stakes_cache.stakes().clone()
         };
