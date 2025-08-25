@@ -42,6 +42,7 @@
 //!
 use {
     crate::{
+        alpenglow_metrics::AlpenglowMetrics,
         certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
@@ -105,6 +106,7 @@ pub struct VotorConfig {
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    pub ag_metrics: Arc<PlRwLock<AlpenglowMetrics>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -169,6 +171,7 @@ impl Votor {
             event_receiver,
             own_vote_sender,
             consensus_message_receiver: bls_receiver,
+            ag_metrics,
         } = config;
 
         let start = Arc::new((Mutex::new(false), Condvar::new()));
@@ -200,6 +203,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             root_bank: root_bank.clone(),
+            ag_metrics,
         };
 
         let root_context = RootContext {

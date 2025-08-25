@@ -28,6 +28,7 @@ use {
     },
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
+    parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
@@ -58,7 +59,7 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
         xdp::XdpSender,
     },
-    solana_votor::event::VotorEventSender,
+    solana_votor::{alpenglow_metrics::AlpenglowMetrics, event::VotorEventSender},
     solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
@@ -167,6 +168,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
+        ag_metrics: Arc<PlRwLock<AlpenglowMetrics>>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -342,6 +344,7 @@ impl Tpu {
                 root_bank,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
+                ag_metrics,
             );
             SigVerifyStage::new(
                 bls_packet_receiver,
