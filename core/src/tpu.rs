@@ -108,7 +108,7 @@ pub struct Tpu {
     sig_verifier: SigVerifier,
     vote_sigverify_stage: SigVerifyStage,
     alpenglow_sigverify_stage: SigVerifyStage,
-    banking_stage: BankingStage,
+    banking_stage: Arc<RwLock<Option<BankingStage>>>,
     forwarding_stage: JoinHandle<()>,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -441,7 +441,7 @@ impl Tpu {
             sig_verifier,
             vote_sigverify_stage,
             alpenglow_sigverify_stage,
-            banking_stage,
+            banking_stage: Arc::new(RwLock::new(Some(banking_stage))),
             forwarding_stage,
             cluster_info_vote_listener,
             broadcast_stage,
@@ -455,6 +455,10 @@ impl Tpu {
         }
     }
 
+    pub fn banking_stage(&self) -> Arc<RwLock<Option<BankingStage>>> {
+        self.banking_stage.clone()
+    }
+
     pub fn join(self) -> thread::Result<()> {
         let results = vec![
             self.fetch_stage.join(),
@@ -462,7 +466,12 @@ impl Tpu {
             self.vote_sigverify_stage.join(),
             self.alpenglow_sigverify_stage.join(),
             self.cluster_info_vote_listener.join(),
-            self.banking_stage.join(),
+            self.banking_stage
+                .write()
+                .unwrap()
+                .take()
+                .expect("banking_stage must be Some")
+                .join(),
             self.forwarding_stage.join(),
             self.staked_nodes_updater_service.join(),
             self.tpu_quic_t.map_or(Ok(()), |t| t.join()),

@@ -192,8 +192,21 @@ impl BlockVerificationMethod {
     }
 }
 
-#[derive(Clone, EnumString, EnumVariantNames, Default, IntoStaticStr, Display)]
+#[derive(
+    Clone,
+    Debug,
+    EnumString,
+    EnumVariantNames,
+    Default,
+    IntoStaticStr,
+    Display,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+)]
 #[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BlockProductionMethod {
     CentralScheduler,
     #[default]
@@ -210,8 +223,21 @@ impl BlockProductionMethod {
     }
 }
 
-#[derive(Clone, EnumString, EnumVariantNames, Default, IntoStaticStr, Display)]
+#[derive(
+    Clone,
+    Debug,
+    EnumString,
+    EnumVariantNames,
+    Default,
+    IntoStaticStr,
+    Display,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+)]
 #[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum TransactionStructure {
     Sdk,
     #[default]
@@ -1772,6 +1798,7 @@ impl Validator {
             cluster_slots,
             votor_event_sender,
             node: Some(node_multihoming),
+            banking_stage: tpu.banking_stage(),
         });
 
         Ok(Self {
