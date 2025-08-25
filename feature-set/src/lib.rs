@@ -159,7 +159,6 @@ impl FeatureSet {
             reenable_zk_elgamal_proof_program: self
                 .is_active(&reenable_zk_elgamal_proof_program::id()),
             raise_cpi_nesting_limit_to_8: self.is_active(&raise_cpi_nesting_limit_to_8::id()),
-            limit_validators_for_alpenglow: self.is_active(&limit_validators_for_alpenglow::id()),
         }
     }
 }
