@@ -2381,7 +2381,7 @@ pub struct Sockets {
     /// Client-side socket for ForwardingStage vote transactions
     pub tpu_vote_forwarding_client: UdpSocket,
     /// Client-side socket for ForwardingStage non-vote transactions
-    pub tpu_transaction_forwarding_client: UdpSocket,
+    pub tpu_transaction_forwarding_clients: Box<[UdpSocket]>,
     /// Connection cache endpoint for QUIC-based Vote
     pub quic_vote_client: UdpSocket,
     /// Client-side socket for RPC/SendTransactionService.
