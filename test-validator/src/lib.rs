@@ -1445,6 +1445,7 @@ mod test {
             agave_feature_set::disable_fees_sysvar::id(),
             // TODO: remove this
             agave_feature_set::alpenglow::id(),
+            agave_feature_set::limit_validators_for_alpenglow::id(),
         ]
         .into_iter()
         .for_each(|feature| {
