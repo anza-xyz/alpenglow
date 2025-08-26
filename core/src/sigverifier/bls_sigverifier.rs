@@ -21,7 +21,7 @@ use {
     solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::{
@@ -88,7 +88,7 @@ enum CertVerifyError {
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<ConsensusMessage>,
-    root_bank: SharableBank,
+    sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
@@ -108,7 +108,7 @@ impl SigVerifier for BLSSigVerifier {
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
 
-        let root_bank = self.root_bank.load();
+        let root_bank = self.sharable_banks.root();
         self.verified_certs
             .write()
             .unwrap()
@@ -239,7 +239,7 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let root_bank = self.root_bank.load();
+            let root_bank = self.sharable_banks.root();
             let Some(rank_to_pubkey_map) = get_key_to_rank_map(&root_bank, slot) else {
                 error!("This should not happen because verification succeeded");
                 continue;
@@ -284,12 +284,12 @@ impl SigVerifier for BLSSigVerifier {
 
 impl BLSSigVerifier {
     pub fn new(
-        root_bank: SharableBank,
+        sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
     ) -> Self {
         Self {
-            root_bank,
+            sharable_banks,
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
@@ -636,10 +636,10 @@ mod tests {
         );
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         (
             validator_keypairs,
-            BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender),
         )
     }
 
@@ -1410,8 +1410,9 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank5 = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), 5);
         let bank_forks = BankForks::new_rw_arc(bank5);
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
-        let sig_verifier = BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender);
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let sig_verifier =
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender);
 
         // Create a vote for slot 2, which is older than the root bank (slot 5)
         let vote = Vote::new_skip_vote(2);

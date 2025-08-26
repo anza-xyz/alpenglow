@@ -53,8 +53,8 @@ fn setup_environment() -> BenchEnvironment {
     // Ensure the bank slot is high enough so votes are not considered ancient.
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
-    let sharable_root_bank = bank_forks.read().unwrap().sharable_root_bank();
-    let verifier = BLSSigVerifier::new(sharable_root_bank, verified_votes_s, consensus_msg_s);
+    let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
 
     BenchEnvironment {
         verifier,

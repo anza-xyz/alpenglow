@@ -15,7 +15,7 @@ use {
     solana_clock::Slot,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, bank_forks::SharableBank},
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_signer::Signer,
     solana_transaction::Transaction,
     solana_votor_messages::{
@@ -123,7 +123,7 @@ pub struct VotingContext {
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
-    pub root_bank: SharableBank,
+    pub sharable_banks: SharableBanks,
     pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
 }
 
@@ -264,7 +264,7 @@ fn insert_vote_and_create_bls_message(
         context.vote_history.add_vote(vote);
     }
 
-    let bank = context.root_bank.load();
+    let bank = context.sharable_banks.root();
     let message = match generate_vote_tx(&vote, &bank, context) {
         GenerateVoteTxResult::ConsensusMessage(m) => m,
         e => {
@@ -373,7 +373,7 @@ mod tests {
         let bank_forks = BankForks::new_rw_arc(bank0);
 
         let my_keys = &validator_keypairs[my_index];
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         VotingContext {
             vote_history: VoteHistory::new(my_keys.node_keypair.pubkey(), 0),
             vote_account_pubkey: my_keys.vote_keypair.pubkey(),
@@ -387,7 +387,7 @@ mod tests {
             bls_sender: unbounded().0,
             commitment_sender: unbounded().0,
             wait_to_vote_slot: None,
-            root_bank,
+            sharable_banks,
             consensus_metrics: Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
         }
     }
@@ -602,7 +602,7 @@ mod tests {
 
         // Set the stake of my_index to 0 in epoch 2
         // For epoch 2, make validator my_index to be zero stake, others have stake in ascending order, 1 < 2 < ... < 9
-        let bank = voting_context.root_bank.load();
+        let bank = voting_context.sharable_banks.root();
         assert_eq!(bank.epoch(), 0);
         assert!(bank.epoch_stakes(2).is_none());
         let vote_accounts_hash_map = validator_keypairs
@@ -627,12 +627,12 @@ mod tests {
         assert!(new_bank.epoch_stakes(2).is_some());
         new_bank.freeze();
         let bank_forks = BankForks::new_rw_arc(new_bank);
-        voting_context.root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        voting_context.sharable_banks = bank_forks.read().unwrap().sharable_banks();
 
         // If we try to vote for a slot in epoch 1, it should succeed
         let first_slot_in_epoch_1 = voting_context
-            .root_bank
-            .load()
+            .sharable_banks
+            .root()
             .epoch_schedule()
             .get_first_slot_in_epoch(1);
         let vote = Vote::new_notarization_vote(first_slot_in_epoch_1, Hash::new_unique());
@@ -642,8 +642,8 @@ mod tests {
 
         // If we try to vote for a slot in epoch 2, we should get NoRankFound error
         let first_slot_in_epoch_2 = voting_context
-            .root_bank
-            .load()
+            .sharable_banks
+            .root()
             .epoch_schedule()
             .get_first_slot_in_epoch(2);
         let vote = Vote::new_notarization_vote(first_slot_in_epoch_2, Hash::new_unique());

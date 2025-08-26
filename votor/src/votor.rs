@@ -177,7 +177,7 @@ impl Votor {
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
         // Get the sharable root bank
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
 
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
@@ -189,7 +189,7 @@ impl Votor {
         };
 
         let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(
-            root_bank.load().epoch(),
+            sharable_banks.root().epoch(),
         )));
         let voting_context = VotingContext {
             vote_history,
@@ -202,7 +202,7 @@ impl Votor {
             bls_sender: bls_sender.clone(),
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
-            root_bank: root_bank.clone(),
+            sharable_banks: sharable_banks.clone(),
             consensus_metrics: consensus_metrics.clone(),
         };
 
@@ -235,7 +235,7 @@ impl Votor {
             cluster_info: cluster_info.clone(),
             my_vote_pubkey: vote_account,
             blockstore,
-            root_bank: root_bank.clone(),
+            sharable_banks,
             leader_schedule_cache,
             consensus_message_receiver: bls_receiver,
             bls_sender,

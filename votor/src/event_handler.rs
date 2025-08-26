@@ -156,7 +156,7 @@ impl EventHandler {
                 .receive_event_time_us
                 .saturating_add(receive_event_time.as_us() as u32);
 
-            let root_bank = vctx.root_bank.load();
+            let root_bank = vctx.sharable_banks.root();
             if event.should_ignore(root_bank.slot()) {
                 local_context.stats.ignored = local_context.stats.ignored.saturating_add(1);
                 continue;
@@ -686,7 +686,7 @@ impl EventHandler {
         // In case we set root in the middle of a leader window,
         // it's not necessary to vote skip prior to it and we won't
         // be able to check vote history if we've already voted on it
-        let root_bank = voting_context.root_bank.load();
+        let root_bank = voting_context.sharable_banks.root();
         // No matter what happens, we should not vote skip for slot 0
         let start = first_of_consecutive_leader_slots(slot)
             .max(root_bank.slot())
@@ -907,7 +907,7 @@ mod tests {
         let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);
         let voting_context = VotingContext {
             identity_keypair: Arc::new(my_node_keypair),
-            root_bank: bank_forks.read().unwrap().sharable_root_bank(),
+            sharable_banks: bank_forks.read().unwrap().sharable_banks(),
             vote_history,
             bls_sender,
             commitment_sender,
@@ -1213,7 +1213,12 @@ mod tests {
         send_parent_ready_event(&test_context, slot, (parent_slot, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (slot, (parent_slot, Hash::default())));
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank1 = create_block_and_send_block_event(&test_context, slot, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
 
@@ -1269,7 +1274,12 @@ mod tests {
         // But it will not trigger Finalize if any of the conditions are not met
         let test_context = setup();
 
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
 
@@ -1368,7 +1378,12 @@ mod tests {
 
         // We can theoretically not vote skip here and test will pass, but in real world
         // safe_to_notar event only fires after we voted skip for the whole window
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1_old = bank_1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
@@ -1415,7 +1430,12 @@ mod tests {
         let test_context = setup();
 
         // The safe_to_skip event only fires after we voted notarize for the slot
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank_1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
@@ -1495,7 +1515,12 @@ mod tests {
         solana_logger::setup();
         let test_context = setup();
 
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
 
@@ -1527,7 +1552,12 @@ mod tests {
         let test_context = setup();
 
         // We just woke up and received finalize for slot 5
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank4 = create_block_and_send_block_event(&test_context, 4, root_bank);
         let block_id_4 = bank4.block_id().unwrap();
 
@@ -1561,7 +1591,12 @@ mod tests {
         let test_context = setup();
 
         // Send notarize vote for slot 1 then skip rest of the window
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
@@ -1617,7 +1652,12 @@ mod tests {
         ));
 
         // Should not send any votes because we set to a different identity
-        let root_bank = test_context.bank_forks.read().unwrap().root_bank();
+        let root_bank = test_context
+            .bank_forks
+            .read()
+            .unwrap()
+            .sharable_banks()
+            .root();
         let _ = create_block_and_send_block_event(&test_context, 1, root_bank.clone());
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);

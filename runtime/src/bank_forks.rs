@@ -44,17 +44,33 @@ impl ReadOnlyAtomicSlot {
     }
 }
 
+/// Convenience type since often root/working banks are fetched together.
 #[derive(Clone)]
-pub struct SharableBank(Arc<ArcSwap<Bank>>);
+pub struct SharableBanks {
+    root_bank: Arc<ArcSwap<Bank>>,
+    working_bank: Arc<ArcSwap<Bank>>,
+}
 
-impl SharableBank {
-    pub fn load(&self) -> Arc<Bank> {
-        self.0.load_full()
+impl SharableBanks {
+    pub fn root(&self) -> Arc<Bank> {
+        self.root_bank.load_full()
     }
 
-    fn store(&self, bank: Arc<Bank>) {
-        self.0.store(bank);
+    pub fn working(&self) -> Arc<Bank> {
+        self.working_bank.load_full()
     }
+
+    pub fn load(&self) -> BankPair {
+        BankPair {
+            root_bank: self.root(),
+            working_bank: self.working(),
+        }
+    }
+}
+
+pub struct BankPair {
+    pub root_bank: Arc<Bank>,
+    pub working_bank: Arc<Bank>,
 }
 
 #[derive(Error, Debug)]
@@ -83,7 +99,8 @@ pub struct BankForks {
     banks: HashMap<Slot, BankWithScheduler>,
     descendants: HashMap<Slot, HashSet<Slot>>,
     root: Arc<AtomicSlot>,
-    root_bank: SharableBank,
+    working_slot: Slot,
+    sharable_banks: SharableBanks,
     in_vote_only_mode: Arc<AtomicBool>,
     highest_slot_at_startup: Slot,
     scheduler_pool: Option<InstalledSchedulerPoolArc>,
@@ -130,7 +147,13 @@ impl BankForks {
 
         let bank_forks = Arc::new(RwLock::new(Self {
             root: Arc::new(AtomicSlot::new(root_slot)),
-            root_bank: SharableBank(Arc::new(ArcSwap::from(Arc::clone(&root_bank)))),
+            working_slot: root_slot,
+            sharable_banks: SharableBanks {
+                root_bank: Arc::new(ArcSwap::from(root_bank.clone())),
+                // working bank is initially the same as root - all banks are either the root
+                // or its ancestors.
+                working_bank: Arc::new(ArcSwap::from(root_bank.clone())),
+            },
             banks,
             descendants,
             in_vote_only_mode: Arc::new(AtomicBool::new(false)),
@@ -219,12 +242,12 @@ impl BankForks {
         self.get(slot).map(|bank| bank.is_frozen()).unwrap_or(false)
     }
 
-    pub fn sharable_root_bank(&self) -> SharableBank {
-        self.root_bank.clone()
+    pub fn sharable_banks(&self) -> SharableBanks {
+        self.sharable_banks.clone()
     }
 
     pub fn root_bank(&self) -> Arc<Bank> {
-        self.root_bank.load()
+        self.sharable_banks.root()
     }
 
     pub fn install_scheduler_pool(&mut self, pool: InstalledSchedulerPoolArc) {
@@ -261,6 +284,11 @@ impl BankForks {
         for parent in bank.proper_ancestors() {
             self.descendants.entry(parent).or_default().insert(slot);
         }
+
+        // Update sharable working bank and cached slot.
+        self.working_slot = self.find_highest_slot();
+        self.sharable_banks.working_bank.store(self.working_bank());
+
         bank
     }
 
@@ -304,6 +332,12 @@ impl BankForks {
         if entry.get().is_empty() {
             entry.remove_entry();
         }
+
+        // Update sharable working bank and cached slot.
+        // The previous working bank (highest slot) may have been removed.
+        self.working_slot = self.find_highest_slot();
+        self.sharable_banks.working_bank.store(self.working_bank());
+
         Some(bank)
     }
 
@@ -322,11 +356,15 @@ impl BankForks {
     }
 
     pub fn highest_slot(&self) -> Slot {
+        self.working_slot
+    }
+
+    fn find_highest_slot(&self) -> Slot {
         self.banks.values().map(|bank| bank.slot()).max().unwrap()
     }
 
     pub fn working_bank(&self) -> Arc<Bank> {
-        self[self.highest_slot()].clone()
+        self.banks[&self.highest_slot()].clone_without_scheduler()
     }
 
     pub fn working_bank_with_scheduler(&self) -> BankWithScheduler {
@@ -374,7 +412,7 @@ impl BankForks {
         snapshot_controller: Option<&SnapshotController>,
         highest_super_majority_root: Option<Slot>,
     ) -> Result<(Vec<BankWithScheduler>, SetRootMetrics), SetRootError> {
-        let old_epoch = self.root_bank.load().epoch();
+        let old_epoch = self.sharable_banks.root().epoch();
 
         let root_bank = &self
             .get(root)
@@ -384,7 +422,7 @@ impl BankForks {
         // BankForks first *and* from a different thread, this store *must* be at least Release to
         // ensure atomic ordering correctness.
         self.root.store(root, Ordering::Release);
-        self.root_bank.store(Arc::clone(root_bank));
+        self.sharable_banks.root_bank.store(Arc::clone(root_bank));
 
         let new_epoch = root_bank.epoch();
         if old_epoch != new_epoch {

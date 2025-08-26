@@ -25,7 +25,7 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, bank_forks::SharableBank},
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
     stats::ConsensusPoolServiceStats,
     std::{
@@ -46,7 +46,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) my_vote_pubkey: Pubkey,
     pub(crate) blockstore: Arc<Blockstore>,
-    pub(crate) root_bank: SharableBank,
+    pub(crate) sharable_banks: SharableBanks,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
     // TODO: for now we ingest our own votes into the certificate pool
@@ -80,7 +80,7 @@ impl ConsensusPoolService {
 
     fn maybe_update_root_and_send_new_certificates(
         consensus_pool: &mut ConsensusPool,
-        root_bank: &SharableBank,
+        sharable_banks: &SharableBanks,
         bls_sender: &Sender<BLSOp>,
         new_finalized_slot: Option<Slot>,
         new_certificates_to_send: Vec<Arc<CertificateMessage>>,
@@ -93,7 +93,7 @@ impl ConsensusPoolService {
             *standstill_timer = Instant::now();
             ConsensusPoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
         }
-        let bank = root_bank.load();
+        let bank = sharable_banks.root();
         consensus_pool.prune_old_state(bank.slot());
         ConsensusPoolServiceStats::incr_u64(&mut stats.prune_old_state_called);
         // Send new certificates to peers
@@ -146,7 +146,7 @@ impl ConsensusPoolService {
                 ConsensusPoolServiceStats::incr_u32(&mut stats.received_votes);
             }
         }
-        let root_bank = ctx.root_bank.load();
+        let root_bank = ctx.sharable_banks.root();
         let (new_finalized_slot, new_certificates_to_send) =
             Self::add_message_and_maybe_update_commitment(
                 &root_bank,
@@ -159,7 +159,7 @@ impl ConsensusPoolService {
             )?;
         Self::maybe_update_root_and_send_new_certificates(
             consensus_pool,
-            &ctx.root_bank,
+            &ctx.sharable_banks,
             &ctx.bls_sender,
             new_finalized_slot,
             new_certificates_to_send,
@@ -185,7 +185,7 @@ impl ConsensusPoolService {
     fn consensus_pool_ingest_loop(mut ctx: ConsensusPoolContext) -> Result<(), ()> {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
-        let root_bank = ctx.root_bank.load();
+        let root_bank = ctx.sharable_banks.root();
         let mut consensus_pool = ConsensusPool::new_from_root_bank(my_pubkey, &root_bank);
 
         // Wait until migration has completed
@@ -198,7 +198,6 @@ impl ConsensusPoolService {
         let mut standstill_timer = Instant::now();
 
         // Kick off parent ready
-        let root_bank = ctx.root_bank.load();
         let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
@@ -348,7 +347,7 @@ impl ConsensusPoolService {
         }
         *highest_parent_ready = new_highest_parent_ready;
 
-        let root_bank = ctx.root_bank.load();
+        let root_bank = ctx.sharable_banks.root();
         let Some(leader_pubkey) = ctx
             .leader_schedule_cache
             .slot_leader_at(*highest_parent_ready, Some(&root_bank))
@@ -425,7 +424,7 @@ mod tests {
         solana_hash::Hash,
         solana_ledger::get_tmp_ledger_path_auto_delete,
         solana_runtime::{
-            bank_forks::BankForks,
+            bank_forks::{BankForks, SharableBanks},
             genesis_utils::{
                 create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
             },
@@ -451,7 +450,7 @@ mod tests {
         validator_keypairs: Vec<ValidatorVoteKeypairs>,
         exit: Arc<AtomicBool>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
-        root_bank: SharableBank,
+        sharable_banks: SharableBanks,
     }
 
     fn setup() -> ConsensusPoolServiceTestComponents {
@@ -485,16 +484,17 @@ mod tests {
 
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let exit = Arc::new(AtomicBool::new(false));
-        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&root_bank.load()));
+        let leader_schedule_cache =
+            Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
         let ctx = ConsensusPoolContext {
             exit: exit.clone(),
             start: Arc::new((Mutex::new(true), Condvar::new())),
             cluster_info: Arc::new(cluster_info),
             my_vote_pubkey: Pubkey::new_unique(),
             blockstore: Arc::new(blockstore),
-            root_bank: root_bank.clone(),
+            sharable_banks: sharable_banks.clone(),
             leader_schedule_cache: leader_schedule_cache.clone(),
             consensus_message_receiver,
             bls_sender,
@@ -510,7 +510,7 @@ mod tests {
             validator_keypairs,
             exit,
             leader_schedule_cache,
-            root_bank,
+            sharable_banks,
         }
     }
 
@@ -637,7 +637,13 @@ mod tests {
         let my_pubkey = setup_result.validator_keypairs[0].node_keypair.pubkey();
         let next_leader_slot = setup_result
             .leader_schedule_cache
-            .next_leader_slot(&my_pubkey, 0, &setup_result.root_bank.load(), None, 1000000)
+            .next_leader_slot(
+                &my_pubkey,
+                0,
+                &setup_result.sharable_banks.root(),
+                None,
+                1000000,
+            )
             .expect("Should find a leader slot");
         // Send skip certificates for all slots up to the next leader slot
         let messages_to_send = (1..next_leader_slot.0)

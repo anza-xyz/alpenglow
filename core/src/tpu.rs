@@ -337,9 +337,9 @@ impl Tpu {
         };
 
         let alpenglow_sigverify_stage = {
-            let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+            let sharable_banks = bank_forks.read().unwrap().sharable_banks();
             let verifier = BLSSigVerifier::new(
-                root_bank,
+                sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
             );
@@ -389,7 +389,7 @@ impl Tpu {
             forward_stage_receiver,
             client,
             vote_forwarding_client_socket,
-            bank_forks.read().unwrap().sharable_root_bank(),
+            bank_forks.read().unwrap().sharable_banks(),
             ForwardAddressGetter::new(cluster_info.clone(), poh_recorder.clone()),
             DataBudget::default(),
         );
