@@ -816,14 +816,6 @@ mod tests {
     fn setup_test_slot_boundary_banks() -> TestSlotBoundaryComponents {
         let genesis = create_genesis_config(10);
         let first_bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
-<<<<<<< HEAD
-        let first_poh_recorder_bank = BankStart {
-            contains_valid_certificate: Arc::new(AtomicBool::new(true)),
-            working_bank: first_bank.clone(),
-            bank_creation_time: Arc::new(Instant::now()),
-        };
-=======
->>>>>>> d792c9d41a (Remove BankStart (#7351))
 
         // Create a child descended from the first bank
         let next_bank = Arc::new(Bank::new_from_parent(
@@ -831,14 +823,6 @@ mod tests {
             &Pubkey::new_unique(),
             first_bank.slot() + 1,
         ));
-<<<<<<< HEAD
-        let next_poh_recorder_bank = BankStart {
-            contains_valid_certificate: Arc::new(AtomicBool::new(true)),
-            working_bank: next_bank.clone(),
-            bank_creation_time: Arc::new(Instant::now()),
-        };
-=======
->>>>>>> d792c9d41a (Remove BankStart (#7351))
 
         let leader_slot_metrics_tracker = LeaderSlotMetricsTracker::default();
 

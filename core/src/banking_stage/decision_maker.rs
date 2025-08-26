@@ -105,7 +105,7 @@ impl DecisionMaker {
     }
 
     fn bank(poh_recorder: &PohRecorder) -> Option<Arc<Bank>> {
-        poh_recorder.bank_with_certificate_check()
+        poh_recorder.bank()
     }
 
     fn would_be_leader_shortly(poh_recorder: &PohRecorder) -> bool {
@@ -350,15 +350,6 @@ mod tests {
     #[test]
     fn test_should_process_or_forward_packets() {
         let bank = Arc::new(Bank::default_for_tests());
-<<<<<<< HEAD
-        let bank_start = Some(BankStart {
-            contains_valid_certificate: Arc::new(AtomicBool::new(true)),
-            working_bank: bank,
-            bank_creation_time: Arc::new(Instant::now()),
-        });
-
-=======
->>>>>>> d792c9d41a (Remove BankStart (#7351))
         // having active bank allows to consume immediately
         assert_matches!(
             DecisionMaker::consume_or_forward_packets(

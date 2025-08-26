@@ -748,11 +748,9 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &Leade
 
     // Insert the bank
     let tpu_bank = ctx.bank_forks.write().unwrap().insert(tpu_bank);
-    let poh_bank_start = ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
+    ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
     // TODO: cleanup, this is no longer needed
-    poh_bank_start
-        .contains_valid_certificate
-        .store(true, Ordering::Relaxed);
+    // contains_valid_certificate handling has been removed with BankStart
 
     info!(
         "{}: new fork:{} parent:{} (leader) root:{}",
