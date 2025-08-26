@@ -962,7 +962,9 @@ impl TestValidator {
 
         for feature in feature_set {
             // TODO remove this
-            if feature != agave_feature_set::alpenglow::id() {
+            if feature != agave_feature_set::alpenglow::id()
+                && feature != agave_feature_set::limit_validators_for_alpenglow::id()
+            {
                 genesis_utils::activate_feature(&mut genesis_config, feature);
             }
         }
