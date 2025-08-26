@@ -1370,6 +1370,7 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (raise_block_limits_to_100m::id(), "SIMD-0286: Raise block limit to 100M"),
         (raise_account_cu_limit::id(), "SIMD-0306: Raise account CU limit to 40% max"),
         (raise_cpi_nesting_limit_to_8::id(), "SIMD-0296: Raise CPI nesting limit from 4 to 8"),
+        (limit_validators_for_alpenglow::id(), "SIMD-0326: Only allow top 2000 stakes validators with BLS pubkey for Alpenglow"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()
