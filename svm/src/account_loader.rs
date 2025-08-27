@@ -4,7 +4,9 @@ use {
     crate::{
         account_overrides::AccountOverrides,
         nonce_info::NonceInfo,
-        rent_calculator::{check_rent_state_with_account, get_account_rent_state},
+        rent_calculator::{
+            check_rent_state_with_account, get_account_rent_state, RENT_EXEMPT_RENT_EPOCH,
+        },
         rollback_accounts::RollbackAccounts,
         transaction_error_metrics::TransactionErrorMetrics,
         transaction_execution_result::ExecutedTransaction,
@@ -26,7 +28,6 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_rent::Rent,
-    solana_rent_collector::RENT_EXEMPT_RENT_EPOCH,
     solana_sdk_ids::{
         bpf_loader_upgradeable, native_loader,
         sysvar::{self, slot_history},
@@ -235,17 +236,26 @@ impl<'a, CB: TransactionProcessingCallback> AccountLoader<'a, CB> {
     // This is a general purpose function suitable for usage outside initial transaction loading.
     pub(crate) fn load_account(&mut self, account_key: &Pubkey) -> Option<AccountSharedData> {
         match self.do_load(account_key) {
+            // Exists, from AccountLoader.
+            (Some(account), false) => Some(account),
+            // Not allocated, but has an AccountLoader placeholder already.
+            (None, false) => None,
+            // Exists in accounts-db. Store it in AccountLoader for future loads.
             (Some(account), true) => {
                 self.loaded_accounts.insert(*account_key, account.clone());
                 Some(account)
             }
-            (account, false) => account,
-            (None, true) => unreachable!(),
+            // Does not exist and has never been seen.
+            (None, true) => {
+                self.loaded_accounts
+                    .insert(*account_key, AccountSharedData::default());
+                None
+            }
         }
     }
 
     // Internal helper for core loading logic to prevent code duplication. Returns a bool
-    // indicating whether the account came from accounts-db, which allows wrappers with
+    // indicating whether an accounts-db lookup was performed, which allows wrappers with
     // &mut self to insert the account. Wrappers with &self ignore it.
     fn do_load(&self, account_key: &Pubkey) -> (Option<AccountSharedData>, bool) {
         if let Some(account) = self.loaded_accounts.get(account_key) {
@@ -262,7 +272,7 @@ impl<'a, CB: TransactionProcessingCallback> AccountLoader<'a, CB> {
         } else if let Some((account, _slot)) = self.callbacks.get_account_shared_data(account_key) {
             (Some(account), true)
         } else {
-            (None, false)
+            (None, true)
         }
     }
 
@@ -610,15 +620,6 @@ fn load_transaction_accounts_simd186<CB: TransactionProcessingCallback>(
             return Err(TransactionError::ProgramAccountNotFound);
         };
 
-        if !account_loader
-            .feature_set
-            .remove_accounts_executable_flag_checks
-            && !program_account.executable()
-        {
-            error_metrics.invalid_program_for_execution += 1;
-            return Err(TransactionError::InvalidProgramForExecution);
-        }
-
         let owner_id = program_account.owner();
         if !native_loader::check_id(owner_id) && !PROGRAM_OWNERS.contains(owner_id) {
             error_metrics.invalid_program_for_execution += 1;
@@ -690,15 +691,6 @@ fn load_transaction_accounts_old<CB: TransactionProcessingCallback>(
                 return Err(TransactionError::ProgramAccountNotFound);
             };
 
-            if !account_loader
-                .feature_set
-                .remove_accounts_executable_flag_checks
-                && !program_account.executable()
-            {
-                error_metrics.invalid_program_for_execution += 1;
-                return Err(TransactionError::InvalidProgramForExecution);
-            }
-
             let owner_id = program_account.owner();
             if native_loader::check_id(owner_id) {
                 return Ok(program_index as IndexOfAccount);
@@ -706,12 +698,7 @@ fn load_transaction_accounts_old<CB: TransactionProcessingCallback>(
 
             if !validated_loaders.contains(owner_id) {
                 if let Some(owner_account) = account_loader.load_account(owner_id) {
-                    if !native_loader::check_id(owner_account.owner())
-                        || (!account_loader
-                            .feature_set
-                            .remove_accounts_executable_flag_checks
-                            && !owner_account.executable())
-                    {
+                    if !native_loader::check_id(owner_account.owner()) {
                         error_metrics.invalid_program_for_execution += 1;
                         return Err(TransactionError::InvalidProgramForExecution);
                     }
@@ -831,7 +818,6 @@ mod tests {
     use {
         super::*,
         crate::transaction_account_state_info::TransactionAccountStateInfo,
-        agave_reserved_account_keys::ReservedAccountKeys,
         rand0_7::prelude::*,
         solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
         solana_hash::Hash,
@@ -850,7 +836,6 @@ mod tests {
         },
         solana_pubkey::Pubkey,
         solana_rent::Rent,
-        solana_rent_collector::RENT_EXEMPT_RENT_EPOCH,
         solana_sdk_ids::{
             bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar,
         },
@@ -861,7 +846,14 @@ mod tests {
         solana_transaction::{sanitized::SanitizedTransaction, Transaction},
         solana_transaction_context::{TransactionAccount, TransactionContext},
         solana_transaction_error::{TransactionError, TransactionResult as Result},
-        std::{borrow::Cow, cell::RefCell, collections::HashMap, fs::File, io::Read},
+        std::{
+            borrow::Cow,
+            cell::RefCell,
+            collections::{HashMap, HashSet},
+            fs::File,
+            io::Read,
+            sync::Arc,
+        },
         test_case::test_case,
     };
 
@@ -957,10 +949,7 @@ mod tests {
     }
 
     fn new_unchecked_sanitized_message(message: Message) -> SanitizedMessage {
-        SanitizedMessage::Legacy(LegacyMessage::new(
-            message,
-            &ReservedAccountKeys::empty_key_set(),
-        ))
+        SanitizedMessage::Legacy(LegacyMessage::new(message, &HashSet::new()))
     }
 
     #[test_case(false; "informal_loaded_size")]
@@ -1154,7 +1143,6 @@ mod tests {
         );
 
         let mut feature_set = SVMFeatureSet::all_enabled();
-        feature_set.remove_accounts_executable_flag_checks = false;
         feature_set.formalize_loaded_transaction_data_size = formalize_loaded_transaction_data_size;
 
         let load_results = load_accounts_with_features_and_rent(
@@ -1165,14 +1153,18 @@ mod tests {
             feature_set,
         );
 
-        assert_eq!(error_metrics.invalid_program_for_execution.0, 1);
-        assert!(matches!(
-            load_results,
-            TransactionLoadResult::FeesOnly(FeesOnlyTransaction {
-                load_error: TransactionError::InvalidProgramForExecution,
-                ..
-            }),
-        ));
+        assert_eq!(error_metrics.invalid_program_for_execution.0, 0);
+        match &load_results {
+            TransactionLoadResult::Loaded(loaded_transaction) => {
+                assert_eq!(loaded_transaction.accounts.len(), 2);
+                assert_eq!(loaded_transaction.accounts[0].1, accounts[0].1);
+                assert_eq!(loaded_transaction.accounts[1].1, accounts[1].1);
+                assert_eq!(loaded_transaction.program_indices.len(), 1);
+                assert_eq!(loaded_transaction.program_indices[0], 1);
+            }
+            TransactionLoadResult::FeesOnly(fees_only_tx) => panic!("{}", fees_only_tx.load_error),
+            TransactionLoadResult::NotLoaded(e) => panic!("{e}"),
+        }
     }
 
     #[test_case(false; "informal_loaded_size")]
@@ -2810,15 +2802,10 @@ mod tests {
 
     // note all magic numbers (how many accounts, how many instructions, how big to size buffers) are arbitrary
     // other than trying not to swamp programs with blank accounts and keep transaction size below the 64mb limit
-    #[test_case(false; "executable_mandatory")]
-    #[test_case(true; "executable_optional")]
-    fn test_load_transaction_accounts_data_sizes_simd186(
-        remove_accounts_executable_flag_checks: bool,
-    ) {
+    #[test]
+    fn test_load_transaction_accounts_data_sizes_simd186() {
         let mut rng = rand0_7::thread_rng();
         let mut mock_bank = TestCallbacks::default();
-        mock_bank.feature_set.remove_accounts_executable_flag_checks =
-            remove_accounts_executable_flag_checks;
 
         // arbitrary accounts
         for _ in 0..128 {
@@ -2857,7 +2844,7 @@ mod tests {
                     1,
                     vec![0; rng.gen_range(0, 512)],
                     *loader,
-                    !remove_accounts_executable_flag_checks || rng.gen(),
+                    rng.gen(),
                     u64::MAX,
                 );
 
@@ -2875,7 +2862,7 @@ mod tests {
                             1,
                             vec![0; rng.gen_range(0, 512)],
                             *loader,
-                            !remove_accounts_executable_flag_checks || rng.gen(),
+                            rng.gen(),
                             u64::MAX,
                         );
                         programdata_tracker.insert(
@@ -2996,5 +2983,63 @@ mod tests {
                 expected_size as u32,
             );
         }
+    }
+
+    #[test]
+    fn test_loader_aliasing() {
+        let mut mock_bank = TestCallbacks::default();
+
+        let hit_address = Pubkey::new_unique();
+        let miss_address = Pubkey::new_unique();
+
+        let expected_hit_account = AccountSharedData::default();
+        mock_bank
+            .accounts_map
+            .insert(hit_address, expected_hit_account.clone());
+
+        let mut account_loader: AccountLoader<_> = (&mock_bank).into();
+
+        // load hits accounts-db, same account is stored
+        account_loader.load_account(&hit_address);
+        let actual_hit_account = account_loader.loaded_accounts.get(&hit_address);
+
+        assert_eq!(actual_hit_account, Some(&expected_hit_account));
+        assert!(Arc::ptr_eq(
+            &actual_hit_account.unwrap().data_clone(),
+            &expected_hit_account.data_clone()
+        ));
+
+        // reload doesnt affect this
+        account_loader.load_account(&hit_address);
+        let actual_hit_account = account_loader.loaded_accounts.get(&hit_address);
+
+        assert_eq!(actual_hit_account, Some(&expected_hit_account));
+        assert!(Arc::ptr_eq(
+            &actual_hit_account.unwrap().data_clone(),
+            &expected_hit_account.data_clone()
+        ));
+
+        // load misses accounts-db, placeholder is inserted
+        account_loader.load_account(&miss_address);
+        let expected_miss_account = account_loader
+            .loaded_accounts
+            .get(&miss_address)
+            .unwrap()
+            .clone();
+
+        assert!(!Arc::ptr_eq(
+            &expected_miss_account.data_clone(),
+            &expected_hit_account.data_clone()
+        ));
+
+        // reload keeps the same placeholder
+        account_loader.load_account(&miss_address);
+        let actual_miss_account = account_loader.loaded_accounts.get(&miss_address);
+
+        assert_eq!(actual_miss_account, Some(&expected_miss_account));
+        assert!(Arc::ptr_eq(
+            &actual_miss_account.unwrap().data_clone(),
+            &expected_miss_account.data_clone()
+        ));
     }
 }

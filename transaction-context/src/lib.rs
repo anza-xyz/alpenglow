@@ -109,6 +109,7 @@ pub struct TransactionAccounts {
     accounts: Vec<RefCell<AccountSharedData>>,
     touched_flags: RefCell<Box<[bool]>>,
     resize_delta: RefCell<i64>,
+    lamports_delta: RefCell<i128>,
 }
 
 impl TransactionAccounts {
@@ -119,15 +120,12 @@ impl TransactionAccounts {
             accounts,
             touched_flags: RefCell::new(touched_flags),
             resize_delta: RefCell::new(0),
+            lamports_delta: RefCell::new(0),
         }
     }
 
     fn len(&self) -> usize {
         self.accounts.len()
-    }
-
-    fn get(&self, index: IndexOfAccount) -> Option<&RefCell<AccountSharedData>> {
-        self.accounts.get(index as usize)
     }
 
     #[cfg(not(target_os = "solana"))]
@@ -174,6 +172,17 @@ impl TransactionAccounts {
         Ok(())
     }
 
+    fn try_borrow_mut(
+        &self,
+        index: IndexOfAccount,
+    ) -> Result<RefMut<'_, AccountSharedData>, InstructionError> {
+        self.accounts
+            .get(index as usize)
+            .ok_or(InstructionError::MissingAccount)?
+            .try_borrow_mut()
+            .map_err(|_| InstructionError::AccountBorrowFailed)
+    }
+
     pub fn try_borrow(
         &self,
         index: IndexOfAccount,
@@ -183,6 +192,18 @@ impl TransactionAccounts {
             .ok_or(InstructionError::MissingAccount)?
             .try_borrow()
             .map_err(|_| InstructionError::AccountBorrowFailed)
+    }
+
+    fn add_lamports_delta(&self, balance: i128) -> Result<(), InstructionError> {
+        let mut delta = self.lamports_delta.borrow_mut();
+        *delta = delta
+            .checked_add(balance)
+            .ok_or(InstructionError::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    fn get_lamports_delta(&self) -> i128 {
+        *self.lamports_delta.borrow()
     }
 }
 
@@ -199,8 +220,6 @@ pub struct TransactionContext {
     instruction_trace: Vec<InstructionContext>,
     top_level_instruction_index: usize,
     return_data: TransactionReturnData,
-    #[cfg(not(target_os = "solana"))]
-    remove_accounts_executable_flag_checks: bool,
     #[cfg(not(target_os = "solana"))]
     rent: Rent,
 }
@@ -227,14 +246,8 @@ impl TransactionContext {
             instruction_trace: vec![InstructionContext::default()],
             top_level_instruction_index: 0,
             return_data: TransactionReturnData::default(),
-            remove_accounts_executable_flag_checks: true,
             rent,
         }
-    }
-
-    #[cfg(not(target_os = "solana"))]
-    pub fn set_remove_accounts_executable_flag_checks(&mut self, enabled: bool) {
-        self.remove_accounts_executable_flag_checks = enabled;
     }
 
     /// Used in mock_process_instruction
@@ -269,20 +282,6 @@ impl TransactionContext {
     ) -> Result<&Pubkey, InstructionError> {
         self.account_keys
             .get(index_in_transaction as usize)
-            .ok_or(InstructionError::NotEnoughAccountKeys)
-    }
-
-    /// Searches for an account by its key
-    #[cfg(all(
-        not(target_os = "solana"),
-        any(test, feature = "dev-context-only-utils")
-    ))]
-    pub fn get_account_at_index(
-        &self,
-        index_in_transaction: IndexOfAccount,
-    ) -> Result<&RefCell<AccountSharedData>, InstructionError> {
-        self.accounts
-            .get(index_in_transaction)
             .ok_or(InstructionError::NotEnoughAccountKeys)
     }
 
@@ -375,29 +374,12 @@ impl TransactionContext {
     #[cfg(not(target_os = "solana"))]
     pub fn push(&mut self) -> Result<(), InstructionError> {
         let nesting_level = self.get_instruction_context_stack_height();
-        let caller_instruction_context = self
-            .instruction_trace
-            .last()
-            .ok_or(InstructionError::CallDepth)?;
-        let callee_instruction_accounts_lamport_sum =
-            self.instruction_accounts_lamport_sum(caller_instruction_context)?;
-        if !self.instruction_stack.is_empty() {
-            let caller_instruction_context = self.get_current_instruction_context()?;
-            let original_caller_instruction_accounts_lamport_sum =
-                caller_instruction_context.instruction_accounts_lamport_sum;
-            let current_caller_instruction_accounts_lamport_sum =
-                self.instruction_accounts_lamport_sum(caller_instruction_context)?;
-            if original_caller_instruction_accounts_lamport_sum
-                != current_caller_instruction_accounts_lamport_sum
-            {
-                return Err(InstructionError::UnbalancedInstruction);
-            }
+        if !self.instruction_stack.is_empty() && self.accounts.get_lamports_delta() != 0 {
+            return Err(InstructionError::UnbalancedInstruction);
         }
         {
             let instruction_context = self.get_next_instruction_context_mut()?;
             instruction_context.nesting_level = nesting_level;
-            instruction_context.instruction_accounts_lamport_sum =
-                callee_instruction_accounts_lamport_sum;
         }
         let index_in_trace = self.get_instruction_trace_length();
         if index_in_trace >= self.instruction_trace_capacity {
@@ -409,12 +391,7 @@ impl TransactionContext {
         }
         self.instruction_stack.push(index_in_trace);
         if let Some(index_in_transaction) = self.find_index_of_account(&instructions::id()) {
-            let mut mut_account_ref = self
-                .accounts
-                .get(index_in_transaction)
-                .ok_or(InstructionError::NotEnoughAccountKeys)?
-                .try_borrow_mut()
-                .map_err(|_| InstructionError::AccountBorrowFailed)?;
+            let mut mut_account_ref = self.accounts.try_borrow_mut(index_in_transaction)?;
             if mut_account_ref.owner() != &solana_sdk_ids::sysvar::id() {
                 return Err(InstructionError::InvalidAccountOwner);
             }
@@ -438,15 +415,17 @@ impl TransactionContext {
                 .and_then(|instruction_context| {
                     // Verify all executable accounts have no outstanding refs
                     self.accounts
-                        .get(instruction_context.get_index_of_program_account_in_transaction()?)
-                        .ok_or(InstructionError::NotEnoughAccountKeys)?
-                        .try_borrow_mut()
-                        .map_err(|_| InstructionError::AccountBorrowOutstanding)?;
-                    self.instruction_accounts_lamport_sum(instruction_context)
-                        .map(|instruction_accounts_lamport_sum| {
-                            instruction_context.instruction_accounts_lamport_sum
-                                != instruction_accounts_lamport_sum
-                        })
+                        .try_borrow_mut(
+                            instruction_context.get_index_of_program_account_in_transaction()?,
+                        )
+                        .map_err(|err| {
+                            if err == InstructionError::AccountBorrowFailed {
+                                InstructionError::AccountBorrowOutstanding
+                            } else {
+                                err
+                            }
+                        })?;
+                    Ok(self.accounts.get_lamports_delta() != 0)
                 });
         // Always pop, even if we `detected_an_unbalanced_instruction`
         self.instruction_stack.pop();
@@ -473,36 +452,6 @@ impl TransactionContext {
     ) -> Result<(), InstructionError> {
         self.return_data = TransactionReturnData { program_id, data };
         Ok(())
-    }
-
-    /// Calculates the sum of all lamports within an instruction
-    #[cfg(not(target_os = "solana"))]
-    fn instruction_accounts_lamport_sum(
-        &self,
-        instruction_context: &InstructionContext,
-    ) -> Result<u128, InstructionError> {
-        let mut instruction_accounts_lamport_sum: u128 = 0;
-        for instruction_account_index in 0..instruction_context.get_number_of_instruction_accounts()
-        {
-            if instruction_context
-                .is_instruction_account_duplicate(instruction_account_index)?
-                .is_some()
-            {
-                continue; // Skip duplicate account
-            }
-            let index_in_transaction = instruction_context
-                .get_index_of_instruction_account_in_transaction(instruction_account_index)?;
-            instruction_accounts_lamport_sum = (self
-                .accounts
-                .get(index_in_transaction)
-                .ok_or(InstructionError::NotEnoughAccountKeys)?
-                .try_borrow()
-                .map_err(|_| InstructionError::AccountBorrowOutstanding)?
-                .lamports() as u128)
-                .checked_add(instruction_accounts_lamport_sum)
-                .ok_or(InstructionError::ArithmeticOverflow)?;
-        }
-        Ok(instruction_accounts_lamport_sum)
     }
 
     /// Returns the accounts resize delta
@@ -544,11 +493,7 @@ impl TransactionContext {
                 // The four calls below can't really fail. If they fail because of a bug,
                 // whatever is writing will trigger an EbpfError::AccessViolation like
                 // if the region was readonly, and the transaction will fail gracefully.
-                let Some(account) = accounts.accounts.get(index_in_transaction as usize) else {
-                    debug_assert!(false);
-                    return;
-                };
-                let Ok(mut account) = account.try_borrow_mut() else {
+                let Ok(mut account) = accounts.try_borrow_mut(index_in_transaction) else {
                     debug_assert!(false);
                     return;
                 };
@@ -614,7 +559,6 @@ pub struct TransactionReturnData {
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct InstructionContext {
     nesting_level: usize,
-    instruction_accounts_lamport_sum: u128,
     program_account_index_in_tx: IndexOfAccount,
     instruction_accounts: Vec<InstructionAccount>,
     /// This is an account deduplication map that maps index_in_transaction to index_in_instruction
@@ -793,10 +737,7 @@ impl InstructionContext {
     ) -> Result<BorrowedAccount<'a>, InstructionError> {
         let account = transaction_context
             .accounts
-            .get(index_in_transaction)
-            .ok_or(InstructionError::MissingAccount)?
-            .try_borrow_mut()
-            .map_err(|_| InstructionError::AccountBorrowFailed)?;
+            .try_borrow_mut(index_in_transaction)?;
         Ok(BorrowedAccount {
             transaction_context,
             instruction_context: self,
@@ -876,6 +817,15 @@ impl InstructionContext {
     pub fn instruction_accounts(&self) -> &[InstructionAccount] {
         &self.instruction_accounts
     }
+
+    pub fn get_key_of_instruction_account<'a>(
+        &self,
+        index_in_instruction: IndexOfAccount,
+        transaction_context: &'a TransactionContext,
+    ) -> Result<&'a Pubkey, InstructionError> {
+        self.get_index_of_instruction_account_in_transaction(index_in_instruction)
+            .and_then(|idx| transaction_context.get_key_of_account_at_index(idx))
+    }
 }
 
 /// Shared account borrowed from the TransactionContext and an InstructionContext.
@@ -890,11 +840,6 @@ pub struct BorrowedAccount<'a> {
 }
 
 impl BorrowedAccount<'_> {
-    /// Returns the transaction context
-    pub fn transaction_context(&self) -> &TransactionContext {
-        self.transaction_context
-    }
-
     /// Returns the index of this account (transaction wide)
     #[inline]
     pub fn get_index_in_transaction(&self) -> IndexOfAccount {
@@ -924,10 +869,6 @@ impl BorrowedAccount<'_> {
         }
         // and only if the account is writable
         if !self.is_writable() {
-            return Err(InstructionError::ModifiedProgramId);
-        }
-        // and only if the account is not executable
-        if self.is_executable_internal() {
             return Err(InstructionError::ModifiedProgramId);
         }
         // and only if the data is zero-initialized or empty
@@ -960,14 +901,17 @@ impl BorrowedAccount<'_> {
         if !self.is_writable() {
             return Err(InstructionError::ReadonlyLamportChange);
         }
-        // The balance of executable accounts may not change
-        if self.is_executable_internal() {
-            return Err(InstructionError::ExecutableLamportChange);
-        }
         // don't touch the account if the lamports do not change
-        if self.get_lamports() == lamports {
+        let old_lamports = self.get_lamports();
+        if old_lamports == lamports {
             return Ok(());
         }
+
+        let lamports_balance = (lamports as i128).saturating_sub(old_lamports as i128);
+        self.transaction_context
+            .accounts
+            .add_lamports_delta(lamports_balance)?;
+
         self.touch()?;
         self.account.set_lamports(lamports);
         Ok(())
@@ -1006,24 +950,6 @@ impl BorrowedAccount<'_> {
         self.touch()?;
         self.make_data_mut();
         Ok(self.account.data_as_mut_slice())
-    }
-
-    /// Overwrites the account data and size (transaction wide).
-    ///
-    /// You should always prefer set_data_from_slice(). Calling this method is
-    /// currently safe but requires some special casing during CPI when direct
-    /// account mapping is enabled.
-    #[cfg(all(
-        not(target_os = "solana"),
-        any(test, feature = "dev-context-only-utils")
-    ))]
-    pub fn set_data(&mut self, data: Vec<u8>) -> Result<(), InstructionError> {
-        self.can_data_be_resized(data.len())?;
-        self.touch()?;
-
-        self.update_accounts_resize_delta(data.len())?;
-        self.account.set_data(data);
-        Ok(())
     }
 
     /// Overwrites the account data and size (transaction wide).
@@ -1144,16 +1070,6 @@ impl BorrowedAccount<'_> {
         self.account.executable()
     }
 
-    /// Feature gating to remove `is_executable` flag related checks
-    #[cfg(not(target_os = "solana"))]
-    #[inline]
-    fn is_executable_internal(&self) -> bool {
-        !self
-            .transaction_context
-            .remove_accounts_executable_flag_checks
-            && self.account.executable()
-    }
-
     /// Configures whether this account is executable (transaction wide)
     #[cfg(not(target_os = "solana"))]
     pub fn set_executable(&mut self, is_executable: bool) -> Result<(), InstructionError> {
@@ -1171,10 +1087,6 @@ impl BorrowedAccount<'_> {
         }
         // and only if the account is writable
         if !self.is_writable() {
-            return Err(InstructionError::ExecutableModified);
-        }
-        // one can not clear the executable flag
-        if self.is_executable_internal() && !is_executable {
             return Err(InstructionError::ExecutableModified);
         }
         // don't touch the account if the executable flag does not change
@@ -1227,10 +1139,6 @@ impl BorrowedAccount<'_> {
     /// Returns an error if the account data can not be mutated by the current program
     #[cfg(not(target_os = "solana"))]
     pub fn can_data_be_changed(&self) -> Result<(), InstructionError> {
-        // Only non-executable accounts data can be changed
-        if self.is_executable_internal() {
-            return Err(InstructionError::ExecutableDataModified);
-        }
         // and only if the account is writable
         if !self.is_writable() {
             return Err(InstructionError::ReadonlyDataModified);
@@ -1288,6 +1196,7 @@ impl From<TransactionContext> for ExecutionRecord {
             accounts,
             touched_flags,
             resize_delta,
+            ..
         } = Rc::try_unwrap(context.accounts)
             .expect("transaction_context.accounts has unexpected outstanding refs");
         let accounts = Vec::from(Pin::into_inner(context.account_keys))

@@ -29,7 +29,10 @@ use {
     solana_transaction::versioned::VersionedTransaction,
     std::{
         cmp,
-        sync::{atomic::AtomicBool, Arc, Mutex},
+        sync::{
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            Arc, Mutex,
+        },
         time::Instant,
     },
     thiserror::Error,
@@ -57,32 +60,6 @@ pub enum PohRecorderError {
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
 
 pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
-
-#[derive(Debug, Clone)]
-pub struct BankStart {
-    pub working_bank: Arc<Bank>,
-    pub bank_creation_time: Arc<Instant>,
-    pub contains_valid_certificate: Arc<AtomicBool>,
-}
-
-impl BankStart {
-    pub fn should_working_bank_still_be_processing_txs(&self) -> bool {
-        Bank::should_bank_still_be_processing_txs(
-            &self.bank_creation_time,
-            self.working_bank.ns_per_slot,
-        )
-    }
-}
-
-impl From<&WorkingBank> for BankStart {
-    fn from(w: &WorkingBank) -> Self {
-        Self {
-            working_bank: w.bank.clone(),
-            bank_creation_time: w.start.clone(),
-            contains_valid_certificate: w.contains_valid_certificate.clone(),
-        }
-    }
-}
 
 // Sends the Result of the record operation, including the index in the slot of the first
 // transaction, if being tracked by WorkingBank
@@ -183,7 +160,7 @@ impl PohRecorderMetrics {
 
 pub struct PohRecorder {
     pub(crate) poh: Arc<Mutex<Poh>>,
-    tick_height: u64,
+    tick_height: SharedTickHeight,
     clear_bank_signal: Option<Sender<bool>>,
     start_bank: Arc<Bank>, // parent slot
     start_bank_active_descendants: Vec<Slot>,
@@ -198,7 +175,7 @@ pub struct PohRecorder {
     /// the `working_bank` field of this struct.
     shared_working_bank: SharedWorkingBank,
     working_bank_sender: Sender<WorkingBankEntry>,
-    leader_first_tick_height: Option<u64>,
+    leader_first_tick_height: SharedLeaderFirstTickHeight,
     leader_last_tick_height: u64, // zero if none
     grace_ticks: u64,
     blockstore: Arc<Blockstore>,
@@ -282,7 +259,7 @@ impl PohRecorder {
         (
             Self {
                 poh,
-                tick_height,
+                tick_height: SharedTickHeight::new(tick_height),
                 tick_cache: vec![],
                 working_bank: None,
                 shared_working_bank: SharedWorkingBank::empty(),
@@ -291,7 +268,9 @@ impl PohRecorder {
                 start_bank,
                 start_bank_active_descendants: vec![],
                 start_tick_height: tick_height + 1,
-                leader_first_tick_height,
+                leader_first_tick_height: SharedLeaderFirstTickHeight::new(
+                    leader_first_tick_height,
+                ),
                 leader_last_tick_height,
                 grace_ticks,
                 blockstore,
@@ -323,7 +302,8 @@ impl PohRecorder {
         let (leader_first_tick_height, leader_last_tick_height, grace_ticks) =
             Self::compute_leader_slot_tick_heights(next_leader_slot, self.ticks_per_slot);
         self.grace_ticks = grace_ticks;
-        self.leader_first_tick_height = leader_first_tick_height;
+        self.leader_first_tick_height
+            .store(leader_first_tick_height);
         self.leader_last_tick_height = leader_last_tick_height;
     }
 
@@ -354,6 +334,7 @@ impl PohRecorder {
             self.metrics.flush_cache_no_tick_us += flush_cache_us;
             flush_cache_res?;
 
+            let tick_height = self.tick_height(); // cannot change until next loop iteration.
             let working_bank = self
                 .working_bank
                 .as_mut()
@@ -387,7 +368,7 @@ impl PohRecorder {
                                     hash: entry.hash,
                                     transactions,
                                 },
-                                self.tick_height, // `record_batches` guarantees that mixins are **not** split across ticks.
+                                tick_height, // `record_batches` guarantees that mixins are **not** split across ticks.
                             ),
                         )));
                     self.metrics.send_entry_us += send_batches_us;
@@ -425,10 +406,10 @@ impl PohRecorder {
         self.metrics.tick_lock_contention_us += tick_lock_contention_us;
 
         if let Some(poh_entry) = poh_entry {
-            self.tick_height += 1;
-            trace!("tick_height {}", self.tick_height);
+            self.tick_height.increment();
+            trace!("tick_height {}", self.tick_height());
 
-            if self.leader_first_tick_height.is_none() {
+            if self.leader_first_tick_height.load().is_none() {
                 return;
             }
 
@@ -438,7 +419,7 @@ impl PohRecorder {
                     hash: poh_entry.hash,
                     transactions: vec![],
                 },
-                self.tick_height,
+                self.tick_height(),
             ));
 
             let (_flush_res, flush_cache_and_tick_us) = measure_us!(self.flush_cache(true));
@@ -457,7 +438,7 @@ impl PohRecorder {
         }
     }
 
-    pub fn set_bank(&mut self, bank: BankWithScheduler) -> BankStart {
+    pub fn set_bank(&mut self, bank: BankWithScheduler) {
         assert!(self.working_bank.is_none());
 
         let working_bank = WorkingBank {
@@ -468,7 +449,6 @@ impl PohRecorder {
             transaction_index: self.track_transaction_indexes.then_some(0),
             contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
-        let bank_start = BankStart::from(&working_bank);
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
         if let Some(hashes_per_tick) = *working_bank.bank.hashes_per_tick() {
@@ -492,7 +472,6 @@ impl PohRecorder {
         // TODO: adjust the working_bank.start time based on number of ticks
         // that have already elapsed based on current tick height.
         let _ = self.flush_cache(false);
-        bank_start
     }
 
     fn clear_bank(&mut self) {
@@ -511,7 +490,8 @@ impl PohRecorder {
             let (leader_first_tick_height, leader_last_tick_height, grace_ticks) =
                 Self::compute_leader_slot_tick_heights(next_leader_slot, self.ticks_per_slot);
             self.grace_ticks = grace_ticks;
-            self.leader_first_tick_height = leader_first_tick_height;
+            self.leader_first_tick_height
+                .store(leader_first_tick_height);
             self.leader_last_tick_height = leader_last_tick_height;
 
             datapoint_info!(
@@ -549,7 +529,7 @@ impl PohRecorder {
         info!(
             "reset poh from: {},{},{} to: {},{}",
             poh_hash,
-            self.tick_height,
+            self.tick_height(),
             self.start_slot(),
             blockhash,
             reset_bank.slot()
@@ -560,8 +540,9 @@ impl PohRecorder {
             self.start_bank = reset_bank;
             self.start_bank_active_descendants = vec![];
         }
-        self.tick_height = (self.start_slot() + 1) * self.ticks_per_slot;
-        self.start_tick_height = self.tick_height + 1;
+        self.tick_height
+            .store((self.start_slot() + 1) * self.ticks_per_slot);
+        self.start_tick_height = self.tick_height() + 1;
     }
 
     // Flush cache will delay flushing the cache for a bank until it past the WorkingBank::min_tick_height
@@ -575,10 +556,10 @@ impl PohRecorder {
             .working_bank
             .as_ref()
             .ok_or(PohRecorderError::MaxHeightReached)?;
-        if self.tick_height < working_bank.min_tick_height {
+        if self.tick_height() < working_bank.min_tick_height {
             return Err(PohRecorderError::MinHeightNotReached);
         }
-        if tick && self.tick_height == working_bank.min_tick_height {
+        if tick && self.tick_height() == working_bank.min_tick_height {
             return Err(PohRecorderError::MinHeightNotReached);
         }
 
@@ -608,7 +589,7 @@ impl PohRecorder {
                 }
             }
         }
-        if self.tick_height >= working_bank.max_tick_height {
+        if self.tick_height() >= working_bank.max_tick_height {
             info!(
                 "poh_record: max_tick_height {} reached, clearing working_bank {}",
                 working_bank.max_tick_height,
@@ -635,9 +616,10 @@ impl PohRecorder {
         self.has_bank()
             || self
                 .leader_first_tick_height
+                .load()
                 .is_some_and(|leader_first_tick_height| {
-                    self.tick_height + within_next_n_ticks >= leader_first_tick_height
-                        && self.tick_height <= self.leader_last_tick_height
+                    self.tick_height() + within_next_n_ticks >= leader_first_tick_height
+                        && self.tick_height() <= self.leader_last_tick_height
                 })
     }
 
@@ -655,7 +637,7 @@ impl PohRecorder {
         // bank and generally indicates what tick height has already been
         // reached so use the next tick height to determine which slot poh is
         // ticking through.
-        let next_tick_height = self.tick_height.saturating_add(1);
+        let next_tick_height = self.tick_height().saturating_add(1);
         self.slot_for_tick_height(next_tick_height)
     }
 
@@ -679,16 +661,20 @@ impl PohRecorder {
         self.working_bank.as_ref().map(|w| w.bank.clone())
     }
 
-    pub fn bank_start(&self) -> Option<BankStart> {
-        self.working_bank.as_ref().map(BankStart::from)
-    }
-
     pub fn has_bank(&self) -> bool {
         self.working_bank.is_some()
     }
 
     pub fn tick_height(&self) -> u64 {
-        self.tick_height
+        self.tick_height.load()
+    }
+
+    pub fn shared_tick_height(&self) -> SharedTickHeight {
+        self.tick_height.clone()
+    }
+
+    pub fn shared_leader_first_tick_height(&self) -> SharedLeaderFirstTickHeight {
+        self.leader_first_tick_height.clone()
     }
 
     pub fn ticks_per_slot(&self) -> u64 {
@@ -712,15 +698,15 @@ impl PohRecorder {
     pub fn reached_leader_slot(&self, my_pubkey: &Pubkey) -> PohLeaderStatus {
         trace!(
             "tick_height {}, start_tick_height {}, leader_first_tick_height {:?}, grace_ticks {}, has_bank {}",
-            self.tick_height,
+            self.tick_height(),
             self.start_tick_height,
-            self.leader_first_tick_height,
+            self.leader_first_tick_height.load(),
             self.grace_ticks,
             self.has_bank()
         );
 
         let current_poh_slot = self.current_poh_slot();
-        let Some(leader_first_tick_height) = self.leader_first_tick_height else {
+        let Some(leader_first_tick_height) = self.leader_first_tick_height.load() else {
             // No next leader slot, so no leader slot has been reached.
             return PohLeaderStatus::NotReached;
         };
@@ -757,12 +743,12 @@ impl PohRecorder {
         }
 
         let ideal_target_tick_height = leader_first_tick_height.saturating_sub(1);
-        if self.tick_height < ideal_target_tick_height {
+        if self.tick_height() < ideal_target_tick_height {
             // We haven't ticked to our leader slot yet.
             return false;
         }
 
-        if self.tick_height >= ideal_target_tick_height.saturating_add(self.grace_ticks) {
+        if self.tick_height() >= ideal_target_tick_height.saturating_add(self.grace_ticks) {
             // We have finished waiting for grace ticks.
             return true;
         }
@@ -927,8 +913,10 @@ impl PohRecorder {
         });
         self.metrics.tick_lock_contention_us += tick_lock_contention_us;
 
+        // TODO(ksn): are the stores and loads here safe to do, if the tick heights can be
+        // externally modified?
         if let Some(poh_entry) = poh_entry {
-            self.tick_height = slot_max_tick_height;
+            self.tick_height.store(slot_max_tick_height);
 
             // Should be empty in most cases, but reset just to be safe
             self.tick_cache = vec![];
@@ -938,7 +926,7 @@ impl PohRecorder {
                     hash: poh_entry.hash,
                     transactions: vec![],
                 },
-                self.tick_height,
+                self.tick_height.load(),
             ));
 
             let (_flush_res, flush_cache_and_tick_us) = measure_us!(self.flush_cache(true));
@@ -1062,16 +1050,90 @@ impl SharedWorkingBank {
         self.0.load_full()
     }
 
-    fn store(&self, bank: Arc<Bank>) {
+    // Mutable access not needed for this function.
+    // However we use it to guarantee only used when PohRecorder is
+    // write locked.
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn store(&mut self, bank: Arc<Bank>) {
         self.0.store(Some(bank));
     }
 
-    fn clear(&self) {
+    // Mutable access not needed for this function.
+    // However we use it to guarantee only used when PohRecorder is
+    // write locked.
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn clear(&mut self) {
         self.0.store(None);
     }
 
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
     fn empty() -> Self {
         Self(Arc::new(ArcSwapOption::empty()))
+    }
+}
+
+/// Wrapper around a atomic-u64 that prevents modifying outside
+/// of `PohRecorder`.
+#[derive(Clone)]
+pub struct SharedTickHeight(Arc<AtomicU64>);
+
+impl SharedTickHeight {
+    pub fn load(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn new(tick_height: u64) -> Self {
+        Self(Arc::new(AtomicU64::new(tick_height)))
+    }
+
+    // Mutable access not needed for this function.
+    // However we use it to guarantee only used when PohRecorder is
+    // write locked.
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn store(&mut self, tick_height: u64) {
+        self.0.store(tick_height, Ordering::Release);
+    }
+
+    // Mutable access not needed for this function.
+    // However we use it to guarantee only used when PohRecorder is
+    // write locked.
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn increment(&mut self) {
+        self.0.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// Wrapper around a atomic-u64 that may be None.
+// Uses the flag of u64::MAX to indicate None; this does not
+// need to be observable outside of PohRecorder.
+#[derive(Clone)]
+pub struct SharedLeaderFirstTickHeight(Arc<AtomicU64>);
+const SHARED_LEADER_FIRST_TICK_HEIGHT_NONE: u64 = u64::MAX;
+
+impl SharedLeaderFirstTickHeight {
+    pub fn load(&self) -> Option<u64> {
+        let v = self.0.load(Ordering::Acquire);
+        if v == SHARED_LEADER_FIRST_TICK_HEIGHT_NONE {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn new(tick_height: Option<u64>) -> Self {
+        let v = tick_height.unwrap_or(SHARED_LEADER_FIRST_TICK_HEIGHT_NONE);
+        Self(Arc::new(AtomicU64::new(v)))
+    }
+
+    // Mutable access not needed for this function.
+    // However we use it to guarantee only used when PohRecorder is
+    // write locked.
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn store(&mut self, tick_height: Option<u64>) {
+        let v = tick_height.unwrap_or(SHARED_LEADER_FIRST_TICK_HEIGHT_NONE);
+        self.0.store(v, Ordering::Release);
     }
 }
 
@@ -1114,7 +1176,7 @@ mod tests {
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 1);
         assert_eq!(poh_recorder.tick_cache[0].1, 1);
-        assert_eq!(poh_recorder.tick_height, 1);
+        assert_eq!(poh_recorder.tick_height(), 1);
     }
 
     #[test]
@@ -1141,7 +1203,7 @@ mod tests {
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 2);
         assert_eq!(poh_recorder.tick_cache[1].1, 2);
-        assert_eq!(poh_recorder.tick_height, 2);
+        assert_eq!(poh_recorder.tick_height(), 2);
     }
 
     #[test]
@@ -1241,7 +1303,7 @@ mod tests {
         // all ticks are sent after height > min
         let tick_height_before = poh_recorder.tick_height();
         poh_recorder.tick();
-        assert_eq!(poh_recorder.tick_height, tick_height_before + 1);
+        assert_eq!(poh_recorder.tick_height(), tick_height_before + 1);
         assert_eq!(poh_recorder.tick_cache.len(), 0);
         let mut num_entries = 0;
         while let Ok((wbank, (_entry, _tick_height))) = entry_receiver.try_recv() {
@@ -1281,12 +1343,12 @@ mod tests {
             poh_recorder.tick_cache.last().unwrap().1,
             bank.max_tick_height() + 1
         );
-        assert_eq!(poh_recorder.tick_height, bank.max_tick_height() + 1);
+        assert_eq!(poh_recorder.tick_height(), bank.max_tick_height() + 1);
 
         poh_recorder.set_bank_for_test(bank.clone());
         poh_recorder.tick();
 
-        assert_eq!(poh_recorder.tick_height, bank.max_tick_height() + 2);
+        assert_eq!(poh_recorder.tick_height(), bank.max_tick_height() + 2);
         assert!(poh_recorder.working_bank.is_none());
         let mut num_entries = 0;
         while entry_receiver.try_recv().is_ok() {
@@ -1409,7 +1471,7 @@ mod tests {
 
         // Check record succeeds on boundary condition where
         // poh_recorder.tick height == poh_recorder.working_bank.min_tick_height
-        assert_eq!(poh_recorder.tick_height, min_tick_height);
+        assert_eq!(poh_recorder.tick_height(), min_tick_height);
         let tx = test_tx();
         let h1 = hash(b"hello world!");
         assert!(poh_recorder
@@ -1448,7 +1510,7 @@ mod tests {
         );
 
         poh_recorder.set_bank_for_test(bank.clone());
-        let num_ticks_to_max = bank.max_tick_height() - poh_recorder.tick_height;
+        let num_ticks_to_max = bank.max_tick_height() - poh_recorder.tick_height();
         for _ in 0..num_ticks_to_max {
             poh_recorder.tick();
         }
@@ -1562,7 +1624,7 @@ mod tests {
         for _ in 0..remaining_ticks_to_min {
             poh_recorder.tick();
         }
-        assert_eq!(poh_recorder.tick_height, remaining_ticks_to_min);
+        assert_eq!(poh_recorder.tick_height(), remaining_ticks_to_min);
         assert_eq!(
             poh_recorder.tick_cache.len(),
             remaining_ticks_to_min as usize
@@ -1659,11 +1721,11 @@ mod tests {
         poh_recorder.tick();
         poh_recorder.tick();
         assert_eq!(poh_recorder.tick_cache.len(), 4);
-        assert_eq!(poh_recorder.tick_height, 4);
+        assert_eq!(poh_recorder.tick_height(), 4);
         poh_recorder.reset(bank, Some((4, 4))); // parent slot 0 implies tick_height of 3
         assert_eq!(poh_recorder.tick_cache.len(), 0);
         poh_recorder.tick();
-        assert_eq!(poh_recorder.tick_height, DEFAULT_TICKS_PER_SLOT + 1);
+        assert_eq!(poh_recorder.tick_height(), DEFAULT_TICKS_PER_SLOT + 1);
     }
 
     #[test]
@@ -1916,7 +1978,7 @@ mod tests {
         assert!(!poh_recorder.reached_leader_tick(&leader_b_pubkey, leader_b_start_tick));
 
         // Tick through Leader A's remaining slots.
-        for _ in poh_recorder.tick_height..ticks_in_leader_slot_set {
+        for _ in poh_recorder.tick_height()..ticks_in_leader_slot_set {
             poh_recorder.tick();
         }
 

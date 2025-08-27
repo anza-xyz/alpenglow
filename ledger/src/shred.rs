@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "agave-unstable-api"), allow(dead_code))]
 //! The `shred` module defines data structures and methods to pull MTU sized data frames from the
 //! network. There are two types of shreds: data and coding. Data shreds contain entry information
 //! while coding shreds provide redundancy to protect against dropped network packets (erasures).
@@ -1710,7 +1711,10 @@ mod tests {
             let mut shred = shred.into_payload();
             let mut signature = [0u8; SIGNATURE_BYTES];
             rng.fill(&mut signature[..]);
-            let out = layout::set_retransmitter_signature(&mut shred, &Signature::from(signature));
+            let out = layout::set_retransmitter_signature(
+                &mut shred.as_mut(),
+                &Signature::from(signature),
+            );
             if chained && is_last_in_slot {
                 assert_matches!(out, Ok(()));
             } else {
@@ -1759,7 +1763,7 @@ mod tests {
         // (ignoring retransmitter signature) are duplicate.
         for shred in &shreds {
             let mut other = shred.payload().clone();
-            other[90] = other[90].wrapping_add(1);
+            other.as_mut()[90] = other[90].wrapping_add(1);
             let other = Shred::new_from_serialized_shred(other).unwrap();
             assert_ne!(shred.payload(), other.payload());
             assert_eq!(

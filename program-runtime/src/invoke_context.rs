@@ -13,7 +13,6 @@ use {
     solana_epoch_schedule::EpochSchedule,
     solana_hash::Hash,
     solana_instruction::{error::InstructionError, AccountMeta, Instruction},
-    solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_sbpf::{
         ebpf::MM_HEAP_START,
@@ -28,6 +27,7 @@ use {
     solana_svm_callback::InvokeContextCallback,
     solana_svm_feature_set::SVMFeatureSet,
     solana_svm_log_collector::{ic_msg, LogCollector},
+    solana_svm_measure::measure::Measure,
     solana_svm_timings::{ExecuteDetailsTimings, ExecuteTimings},
     solana_svm_transaction::{instruction::SVMInstruction, svm_message::SVMMessage},
     solana_svm_type_overrides::sync::Arc,
@@ -266,18 +266,18 @@ impl<'a> InvokeContext<'a> {
                     self.transaction_context
                         .get_instruction_context_at_nesting_level(level)
                         .and_then(|instruction_context| {
-                            instruction_context.try_borrow_program_account(self.transaction_context)
+                            instruction_context.get_program_key(self.transaction_context)
                         })
-                        .map(|program_account| program_account.get_key() == program_id)
+                        .map(|program_key| program_key == program_id)
                         .unwrap_or(false)
                 });
             let is_last = self
                 .transaction_context
                 .get_current_instruction_context()
                 .and_then(|instruction_context| {
-                    instruction_context.try_borrow_program_account(self.transaction_context)
+                    instruction_context.get_program_key(self.transaction_context)
                 })
-                .map(|program_account| program_account.get_key() == program_id)
+                .map(|program_key| program_key == program_id)
                 .unwrap_or(false);
             if contains && !is_last {
                 // Reentrancy not allowed unless caller is calling itself
@@ -406,30 +406,27 @@ impl<'a> InvokeContext<'a> {
                 let index_in_caller = instruction_context.get_index_of_account_in_instruction(
                     instruction_account.index_in_transaction,
                 )?;
-                let borrowed_account = instruction_context
-                    .try_borrow_instruction_account(self.transaction_context, index_in_caller)?;
+
+                // This unwrap is safe because instruction.accounts.len() == instruction_accounts.len()
+                let account_key = &instruction.accounts.get(current_index).unwrap().pubkey;
+                // get_index_of_account_in_instruction has already checked if the index is valid.
+                let caller_instruction_account = instruction_context
+                    .instruction_accounts()
+                    .get(index_in_caller as usize)
+                    .unwrap();
 
                 // Readonly in caller cannot become writable in callee
-                if instruction_account.is_writable() && !borrowed_account.is_writable() {
-                    ic_msg!(
-                        self,
-                        "{}'s writable privilege escalated",
-                        borrowed_account.get_key(),
-                    );
+                if instruction_account.is_writable() && !caller_instruction_account.is_writable() {
+                    ic_msg!(self, "{}'s writable privilege escalated", account_key,);
                     return Err(InstructionError::PrivilegeEscalation);
                 }
 
                 // To be signed in the callee,
                 // it must be either signed in the caller or by the program
                 if instruction_account.is_signer()
-                    && !(borrowed_account.is_signer()
-                        || signers.contains(borrowed_account.get_key()))
+                    && !(caller_instruction_account.is_signer() || signers.contains(account_key))
                 {
-                    ic_msg!(
-                        self,
-                        "{}'s signer privilege escalated",
-                        borrowed_account.get_key()
-                    );
+                    ic_msg!(self, "{}'s signer privilege escalated", account_key,);
                     return Err(InstructionError::PrivilegeEscalation);
                 }
             }
@@ -442,19 +439,9 @@ impl<'a> InvokeContext<'a> {
                     ic_msg!(self, "Unknown program {}", callee_program_id);
                     InstructionError::MissingAccount
                 })?;
-            let borrowed_program_account = instruction_context
-                .try_borrow_instruction_account(self.transaction_context, program_account_index)?;
-            #[allow(deprecated)]
-            if !self
-                .get_feature_set()
-                .remove_accounts_executable_flag_checks
-                && !borrowed_program_account.is_executable()
-            {
-                ic_msg!(self, "Account {} is not executable", callee_program_id);
-                return Err(InstructionError::AccountNotExecutable);
-            }
 
-            borrowed_program_account.get_index_in_transaction()
+            instruction_context
+                .get_index_of_instruction_account_in_transaction(program_account_index)?
         };
 
         self.transaction_context
@@ -561,21 +548,14 @@ impl<'a> InvokeContext<'a> {
             let owner_id = borrowed_root_account.get_owner();
             if native_loader::check_id(owner_id) {
                 *borrowed_root_account.get_key()
-            } else if self
-                .get_feature_set()
-                .remove_accounts_executable_flag_checks
+            } else if bpf_loader_deprecated::check_id(owner_id)
+                || bpf_loader::check_id(owner_id)
+                || bpf_loader_upgradeable::check_id(owner_id)
+                || loader_v4::check_id(owner_id)
             {
-                if bpf_loader_deprecated::check_id(owner_id)
-                    || bpf_loader::check_id(owner_id)
-                    || bpf_loader_upgradeable::check_id(owner_id)
-                    || loader_v4::check_id(owner_id)
-                {
-                    *owner_id
-                } else {
-                    return Err(InstructionError::UnsupportedProgramId);
-                }
-            } else {
                 *owner_id
+            } else {
+                return Err(InstructionError::UnsupportedProgramId);
             }
         };
 
@@ -1026,9 +1006,7 @@ mod tests {
                 instruction_context
                     .try_borrow_instruction_account(transaction_context, 1)?
                     .get_owner(),
-                instruction_context
-                    .try_borrow_instruction_account(transaction_context, 0)?
-                    .get_key()
+                instruction_context.get_key_of_instruction_account(0, transaction_context)?
             );
 
             if let Ok(instruction) = bincode::deserialize(instruction_data) {
@@ -1090,7 +1068,7 @@ mod tests {
                     }
                     MockInstruction::Resize { new_len } => instruction_context
                         .try_borrow_instruction_account(transaction_context, 0)?
-                        .set_data(vec![0; new_len as usize])?,
+                        .set_data_from_slice(&vec![0; new_len as usize])?,
                 }
             } else {
                 return Err(InstructionError::InvalidInstructionData);
