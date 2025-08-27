@@ -914,7 +914,6 @@ pub(crate) fn process_blockstore_for_bank_0(
         Arc::new(opts.runtime_config.clone()),
         account_paths,
         opts.debug_keys.clone(),
-        None,
         false,
         opts.accounts_db_config.clone(),
         accounts_update_notifier,
