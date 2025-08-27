@@ -801,10 +801,7 @@ mod tests {
         super::*,
         solana_pubkey::Pubkey,
         solana_runtime::{bank::Bank, genesis_utils::create_genesis_config},
-        std::{
-            mem,
-            sync::{atomic::AtomicBool, Arc},
-        },
+        std::{mem, sync::Arc},
     };
 
     struct TestSlotBoundaryComponents {
