@@ -398,7 +398,7 @@ solana-big-mod-exp = "2.2.1"
 solana-bincode = "2.2.1"
 solana-blake3-hasher = "2.2.1"
 solana-bloom = { path = "bloom", version = "=3.0.0" }
-solana-bls-signatures = { version = "0.1.0", features = ["serde"] }
+solana-bls-signatures = { version = "0.2.0", features = ["serde"] }
 solana-bls12-381 = { path = "curves/bls12-381", version = "=3.0.0" }
 solana-bn254 = "2.2.2"
 solana-borsh = "2.2.1"
