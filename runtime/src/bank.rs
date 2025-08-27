@@ -85,7 +85,7 @@ use {
         blockhash_queue::BlockhashQueue,
         storable_accounts::StorableAccounts,
     },
-    solana_builtins::{prototype::BuiltinPrototype, BUILTINS, STATELESS_BUILTINS},
+    solana_builtins::{BUILTINS, STATELESS_BUILTINS},
     solana_clock::{
         BankId, Epoch, Slot, SlotIndex, UnixTimestamp, INITIAL_RENT_EPOCH, MAX_PROCESSING_AGE,
         MAX_TRANSACTION_FORWARDING_DELAY,
@@ -1121,7 +1121,6 @@ impl Bank {
         runtime_config: Arc<RuntimeConfig>,
         paths: Vec<PathBuf>,
         debug_keys: Option<Arc<HashSet<Pubkey>>>,
-        additional_builtins: Option<&[BuiltinPrototype]>,
         debug_do_not_add_builtins: bool,
         accounts_db_config: Option<AccountsDbConfig>,
         accounts_update_notifier: Option<AccountsUpdateNotifier>,
@@ -1150,11 +1149,7 @@ impl Bank {
         #[cfg(feature = "dev-context-only-utils")]
         bank.process_genesis_config(genesis_config, collector_id_for_tests, genesis_hash);
 
-        bank.finish_init(
-            genesis_config,
-            additional_builtins,
-            debug_do_not_add_builtins,
-        );
+        bank.finish_init(genesis_config, debug_do_not_add_builtins);
 
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
@@ -1734,7 +1729,6 @@ impl Bank {
         runtime_config: Arc<RuntimeConfig>,
         fields: BankFieldsToDeserialize,
         debug_keys: Option<Arc<HashSet<Pubkey>>>,
-        additional_builtins: Option<&[BuiltinPrototype]>,
         debug_do_not_add_builtins: bool,
         accounts_data_size_initial: u64,
     ) -> Self {
@@ -1849,11 +1843,7 @@ impl Bank {
             .expect("new rayon threadpool");
         bank.recalculate_partitioned_rewards(null_tracer(), &thread_pool);
 
-        bank.finish_init(
-            genesis_config,
-            additional_builtins,
-            debug_do_not_add_builtins,
-        );
+        bank.finish_init(genesis_config, debug_do_not_add_builtins);
         bank.transaction_processor
             .fill_missing_sysvar_cache_entries(&bank);
 
@@ -4089,12 +4079,7 @@ impl Bank {
         cost_tracker.set_limits(account_cost_limit, block_cost_limit, vote_cost_limit);
     }
 
-    fn finish_init(
-        &mut self,
-        genesis_config: &GenesisConfig,
-        additional_builtins: Option<&[BuiltinPrototype]>,
-        debug_do_not_add_builtins: bool,
-    ) {
+    fn finish_init(&mut self, genesis_config: &GenesisConfig, debug_do_not_add_builtins: bool) {
         if let Some(compute_budget) = self.compute_budget {
             self.transaction_processor
                 .set_execution_cost(compute_budget.to_cost());
@@ -4131,10 +4116,7 @@ impl Bank {
         }
 
         if !debug_do_not_add_builtins {
-            for builtin in BUILTINS
-                .iter()
-                .chain(additional_builtins.unwrap_or(&[]).iter())
-            {
+            for builtin in BUILTINS {
                 // The builtin should be added if it has no enable feature ID
                 // and it has not been migrated to Core BPF.
                 //
@@ -5789,7 +5771,6 @@ impl Bank {
             runtime_config,
             paths,
             None,
-            None,
             false,
             Some(test_config.accounts_db_config),
             None,
@@ -5811,7 +5792,6 @@ impl Bank {
             genesis_config,
             Arc::<RuntimeConfig>::default(),
             paths,
-            None,
             None,
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_BENCHMARKS),
