@@ -643,7 +643,7 @@ mod tests {
             rng.gen(),
             Pubkey::new_unique(),
             rng.gen(),
-            bls_keypair.public.into(),
+            bls_keypair.public,
         );
         let mut account = AccountSharedData::new(
             rng.gen(), // lamports
