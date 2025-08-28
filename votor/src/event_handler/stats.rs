@@ -177,7 +177,7 @@ impl EventHandlerStats {
         let entry = self
             .received_events_count_and_timing
             .entry(stats_event)
-            .or_insert(EventCountAndTime::default());
+            .or_default();
         entry.count = entry.count.saturating_add(1);
         entry.time_us = entry.time_us.saturating_add(time_us as u32);
     }
