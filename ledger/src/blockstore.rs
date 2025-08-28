@@ -2039,8 +2039,8 @@ impl Blockstore {
             shred_source,
         )?;
         if matches!(location, BlockLocation::Original) {
-            // This tracking is not needed for alternate shred columns, as we intentionally switch banks in replay
-            // based on certificate conditions
+            // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
+            // if necessary.
             newly_completed_data_sets.extend(completed_data_sets);
         }
         merkle_root_metas
