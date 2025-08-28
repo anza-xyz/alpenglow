@@ -527,7 +527,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
         ("bls_pubkey", matches) => {
             let keypair = get_keypair_from_matches(matches, config, &mut wallet_manager)?;
             let bls_keypair = BLSKeypair::derive_from_signer(&keypair, BLS_KEYPAIR_DERIVE_SEED)?;
-            let bls_pubkey: BLSPubkey = bls_keypair.public.into();
+            let bls_pubkey: BLSPubkey = bls_keypair.public;
 
             if matches.try_contains_id("outfile")? {
                 let outfile = matches.get_one::<String>("outfile").unwrap();

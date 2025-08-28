@@ -17,7 +17,7 @@ use {
     },
     solana_seed_derivable::SeedDerivable,
     solana_signer::EncodableKey,
-    solana_zk_token_sdk::encryption::{auth_encryption::AeKey, elgamal::ElGamalKeypair},
+    solana_zk_sdk::encryption::{auth_encryption::AeKey, elgamal::ElGamalKeypair},
     std::{error, str::FromStr},
     thiserror::Error,
 };
@@ -259,7 +259,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                     if !silent {
                         let phrase: &str = mnemonic.phrase();
                         let divider = String::from_utf8(vec![b'='; phrase.len()]).unwrap();
-                        let bls_pubkey: BlsPubkey = bls_keypair.public.into();
+                        let bls_pubkey: BlsPubkey = bls_keypair.public;
                         println!(
                             "{}\npubkey: {}\n{}\nSave this seed phrase{} to recover your new ElGamal keypair:\n{}\n{}",
                             &divider, bls_pubkey, &divider, passphrase_message, phrase, &divider
@@ -299,7 +299,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                     // TODO: BLS only supports JSON files for now
                     let bls_keypair_path = matches.get_one::<String>("keypair").unwrap();
                     let bls_keypair = BlsKeypair::read_json_file(bls_keypair_path)?;
-                    let bls_pubkey: BlsPubkey = bls_keypair.public.into();
+                    let bls_pubkey: BlsPubkey = bls_keypair.public;
                     println!("{bls_pubkey}");
                 }
                 _ => unreachable!(),

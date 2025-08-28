@@ -401,9 +401,9 @@ mod tests {
     #[test]
     #[ignore = "historical reference; shows float behavior fixed in pull #4988"]
     fn test_lamports_of_sol_origin() {
-        use solana_native_token::sol_to_lamports;
+        use solana_native_token::sol_str_to_lamports;
         pub fn lamports_of_sol(matches: &ArgMatches<'_>, name: &str) -> Option<u64> {
-            value_of(matches, name).map(sol_to_lamports)
+            matches.value_of(name).and_then(sol_str_to_lamports)
         }
 
         let matches = app().get_matches_from(vec!["test", "--single", "50"]);
@@ -433,8 +433,8 @@ mod tests {
 
     #[test]
     fn test_bls_pubkeys_of() {
-        let bls_pubkey1: BLSPubkey = BLSKeypair::new().public.into();
-        let bls_pubkey2: BLSPubkey = BLSKeypair::new().public.into();
+        let bls_pubkey1: BLSPubkey = BLSKeypair::new().public;
+        let bls_pubkey2: BLSPubkey = BLSKeypair::new().public;
         let matches = app().get_matches_from(vec![
             "test",
             "--multiple",

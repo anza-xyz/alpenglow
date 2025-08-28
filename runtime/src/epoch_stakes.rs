@@ -259,7 +259,7 @@ pub(crate) mod tests {
                                 &node_id,
                                 0,
                                 100,
-                                bls_keypair.public.into(),
+                                bls_keypair.public,
                             )
                         } else {
                             create_account_with_authorized(
