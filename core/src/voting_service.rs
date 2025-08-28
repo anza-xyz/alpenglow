@@ -60,7 +60,7 @@ fn send_message(
 ) -> Result<(), TransportError> {
     let client = connection_cache.get_connection(socket);
 
-    client.send_data_async(buf)
+    client.send_data_async(Arc::new(buf))
 }
 
 fn send_vote_transaction(
