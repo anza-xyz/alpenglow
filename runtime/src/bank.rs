@@ -1162,7 +1162,7 @@ impl Bank {
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
         {
-            let stakes = bank.get_stakes_for_epoch_stakes();
+            let stakes = bank.copy_and_filter_from_stakes_cache();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             for epoch in 0..=bank.get_leader_schedule_epoch(bank.slot) {
                 bank.epoch_stakes
@@ -2205,7 +2205,7 @@ impl Bank {
             self.epoch_stakes.retain(|&epoch, _| {
                 epoch >= leader_schedule_epoch.saturating_sub(MAX_LEADER_SCHEDULE_STAKES)
             });
-            let stakes = self.get_stakes_for_epoch_stakes();
+            let stakes = self.copy_and_filter_from_stakes_cache();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             let new_epoch_stakes = VersionedEpochStakes::new(stakes, leader_schedule_epoch);
             info!(
@@ -5693,7 +5693,7 @@ impl Bank {
         self.collector_fee_details.read().unwrap().clone()
     }
 
-    pub fn get_stakes_for_epoch_stakes(&self) -> Stakes<StakeAccount<Delegation>> {
+    pub fn copy_and_filter_from_stakes_cache(&self) -> Stakes<StakeAccount<Delegation>> {
         let stakes = if self
             .feature_set
             .is_active(&feature_set::limit_validators_for_alpenglow::id())

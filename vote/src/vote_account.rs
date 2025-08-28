@@ -13,7 +13,7 @@ use {
     solana_vote_interface::state::BlockTimestamp,
     solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{
-        cmp::Ordering,
+        cmp::{Ordering, Reverse},
         collections::{hash_map::Entry, HashMap},
         fmt,
         iter::FromIterator,
@@ -77,33 +77,31 @@ pub struct VoteAccounts {
 
 impl VoteAccounts {
     pub fn clone_and_filter_for_alpenglow(&self, maximum_accounts: usize) -> VoteAccounts {
-        let mut pubkeys_and_stakes_to_sort: Vec<(Pubkey, u64)> = self
+        if maximum_accounts == 0 {
+            panic!("maximum_accounts must be > 0");
+        }
+        let mut entries_to_sort: Vec<(&Pubkey, u64, &VoteAccount)> = self
             .vote_accounts
             .iter()
             .filter_map(|(pubkey, (stake, vote_account))| {
                 if vote_account.bls_pubkey().is_some() && *stake != 0u64 {
-                    Some((*pubkey, *stake))
+                    Some((pubkey, *stake, vote_account))
                 } else {
                     None
                 }
             })
             .collect();
         // Sort by stake descending first, then pubkey descending.
-        pubkeys_and_stakes_to_sort.sort_unstable_by(|(pubkey_a, stake_a), (pubkey_b, stake_b)| {
-            stake_b.cmp(stake_a).then_with(|| pubkey_b.cmp(pubkey_a))
-        });
-        pubkeys_and_stakes_to_sort.truncate(maximum_accounts);
-        let pubkeys_to_keep: HashMap<Pubkey, u64> =
-            pubkeys_and_stakes_to_sort.into_iter().collect();
-        self.vote_accounts
-            .iter()
-            .filter_map(|(pubkey, (stake, vote_account))| {
-                if pubkeys_to_keep.contains_key(pubkey) {
-                    Some((*pubkey, (*stake, vote_account.clone())))
-                } else {
-                    None
-                }
-            })
+        if entries_to_sort.len() > maximum_accounts {
+            let key = |(pubkey, stake, _): &(&Pubkey, u64, &VoteAccount)| {
+                (Reverse(*stake), Reverse(**pubkey))
+            };
+            entries_to_sort.select_nth_unstable_by_key(maximum_accounts, key);
+            entries_to_sort.truncate(maximum_accounts);
+        }
+        entries_to_sort
+            .into_iter()
+            .map(|(pubkey, stake, vote_account)| (*pubkey, (stake, vote_account.clone())))
             .collect()
     }
 }
