@@ -213,14 +213,10 @@ impl ParentReadyTracker {
             // and catching up. Either way we should not attempt to produce this slot
             return BlockProductionParent::MissedWindow;
         }
-        // TODO: for duplicate blocks we should adjust this to choose the
-        // parent with the least amount of duplicate blocks if possible.
-        // Notice that each scenario with multiple NotarFallbacks also will eventually
-        // have a skip for that slot, so prefer the skip if we've received it.
         match self
             .slot_statuses
             .get(&slot)
-            .and_then(|ss| ss.parents_ready.iter().max().copied())
+            .and_then(|ss| ss.parents_ready.iter().min().copied())
         {
             Some(parent) => BlockProductionParent::Parent(parent),
             // TODO: this will be plugged in for optimistic block production
@@ -246,8 +242,8 @@ impl ParentReadyTracker {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS, solana_hash::Hash,
-        solana_pubkey::Pubkey,
+        super::*, itertools::Itertools, solana_clock::NUM_CONSECUTIVE_LEADER_SLOTS,
+        solana_hash::Hash, solana_pubkey::Pubkey,
     };
 
     #[test]
@@ -377,6 +373,38 @@ mod tests {
         assert_eq!(
             tracker.block_production_parent(8),
             BlockProductionParent::MissedWindow
+        );
+    }
+
+    #[test]
+    fn pick_more_skips() {
+        let genesis = Block::default();
+        let mut tracker = ParentReadyTracker::new(Pubkey::default(), genesis);
+        let mut events = vec![];
+
+        for i in 1..=10 {
+            tracker.add_new_skip(i, &mut vec![]);
+            tracker.add_new_notar_fallback_or_stronger((i, Hash::new_unique()), &mut vec![]);
+        }
+
+        tracker.add_new_skip(11, &mut events);
+
+        assert_eq!(12, tracker.highest_parent_ready(),);
+        let parent_readys: Vec<Slot> = events
+            .into_iter()
+            .map(|event| match event {
+                VotorEvent::ParentReady { slot, parent_block } => {
+                    assert!(slot == 12);
+                    parent_block.0
+                }
+                _ => panic!("Invalid event"),
+            })
+            .sorted()
+            .collect();
+        assert_eq!(parent_readys, (0..=10).collect::<Vec<Slot>>());
+        assert_eq!(
+            tracker.block_production_parent(12),
+            BlockProductionParent::Parent(genesis)
         );
     }
 }
