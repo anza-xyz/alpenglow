@@ -60,7 +60,7 @@ fn send_message(
 ) -> Result<(), TransportError> {
     let client = connection_cache.get_connection(socket);
 
-    client.send_data_async(buf)
+    client.send_data_async(Arc::new(buf))
 }
 
 fn send_vote_transaction(
@@ -76,7 +76,7 @@ fn send_vote_transaction(
                 .tpu(connection_cache.protocol())
         })
         .ok_or(SendVoteError::InvalidTpuAddress)?;
-    let buf = serialize(transaction)?;
+    let buf = Arc::new(serialize(transaction)?);
     let client = connection_cache.get_connection(&tpu);
 
     client.send_data_async(buf).map_err(|err| {

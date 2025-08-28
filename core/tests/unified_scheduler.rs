@@ -173,6 +173,7 @@ fn test_scheduler_waited_by_drop_bank_service() {
             None, // snapshot_controller
             None,
             &mut true,
+            &mut vec![],
             &drop_bank_sender1,
             &mut tbft_structs,
         )
@@ -241,7 +242,7 @@ fn test_scheduler_producing_blocks() {
         &channels,
         &poh_recorder,
         transaction_recorder,
-        BankingStage::default_or_env_num_workers(),
+        BankingStage::default_num_workers(),
     );
     bank_forks.write().unwrap().install_scheduler_pool(pool);
 

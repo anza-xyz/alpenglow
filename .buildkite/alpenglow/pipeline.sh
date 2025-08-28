@@ -9,7 +9,7 @@ steps:
       queue: "default"
 
   - name: "frozen-abi"
-    command: "ci/docker-run-default-image.sh ./test-abi.sh"
+    command: "ci/docker-run-default-image.sh ./ci/test-abi.sh"
     timeout_in_minutes: 15
     agents:
       queue: "default"

@@ -12,7 +12,9 @@ use {
         consume_worker::ConsumeWorkerMetrics,
         consumer::Consumer,
         decision_maker::{BufferedPacketsDecision, DecisionMaker},
-        transaction_scheduler::transaction_state_container::StateContainer,
+        transaction_scheduler::{
+            receive_and_buffer::ReceivingStats, transaction_state_container::StateContainer,
+        },
         TOTAL_BUFFERED_PACKETS,
     },
     solana_clock::MAX_PROCESSING_AGE,
@@ -21,7 +23,10 @@ use {
     solana_svm::transaction_error_metrics::TransactionErrorMetrics,
     std::{
         num::Saturating,
-        sync::{Arc, RwLock},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, RwLock,
+        },
     },
 };
 
@@ -31,6 +36,8 @@ where
     R: ReceiveAndBuffer,
     S: Scheduler<R::Transaction>,
 {
+    /// Exit signal for the scheduler thread.
+    exit: Arc<AtomicBool>,
     /// Decision maker for determining what should be done with transactions.
     decision_maker: DecisionMaker,
     receive_and_buffer: R,
@@ -58,6 +65,7 @@ where
     S: Scheduler<R::Transaction>,
 {
     pub fn new(
+        exit: Arc<AtomicBool>,
         decision_maker: DecisionMaker,
         receive_and_buffer: R,
         bank_forks: Arc<RwLock<BankForks>>,
@@ -65,6 +73,7 @@ where
         worker_metrics: Vec<Arc<ConsumeWorkerMetrics>>,
     ) -> Self {
         Self {
+            exit,
             decision_maker,
             receive_and_buffer,
             bank_forks,
@@ -78,7 +87,7 @@ where
     }
 
     pub fn run(mut self) -> Result<(), SchedulerError> {
-        loop {
+        while !self.exit.load(Ordering::Relaxed) {
             // BufferedPacketsDecision is shared with legacy BankingStage, which will forward
             // packets. Initially, not renaming these decision variants but the actions taken
             // are different, since new BankingStage will not forward packets.
@@ -295,13 +304,47 @@ where
     fn receive_and_buffer_packets(
         &mut self,
         decision: &BufferedPacketsDecision,
-    ) -> Result<usize, DisconnectedError> {
-        self.receive_and_buffer.receive_and_buffer_packets(
-            &mut self.container,
-            &mut self.timing_metrics,
-            &mut self.count_metrics,
-            decision,
-        )
+    ) -> Result<ReceivingStats, DisconnectedError> {
+        let receiving_stats = self
+            .receive_and_buffer
+            .receive_and_buffer_packets(&mut self.container, decision)?;
+
+        self.count_metrics.update(|count_metrics| {
+            let ReceivingStats {
+                num_received,
+                num_dropped_without_parsing: num_dropped_without_buffering,
+                num_dropped_on_parsing_and_sanitization,
+                num_dropped_on_lock_validation,
+                num_dropped_on_compute_budget,
+                num_dropped_on_age,
+                num_dropped_on_already_processed,
+                num_dropped_on_fee_payer,
+                num_dropped_on_capacity,
+                num_buffered,
+                receive_time_us: _,
+                buffer_time_us: _,
+            } = &receiving_stats;
+
+            count_metrics.num_received += *num_received;
+            count_metrics.num_dropped_on_receive += *num_dropped_without_buffering;
+            count_metrics.num_dropped_on_parsing_and_sanitization +=
+                *num_dropped_on_parsing_and_sanitization;
+            count_metrics.num_dropped_on_validate_locks += *num_dropped_on_lock_validation;
+            count_metrics.num_dropped_on_receive_compute_budget += *num_dropped_on_compute_budget;
+            count_metrics.num_dropped_on_receive_age += *num_dropped_on_age;
+            count_metrics.num_dropped_on_receive_already_processed +=
+                *num_dropped_on_already_processed;
+            count_metrics.num_dropped_on_receive_fee_payer += *num_dropped_on_fee_payer;
+            count_metrics.num_dropped_on_capacity += *num_dropped_on_capacity;
+            count_metrics.num_buffered += *num_buffered;
+        });
+
+        self.timing_metrics.update(|timing_metrics| {
+            timing_metrics.receive_time_us += receiving_stats.receive_time_us;
+            timing_metrics.buffer_time_us += receiving_stats.buffer_time_us;
+        });
+
+        Ok(receiving_stats)
     }
 }
 
@@ -422,7 +465,9 @@ mod tests {
             finished_consume_work_receiver,
             PrioGraphSchedulerConfig::default(),
         );
+        let exit = Arc::new(AtomicBool::new(false));
         let scheduler_controller = SchedulerController::new(
+            exit,
             decision_maker,
             receive_and_buffer,
             bank_forks,
@@ -485,7 +530,7 @@ mod tests {
         // from the channel.
         while scheduler_controller
             .receive_and_buffer_packets(&decision)
-            .map(|n| n > 0)
+            .map(|n| n.num_received > 0)
             .unwrap_or_default()
         {}
         assert!(scheduler_controller.process_transactions(&decision).is_ok());

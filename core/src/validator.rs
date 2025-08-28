@@ -4,6 +4,7 @@ pub use solana_perf::report_target_features;
 use {
     crate::{
         admin_rpc_post_init::{AdminRpcRequestMetadataPostInit, KeyUpdaterType, KeyUpdaters},
+        banking_stage::BankingStage,
         banking_trace::{self, BankingTracer, TraceError},
         block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
         cluster_info_vote_listener::VoteTracker,
@@ -82,6 +83,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_metrics::{datapoint_info, metrics::metrics_config_sanity_check},
+    solana_net_utils::multihomed_sockets::EgressSocketSelect,
     solana_poh::{
         poh_recorder::PohRecorder,
         poh_service::{self, PohService},
@@ -191,8 +193,21 @@ impl BlockVerificationMethod {
     }
 }
 
-#[derive(Clone, EnumString, EnumVariantNames, Default, IntoStaticStr, Display)]
+#[derive(
+    Clone,
+    Debug,
+    EnumString,
+    EnumVariantNames,
+    Default,
+    IntoStaticStr,
+    Display,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+)]
 #[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BlockProductionMethod {
     CentralScheduler,
     #[default]
@@ -209,8 +224,21 @@ impl BlockProductionMethod {
     }
 }
 
-#[derive(Clone, EnumString, EnumVariantNames, Default, IntoStaticStr, Display)]
+#[derive(
+    Clone,
+    Debug,
+    EnumString,
+    EnumVariantNames,
+    Default,
+    IntoStaticStr,
+    Display,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+)]
 #[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum TransactionStructure {
     Sdk,
     #[default]
@@ -293,6 +321,7 @@ pub struct ValidatorConfig {
     pub banking_trace_dir_byte_limit: banking_trace::DirByteLimit,
     pub block_verification_method: BlockVerificationMethod,
     pub block_production_method: BlockProductionMethod,
+    pub block_production_num_workers: NonZeroUsize,
     pub transaction_struct: TransactionStructure,
     pub enable_block_production_forwarding: bool,
     pub generator_config: Option<GeneratorConfig>,
@@ -373,6 +402,7 @@ impl ValidatorConfig {
             banking_trace_dir_byte_limit: 0,
             block_verification_method: BlockVerificationMethod::default(),
             block_production_method: BlockProductionMethod::default(),
+            block_production_num_workers: BankingStage::default_num_workers(),
             transaction_struct: TransactionStructure::default(),
             // enable forwarding by default for tests
             enable_block_production_forwarding: true,
@@ -854,8 +884,13 @@ impl Validator {
         cluster_info.set_entrypoints(cluster_entrypoints);
         cluster_info.restore_contact_info(ledger_path, config.contact_save_interval);
         cluster_info.set_bind_ip_addrs(node.bind_ip_addrs.clone());
+        let tvu_sockets_per_interface =
+            node.sockets.retransmit_sockets.len() / node.bind_ip_addrs.len();
+        cluster_info.init_egress_socket_select(Arc::new(EgressSocketSelect::new(
+            tvu_sockets_per_interface,
+        )));
         let cluster_info = Arc::new(cluster_info);
-        let node_multihoming = NodeMultihoming::from(&node);
+        let node_multihoming = Arc::new(NodeMultihoming::from(&node));
 
         assert!(is_snapshot_config_valid(&config.snapshot_config));
 
@@ -1068,18 +1103,23 @@ impl Validator {
 
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
 
-        let mut tpu_transactions_forwards_client =
-            Some(node.sockets.tpu_transaction_forwarding_client);
-
+        let mut tpu_transactions_forwards_client_sockets =
+            Some(node.sockets.tpu_transaction_forwarding_clients);
         let connection_cache = match (config.use_tpu_client_next, use_quic) {
             (false, true) => Some(Arc::new(ConnectionCache::new_with_client_options(
                 "connection_cache_tpu_quic",
                 tpu_connection_pool_size,
-                Some(
-                    tpu_transactions_forwards_client
+                Some({
+                    // this conversion is not beautiful but rust does not allow popping single
+                    // elements from a boxed slice
+                    let socketbox: Box<[_; 1]> = tpu_transactions_forwards_client_sockets
                         .take()
-                        .expect("Socket should exist."),
-                ),
+                        .unwrap()
+                        .try_into()
+                        .expect("Multihoming support for connection cache is not available");
+                    let [sock] = *socketbox;
+                    sock
+                }),
                 Some((
                     &identity_keypair,
                     node.info
@@ -1666,11 +1706,10 @@ impl Validator {
                 .unwrap_or_else(|| current_runtime_handle.as_ref().unwrap());
             ForwardingClientOption::TpuClientNext((
                 Arc::as_ref(&identity_keypair),
-                tpu_transactions_forwards_client
-                    .take()
-                    .expect("Socket should exist."),
+                tpu_transactions_forwards_client_sockets.take().unwrap(),
                 runtime_handle.clone(),
                 cancel_tpu_client_next,
+                node_multihoming.clone(),
             ))
         };
         let tpu = Tpu::new_with_client(
@@ -1725,6 +1764,7 @@ impl Validator {
             alpenglow_quic_server_config,
             &prioritization_fee_cache,
             config.block_production_method.clone(),
+            config.block_production_num_workers,
             config.transaction_struct.clone(),
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
@@ -1763,7 +1803,8 @@ impl Validator {
             outstanding_repair_requests,
             cluster_slots,
             votor_event_sender,
-            node: Some(Arc::new(node_multihoming)),
+            node: Some(node_multihoming),
+            banking_stage: tpu.banking_stage(),
         });
 
         Ok(Self {
@@ -1820,7 +1861,7 @@ impl Validator {
         info!("{:?}", node.info);
         info!(
             "local gossip address: {}",
-            node.sockets.gossip.local_addr().unwrap()
+            node.sockets.gossip[0].local_addr().unwrap()
         );
         info!(
             "local broadcast address: {}",

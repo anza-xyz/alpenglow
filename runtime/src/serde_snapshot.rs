@@ -55,12 +55,16 @@ use {
     types::SerdeAccountsLtHash,
 };
 
+mod status_cache;
 mod storage;
 mod tests;
 mod types;
 mod utils;
 
-pub(crate) use storage::{SerializableAccountStorageEntry, SerializedAccountsFileId};
+pub(crate) use {
+    status_cache::{deserialize_status_cache, serialize_status_cache},
+    storage::{SerializableAccountStorageEntry, SerializedAccountsFileId},
+};
 
 const MAX_STREAM_SIZE: u64 = 32 * 1024 * 1024 * 1024;
 
@@ -451,7 +455,7 @@ where
     // Process extra fields
     let ExtraFieldsToDeserialize {
         lamports_per_signature,
-        _obsolete_incremental_snapshot_persistence: _incremental_snapshot_persistence,
+        _obsolete_incremental_snapshot_persistence,
         _obsolete_epoch_accounts_hash,
         versioned_epoch_stakes,
         accounts_lt_hash,

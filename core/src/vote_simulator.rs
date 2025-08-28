@@ -246,6 +246,7 @@ impl VoteSimulator {
             None, // snapshot_controller
             None,
             &mut true,
+            &mut vec![],
             &drop_bank_sender,
             &mut self.tbft_structs,
         )
