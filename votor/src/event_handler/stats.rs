@@ -41,20 +41,43 @@ impl Default for SlotTracking {
     }
 }
 
+#[derive(Debug, Default)]
+struct EventCountAndTime {
+    count: u16,
+    time_us: u32,
+}
+
 #[derive(Debug)]
 pub(crate) struct EventHandlerStats {
+    // Number of events that were ignored. This includes events that were
+    // received but not processed due to various reasons (e.g., outdated,
+    // irrelevant).
     pub(crate) ignored: u16,
+
+    // Number of times where we are attempting to start a leader window but
+    // there is already a pending window to produce. The older window is
+    // discarded in favor of the newer one.
     pub(crate) leader_window_replaced: u16,
+
+    // Number of times we updated the root.
     pub(crate) set_root_count: u16,
+
+    // Number of times we setup timeouts for a new leader window.
     pub(crate) timeout_set: u16,
 
-    /// All of the following fields are in microseconds
-    pub(crate) receive_event_time: u32,
-    pub(crate) send_vote_time: u32,
+    // Amount of time spent receiving events. Includes waiting for events.
+    pub(crate) receive_event_time_us: u32,
 
-    received_events_count_and_timing: HashMap<StatsEvent, (u16, u32)>,
+    // Amount of time spent sending votes.
+    pub(crate) send_vote_time_us: u32,
+
+    // Number of times we saw each event and time spent processing the event.
+    received_events_count_and_timing: HashMap<StatsEvent, EventCountAndTime>,
+
+    // Number of votes sent for each vote type.
     sent_votes: HashMap<VoteType, u16>,
 
+    // Timing information for major events for each slot.
     slot_tracking_map: BTreeMap<Slot, SlotTracking>,
 
     root_slot: Slot,
@@ -109,8 +132,8 @@ impl EventHandlerStats {
             leader_window_replaced: 0,
             set_root_count: 0,
             timeout_set: 0,
-            receive_event_time: 0,
-            send_vote_time: 0,
+            receive_event_time_us: 0,
+            send_vote_time_us: 0,
             received_events_count_and_timing: HashMap::new(),
             sent_votes: HashMap::new(),
             slot_tracking_map: BTreeMap::new(),
@@ -150,13 +173,13 @@ impl EventHandlerStats {
         self.set_root_count = self.set_root_count.saturating_add(1);
     }
 
-    pub fn incr_event_with_timing(&mut self, stats_event: StatsEvent, timing: u64) {
+    pub fn incr_event_with_timing(&mut self, stats_event: StatsEvent, time_us: u64) {
         let entry = self
             .received_events_count_and_timing
             .entry(stats_event)
-            .or_insert((0, 0));
-        entry.0 = entry.0.saturating_add(1);
-        entry.1 = entry.1.saturating_add(timing as u32);
+            .or_insert(EventCountAndTime::default());
+        entry.count = entry.count.saturating_add(1);
+        entry.time_us = entry.time_us.saturating_add(time_us as u32);
     }
 
     pub fn incr_vote(&mut self, bls_op: &BLSOp) {
@@ -196,18 +219,19 @@ impl EventHandlerStats {
             ("set_root_count", self.set_root_count as i64, i64),
             ("timeout_set", self.timeout_set as i64, i64),
         );
-        for (event, (count, ms)) in &self.received_events_count_and_timing {
+        for (event, EventCountAndTime { count, time_us }) in &self.received_events_count_and_timing
+        {
             datapoint_info!(
                 "event_handler_received_event_count_and_timing",
                 ("event", format!("{:?}", event), String),
                 ("count", *count as i64, i64),
-                ("elapsed", *ms as i64, i64)
+                ("elapsed", *time_us as i64, i64)
             );
         }
         datapoint_info!(
             "event_handler_timing",
-            ("receive_event_time", self.receive_event_time as i64, i64),
-            ("send_vote_time", self.send_vote_time as i64, i64),
+            ("receive_event_time", self.receive_event_time_us as i64, i64),
+            ("send_vote_time", self.send_vote_time_us as i64, i64),
         );
         for (vote_type, count) in &self.sent_votes {
             datapoint_info!(

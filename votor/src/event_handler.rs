@@ -150,9 +150,9 @@ impl EventHandler {
                 default(Duration::from_secs(1))  => continue
             };
             receive_event_time.stop();
-            local_context.stats.receive_event_time = local_context
+            local_context.stats.receive_event_time_us = local_context
                 .stats
-                .receive_event_time
+                .receive_event_time_us
                 .saturating_add(receive_event_time.as_us() as u32);
 
             let root_bank = vctx.root_bank.load();
@@ -182,9 +182,9 @@ impl EventHandler {
                 vctx.bls_sender.send(vote).map_err(|_| SendError(()))?;
             }
             send_vote_time.stop();
-            local_context.stats.send_vote_time = local_context
+            local_context.stats.send_vote_time_us = local_context
                 .stats
-                .send_vote_time
+                .send_vote_time_us
                 .saturating_add(send_vote_time.as_us() as u32);
             local_context.stats.maybe_report();
         }
