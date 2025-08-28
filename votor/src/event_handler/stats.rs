@@ -225,13 +225,17 @@ impl EventHandlerStats {
                 "event_handler_received_event_count_and_timing",
                 ("event", format!("{:?}", event), String),
                 ("count", *count as i64, i64),
-                ("elapsed", *time_us as i64, i64)
+                ("elapsed_us", *time_us as i64, i64)
             );
         }
         datapoint_info!(
             "event_handler_timing",
-            ("receive_event_time", self.receive_event_time_us as i64, i64),
-            ("send_vote_time", self.send_vote_time_us as i64, i64),
+            (
+                "receive_event_time_us",
+                self.receive_event_time_us as i64,
+                i64
+            ),
+            ("send_vote_time_us", self.send_vote_time_us as i64, i64),
         );
         for (vote_type, count) in &self.sent_votes {
             datapoint_info!(
