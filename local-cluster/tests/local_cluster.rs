@@ -6223,7 +6223,7 @@ fn broadcast_vote(
     {
         let buf = bincode::serialize(&message).unwrap();
         let client = connection_cache.get_connection(tpu_socket_addr);
-        client.send_data_async(buf).unwrap_or_else(|_| {
+        client.send_data_async(Arc::new(buf)).unwrap_or_else(|_| {
             panic!("Failed to broadcast vote to {}", tpu_socket_addr);
         });
     }
