@@ -740,32 +740,27 @@ impl Blockstore {
                 .and_then(|((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
                     (candidate_slot == slot).then_some((
                         u32::try_from(candidate_fec_set_index)
-                        .expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
+                            .expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
                         candidate_erasure_meta
                     ))
                 }),
-            BlockLocation::Alternate { block_id } => self
-                .alt_erasure_meta_cf
-                .iter(IteratorMode::From(
-                    (slot, fec_set_index, block_id),
-                    IteratorDirection::Reverse,
-                ))?
-                // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
-                .find(|((_, candidate_fec_set_index, _), _)| {
-                    *candidate_fec_set_index != fec_set_index
-                })
-                // Do not consider sets from the previous slot
-                .and_then(|((candidate_slot, candidate_fec_set_index, bid), candidate_erasure_meta)| {
-                    debug_assert!(bid == block_id);
-                    (candidate_slot == slot).then_some((
-                        candidate_fec_set_index,
-                        candidate_erasure_meta
-                    ))
-                }),
+            BlockLocation::Alternate { block_id } => {
+                // Shreds are only inserted in the alternate column as part of alpenglow. Alpenglow will launch after
+                // SIMD-0317 which enforces fixed FEC sets of DATA_SHREDS_PER_FEC_BLOCK. Thus we can avoid the scan,
+                // as we know the previous fec set index
+                debug_assert!(fec_set_index % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0);
+                debug_assert!(fec_set_index >= DATA_SHREDS_PER_FEC_BLOCK as u32);
+                let prev_fec_set_index = fec_set_index.saturating_sub(DATA_SHREDS_PER_FEC_BLOCK as u32);
+                self
+                    .alt_erasure_meta_cf
+                    .get_bytes((slot, prev_fec_set_index, block_id))?
+                    .map(|candidate_erasure_meta| (prev_fec_set_index, candidate_erasure_meta.into_boxed_slice()))
+            },
         }) else {
             // No potential candidates
             return Ok(None);
         };
+
         let candidate_erasure_set = ErasureSetId::new(slot, candidate_fec_set_index);
         let candidate_erasure_meta: ErasureMeta = deserialize(candidate_erasure_meta.as_ref())?;
 
