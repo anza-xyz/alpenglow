@@ -177,8 +177,6 @@ impl Votor {
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
         // Get the sharable root bank
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
-
         let shared_context = SharedContext {
             blockstore: blockstore.clone(),
             bank_forks: bank_forks.clone(),
@@ -199,7 +197,7 @@ impl Votor {
             bls_sender: bls_sender.clone(),
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
-            root_bank: root_bank.clone(),
+            sharable_banks: bank_forks.read().unwrap().sharable_banks(),
         };
 
         let root_context = RootContext {
@@ -230,13 +228,13 @@ impl Votor {
             cluster_info: cluster_info.clone(),
             my_vote_pubkey: vote_account,
             blockstore,
-            root_bank: root_bank.clone(),
             leader_schedule_cache,
             consensus_message_receiver: bls_receiver,
             bls_sender,
             event_sender,
             commitment_sender,
             certificate_sender,
+            sharable_banks: bank_forks.read().unwrap().sharable_banks(),
         };
 
         let event_handler = EventHandler::new(event_handler_context);

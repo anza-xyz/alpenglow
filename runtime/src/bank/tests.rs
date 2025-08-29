@@ -962,7 +962,6 @@ impl VerifyAccountsHashConfig {
     fn default_for_test() -> Self {
         Self {
             require_rooted_bank: false,
-            run_in_background: false,
         }
     }
 }
@@ -5334,7 +5333,6 @@ fn test_bank_hash_consistency() {
         Arc::new(RuntimeConfig::default()),
         vec![],
         None,
-        None,
         false,
         Some(BankTestConfig::default().accounts_db_config),
         None,
@@ -7423,7 +7421,7 @@ fn test_invoke_non_program_account_owned_by_a_builtin(
 fn test_debug_bank() {
     let (genesis_config, _mint_keypair) = create_genesis_config(50000);
     let mut bank = Bank::new_for_tests(&genesis_config);
-    bank.finish_init(&genesis_config, None, false);
+    bank.finish_init(&genesis_config, false);
     let debug = format!("{bank:#?}");
     assert!(!debug.is_empty());
 }
@@ -8255,7 +8253,6 @@ fn test_epoch_schedule_from_genesis_config() {
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
         None,
-        None,
         false,
         Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
         None,
@@ -8284,7 +8281,6 @@ where
         &genesis_config,
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
-        None,
         None,
         false,
         Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
@@ -12398,7 +12394,7 @@ fn test_apply_builtin_program_feature_transitions_for_new_epoch() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(&genesis_config, None, false);
+    bank.finish_init(&genesis_config, false);
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12433,7 +12429,7 @@ fn test_startup_from_snapshot_after_precompile_transition() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(&genesis_config, None, false);
+    bank.finish_init(&genesis_config, false);
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12444,5 +12440,5 @@ fn test_startup_from_snapshot_after_precompile_transition() {
     bank.freeze();
 
     // Simulate starting up from snapshot finishing the initialization for a frozen bank
-    bank.finish_init(&genesis_config, None, false);
+    bank.finish_init(&genesis_config, false);
 }
