@@ -18,14 +18,15 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredId,
-            ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
+            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredFlags,
+            ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
         },
+        shred_event::{ShredEvent, ShredEventSender},
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
     },
     agave_feature_set::FeatureSet,
-    assert_matches::debug_assert_matches,
+    assert_matches::{assert_matches, debug_assert_matches},
     bincode::{deserialize, serialize},
     crossbeam_channel::{bounded, Receiver, Sender, TrySendError},
     dashmap::DashSet,
@@ -219,6 +220,7 @@ impl LastFECSetCheckResults {
 pub struct InsertResults {
     completed_data_set_infos: Vec<CompletedDataSetInfo>,
     duplicate_shreds: Vec<PossibleDuplicateShred>,
+    shred_events: Vec<ShredEvent>,
 }
 
 /// A "complete data set" is a range of [`Shred`]s that combined in sequence carry a single
@@ -310,20 +312,21 @@ pub struct SlotMetaWorkingSetEntry {
 }
 
 struct ShredInsertionTracker<'a> {
-    // Map which contains data shreds that have just been inserted.
-    just_inserted_shreds: HashMap<ShredId, Cow<'a, Shred>>,
+    // Map which contains data shreds that have just been inserted. They will
+    // later be written to `cf::ShredData` or `cf::AlternateShredData`
+    just_inserted_shreds: HashMap<(BlockLocation, ShredId), Cow<'a, Shred>>,
     // In-memory map that maintains the dirty copy of the erasure meta.  It will
-    // later be written to `cf::ErasureMeta`
-    erasure_metas: BTreeMap<ErasureSetId, WorkingEntry<ErasureMeta>>,
+    // later be written to `cf::ErasureMeta` or `cf::AlternateErasureMeta`
+    erasure_metas: BTreeMap<(BlockLocation, ErasureSetId), WorkingEntry<ErasureMeta>>,
     // In-memory map that maintains the dirty copy of the merkle root meta. It
-    // will later be written to `cf::MerkleRootMeta`
-    merkle_root_metas: HashMap<ErasureSetId, WorkingEntry<MerkleRootMeta>>,
+    // will later be written to `cf::MerkleRootMeta` or `cf::AlternateMerkleRootMeta`
+    merkle_root_metas: HashMap<(BlockLocation, ErasureSetId), WorkingEntry<MerkleRootMeta>>,
     // In-memory map that maintains the dirty copy of the index meta.  It will
-    // later be written to `cf::SlotMeta`
-    slot_meta_working_set: HashMap<u64, SlotMetaWorkingSetEntry>,
+    // later be written to `cf::SlotMeta` or `cf::AlternateSlotMeta`
+    slot_meta_working_set: HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
     // In-memory map that maintains the dirty copy of the index meta.  It will
-    // later be written to `cf::Index`
-    index_working_set: HashMap<u64, IndexMetaWorkingSetEntry>,
+    // later be written to `cf::Index` or `cf::AlternateIndex`
+    index_working_set: HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
     duplicate_shreds: Vec<PossibleDuplicateShred>,
     // Collection of the current blockstore writes which will be committed
     // atomically.
@@ -332,6 +335,8 @@ struct ShredInsertionTracker<'a> {
     index_meta_time_us: u64,
     // Collection of recently completed data sets (data portion of erasure batch)
     newly_completed_data_sets: Vec<CompletedDataSetInfo>,
+    // Collection of shred events to be sent to the shred resolver service
+    shred_events: Vec<ShredEvent>,
 }
 
 impl ShredInsertionTracker<'_> {
@@ -346,6 +351,7 @@ impl ShredInsertionTracker<'_> {
             write_batch,
             index_meta_time_us: 0,
             newly_completed_data_sets: vec![],
+            shred_events: vec![],
         }
     }
 }
@@ -580,6 +586,23 @@ impl Blockstore {
         }
     }
 
+    /// Puts the SlotMeta of the specified slot in the column for the specified location
+    fn put_meta_in_batch(
+        &self,
+        write_batch: &mut WriteBatch,
+        slot: Slot,
+        location: BlockLocation,
+        meta: &SlotMeta,
+    ) -> Result<()> {
+        match location {
+            BlockLocation::Original => self.meta_cf.put_in_batch(write_batch, slot, meta),
+            BlockLocation::Alternate { block_id } => {
+                self.alt_meta_cf
+                    .put_in_batch(write_batch, (slot, block_id), meta)
+            }
+        }
+    }
+
     /// Checks all available block versions, if we have a *complete* block for
     /// `block_id`, returns the associated slot meta
     pub fn meta_for_block_id(&self, slot: Slot, block_id: Hash) -> Result<Option<SlotMeta>> {
@@ -623,7 +646,6 @@ impl Blockstore {
         self.erasure_meta_cf.get((slot, u64::from(fec_set_index)))
     }
 
-    #[allow(dead_code)]
     fn erasure_meta_from_location(
         &self,
         erasure_set: ErasureSetId,
@@ -636,6 +658,29 @@ impl Blockstore {
                 self.alt_erasure_meta_cf
                     .get((slot, fec_set_index, block_id))
             }
+        }
+    }
+
+    /// Puts the ErasureMeta of the specified erasure set in the column for the specified location
+    fn put_erasure_meta_in_batch(
+        &self,
+        write_batch: &mut WriteBatch,
+        erasure_set: ErasureSetId,
+        location: BlockLocation,
+        erasure_meta: &ErasureMeta,
+    ) -> Result<()> {
+        let (slot, fec_set_index) = erasure_set.store_key();
+        match location {
+            BlockLocation::Original => self.erasure_meta_cf.put_in_batch(
+                write_batch,
+                (slot, u64::from(fec_set_index)),
+                erasure_meta,
+            ),
+            BlockLocation::Alternate { block_id } => self.alt_erasure_meta_cf.put_in_batch(
+                write_batch,
+                (slot, fec_set_index, block_id),
+                erasure_meta,
+            ),
         }
     }
 
@@ -659,7 +704,8 @@ impl Blockstore {
     fn previous_erasure_set<'a>(
         &'a self,
         erasure_set: ErasureSetId,
-        erasure_metas: &'a BTreeMap<ErasureSetId, WorkingEntry<ErasureMeta>>,
+        location: BlockLocation,
+        erasure_metas: &'a BTreeMap<(BlockLocation, ErasureSetId), WorkingEntry<ErasureMeta>>,
     ) -> Result<Option<(ErasureSetId, Cow<'a, ErasureMeta>)>> {
         let (slot, fec_set_index) = erasure_set.store_key();
 
@@ -667,8 +713,8 @@ impl Blockstore {
         // set to `erasure set`
         let candidate_erasure_entry = erasure_metas
             .range((
-                Bound::Included(ErasureSetId::new(slot, 0)),
-                Bound::Excluded(erasure_set),
+                Bound::Included((location, ErasureSetId::new(slot, 0))),
+                Bound::Excluded((location, erasure_set)),
             ))
             .next_back();
         let candidate_erasure_set_and_meta = candidate_erasure_entry
@@ -678,29 +724,48 @@ impl Blockstore {
             .map(|(erasure_set, erasure_meta)| {
                 (*erasure_set, Cow::Borrowed(erasure_meta.as_ref()))
             });
-        if candidate_erasure_set_and_meta.is_some() {
-            return Ok(candidate_erasure_set_and_meta);
+        if let Some(((loc, es), em)) = candidate_erasure_set_and_meta {
+            debug_assert!(loc == location);
+            return Ok(Some((es, em)));
         }
 
         // Consecutive set was not found in memory, scan blockstore for a potential candidate
-        let Some(((_, candidate_fec_set_index), candidate_erasure_meta)) = self
-            .erasure_meta_cf
-            .iter(IteratorMode::From(
-                (slot, u64::from(fec_set_index)),
-                IteratorDirection::Reverse,
-            ))?
-            // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
-            .find(|((_, candidate_fec_set_index), _)| {
-                *candidate_fec_set_index != u64::from(fec_set_index)
-            })
-            // Do not consider sets from the previous slot
-            .filter(|((candidate_slot, _), _)| *candidate_slot == slot)
-        else {
+        let Some((candidate_fec_set_index, candidate_erasure_meta)) = (match location {
+            BlockLocation::Original => self
+                .erasure_meta_cf
+                .iter(IteratorMode::From(
+                    (slot, u64::from(fec_set_index)),
+                    IteratorDirection::Reverse,
+                ))?
+                // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
+                .find(|((_, candidate_fec_set_index), _)| {
+                    *candidate_fec_set_index != u64::from(fec_set_index)
+                })
+                // Do not consider sets from the previous slot
+                .and_then(|((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
+                    (candidate_slot == slot).then_some((
+                        u32::try_from(candidate_fec_set_index)
+                            .expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
+                        candidate_erasure_meta
+                    ))
+                }),
+            BlockLocation::Alternate { block_id } => {
+                // Shreds are only inserted in the alternate column as part of alpenglow. Alpenglow will launch after
+                // SIMD-0317 which enforces fixed FEC sets of DATA_SHREDS_PER_FEC_BLOCK. Thus we can avoid the scan,
+                // as we know the previous fec set index
+                debug_assert!(fec_set_index % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0);
+                debug_assert!(fec_set_index >= DATA_SHREDS_PER_FEC_BLOCK as u32);
+                let prev_fec_set_index = fec_set_index.saturating_sub(DATA_SHREDS_PER_FEC_BLOCK as u32);
+                self
+                    .alt_erasure_meta_cf
+                    .get_bytes((slot, prev_fec_set_index, block_id))?
+                    .map(|candidate_erasure_meta| (prev_fec_set_index, candidate_erasure_meta.into_boxed_slice()))
+            },
+        }) else {
             // No potential candidates
             return Ok(None);
         };
-        let candidate_fec_set_index = u32::try_from(candidate_fec_set_index)
-            .expect("fec_set_index from a previously inserted shred should fit in u32");
+
         let candidate_erasure_set = ErasureSetId::new(slot, candidate_fec_set_index);
         let candidate_erasure_meta: ErasureMeta = deserialize(candidate_erasure_meta.as_ref())?;
 
@@ -717,11 +782,11 @@ impl Blockstore {
         Ok(None)
     }
 
+    #[cfg(test)]
     fn merkle_root_meta(&self, erasure_set: ErasureSetId) -> Result<Option<MerkleRootMeta>> {
         self.merkle_root_meta_cf.get(erasure_set.store_key())
     }
 
-    #[allow(dead_code)]
     fn merkle_root_meta_from_location(
         &self,
         erasure_set: ErasureSetId,
@@ -734,6 +799,29 @@ impl Blockstore {
                 self.alt_merkle_root_meta_cf
                     .get((slot, fec_set_index, block_id))
             }
+        }
+    }
+
+    /// Puts the MerkleRootMeta of the specified erasure set in the column for the specified location
+    fn put_merkle_root_meta_in_batch(
+        &self,
+        write_batch: &mut WriteBatch,
+        erasure_set: ErasureSetId,
+        location: BlockLocation,
+        merkle_root_meta: &MerkleRootMeta,
+    ) -> Result<()> {
+        let (slot, fec_set_index) = erasure_set.store_key();
+        match location {
+            BlockLocation::Original => self.merkle_root_meta_cf.put_in_batch(
+                write_batch,
+                (slot, fec_set_index),
+                merkle_root_meta,
+            ),
+            BlockLocation::Alternate { block_id } => self.alt_merkle_root_meta_cf.put_in_batch(
+                write_batch,
+                (slot, fec_set_index, block_id),
+                merkle_root_meta,
+            ),
         }
     }
 
@@ -871,12 +959,12 @@ impl Blockstore {
         &'a self,
         index: &'a Index,
         erasure_meta: &'a ErasureMeta,
-        prev_inserted_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        prev_inserted_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> impl Iterator<Item = Shred> + 'a {
         let slot = index.slot;
         erasure_meta.data_shreds_indices().filter_map(move |i| {
             let key = ShredId::new(slot, u32::try_from(i).unwrap(), ShredType::Data);
-            if let Some(shred) = prev_inserted_shreds.get(&key) {
+            if let Some(shred) = prev_inserted_shreds.get(&(BlockLocation::Original, key)) {
                 return Some(shred.as_ref().clone());
             }
             if !index.data().contains(i) {
@@ -900,12 +988,12 @@ impl Blockstore {
         &'a self,
         index: &'a Index,
         erasure_meta: &'a ErasureMeta,
-        prev_inserted_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        prev_inserted_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> impl Iterator<Item = Shred> + 'a {
         let slot = index.slot;
         erasure_meta.coding_shreds_indices().filter_map(move |i| {
             let key = ShredId::new(slot, u32::try_from(i).unwrap(), ShredType::Code);
-            if let Some(shred) = prev_inserted_shreds.get(&key) {
+            if let Some(shred) = prev_inserted_shreds.get(&(BlockLocation::Original, key)) {
                 return Some(shred.as_ref().clone());
             }
             if !index.coding().contains(i) {
@@ -929,7 +1017,7 @@ impl Blockstore {
         &'a self,
         index: &'a Index,
         erasure_meta: &'a ErasureMeta,
-        prev_inserted_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        prev_inserted_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         reed_solomon_cache: &'a ReedSolomonCache,
     ) -> std::result::Result<impl Iterator<Item = Shred> + 'a, shred::Error> {
         // Find shreds for this erasure set and try recovery
@@ -983,7 +1071,7 @@ impl Blockstore {
     fn attempt_shred_insertion<'a>(
         &self,
         shreds: impl IntoIterator<
-            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool),
+            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
         is_trusted: bool,
@@ -994,7 +1082,7 @@ impl Blockstore {
         let shreds = shreds.into_iter();
         metrics.num_shreds += shreds.len();
         let mut start = Measure::start("Shred insertion");
-        for (shred, is_repaired) in shreds {
+        for (shred, is_repaired, location) in shreds {
             let shred_source = if is_repaired {
                 ShredSource::Repaired
             } else {
@@ -1004,6 +1092,7 @@ impl Blockstore {
                 ShredType::Data => {
                     match self.check_insert_data_shred(
                         shred,
+                        location,
                         shred_insertion_tracker,
                         is_trusted,
                         leader_schedule,
@@ -1032,8 +1121,14 @@ impl Blockstore {
                     };
                 }
                 ShredType::Code => {
+                    // Coding shred repair is not implemented so coding shreds
+                    // should always be inserted into the Original column
+                    // We still pass location to support a future when we do repair
+                    // coding shreds
+                    assert_matches!(location, BlockLocation::Original);
                     self.check_insert_coding_shred(
                         shred,
+                        location,
                         shred_insertion_tracker,
                         is_trusted,
                         shred_source,
@@ -1049,9 +1144,9 @@ impl Blockstore {
 
     fn try_shred_recovery<'a>(
         &'a self,
-        erasure_metas: &'a BTreeMap<ErasureSetId, WorkingEntry<ErasureMeta>>,
-        index_working_set: &'a HashMap<u64, IndexMetaWorkingSetEntry>,
-        prev_inserted_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        erasure_metas: &'a BTreeMap<(BlockLocation, ErasureSetId), WorkingEntry<ErasureMeta>>,
+        index_working_set: &'a HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
+        prev_inserted_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         reed_solomon_cache: &'a ReedSolomonCache,
     ) -> impl Iterator<Item = Shred> + 'a {
         // Recovery rules:
@@ -1061,10 +1156,15 @@ impl Blockstore {
         // 3a. Enough number of shreds = (#data + #coding shreds) > erasure.num_data
         erasure_metas
             .iter()
-            .filter_map(|(erasure_set, working_erasure_meta)| {
+            .filter_map(|((location, erasure_set), working_erasure_meta)| {
+                if !matches!(location, BlockLocation::Original) {
+                    // At the moment we only perform recovery from the original column, as coding shred
+                    // repair is not implemented
+                    return None;
+                }
                 let erasure_meta = working_erasure_meta.as_ref();
                 let slot = erasure_set.slot();
-                let index_meta_entry = index_working_set.get(&slot).expect("Index");
+                let index_meta_entry = index_working_set.get(&(*location, slot)).expect("Index");
                 let index = &index_meta_entry.index;
                 erasure_meta
                     .should_recover_shreds(index)
@@ -1086,6 +1186,9 @@ impl Blockstore {
     /// 1. Verify signatures
     /// 2. Insert into blockstore
     /// 3. Send for retransmit.
+    ///
+    /// Note: At the moment we only perform shred recovery on the `BlockLocation::Original`
+    /// column, as coding shred repair is not implemented
     fn handle_shred_recovery(
         &self,
         leader_schedule: Option<&LeaderScheduleCache>,
@@ -1129,6 +1232,7 @@ impl Blockstore {
         for shred in recovered_data_shreds {
             *match self.check_insert_data_shred(
                 Cow::Owned(shred),
+                BlockLocation::Original,
                 shred_insertion_tracker,
                 is_trusted,
                 leader_schedule,
@@ -1153,15 +1257,14 @@ impl Blockstore {
         &self,
         shred_insertion_tracker: &mut ShredInsertionTracker,
     ) {
-        for (erasure_set, working_erasure_meta) in shred_insertion_tracker.erasure_metas.iter() {
+        for ((location, erasure_set), working_erasure_meta) in
+            shred_insertion_tracker.erasure_metas.iter()
+        {
             if !working_erasure_meta.should_write() {
                 // Not a new erasure meta
                 continue;
             }
             let (slot, _) = erasure_set.store_key();
-            if self.has_duplicate_shreds_in_slot(slot) {
-                continue;
-            }
             // First coding shred from this erasure batch, check the forward merkle root chaining
             let erasure_meta = working_erasure_meta.as_ref();
             let shred_id = ShredId::new(
@@ -1173,19 +1276,21 @@ impl Blockstore {
             );
             let shred = shred_insertion_tracker
                 .just_inserted_shreds
-                .get(&shred_id)
+                .get(&(*location, shred_id))
                 .expect("Erasure meta was just created, initial shred must exist");
 
             self.check_forward_chained_merkle_root_consistency(
                 shred,
                 erasure_meta,
+                *location,
                 &shred_insertion_tracker.just_inserted_shreds,
                 &shred_insertion_tracker.merkle_root_metas,
                 &mut shred_insertion_tracker.duplicate_shreds,
+                &mut shred_insertion_tracker.shred_events,
             );
         }
 
-        for (erasure_set, working_merkle_root_meta) in
+        for ((location, erasure_set), working_merkle_root_meta) in
             shred_insertion_tracker.merkle_root_metas.iter()
         {
             if !working_merkle_root_meta.should_write() {
@@ -1193,9 +1298,6 @@ impl Blockstore {
                 continue;
             }
             let (slot, _) = erasure_set.store_key();
-            if self.has_duplicate_shreds_in_slot(slot) {
-                continue;
-            }
             // First shred from this erasure batch, check the backwards merkle root chaining
             let merkle_root_meta = working_merkle_root_meta.as_ref();
             let shred_id = ShredId::new(
@@ -1205,14 +1307,16 @@ impl Blockstore {
             );
             let shred = shred_insertion_tracker
                 .just_inserted_shreds
-                .get(&shred_id)
+                .get(&(*location, shred_id))
                 .expect("Merkle root meta was just created, initial shred must exist");
 
             self.check_backwards_chained_merkle_root_consistency(
                 shred,
+                *location,
                 &shred_insertion_tracker.just_inserted_shreds,
                 &shred_insertion_tracker.erasure_metas,
                 &mut shred_insertion_tracker.duplicate_shreds,
+                &mut shred_insertion_tracker.shred_events,
             );
         }
     }
@@ -1231,36 +1335,44 @@ impl Blockstore {
             &mut shred_insertion_tracker.write_batch,
         )?;
 
-        for (erasure_set, working_erasure_meta) in &shred_insertion_tracker.erasure_metas {
+        for (&(location, erasure_set), working_erasure_meta) in
+            &shred_insertion_tracker.erasure_metas
+        {
             if !working_erasure_meta.should_write() {
                 // No need to rewrite the column
                 continue;
             }
-            let (slot, fec_set_index) = erasure_set.store_key();
-            self.erasure_meta_cf.put_in_batch(
+            self.put_erasure_meta_in_batch(
                 &mut shred_insertion_tracker.write_batch,
-                (slot, u64::from(fec_set_index)),
+                erasure_set,
+                location,
                 working_erasure_meta.as_ref(),
             )?;
         }
 
-        for (erasure_set, working_merkle_root_meta) in &shred_insertion_tracker.merkle_root_metas {
+        for (&(location, erasure_set), working_merkle_root_meta) in
+            &shred_insertion_tracker.merkle_root_metas
+        {
             if !working_merkle_root_meta.should_write() {
                 // No need to rewrite the column
                 continue;
             }
-            self.merkle_root_meta_cf.put_in_batch(
+            self.put_merkle_root_meta_in_batch(
                 &mut shred_insertion_tracker.write_batch,
-                erasure_set.store_key(),
+                erasure_set,
+                location,
                 working_merkle_root_meta.as_ref(),
             )?;
         }
 
-        for (&slot, index_working_set_entry) in shred_insertion_tracker.index_working_set.iter() {
+        for (&(location, slot), index_working_set_entry) in
+            shred_insertion_tracker.index_working_set.iter()
+        {
             if index_working_set_entry.did_insert_occur {
-                self.index_cf.put_in_batch(
+                self.put_index_in_batch(
                     &mut shred_insertion_tracker.write_batch,
                     slot,
+                    location,
                     &index_working_set_entry.index,
                 )?;
             }
@@ -1308,7 +1420,7 @@ impl Blockstore {
     ///     pair to the `cf::Index` column family for each index_working_set_entry which insert did occur in this function call.
     ///
     /// Arguments:
-    ///  - `shreds`: the shreds to be inserted.
+    ///  - `shreds`: the shreds to be inserted, alongside the location to insert.
     ///  - `is_repaired`: a boolean vector aligned with `shreds` where each
     ///    boolean indicates whether the corresponding shred is repaired or not.
     ///  - `leader_schedule`: the leader schedule
@@ -1327,7 +1439,7 @@ impl Blockstore {
     fn do_insert_shreds<'a>(
         &self,
         shreds: impl IntoIterator<
-            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool),
+            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
             IntoIter: ExactSizeIterator,
         >,
         leader_schedule: Option<&LeaderScheduleCache>,
@@ -1406,12 +1518,12 @@ impl Blockstore {
         Ok(InsertResults {
             completed_data_set_infos: shred_insertion_tracker.newly_completed_data_sets,
             duplicate_shreds: shred_insertion_tracker.duplicate_shreds,
+            shred_events: shred_insertion_tracker.shred_events,
         })
     }
 
-    // Attempts to recover and retransmit recovered shreds (also identifying
-    // and handling duplicate shreds). Broadcast stage should instead call
-    // Blockstore::insert_shreds when inserting own shreds during leader slots.
+    /// Simlar to `insert_shreds_at_location_handle_duplicate`  but always inserts
+    /// shreds in the original column specified by `BlockLocation::Original`
     pub fn insert_shreds_handle_duplicate<'a, F>(
         &self,
         shreds: impl IntoIterator<
@@ -1428,9 +1540,46 @@ impl Blockstore {
     where
         F: Fn(PossibleDuplicateShred),
     {
+        self.insert_shreds_at_location_handle_duplicate(
+            shreds
+                .into_iter()
+                .map(|(shred, is_repaired)| (shred, is_repaired, BlockLocation::Original)),
+            leader_schedule,
+            is_trusted,
+            retransmit_sender,
+            handle_duplicate,
+            None,
+            reed_solomon_cache,
+            metrics,
+        )
+    }
+
+    /// Inserts `shreds` into the column specified by  the `BlockLocation`.
+    ///
+    /// Additionally attempts to recover and retransmit recovered shreds (also identifying
+    /// and handling duplicate shreds). Broadcast stage should instead call
+    /// Blockstore::insert_shreds when inserting own shreds during leader slots.
+    pub fn insert_shreds_at_location_handle_duplicate<'a, F>(
+        &self,
+        shreds: impl IntoIterator<
+            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool, BlockLocation),
+            IntoIter: ExactSizeIterator,
+        >,
+        leader_schedule: Option<&LeaderScheduleCache>,
+        is_trusted: bool,
+        retransmit_sender: &EvictingSender<Vec<shred::Payload>>,
+        handle_duplicate: &F,
+        shred_event_sender: Option<&ShredEventSender>,
+        reed_solomon_cache: &ReedSolomonCache,
+        metrics: &mut BlockstoreInsertionMetrics,
+    ) -> Result<Vec<CompletedDataSetInfo>>
+    where
+        F: Fn(PossibleDuplicateShred),
+    {
         let InsertResults {
             completed_data_set_infos,
             duplicate_shreds,
+            shred_events,
         } = self.do_insert_shreds(
             shreds,
             leader_schedule,
@@ -1441,6 +1590,13 @@ impl Blockstore {
 
         for shred in duplicate_shreds {
             handle_duplicate(shred);
+        }
+
+        if let Some(shred_event_sender) = shred_event_sender {
+            for event in shred_events {
+                // TODO: handle error
+                let _ = shred_event_sender.send(event);
+            }
         }
 
         Ok(completed_data_set_infos)
@@ -1492,7 +1648,7 @@ impl Blockstore {
     }
 
     // Bypasses erasure recovery becuase it is called from broadcast stage
-    // when inserting own shreds during leader slots.
+    // when inserting own shreds during leader slots. Stores all shreds in the original column.
     pub fn insert_cow_shreds<'a>(
         &self,
         shreds: impl IntoIterator<Item = Cow<'a, Shred>, IntoIter: ExactSizeIterator>,
@@ -1501,7 +1657,7 @@ impl Blockstore {
     ) -> Result<Vec<CompletedDataSetInfo>> {
         let shreds = shreds
             .into_iter()
-            .map(|shred| (shred, /*is_repaired:*/ false));
+            .map(|shred| (shred, /*is_repaired:*/ false, BlockLocation::Original));
         let insert_results = self.do_insert_shreds(
             shreds,
             leader_schedule,
@@ -1531,7 +1687,11 @@ impl Blockstore {
     ) -> Vec<PossibleDuplicateShred> {
         let insert_results = self
             .do_insert_shreds(
-                [(Cow::Owned(shred), /*is_repaired:*/ false)],
+                [(
+                    Cow::Owned(shred),
+                    /*is_repaired:*/ false,
+                    BlockLocation::Original,
+                )],
                 Some(leader_schedule),
                 false,
                 None, // (reed_solomon_cache, retransmit_sender)
@@ -1545,6 +1705,7 @@ impl Blockstore {
     fn check_insert_coding_shred<'a>(
         &self,
         shred: Cow<'a, Shred>,
+        location: BlockLocation,
         shred_insertion_tracker: &mut ShredInsertionTracker<'a>,
         is_trusted: bool,
         shred_source: ShredSource,
@@ -1565,13 +1726,16 @@ impl Blockstore {
         } = shred_insertion_tracker;
 
         let index_meta_working_set_entry =
-            self.get_index_meta_entry(slot, index_working_set, index_meta_time_us);
+            self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
 
         let index_meta = &mut index_meta_working_set_entry.index;
         let erasure_set = shred.erasure_set();
 
-        if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry(erasure_set) {
-            if let Some(meta) = self.merkle_root_meta(erasure_set).unwrap() {
+        if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry((location, erasure_set)) {
+            if let Some(meta) = self
+                .merkle_root_meta_from_location(erasure_set, location)
+                .unwrap()
+            {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
@@ -1590,37 +1754,48 @@ impl Blockstore {
                 return false;
             }
 
-            if let Some(merkle_root_meta) = merkle_root_metas.get(&erasure_set) {
+            if let Some(merkle_root_meta) = merkle_root_metas.get(&(location, erasure_set)) {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if !self.check_merkle_root_consistency(
                     just_inserted_shreds,
                     slot,
+                    location,
                     merkle_root_meta.as_ref(),
                     &shred,
                     duplicate_shreds,
+                    &mut shred_insertion_tracker.shred_events,
                 ) {
                     return false;
                 }
             }
         }
 
-        let erasure_meta_entry = erasure_metas.entry(erasure_set).or_insert_with(|| {
-            self.erasure_meta(erasure_set)
-                .expect("Expect database get to succeed")
-                .map(WorkingEntry::Clean)
-                .unwrap_or_else(|| {
-                    WorkingEntry::Dirty(ErasureMeta::from_coding_shred(&shred).unwrap())
-                })
-        });
+        let erasure_meta_entry =
+            erasure_metas
+                .entry((location, erasure_set))
+                .or_insert_with(|| {
+                    self.erasure_meta_from_location(erasure_set, location)
+                        .expect("Expect database get to succeed")
+                        .map(WorkingEntry::Clean)
+                        .unwrap_or_else(|| {
+                            WorkingEntry::Dirty(ErasureMeta::from_coding_shred(&shred).unwrap())
+                        })
+                });
         let erasure_meta = erasure_meta_entry.as_ref();
 
         if !erasure_meta.check_coding_shred(&shred) {
             metrics.num_coding_shreds_invalid_erasure_config += 1;
             if !self.has_duplicate_shreds_in_slot(slot) {
                 if let Some(conflicting_shred) = self
-                    .find_conflicting_coding_shred(&shred, slot, erasure_meta, just_inserted_shreds)
+                    .find_conflicting_coding_shred(
+                        &shred,
+                        slot,
+                        location,
+                        erasure_meta,
+                        just_inserted_shreds,
+                    )
                     .map(Cow::into_owned)
                 {
                     if let Err(e) = self.store_duplicate_slot(
@@ -1674,12 +1849,24 @@ impl Blockstore {
             index_meta_working_set_entry.did_insert_occur = true;
             metrics.num_inserted += 1;
 
-            merkle_root_metas
-                .entry(erasure_set)
-                .or_insert(WorkingEntry::Dirty(MerkleRootMeta::from_shred(&shred)));
+            if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry((location, erasure_set)) {
+                // This is the first shred from this FEC set, db was checked above, create a meta
+                let merkle_root_meta = MerkleRootMeta::from_shred(&shred);
+                entry.insert(WorkingEntry::Dirty(merkle_root_meta));
+
+                shred_insertion_tracker
+                    .shred_events
+                    .push(ShredEvent::NewFECSet {
+                        location,
+                        slot: shred.slot(),
+                        fec_set_index: erasure_set.fec_set_index(),
+                        merkle_root: merkle_root_meta.merkle_root().unwrap(),
+                        chained_merkle_root: shred.chained_merkle_root().unwrap(),
+                    });
+            }
         }
 
-        if let HashMapEntry::Vacant(entry) = just_inserted_shreds.entry(shred.id()) {
+        if let HashMapEntry::Vacant(entry) = just_inserted_shreds.entry((location, shred.id())) {
             metrics.num_coding_shreds_inserted += 1;
             entry.insert(shred);
         }
@@ -1687,18 +1874,39 @@ impl Blockstore {
         result
     }
 
+    /// For a complete fec set `erasure_set`, check if it is the last set in the slot.
+    /// Note: assumes that the fec set is complete (all data shreds are ingested)
+    fn is_complete_fec_set_last_in_slot(
+        &self,
+        erasure_set: ErasureSetId,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+    ) -> bool {
+        let last_data_shred_index = ErasureMeta::last_data_shred_index(erasure_set.fec_set_index());
+        let shred_id = ShredId::new(erasure_set.slot(), last_data_shred_index, ShredType::Data);
+
+        let shred = self
+            .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
+            .expect("FEC set must be complete to check last in slot");
+        shred::layout::get_flags(&shred)
+            .expect("Previously inserted shred must be valid")
+            .contains(ShredFlags::LAST_SHRED_IN_SLOT)
+    }
+
     fn find_conflicting_coding_shred<'a>(
         &'a self,
         shred: &Shred,
         slot: Slot,
+        location: BlockLocation,
         erasure_meta: &ErasureMeta,
-        just_received_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        just_received_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> Option<Cow<'a, shred::Payload>> {
         // Search for the shred which set the initial erasure config, either inserted,
         // or in the current batch in just_received_shreds.
         let index = erasure_meta.first_received_coding_shred_index()?;
         let shred_id = ShredId::new(slot, index, ShredType::Code);
-        let maybe_shred = self.get_shred_from_just_inserted_or_db(just_received_shreds, shred_id);
+        let maybe_shred =
+            self.get_shred_from_just_inserted_or_db(just_received_shreds, shred_id, location);
 
         if index != 0 || maybe_shred.is_some() {
             return maybe_shred;
@@ -1716,7 +1924,7 @@ impl Blockstore {
                 }
             } else if let Some(potential_shred) = {
                 let key = ShredId::new(slot, u32::try_from(coding_index).unwrap(), ShredType::Code);
-                just_received_shreds.get(&key)
+                just_received_shreds.get(&(location, key))
             } {
                 if shred.erasure_mismatch(potential_shred).unwrap() {
                     return Some(Cow::Borrowed(potential_shred.payload()));
@@ -1742,6 +1950,7 @@ impl Blockstore {
     ///
     /// Arguments:
     /// - `shred`: the shred to be inserted
+    /// - `location`: the location to insert into
     /// - `shred_insertion_tracker`: collection of shred insertion tracking
     ///   data.
     /// - `is_trusted`: if false, this function will check whether the
@@ -1754,6 +1963,7 @@ impl Blockstore {
     fn check_insert_data_shred<'a>(
         &self,
         shred: Cow<'a, Shred>,
+        location: BlockLocation,
         shred_insertion_tracker: &mut ShredInsertionTracker<'a>,
         is_trusted: bool,
         leader_schedule: Option<&LeaderScheduleCache>,
@@ -1772,14 +1982,16 @@ impl Blockstore {
             erasure_metas,
             write_batch,
             newly_completed_data_sets,
+            ..
         } = shred_insertion_tracker;
 
         let index_meta_working_set_entry =
-            self.get_index_meta_entry(slot, index_working_set, index_meta_time_us);
+            self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
         let index_meta = &mut index_meta_working_set_entry.index;
         let slot_meta_entry = self.get_slot_meta_entry(
             slot_meta_working_set,
             slot,
+            location,
             shred
                 .parent()
                 .map_err(|_| InsertDataShredError::InvalidShred)?,
@@ -1787,8 +1999,12 @@ impl Blockstore {
 
         let slot_meta = &mut slot_meta_entry.new_slot_meta.borrow_mut();
         let erasure_set = shred.erasure_set();
-        if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry(erasure_set) {
-            if let Some(meta) = self.merkle_root_meta(erasure_set).unwrap() {
+        let fec_set_index = erasure_set.fec_set_index();
+        if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry((location, erasure_set)) {
+            if let Some(meta) = self
+                .merkle_root_meta_from_location(erasure_set, location)
+                .unwrap()
+            {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
@@ -1821,6 +2037,7 @@ impl Blockstore {
 
             if !self.should_insert_data_shred(
                 &shred,
+                location,
                 slot_meta,
                 just_inserted_shreds,
                 self.max_root(),
@@ -1831,16 +2048,18 @@ impl Blockstore {
                 return Err(InsertDataShredError::InvalidShred);
             }
 
-            if let Some(merkle_root_meta) = merkle_root_metas.get(&erasure_set) {
+            if let Some(merkle_root_meta) = merkle_root_metas.get(&(location, erasure_set)) {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if !self.check_merkle_root_consistency(
                     just_inserted_shreds,
                     slot,
+                    location,
                     merkle_root_meta.as_ref(),
                     &shred,
                     duplicate_shreds,
+                    &mut shred_insertion_tracker.shred_events,
                 ) {
                     // This indicates there is an alternate version of this block.
                     // Similar to the last index case above, we might never get all the
@@ -1856,22 +2075,60 @@ impl Blockstore {
             }
         }
 
-        let completed_data_sets = self.insert_data_shred(
-            slot_meta,
-            index_meta.data_mut(),
-            &shred,
-            write_batch,
-            shred_source,
-        )?;
-        newly_completed_data_sets.extend(completed_data_sets);
-        merkle_root_metas
-            .entry(erasure_set)
-            .or_insert(WorkingEntry::Dirty(MerkleRootMeta::from_shred(&shred)));
-        just_inserted_shreds.insert(shred.id(), shred);
+        {
+            let completed_data_sets = self.insert_data_shred(
+                slot_meta,
+                index_meta.data_mut(),
+                &shred,
+                location,
+                write_batch,
+                shred_source,
+            )?;
+
+            if matches!(location, BlockLocation::Original) {
+                // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
+                // if necessary.
+                newly_completed_data_sets.extend(completed_data_sets);
+            }
+        }
+
+        if let HashMapEntry::Vacant(entry) = merkle_root_metas.entry((location, erasure_set)) {
+            // This is the first shred from this FEC set, db was checked above, create a meta
+            let merkle_root_meta = MerkleRootMeta::from_shred(&shred);
+            entry.insert(WorkingEntry::Dirty(merkle_root_meta));
+
+            shred_insertion_tracker
+                .shred_events
+                .push(ShredEvent::NewFECSet {
+                    location,
+                    slot,
+                    fec_set_index,
+                    merkle_root: merkle_root_meta.merkle_root().unwrap(),
+                    chained_merkle_root: shred.chained_merkle_root().unwrap(),
+                });
+        }
+        just_inserted_shreds.insert((location, shred.id()), shred);
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
-        if let BTreeMapEntry::Vacant(entry) = erasure_metas.entry(erasure_set) {
-            if let Some(meta) = self.erasure_meta(erasure_set).unwrap() {
+
+        if ErasureMeta::is_data_set_complete(fec_set_index, index_meta) {
+            let is_last_in_slot =
+                self.is_complete_fec_set_last_in_slot(erasure_set, location, just_inserted_shreds);
+            shred_insertion_tracker
+                .shred_events
+                .push(ShredEvent::CompletedFECSet {
+                    location,
+                    slot,
+                    fec_set_index,
+                    is_last_in_slot,
+                });
+        }
+
+        if let BTreeMapEntry::Vacant(entry) = erasure_metas.entry((location, erasure_set)) {
+            if let Some(meta) = self
+                .erasure_meta_from_location(erasure_set, location)
+                .unwrap()
+            {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
@@ -1916,24 +2173,29 @@ impl Blockstore {
     /// shreds or the backing store. Returns None if there is no shred.
     fn get_shred_from_just_inserted_or_db<'a>(
         &'a self,
-        just_inserted_shreds: &'a HashMap<ShredId, Cow<'_, Shred>>,
+        just_inserted_shreds: &'a HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         shred_id: ShredId,
+        location: BlockLocation,
     ) -> Option<Cow<'a, shred::Payload>> {
         let (slot, index, shred_type) = shred_id.unpack();
-        match (just_inserted_shreds.get(&shred_id), shred_type) {
+        match (just_inserted_shreds.get(&(location, shred_id)), shred_type) {
             (Some(shred), _) => Some(Cow::Borrowed(shred.payload())),
             // If it doesn't exist in the just inserted set, it must exist in
             // the backing store
             (_, ShredType::Data) => self
-                .get_data_shred(slot, u64::from(index))
+                .get_data_shred_from_location(slot, u64::from(index), location)
                 .unwrap()
                 .map(shred::Payload::from)
                 .map(Cow::Owned),
-            (_, ShredType::Code) => self
-                .get_coding_shred(slot, u64::from(index))
-                .unwrap()
-                .map(shred::Payload::from)
-                .map(Cow::Owned),
+            (_, ShredType::Code) => {
+                // Coding shred repair is not implemented so we can only ask for coding shreds from the
+                // original column
+                assert_matches!(location, BlockLocation::Original);
+                self.get_coding_shred(slot, u64::from(index))
+                    .unwrap()
+                    .map(shred::Payload::from)
+                    .map(Cow::Owned)
+            }
         }
     }
 
@@ -1944,11 +2206,13 @@ impl Blockstore {
     /// `duplicate_shreds`.
     fn check_merkle_root_consistency(
         &self,
-        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         slot: Slot,
+        location: BlockLocation,
         merkle_root_meta: &MerkleRootMeta,
         shred: &Shred,
         duplicate_shreds: &mut Vec<PossibleDuplicateShred>,
+        shred_events: &mut Vec<ShredEvent>,
     ) -> bool {
         let new_merkle_root = shred.merkle_root().ok();
         if merkle_root_meta.merkle_root() == new_merkle_root {
@@ -1969,6 +2233,14 @@ impl Blockstore {
             shred.shred_type(),
         );
 
+        shred_events.push(ShredEvent::MerkleRootConflict {
+            location,
+            slot,
+            fec_set_index: shred.erasure_set().fec_set_index(),
+            conflicting_shred_index: shred.index(),
+            conflicting_shred_type: shred.shred_type(),
+        });
+
         if !self.has_duplicate_shreds_in_slot(slot) {
             let shred_id = ShredId::new(
                 slot,
@@ -1976,7 +2248,7 @@ impl Blockstore {
                 merkle_root_meta.first_received_shred_type(),
             );
             let Some(conflicting_shred) = self
-                .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id)
+                .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
                 .map(Cow::into_owned)
             else {
                 error!(
@@ -2018,9 +2290,11 @@ impl Blockstore {
         &self,
         shred: &Shred,
         erasure_meta: &ErasureMeta,
-        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
-        merkle_root_metas: &HashMap<ErasureSetId, WorkingEntry<MerkleRootMeta>>,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        merkle_root_metas: &HashMap<(BlockLocation, ErasureSetId), WorkingEntry<MerkleRootMeta>>,
         duplicate_shreds: &mut Vec<PossibleDuplicateShred>,
+        shred_events: &mut Vec<ShredEvent>,
     ) -> bool {
         debug_assert!(erasure_meta.check_coding_shred(shred));
         let slot = shred.slot();
@@ -2033,11 +2307,11 @@ impl Blockstore {
         };
         let next_erasure_set = ErasureSetId::new(slot, next_fec_set_index);
         let Some(next_merkle_root_meta) = merkle_root_metas
-            .get(&next_erasure_set)
+            .get(&(location, next_erasure_set))
             .map(WorkingEntry::as_ref)
             .map(Cow::Borrowed)
             .or_else(|| {
-                self.merkle_root_meta(next_erasure_set)
+                self.merkle_root_meta_from_location(next_erasure_set, location)
                     .unwrap()
                     .map(Cow::Owned)
             })
@@ -2050,10 +2324,13 @@ impl Blockstore {
             next_merkle_root_meta.first_received_shred_index(),
             next_merkle_root_meta.first_received_shred_type(),
         );
-        let Some(next_shred) =
-            Self::get_shred_from_just_inserted_or_db(self, just_inserted_shreds, next_shred_id)
-                .map(Cow::into_owned)
-        else {
+        let Some(next_shred) = Self::get_shred_from_just_inserted_or_db(
+            self,
+            just_inserted_shreds,
+            next_shred_id,
+            location,
+        )
+        .map(Cow::into_owned) else {
             error!(
                 "Shred {next_shred_id:?} indicated by merkle root meta {next_merkle_root_meta:?} \
                  is missing from blockstore. This should only happen in extreme cases where \
@@ -2074,6 +2351,15 @@ impl Blockstore {
                 shred.shred_type(),
                 next_merkle_root_meta.first_received_shred_type(),
             );
+
+            shred_events.push(ShredEvent::ChainedMerkleRootConflict {
+                location,
+                slot,
+                lower_fec_set_index: erasure_set.fec_set_index(),
+                lower_merkle_root: merkle_root.unwrap_or_default(),
+                higher_fec_set_index: next_erasure_set.fec_set_index(),
+                higher_chained_merkle_root: chained_merkle_root.unwrap_or_default(),
+            });
 
             if !self.has_duplicate_shreds_in_slot(shred.slot()) {
                 duplicate_shreds.push(PossibleDuplicateShred::ChainedMerkleRootConflict(
@@ -2099,19 +2385,20 @@ impl Blockstore {
     fn check_backwards_chained_merkle_root_consistency(
         &self,
         shred: &Shred,
-        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
-        erasure_metas: &BTreeMap<ErasureSetId, WorkingEntry<ErasureMeta>>,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        erasure_metas: &BTreeMap<(BlockLocation, ErasureSetId), WorkingEntry<ErasureMeta>>,
         duplicate_shreds: &mut Vec<PossibleDuplicateShred>,
+        shred_events: &mut Vec<ShredEvent>,
     ) -> bool {
         let slot = shred.slot();
         let erasure_set = shred.erasure_set();
         let fec_set_index = shred.fec_set_index();
 
         if fec_set_index == 0 {
-            // Although the first fec set chains to the last fec set of the parent block,
-            // if this chain is incorrect we do not know which block is the duplicate until votes
-            // are received. We instead delay this check until the block reaches duplicate
-            // confirmation.
+            // The first fec set chains to the last fec set of the parent block.
+            // This chaining across block boundary is checked in the shred resolver and used
+            // in replay
             return true;
         }
 
@@ -2119,7 +2406,7 @@ impl Blockstore {
         // Since we cannot compute the previous fec set index, we check the in memory map, otherwise
         // check the previous key from blockstore to see if it is consecutive with our current set.
         let Some((prev_erasure_set, prev_erasure_meta)) = self
-            .previous_erasure_set(erasure_set, erasure_metas)
+            .previous_erasure_set(erasure_set, location, erasure_metas)
             .expect("Expect database operations to succeed")
         else {
             // No shreds from the previous erasure batch have been received,
@@ -2135,10 +2422,13 @@ impl Blockstore {
                 .expect("First received coding index must fit in u32"),
             ShredType::Code,
         );
-        let Some(prev_shred) =
-            Self::get_shred_from_just_inserted_or_db(self, just_inserted_shreds, prev_shred_id)
-                .map(Cow::into_owned)
-        else {
+        let Some(prev_shred) = Self::get_shred_from_just_inserted_or_db(
+            self,
+            just_inserted_shreds,
+            prev_shred_id,
+            location,
+        )
+        .map(Cow::into_owned) else {
             warn!(
                 "Shred {prev_shred_id:?} indicated by the erasure meta {prev_erasure_meta:?} is \
                  missing from blockstore. This can happen if you have recently upgraded from a \
@@ -2159,6 +2449,15 @@ impl Blockstore {
                 shred.erasure_set(),
                 shred.shred_type(),
             );
+
+            shred_events.push(ShredEvent::ChainedMerkleRootConflict {
+                location,
+                slot,
+                lower_fec_set_index: prev_erasure_set.fec_set_index(),
+                lower_merkle_root: merkle_root.unwrap_or_default(),
+                higher_fec_set_index: erasure_set.fec_set_index(),
+                higher_chained_merkle_root: chained_merkle_root.unwrap_or_default(),
+            });
 
             if !self.has_duplicate_shreds_in_slot(shred.slot()) {
                 duplicate_shreds.push(PossibleDuplicateShred::ChainedMerkleRootConflict(
@@ -2183,8 +2482,9 @@ impl Blockstore {
     fn should_insert_data_shred(
         &self,
         shred: &Shred,
+        location: BlockLocation,
         slot_meta: &SlotMeta,
-        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         max_root: Slot,
         leader_schedule: Option<&LeaderScheduleCache>,
         shred_source: ShredSource,
@@ -2213,7 +2513,7 @@ impl Blockstore {
                     ShredType::Data,
                 );
                 let Some(ending_shred) = self
-                    .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id)
+                    .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
                     .map(Cow::into_owned)
                 else {
                     error!(
@@ -2263,7 +2563,7 @@ impl Blockstore {
                     ShredType::Data,
                 );
                 let Some(ending_shred) = self
-                    .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id)
+                    .get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
                     .map(Cow::into_owned)
                 else {
                     error!(
@@ -2315,6 +2615,7 @@ impl Blockstore {
         slot_meta: &mut SlotMeta,
         data_index: &'a mut ShredIndex,
         shred: &Shred,
+        location: BlockLocation,
         write_batch: &mut WriteBatch,
         shred_source: ShredSource,
     ) -> Result<impl Iterator<Item = CompletedDataSetInfo> + 'a> {
@@ -2351,11 +2652,7 @@ impl Blockstore {
 
         // Commit step: commit all changes to the mutable structures at once, or none at all.
         // We don't want only a subset of these changes going through.
-        self.data_shred_cf.put_bytes_in_batch(
-            write_batch,
-            (slot, index),
-            shred.bytes_to_store(),
-        )?;
+        self.put_data_shred_in_batch(write_batch, slot, index, location, shred.bytes_to_store())?;
         data_index.insert(index);
         let newly_completed_data_sets = update_slot_meta(
             last_in_slot,
@@ -2368,6 +2665,7 @@ impl Blockstore {
         )
         .map(move |indices| CompletedDataSetInfo { slot, indices });
 
+        // TODO(ashwin): update stats to track by location
         self.slots_stats.record_shred(
             shred.slot(),
             shred.fec_set_index(),
@@ -2469,6 +2767,28 @@ impl Blockstore {
             BlockLocation::Alternate { block_id } => {
                 self.alt_data_shred_cf.get_bytes((slot, index, block_id))
             }
+        }
+    }
+
+    /// Puts the shred of the specified slot-index in the column for the specified location
+    fn put_data_shred_in_batch(
+        &self,
+        write_batch: &mut WriteBatch,
+        slot: Slot,
+        index: u64,
+        location: BlockLocation,
+        shred: &[u8],
+    ) -> Result<()> {
+        match location {
+            BlockLocation::Original => {
+                self.data_shred_cf
+                    .put_bytes_in_batch(write_batch, (slot, index), shred)
+            }
+            BlockLocation::Alternate { block_id } => self.alt_data_shred_cf.put_bytes_in_batch(
+                write_batch,
+                (slot, index, block_id),
+                shred,
+            ),
         }
     }
 
@@ -2578,6 +2898,23 @@ impl Blockstore {
         match location {
             BlockLocation::Original => self.get_index(slot),
             BlockLocation::Alternate { block_id } => self.alt_index_cf.get((slot, block_id)),
+        }
+    }
+
+    /// Puts the Index of the specified erasure set in the column for the specified location
+    fn put_index_in_batch(
+        &self,
+        write_batch: &mut WriteBatch,
+        slot: Slot,
+        location: BlockLocation,
+        index: &Index,
+    ) -> Result<()> {
+        match location {
+            BlockLocation::Original => self.index_cf.put_in_batch(write_batch, slot, index),
+            BlockLocation::Alternate { block_id } => {
+                self.alt_index_cf
+                    .put_in_batch(write_batch, (slot, block_id), index)
+            }
         }
     }
 
@@ -4510,6 +4847,9 @@ impl Blockstore {
     /// checks whether any of its direct and indirect children slots are connected
     /// or not.
     ///
+    /// Note: This chaining only occurs for `SlotMeta`s in the column associated with
+    /// `BlockLocation::Original`
+    ///
     /// This function may update column families [`cf::SlotMeta`] and
     /// [`cf::Orphans`].
     ///
@@ -4520,12 +4860,12 @@ impl Blockstore {
     /// - `db`: the blockstore db that stores both shreds and their metadata.
     /// - `write_batch`: the write batch which includes all the updates of the
     ///   the current write and ensures their atomicity.
-    /// - `working_set`: a slot-id to SlotMetaWorkingSetEntry map.  This function
+    /// - `working_set`: a (location, slot-id) to SlotMetaWorkingSetEntry map.  This function
     ///   will remove all entries which insertion did not actually occur.
     fn handle_chaining(
         &self,
         write_batch: &mut WriteBatch,
-        working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        working_set: &mut HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         metrics: &mut BlockstoreInsertionMetrics,
     ) -> Result<()> {
         let mut start = Measure::start("Shred chaining");
@@ -4533,7 +4873,14 @@ impl Blockstore {
         working_set.retain(|_, entry| entry.did_insert_occur);
         let mut new_chained_slots = HashMap::new();
         let working_set_slots: Vec<_> = working_set.keys().collect();
-        for slot in working_set_slots {
+        for (location, slot) in working_set_slots {
+            if !matches!(location, BlockLocation::Original) {
+                // We do not perform SlotMeta chaining for alternate versions of slots, as SlotMeta
+                // only supports slot #. In the future we could consider tracking it here if we upgrade
+                // SlotMeta to also distinguish by hash. For now we track chaining of alternate versions
+                // elsewhere and pass the information to replay for insertion into bank forks when necessary.
+                continue;
+            }
             self.handle_chaining_for_slot(write_batch, working_set, &mut new_chained_slots, *slot)?;
         }
 
@@ -4567,6 +4914,10 @@ impl Blockstore {
     /// This function may update column family [`cf::Orphans`] and indirectly
     /// update SlotMeta from its output parameter `new_chained_slots`.
     ///
+    /// Note: This function works under the assumption that `slot` refers to the
+    /// column associated with `BlockLocation::Original`. `SlotMeta` chaining for
+    /// alternate versions is not supported.
+    ///
     /// Arguments:
     /// `db`: the underlying db for blockstore
     /// `write_batch`: the write batch which includes all the updates of the
@@ -4578,12 +4929,12 @@ impl Blockstore {
     fn handle_chaining_for_slot(
         &self,
         write_batch: &mut WriteBatch,
-        working_set: &HashMap<u64, SlotMetaWorkingSetEntry>,
+        working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
         slot: Slot,
     ) -> Result<()> {
         let slot_meta_entry = working_set
-            .get(&slot)
+            .get(&(BlockLocation::Original, slot))
             .expect("Slot must exist in the working_set hashmap");
 
         let meta = &slot_meta_entry.new_slot_meta;
@@ -4651,12 +5002,13 @@ impl Blockstore {
     }
 
     /// Traverse all the children (direct and indirect) of `slot_meta`, and apply
-    /// `slot_function` to each of the children (but not `slot_meta`).
+    /// `slot_function` to each of the children in `BlockLocation::Original`
+    /// (but not `slot_meta`).
     ///
     /// Arguments:
     /// `db`: the blockstore db that stores shreds and their metadata.
     /// `slot_meta`: the SlotMeta of the above `slot`.
-    /// `working_set`: a slot-id to SlotMetaWorkingSetEntry map which is used
+    /// `working_set`: a (location, slot-id) to SlotMetaWorkingSetEntry map which is used
     ///   to traverse the graph.
     /// `passed_visited_slots`: all the traversed slots which have passed the
     ///   slot_function.  This may also include the input `slot`.
@@ -4666,8 +5018,8 @@ impl Blockstore {
     fn traverse_children_mut<F>(
         &self,
         slot_meta: &Rc<RefCell<SlotMeta>>,
-        working_set: &HashMap<u64, SlotMetaWorkingSetEntry>,
-        passed_visisted_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
+        working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
+        passed_visited_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
         slot_function: F,
     ) -> Result<()>
     where
@@ -4678,7 +5030,7 @@ impl Blockstore {
         while !next_slots.is_empty() {
             let slot = next_slots.pop_front().unwrap();
             let meta_ref =
-                self.find_slot_meta_else_create(working_set, passed_visisted_slots, slot)?;
+                self.find_slot_meta_else_create(working_set, passed_visited_slots, slot)?;
             let mut meta = meta_ref.borrow_mut();
             if slot_function(&mut meta) {
                 meta.next_slots
@@ -4706,7 +5058,7 @@ impl Blockstore {
     ///    newly completed.
     fn commit_slot_meta_working_set(
         &self,
-        slot_meta_working_set: &HashMap<u64, SlotMetaWorkingSetEntry>,
+        slot_meta_working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         write_batch: &mut WriteBatch,
     ) -> Result<(bool, Vec<u64>)> {
         let mut should_signal = false;
@@ -4715,18 +5067,18 @@ impl Blockstore {
 
         // Check if any metadata was changed, if so, insert the new version of the
         // metadata into the write batch
-        for (slot, slot_meta_entry) in slot_meta_working_set.iter() {
+        for (&(location, slot), slot_meta_entry) in slot_meta_working_set.iter() {
             // Any slot that wasn't written to should have been filtered out by now.
             assert!(slot_meta_entry.did_insert_occur);
             let meta: &SlotMeta = &RefCell::borrow(&*slot_meta_entry.new_slot_meta);
             let meta_backup = &slot_meta_entry.old_slot_meta;
             if !completed_slots_senders.is_empty() && is_newly_completed_slot(meta, meta_backup) {
-                newly_completed_slots.push(*slot);
+                newly_completed_slots.push(slot);
             }
             // Check if the working copy of the metadata has changed
             if Some(meta) != meta_backup.as_ref() {
                 should_signal = should_signal || slot_has_updates(meta, meta_backup);
-                self.meta_cf.put_in_batch(write_batch, *slot, meta)?;
+                self.put_meta_in_batch(write_batch, slot, location, meta)?;
             }
         }
 
@@ -4747,46 +5099,52 @@ impl Blockstore {
     /// - `slot_meta_working_set`: a in-memory structure for storing the cached
     ///   SlotMeta.
     /// - `slot`: the slot for loading its meta.
+    /// - `location`: the column to query
     /// - `parent_slot`: the parent slot to be assigned to the specified slot meta
     ///
     /// This function returns the matched `SlotMetaWorkingSetEntry`.  If such entry
     /// does not exist in the database, a new entry will be created.
     fn get_slot_meta_entry<'a>(
         &self,
-        slot_meta_working_set: &'a mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        slot_meta_working_set: &'a mut HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         slot: Slot,
+        location: BlockLocation,
         parent_slot: Slot,
     ) -> &'a mut SlotMetaWorkingSetEntry {
         // Check if we've already inserted the slot metadata for this shred's slot
-        slot_meta_working_set.entry(slot).or_insert_with(|| {
-            // Store a 2-tuple of the metadata (working copy, backup copy)
-            if let Some(mut meta) = self
-                .meta_cf
-                .get(slot)
-                .expect("Expect database get to succeed")
-            {
-                let backup = Some(meta.clone());
-                // If parent_slot == None, then this is one of the orphans inserted
-                // during the chaining process, see the function find_slot_meta_in_cached_state()
-                // for details. Slots that are orphans are missing a parent_slot, so we should
-                // fill in the parent now that we know it.
-                if meta.is_orphan() {
-                    meta.parent_slot = Some(parent_slot);
-                }
+        slot_meta_working_set
+            .entry((location, slot))
+            .or_insert_with(|| {
+                // Store a 2-tuple of the metadata (working copy, backup copy)
+                if let Some(mut meta) = self
+                    .meta_from_location(slot, location)
+                    .expect("Expect database get to succeed")
+                {
+                    let backup = Some(meta.clone());
+                    // If parent_slot == None, then this is one of the orphans inserted
+                    // during the chaining process, see the function find_slot_meta_in_cached_state()
+                    // for details. Slots that are orphans are missing a parent_slot, so we should
+                    // fill in the parent now that we know it.
+                    //
+                    // Note: This doesn't distinguish by version chaining for alternate verisons is managed
+                    // by replay/repair
+                    if meta.is_orphan() {
+                        meta.parent_slot = Some(parent_slot);
+                    }
 
-                SlotMetaWorkingSetEntry::new(Rc::new(RefCell::new(meta)), backup)
-            } else {
-                SlotMetaWorkingSetEntry::new(
-                    Rc::new(RefCell::new(SlotMeta::new(slot, Some(parent_slot)))),
-                    None,
-                )
-            }
-        })
+                    SlotMetaWorkingSetEntry::new(Rc::new(RefCell::new(meta)), backup)
+                } else {
+                    SlotMetaWorkingSetEntry::new(
+                        Rc::new(RefCell::new(SlotMeta::new(slot, Some(parent_slot)))),
+                        None,
+                    )
+                }
+            })
     }
 
-    /// Returns the `SlotMeta` with the specified `slot_index`.  The resulting
-    /// `SlotMeta` could be either from the cache or from the DB.  Specifically,
-    /// the function:
+    /// Returns the `SlotMeta` with the specified `slot_index` from the column associated
+    /// with `BlockLocation::Original`. The resulting `SlotMeta` could be either from the cache
+    /// or from the DB. Specifically, the function:
     ///
     /// 1) Finds the slot metadata in the cache of dirty slot metadata we've
     ///    previously touched, otherwise:
@@ -4796,7 +5154,7 @@ impl Blockstore {
     /// Also see [`find_slot_meta_in_cached_state`] and [`find_slot_meta_in_db_else_create`].
     fn find_slot_meta_else_create<'a>(
         &self,
-        working_set: &'a HashMap<u64, SlotMetaWorkingSetEntry>,
+        working_set: &'a HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         chained_slots: &'a mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
         slot_index: u64,
     ) -> Result<Rc<RefCell<SlotMeta>>> {
@@ -4809,7 +5167,8 @@ impl Blockstore {
     }
 
     /// A helper function to [`find_slot_meta_else_create`] that searches the
-    /// `SlotMeta` based on the specified `slot` in `db` and updates `insert_map`.
+    /// `SlotMeta` based on the specified `slot` in the `BlockLocation::Original` column
+    /// of `db` and updates `insert_map`.
     ///
     /// If the specified `db` does not contain a matched entry, then it will create
     /// a dummy orphan slot in the database.
@@ -4832,21 +5191,23 @@ impl Blockstore {
     fn get_index_meta_entry<'a>(
         &self,
         slot: Slot,
-        index_working_set: &'a mut HashMap<u64, IndexMetaWorkingSetEntry>,
+        location: BlockLocation,
+        index_working_set: &'a mut HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
         index_meta_time_us: &mut u64,
     ) -> &'a mut IndexMetaWorkingSetEntry {
         let mut total_start = Measure::start("Total elapsed");
-        let res = index_working_set.entry(slot).or_insert_with(|| {
-            let newly_inserted_meta = self
-                .index_cf
-                .get(slot)
-                .unwrap()
-                .unwrap_or_else(|| Index::new(slot));
-            IndexMetaWorkingSetEntry {
-                index: newly_inserted_meta,
-                did_insert_occur: false,
-            }
-        });
+        let res = index_working_set
+            .entry((location, slot))
+            .or_insert_with(|| {
+                let newly_inserted_meta = self
+                    .get_index_from_location(slot, location)
+                    .unwrap()
+                    .unwrap_or_else(|| Index::new(slot));
+                IndexMetaWorkingSetEntry {
+                    index: newly_inserted_meta,
+                    did_insert_occur: false,
+                }
+            });
         total_start.stop();
         *index_meta_time_us += total_start.as_us();
         res
@@ -4980,15 +5341,15 @@ fn send_signals(
     }
 }
 
-/// Returns the `SlotMeta` of the specified `slot` from the two cached states:
-/// `working_set` and `chained_slots`.  If both contain the `SlotMeta`, then
-/// the latest one from the `working_set` will be returned.
+/// Returns the `SlotMeta` of the specified `slot` associated with `BlockLocation::Original`
+/// from the two cached states: `working_set` and `chained_slots`.  If both contain the `SlotMeta`,
+/// then the latest one from the `working_set` will be returned.
 fn find_slot_meta_in_cached_state<'a>(
-    working_set: &'a HashMap<u64, SlotMetaWorkingSetEntry>,
+    working_set: &'a HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
     chained_slots: &'a HashMap<u64, Rc<RefCell<SlotMeta>>>,
     slot: Slot,
 ) -> Option<Rc<RefCell<SlotMeta>>> {
-    if let Some(entry) = working_set.get(&slot) {
+    if let Some(entry) = working_set.get(&(BlockLocation::Original, slot)) {
         Some(entry.new_slot_meta.clone())
     } else {
         chained_slots.get(&slot).cloned()
@@ -5580,7 +5941,6 @@ pub mod tests {
             InnerInstruction, InnerInstructions, Reward, Rewards, TransactionTokenBalance,
         },
         std::{cmp::Ordering, time::Duration},
-        test_case::test_case,
     };
 
     // used for tests only
@@ -7122,7 +7482,7 @@ pub mod tests {
                         &keypair,
                         &[],
                         false,
-                        None,
+                        Some(Hash::default()),
                         (i * gap) as u32,
                         (i * gap) as u32,
                         &reed_solomon_cache,
@@ -7305,7 +7665,7 @@ pub mod tests {
                 &keypair,
                 &entries,
                 true,
-                None, //chained_merkle_root
+                Some(Hash::default()), //chained_merkle_root
                 0,
                 0,
                 &rsc,
@@ -7345,6 +7705,7 @@ pub mod tests {
         assert!(terminator_shred.last_in_slot());
         assert!(blockstore.should_insert_data_shred(
             &terminator_shred,
+            BlockLocation::Original,
             &slot_meta,
             &HashMap::new(),
             max_root,
@@ -7369,6 +7730,7 @@ pub mod tests {
         assert!(
             !blockstore.should_insert_data_shred(
                 &terminator_shred,
+                BlockLocation::Original,
                 &slot_meta,
                 &HashMap::new(),
                 max_root,
@@ -7411,6 +7773,7 @@ pub mod tests {
         assert!(
             !blockstore.should_insert_data_shred(
                 &past_tail_shreds[5], // 5 is not magic, could be any shred from this set
+                BlockLocation::Original,
                 &slot_meta,
                 &HashMap::new(),
                 max_root,
@@ -7479,6 +7842,7 @@ pub mod tests {
             ShredInsertionTracker::new(coding_shreds.len(), blockstore.get_write_batch().unwrap());
         assert!(blockstore.check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
+            BlockLocation::Original,
             &mut shred_insertion_tracker,
             false,
             ShredSource::Turbine,
@@ -7493,7 +7857,7 @@ pub mod tests {
         assert_eq!(merkle_root_metas.len(), 1);
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7501,7 +7865,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7509,14 +7873,15 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_type(),
             ShredType::Code,
         );
 
-        for (erasure_set, working_merkle_root_meta) in merkle_root_metas {
+        for ((location, erasure_set), working_merkle_root_meta) in merkle_root_metas {
+            assert_eq!(location, BlockLocation::Original);
             blockstore
                 .merkle_root_meta_cf
                 .put(erasure_set.store_key(), working_merkle_root_meta.as_ref())
@@ -7533,6 +7898,7 @@ pub mod tests {
 
         assert!(!blockstore.check_insert_coding_shred(
             Cow::Owned(new_coding_shred),
+            BlockLocation::Original,
             &mut shred_insertion_tracker,
             false,
             ShredSource::Turbine,
@@ -7555,7 +7921,7 @@ pub mod tests {
         assert_eq!(merkle_root_metas.len(), 1);
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7563,7 +7929,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7596,6 +7962,7 @@ pub mod tests {
 
         assert!(blockstore.check_insert_coding_shred(
             Cow::Borrowed(&new_coding_shred),
+            BlockLocation::Original,
             &mut shred_insertion_tracker,
             false,
             ShredSource::Turbine,
@@ -7611,7 +7978,7 @@ pub mod tests {
         assert_eq!(merkle_root_metas.len(), 2);
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7619,7 +7986,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7627,7 +7994,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&new_coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, new_coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7635,7 +8002,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&new_coding_shred.erasure_set())
+                .get(&(BlockLocation::Original, new_coding_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7661,6 +8028,7 @@ pub mod tests {
         blockstore
             .check_insert_data_shred(
                 Cow::Borrowed(&data_shred),
+                BlockLocation::Original,
                 &mut shred_insertion_tracker,
                 false,
                 None,
@@ -7675,7 +8043,7 @@ pub mod tests {
         assert_eq!(merkle_root_metas.len(), 1);
         assert_eq!(
             merkle_root_metas
-                .get(&data_shred.erasure_set())
+                .get(&(BlockLocation::Original, data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7683,7 +8051,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&data_shred.erasure_set())
+                .get(&(BlockLocation::Original, data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7691,14 +8059,15 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&data_shred.erasure_set())
+                .get(&(BlockLocation::Original, data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_type(),
             ShredType::Data,
         );
 
-        for (erasure_set, working_merkle_root_meta) in merkle_root_metas {
+        for ((location, erasure_set), working_merkle_root_meta) in merkle_root_metas {
+            assert_eq!(location, BlockLocation::Original);
             blockstore
                 .merkle_root_meta_cf
                 .put(erasure_set.store_key(), working_merkle_root_meta.as_ref())
@@ -7717,6 +8086,7 @@ pub mod tests {
         assert!(blockstore
             .check_insert_data_shred(
                 Cow::Owned(new_data_shred),
+                BlockLocation::Original,
                 &mut shred_insertion_tracker,
                 false,
                 None,
@@ -7741,7 +8111,7 @@ pub mod tests {
         assert_eq!(merkle_root_metas.len(), 1);
         assert_eq!(
             merkle_root_metas
-                .get(&data_shred.erasure_set())
+                .get(&(BlockLocation::Original, data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7749,7 +8119,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&data_shred.erasure_set())
+                .get(&(BlockLocation::Original, data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7804,6 +8174,7 @@ pub mod tests {
         blockstore
             .check_insert_data_shred(
                 Cow::Borrowed(&new_data_shred),
+                BlockLocation::Original,
                 &mut shred_insertion_tracker,
                 false,
                 None,
@@ -7839,7 +8210,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&new_data_shred.erasure_set())
+                .get(&(BlockLocation::Original, new_data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .merkle_root(),
@@ -7847,7 +8218,7 @@ pub mod tests {
         );
         assert_eq!(
             merkle_root_metas
-                .get(&new_data_shred.erasure_set())
+                .get(&(BlockLocation::Original, new_data_shred.erasure_set()))
                 .unwrap()
                 .as_ref()
                 .first_received_shred_index(),
@@ -7863,7 +8234,12 @@ pub mod tests {
         let slot = 1;
         let (_data_shreds, code_shreds, _) =
             setup_erasure_shreds_with_index_and_chained_merkle_and_last_in_slot(
-                slot, 0, 10, 0, None, true,
+                slot,
+                0,
+                10,
+                0,
+                Some(Hash::default()),
+                true,
             );
         let coding_shred = code_shreds[0].clone();
 
@@ -7871,6 +8247,7 @@ pub mod tests {
             ShredInsertionTracker::new(1, blockstore.get_write_batch().unwrap());
         assert!(blockstore.check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
+            BlockLocation::Original,
             &mut shred_insertion_tracker,
             false,
             ShredSource::Turbine,
@@ -7880,6 +8257,7 @@ pub mod tests {
         // insert again fails on dupe
         assert!(!blockstore.check_insert_coding_shred(
             Cow::Borrowed(&coding_shred),
+            BlockLocation::Original,
             &mut shred_insertion_tracker,
             false,
             ShredSource::Turbine,
@@ -7900,7 +8278,12 @@ pub mod tests {
         let slot = 1;
         let (_data_shreds, code_shreds, _) =
             setup_erasure_shreds_with_index_and_chained_merkle_and_last_in_slot(
-                slot, 0, 10, 0, None, true,
+                slot,
+                0,
+                10,
+                0,
+                Some(Hash::default()),
+                true,
             );
         let coding_shred = code_shreds[0].clone();
 
@@ -10216,9 +10599,13 @@ pub mod tests {
             setup_erasure_shreds(slot, 0, 100);
 
         let (dummy_retransmit_sender, _) = EvictingSender::new_bounded(0);
-        let coding_shreds = coding_shreds
-            .into_iter()
-            .map(|shred| (Cow::Owned(shred), /*is_repaired:*/ false));
+        let coding_shreds = coding_shreds.into_iter().map(|shred| {
+            (
+                Cow::Owned(shred),
+                /*is_repaired:*/ false,
+                BlockLocation::Original,
+            )
+        });
         blockstore
             .do_insert_shreds(
                 coding_shreds,
@@ -10488,16 +10875,15 @@ pub mod tests {
         assert_eq!(num_coding_in_index, num_coding);
     }
 
-    #[test_case(false)]
-    #[test_case(true)]
-    fn test_duplicate_slot(chained: bool) {
+    #[test]
+    fn test_duplicate_slot() {
         let slot = 0;
         let entries1 = make_slot_entries_with_transactions(1);
         let entries2 = make_slot_entries_with_transactions(1);
         let leader_keypair = Arc::new(Keypair::new());
         let reed_solomon_cache = ReedSolomonCache::default();
         let shredder = Shredder::new(slot, 0, 0, 0).unwrap();
-        let chained_merkle_root = chained.then(|| Hash::new_from_array(rand::thread_rng().gen()));
+        let chained_merkle_root = Some(Hash::new_from_array(rand::thread_rng().gen()));
         let (shreds, _) = shredder.entries_to_merkle_shreds_for_tests(
             &leader_keypair,
             &entries1,
@@ -11253,60 +11639,72 @@ pub mod tests {
         // Blockstore is empty
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap(),
             None
         );
 
         // Erasure metas does not contain the previous fec set, but only the one before that
-        erasure_metas.insert(erasure_set_0, WorkingEntry::Dirty(erasure_meta_0));
+        erasure_metas.insert(
+            (BlockLocation::Original, erasure_set_0),
+            WorkingEntry::Dirty(erasure_meta_0),
+        );
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap(),
             None
         );
 
         // Both Erasure metas and blockstore, contain only contain the previous previous fec set
-        erasure_metas.insert(erasure_set_0, WorkingEntry::Clean(erasure_meta_0));
+        erasure_metas.insert(
+            (BlockLocation::Original, erasure_set_0),
+            WorkingEntry::Clean(erasure_meta_0),
+        );
         blockstore
             .put_erasure_meta(erasure_set_0, &erasure_meta_0)
             .unwrap();
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap(),
             None
         );
 
         // Erasure meta contains the previous FEC set, blockstore only contains the older
-        erasure_metas.insert(erasure_set_prev, WorkingEntry::Dirty(erasure_meta_prev));
+        erasure_metas.insert(
+            (BlockLocation::Original, erasure_set_prev),
+            WorkingEntry::Dirty(erasure_meta_prev),
+        );
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap()
                 .map(|(erasure_set, erasure_meta)| (erasure_set, erasure_meta.into_owned())),
             Some((erasure_set_prev, erasure_meta_prev))
         );
 
         // Erasure meta only contains the older, blockstore has the previous fec set
-        erasure_metas.remove(&erasure_set_prev);
+        erasure_metas.remove(&(BlockLocation::Original, erasure_set_prev));
         blockstore
             .put_erasure_meta(erasure_set_prev, &erasure_meta_prev)
             .unwrap();
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap()
                 .map(|(erasure_set, erasure_meta)| (erasure_set, erasure_meta.into_owned())),
             Some((erasure_set_prev, erasure_meta_prev))
         );
 
         // Both contain the previous fec set
-        erasure_metas.insert(erasure_set_prev, WorkingEntry::Clean(erasure_meta_prev));
+        erasure_metas.insert(
+            (BlockLocation::Original, erasure_set_prev),
+            WorkingEntry::Clean(erasure_meta_prev),
+        );
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap()
                 .map(|(erasure_set, erasure_meta)| (erasure_set, erasure_meta.into_owned())),
             Some((erasure_set_prev, erasure_meta_prev))
@@ -11315,15 +11713,15 @@ pub mod tests {
         // Works even if the previous fec set has index 0
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set_prev, &erasure_metas)
+                .previous_erasure_set(erasure_set_prev, BlockLocation::Original, &erasure_metas)
                 .unwrap()
                 .map(|(erasure_set, erasure_meta)| (erasure_set, erasure_meta.into_owned())),
             Some((erasure_set_0, erasure_meta_0))
         );
-        erasure_metas.remove(&erasure_set_0);
+        erasure_metas.remove(&(BlockLocation::Original, erasure_set_0));
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set_prev, &erasure_metas)
+                .previous_erasure_set(erasure_set_prev, BlockLocation::Original, &erasure_metas)
                 .unwrap()
                 .map(|(erasure_set, erasure_meta)| (erasure_set, erasure_meta.into_owned())),
             Some((erasure_set_0, erasure_meta_0))
@@ -11334,7 +11732,7 @@ pub mod tests {
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
         erasure_metas.clear();
         erasure_metas.insert(
-            erasure_set_prev_slot,
+            (BlockLocation::Original, erasure_set_prev_slot),
             WorkingEntry::Dirty(erasure_meta_prev_slot),
         );
         assert_eq!(
@@ -11343,12 +11741,12 @@ pub mod tests {
         );
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap(),
             None,
         );
         erasure_metas.insert(
-            erasure_set_prev_slot,
+            (BlockLocation::Original, erasure_set_prev_slot),
             WorkingEntry::Clean(erasure_meta_prev_slot),
         );
         blockstore
@@ -11356,7 +11754,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(
             blockstore
-                .previous_erasure_set(erasure_set, &erasure_metas)
+                .previous_erasure_set(erasure_set, BlockLocation::Original, &erasure_metas)
                 .unwrap(),
             None,
         );
@@ -11907,7 +12305,7 @@ pub mod tests {
                 parent_slot,
                 10,
                 fec_set_index,
-                None,
+                Some(Hash::default()),
                 false,
             );
         let merkle_root = first_data_shreds[0].merkle_root().unwrap();
@@ -11948,7 +12346,7 @@ pub mod tests {
                 parent_slot,
                 100,
                 fec_set_index,
-                None,
+                Some(Hash::default()),
                 false,
             );
         let merkle_root = first_data_shreds[0].merkle_root().unwrap();
@@ -11979,28 +12377,6 @@ pub mod tests {
         blockstore.put_meta(slot, &slot_meta).unwrap();
         let results = blockstore.check_last_fec_set(slot).unwrap();
         assert_eq!(results.last_fec_set_merkle_root, Some(merkle_root));
-        assert!(!results.is_retransmitter_signed);
-        blockstore.run_purge(slot, slot, PurgeType::Exact).unwrap();
-
-        // Slot is full, but does not contain retransmitter shreds
-        let fec_set_index = 0;
-        let (first_data_shreds, _, _) =
-            setup_erasure_shreds_with_index_and_chained_merkle_and_last_in_slot(
-                slot,
-                parent_slot,
-                200,
-                fec_set_index,
-                // Do not set merkle root, so shreds are not signed
-                None,
-                true,
-            );
-        assert!(first_data_shreds.len() > DATA_SHREDS_PER_FEC_BLOCK);
-        let block_id = first_data_shreds.last().unwrap().merkle_root().unwrap();
-        blockstore
-            .insert_shreds(first_data_shreds, None, false)
-            .unwrap();
-        let results = blockstore.check_last_fec_set(slot).unwrap();
-        assert_eq!(results.last_fec_set_merkle_root, Some(block_id));
         assert!(!results.is_retransmitter_signed);
     }
 

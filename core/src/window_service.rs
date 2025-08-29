@@ -10,11 +10,12 @@ use {
             repair_service::{
                 OutstandingShredRepairs, RepairInfo, RepairService, RepairServiceChannels,
             },
+            shred_resolver_service::ShredResolverService,
         },
         result::{Error, Result},
     },
     agave_feature_set as feature_set,
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+    crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender},
     rayon::{prelude::*, ThreadPool},
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_gossip::cluster_info::ClusterInfo,
@@ -22,7 +23,8 @@ use {
         blockstore::{Blockstore, BlockstoreInsertionMetrics, PossibleDuplicateShred},
         blockstore_meta::BlockLocation,
         leader_schedule_cache::LeaderScheduleCache,
-        shred::{self, ReedSolomonCache, Shred},
+        shred::{self, ReedSolomonCache, Shred, MAX_DATA_SHREDS_PER_SLOT},
+        shred_event::ShredEventSender,
     },
     solana_measure::measure::Measure,
     solana_metrics::inc_new_counter_error,
@@ -199,6 +201,7 @@ fn run_insert<F>(
     ws_metrics: &mut WindowServiceMetrics,
     completed_data_sets_sender: Option<&CompletedDataSetsSender>,
     retransmit_sender: &EvictingSender<Vec<shred::Payload>>,
+    shred_event_sender: &ShredEventSender,
     reed_solomon_cache: &ReedSolomonCache,
     accept_repairs_only: bool,
 ) -> Result<()>
@@ -212,7 +215,7 @@ where
     shred_receiver_elapsed.stop();
     ws_metrics.shred_receiver_elapsed_us += shred_receiver_elapsed.as_us();
     ws_metrics.run_insert_count += 1;
-    let handle_shred = |(shred, repair, _block_location): (shred::Payload, bool, BlockLocation)| {
+    let handle_shred = |(shred, repair, block_location): (shred::Payload, bool, BlockLocation)| {
         if accept_repairs_only && !repair {
             return None;
         }
@@ -220,7 +223,7 @@ where
             ws_metrics.num_repairs.fetch_add(1, Ordering::Relaxed);
         }
         let shred = Shred::new_from_serialized_shred(shred).ok()?;
-        Some((Cow::Owned(shred), repair))
+        Some((Cow::Owned(shred), repair, block_location))
     };
     let now = Instant::now();
     let shreds: Vec<_> = thread_pool.install(|| {
@@ -232,12 +235,13 @@ where
     });
     ws_metrics.handle_packets_elapsed_us += now.elapsed().as_micros() as u64;
     ws_metrics.num_shreds_received += shreds.len();
-    let completed_data_sets = blockstore.insert_shreds_handle_duplicate(
+    let completed_data_sets = blockstore.insert_shreds_at_location_handle_duplicate(
         shreds,
         Some(leader_schedule_cache),
         false, // is_trusted
         retransmit_sender,
         &handle_duplicate,
+        Some(shred_event_sender),
         reed_solomon_cache,
         metrics,
     )?;
@@ -280,6 +284,7 @@ pub(crate) struct WindowService {
     t_check_duplicate: JoinHandle<()>,
     repair_service: RepairService,
     certificate_service: CertificateService,
+    shred_resolver_service: ShredResolverService,
 }
 
 impl WindowService {
@@ -322,6 +327,13 @@ impl WindowService {
         let certificate_service =
             CertificateService::new(exit.clone(), blockstore.clone(), certificate_receiver);
 
+        let (shred_event_sender, shred_event_receiver) = bounded(MAX_DATA_SHREDS_PER_SLOT);
+        let shred_resolver_service = ShredResolverService::new(
+            blockstore.clone(),
+            shred_event_receiver,
+            outstanding_repair_requests.clone(),
+        );
+
         let (duplicate_sender, duplicate_receiver) = unbounded();
 
         let t_check_duplicate = Self::start_check_duplicate_thread(
@@ -341,6 +353,7 @@ impl WindowService {
             duplicate_sender,
             completed_data_sets_sender,
             retransmit_sender,
+            shred_event_sender,
             accept_repairs_only,
         );
 
@@ -349,6 +362,7 @@ impl WindowService {
             t_check_duplicate,
             repair_service,
             certificate_service,
+            shred_resolver_service,
         }
     }
 
@@ -391,6 +405,7 @@ impl WindowService {
         check_duplicate_sender: Sender<PossibleDuplicateShred>,
         completed_data_sets_sender: Option<CompletedDataSetsSender>,
         retransmit_sender: EvictingSender<Vec<shred::Payload>>,
+        shred_event_sender: ShredEventSender,
         accept_repairs_only: bool,
     ) -> JoinHandle<()> {
         let handle_error = || {
@@ -426,6 +441,7 @@ impl WindowService {
                         &mut ws_metrics,
                         completed_data_sets_sender.as_ref(),
                         &retransmit_sender,
+                        &shred_event_sender,
                         &reed_solomon_cache,
                         accept_repairs_only,
                     ) {
@@ -467,7 +483,8 @@ impl WindowService {
         self.t_insert.join()?;
         self.t_check_duplicate.join()?;
         self.repair_service.join()?;
-        self.certificate_service.join()
+        self.certificate_service.join()?;
+        self.shred_resolver_service.join()
     }
 }
 
