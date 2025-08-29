@@ -16,6 +16,7 @@ pub type EpochAuthorizedVoters = HashMap<Pubkey, Pubkey>;
 pub type SortedPubkeys = Vec<(Pubkey, BLSPubkey)>;
 
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 pub struct BLSPubkeyToRankMap {
     rank_map: HashMap<BLSPubkey, u16>,
