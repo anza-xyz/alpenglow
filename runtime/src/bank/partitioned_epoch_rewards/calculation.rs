@@ -395,7 +395,7 @@ impl Bank {
                     let redeemed = redeem_rewards(
                         rewarded_epoch,
                         &mut stake_state,
-                        &vote_account,
+                        vote_account,
                         &point_value,
                         stake_history,
                         reward_calc_tracer.as_ref(),
