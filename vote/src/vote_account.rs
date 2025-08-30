@@ -13,7 +13,7 @@ use {
     solana_vote_interface::state::BlockTimestamp,
     solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{
-        cmp::{Ordering, Reverse},
+        cmp::Ordering,
         collections::{hash_map::Entry, HashMap},
         fmt,
         iter::FromIterator,
@@ -57,6 +57,14 @@ struct VoteAccountInner {
     vote_state_view: VoteAccountState,
 }
 
+pub fn sort_pubkey_and_stake_pair<T>(
+    (pubkey_a, stake_a, _): &(&Pubkey, u64, T),
+    (pubkey_b, stake_b, _): &(&Pubkey, u64, T),
+) -> Ordering {
+    // Sort by descending stake, then ascending pubkey
+    stake_b.cmp(stake_a).then(pubkey_a.cmp(pubkey_b))
+}
+
 pub type VoteAccountsHashMap = HashMap<Pubkey, (/*stake:*/ u64, VoteAccount)>;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,12 +99,9 @@ impl VoteAccounts {
                 }
             })
             .collect();
-        // Sort by stake descending first, then pubkey descending.
+        // Sort by stake descending first, then pubkey ascending.
         if entries_to_sort.len() > maximum_accounts {
-            let key = |(pubkey, stake, _): &(&Pubkey, u64, &VoteAccount)| {
-                (Reverse(*stake), Reverse(**pubkey))
-            };
-            entries_to_sort.select_nth_unstable_by_key(maximum_accounts, key);
+            entries_to_sort.sort_by(sort_pubkey_and_stake_pair::<&VoteAccount>);
             entries_to_sort.truncate(maximum_accounts);
         }
         entries_to_sort
