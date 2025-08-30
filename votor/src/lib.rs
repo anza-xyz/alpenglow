@@ -4,6 +4,7 @@ use {
     std::time::Duration,
 };
 
+pub mod alpenglow_metrics;
 pub mod certificate_pool;
 mod certificate_pool_service;
 pub mod commitment;
