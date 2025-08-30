@@ -12394,7 +12394,7 @@ fn test_should_use_vote_keyed_leader_schedule() {
 }
 
 #[test]
-fn test_copy_and_filter_from_stakes_cache() {
+fn test_get_top_epoch_stakes() {
     let num_of_nodes: u64 = 3000;
     let stakes = (1..num_of_nodes.checked_add(1).expect("Shouldn't be big")).collect::<Vec<_>>();
     let voting_keypairs = stakes
@@ -12424,13 +12424,13 @@ fn test_copy_and_filter_from_stakes_cache() {
     };
     // Feature deactivated at genesis, return all accounts
     let test_bank = create_test_bank(0, None);
-    let stakes = test_bank.copy_and_filter_from_stakes_cache();
+    let stakes = test_bank.get_top_epoch_stakes();
     assert_eq!(stakes.staked_nodes().len(), 3000);
 
     // Feature activated at epoch 2, return only 2000 accounts
     let slot_in_prev_epoch = test_bank.epoch_schedule().get_first_slot_in_epoch(1);
     let test_bank = create_test_bank(2, Some(slot_in_prev_epoch));
-    let stakes = test_bank.copy_and_filter_from_stakes_cache();
+    let stakes = test_bank.get_top_epoch_stakes();
     assert_eq!(stakes.staked_nodes().len(), 2000);
 }
 
