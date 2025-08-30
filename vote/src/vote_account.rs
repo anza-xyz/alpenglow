@@ -57,6 +57,14 @@ struct VoteAccountInner {
     vote_state_view: VoteAccountState,
 }
 
+pub fn sort_pubkey_and_stake_pair<T>(
+    (pubkey_a, stake_a, _): &(&Pubkey, u64, T),
+    (pubkey_b, stake_b, _): &(&Pubkey, u64, T),
+) -> Ordering {
+    // Sort by descending stake, then ascending pubkey
+    stake_b.cmp(stake_a).then(pubkey_a.cmp(pubkey_b))
+}
+
 pub type VoteAccountsHashMap = HashMap<Pubkey, (/*stake:*/ u64, VoteAccount)>;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +81,34 @@ pub struct VoteAccounts {
             >,
         >,
     >,
+}
+
+impl VoteAccounts {
+    pub fn clone_and_filter_for_alpenglow(&self, maximum_accounts: usize) -> VoteAccounts {
+        if maximum_accounts == 0 {
+            panic!("maximum_accounts must be > 0");
+        }
+        let mut entries_to_sort: Vec<(&Pubkey, u64, &VoteAccount)> = self
+            .vote_accounts
+            .iter()
+            .filter_map(|(pubkey, (stake, vote_account))| {
+                if vote_account.bls_pubkey().is_some() && *stake != 0u64 {
+                    Some((pubkey, *stake, vote_account))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort by stake descending first, then pubkey ascending.
+        if entries_to_sort.len() > maximum_accounts {
+            entries_to_sort.sort_by(sort_pubkey_and_stake_pair::<&VoteAccount>);
+            entries_to_sort.truncate(maximum_accounts);
+        }
+        entries_to_sort
+            .into_iter()
+            .map(|(pubkey, stake, vote_account)| (*pubkey, (stake, vote_account.clone())))
+            .collect()
+    }
 }
 
 impl Clone for VoteAccounts {
@@ -673,6 +709,31 @@ mod tests {
         })
     }
 
+    fn new_vote_accounts<R: Rng>(
+        rng: &mut R,
+        num_non_alpenglow_nodes: usize,
+        num_alpenglow_nodes: usize,
+    ) -> VoteAccounts {
+        let nodes: Vec<_> = repeat_with(Pubkey::new_unique)
+            .take(num_non_alpenglow_nodes + num_alpenglow_nodes)
+            .collect();
+        let vote_account_hash_map = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| {
+                let account = if i < num_alpenglow_nodes {
+                    new_rand_alpenglow_vote_account(rng, Some(*node)).0
+                } else {
+                    new_rand_vote_account(rng, Some(*node))
+                };
+                let stake = rng.gen_range(1..1000);
+                let vote_account = VoteAccount::try_from(account).unwrap();
+                (Pubkey::new_unique(), (stake, vote_account))
+            })
+            .collect();
+        VoteAccounts::from(Arc::new(vote_account_hash_map))
+    }
+
     fn staked_nodes<'a, I>(vote_accounts: I) -> HashMap<Pubkey, u64>
     where
         I: IntoIterator<Item = &'a (Pubkey, (u64, VoteAccount))>,
@@ -1067,6 +1128,50 @@ mod tests {
             } else {
                 assert_eq!(value, &other);
             }
+        }
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow() {
+        let mut rng = rand::thread_rng();
+        let vote_accounts = new_vote_accounts(&mut rng, 0, 3000);
+        // All vote accounts should be returned if the limit is high enough.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(3500);
+        assert_eq!(filtered.len(), vote_accounts.len());
+
+        // If the limit is smaller than number of accounts, truncate it.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(2000);
+        assert_eq!(filtered.len(), 2000);
+        // Check that the filtered accounts are the same as the original accounts.
+        for (pubkey, (_, vote_account)) in filtered.vote_accounts.iter() {
+            assert_eq!(vote_accounts.get(pubkey), Some(vote_account));
+        }
+        // Check that the stake in any filtered account is higher than truncated accounts.
+        let min_stake = filtered
+            .vote_accounts
+            .iter()
+            .map(|(_, (stake, _))| *stake)
+            .min()
+            .unwrap();
+        for (pubkey, (stake, _vote_account)) in vote_accounts.vote_accounts.iter() {
+            if *stake < min_stake {
+                assert!(filtered.get(pubkey).is_none());
+            }
+        }
+
+        // Check that non-alpenglow accounts are kicked out, 2000 accounts with bls pubkey, 1000 accounts without.
+        let vote_accounts = new_vote_accounts(&mut rng, 1000, 2000);
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(2500);
+        assert_eq!(filtered.len(), 2000);
+        // Check that all filtered accounts have bls pubkey
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account.bls_pubkey().is_some());
+        }
+        // Now get only 1500 accounts, even some alpenglow accounts are kicked out
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(1500);
+        assert_eq!(filtered.len(), 1500);
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account.bls_pubkey().is_some());
         }
     }
 }

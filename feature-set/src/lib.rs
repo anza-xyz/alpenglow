@@ -1122,6 +1122,10 @@ pub mod raise_cpi_nesting_limit_to_8 {
     solana_pubkey::declare_id!("6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj");
 }
 
+pub mod limit_validators_for_alpenglow {
+    solana_pubkey::declare_id!("3SJUjJgvYwdH5auT45RXwRnZ5VJVyQCvFU9rFvNpjgsC");
+}
+
 pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::new(|| {
     [
         (secp256k1_program_enabled::id(), "secp256k1 program"),
@@ -1363,6 +1367,7 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (raise_block_limits_to_100m::id(), "SIMD-0286: Raise block limit to 100M"),
         (raise_account_cu_limit::id(), "SIMD-0306: Raise account CU limit to 40% max"),
         (raise_cpi_nesting_limit_to_8::id(), "SIMD-0296: Raise CPI nesting limit from 4 to 8"),
+        (limit_validators_for_alpenglow::id(), "SIMD-0326: Only allow top 2000 stakes validators with BLS pubkey for Alpenglow"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()

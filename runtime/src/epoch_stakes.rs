@@ -4,7 +4,7 @@ use {
     solana_bls_signatures::Pubkey as BLSPubkey,
     solana_clock::Epoch,
     solana_pubkey::Pubkey,
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote::vote_account::{sort_pubkey_and_stake_pair, VoteAccountsHashMap},
     std::{
         collections::HashMap,
         sync::{Arc, OnceLock},
@@ -27,25 +27,24 @@ pub struct BLSPubkeyToRankMap {
 
 impl BLSPubkeyToRankMap {
     pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
-        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkey, u64)> = epoch_vote_accounts_hash_map
-            .iter()
-            .filter_map(|(pubkey, (stake, account))| {
-                if *stake > 0 {
-                    account
-                        .bls_pubkey()
-                        .map(|bls_pubkey| (*pubkey, *bls_pubkey, *stake))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        pubkey_stake_pair_vec.sort_by(|(_, a_pubkey, a_stake), (_, b_pubkey, b_stake)| {
-            b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
-        });
+        let mut pubkey_stake_pair_vec: Vec<(&Pubkey, u64, BLSPubkey)> =
+            epoch_vote_accounts_hash_map
+                .iter()
+                .filter_map(|(pubkey, (stake, account))| {
+                    if *stake > 0 {
+                        account
+                            .bls_pubkey()
+                            .map(|bls_pubkey| (pubkey, *stake, *bls_pubkey))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        pubkey_stake_pair_vec.sort_by(sort_pubkey_and_stake_pair::<BLSPubkey>);
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
-        for (rank, (pubkey, bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            sorted_pubkeys.push((pubkey, bls_pubkey));
+        for (rank, (pubkey, _stake, bls_pubkey)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+            sorted_pubkeys.push((*pubkey, bls_pubkey));
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
