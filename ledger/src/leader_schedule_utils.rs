@@ -139,4 +139,38 @@ mod tests {
         let bank = Bank::new_for_tests(&genesis_config);
         assert_eq!(slot_leader_at(bank.slot(), &bank).unwrap(), pubkey);
     }
+
+    #[test]
+    fn test_leader_span_math() {
+        // All of the test cases assume a 4 slot leader span and need to be
+        // adjusted if it changes.
+        assert_eq!(NUM_CONSECUTIVE_LEADER_SLOTS, 4);
+
+        assert_eq!(first_of_consecutive_leader_slots(0), 0);
+        assert_eq!(first_of_consecutive_leader_slots(1), 0);
+        assert_eq!(first_of_consecutive_leader_slots(2), 0);
+        assert_eq!(first_of_consecutive_leader_slots(3), 0);
+        assert_eq!(first_of_consecutive_leader_slots(4), 4);
+
+        assert_eq!(last_of_consecutive_leader_slots(0), 3);
+        assert_eq!(last_of_consecutive_leader_slots(1), 3);
+        assert_eq!(last_of_consecutive_leader_slots(2), 3);
+        assert_eq!(last_of_consecutive_leader_slots(3), 3);
+        assert_eq!(last_of_consecutive_leader_slots(4), 7);
+
+        assert_eq!(leader_slot_index(0), 0);
+        assert_eq!(leader_slot_index(1), 1);
+        assert_eq!(leader_slot_index(2), 2);
+        assert_eq!(leader_slot_index(3), 3);
+        assert_eq!(leader_slot_index(4), 0);
+        assert_eq!(leader_slot_index(5), 1);
+        assert_eq!(leader_slot_index(6), 2);
+        assert_eq!(leader_slot_index(7), 3);
+
+        assert_eq!(remaining_slots_in_window(0), 4);
+        assert_eq!(remaining_slots_in_window(1), 3);
+        assert_eq!(remaining_slots_in_window(2), 2);
+        assert_eq!(remaining_slots_in_window(3), 1);
+        assert_eq!(remaining_slots_in_window(4), 4);
+    }
 }
