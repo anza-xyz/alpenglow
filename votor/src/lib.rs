@@ -4,9 +4,9 @@ use {
     std::time::Duration,
 };
 
-pub mod certificate_pool;
-mod certificate_pool_service;
 pub mod commitment;
+pub mod consensus_pool;
+mod consensus_pool_service;
 pub mod event;
 mod event_handler;
 pub mod root_utils;

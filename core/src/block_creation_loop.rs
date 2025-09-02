@@ -347,7 +347,7 @@ fn start_receive_and_record_loop(
 
 /// The block creation loop.
 ///
-/// The `votor::certificate_pool_service` tracks when it is our leader window, and populates
+/// The `votor::consensus_pool_service` tracks when it is our leader window, and populates
 /// communicates the skip timer and parent slot for our window. This loop takes the responsibility
 /// of creating our `NUM_CONSECUTIVE_LEADER_SLOTS` blocks and finishing them within the required timeout.
 pub fn start_loop(config: BlockCreationLoopConfig) {
@@ -660,7 +660,7 @@ fn start_leader_retry_replay(
 }
 
 /// Checks if we are set to produce a leader block for `slot`:
-/// - Is the highest notarization/finalized slot from `cert_pool` frozen
+/// - Is the highest notarization/finalized slot from `consensus_pool` frozen
 /// - Startup verification is complete
 /// - Bank forks does not already contain a bank for `slot`
 ///

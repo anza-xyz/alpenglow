@@ -1,6 +1,6 @@
 use {
     crate::{
-        certificate_pool::stats::CertificatePoolStats, event::VotorEvent, Stake,
+        consensus_pool::stats::ConsensusPoolStats, event::VotorEvent, Stake,
         SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
         SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY, SAFE_TO_SKIP_THRESHOLD,
     },
@@ -35,7 +35,7 @@ impl SlotStakeCounters {
         entry_stake: Stake,
         is_my_own_vote: bool,
         events: &mut Vec<VotorEvent>,
-        stats: &mut CertificatePoolStats,
+        stats: &mut ConsensusPoolStats,
     ) {
         match vote {
             Vote::Skip(_) => self.skip_total = entry_stake,
@@ -134,7 +134,7 @@ mod tests {
         let mut counters = SlotStakeCounters::new(100);
 
         let mut events = vec![];
-        let mut stats = CertificatePoolStats::default();
+        let mut stats = ConsensusPoolStats::default();
         let slot = 2;
         // I voted for skip
         counters.add_vote(
@@ -176,7 +176,7 @@ mod tests {
         // Reset counters
         counters = SlotStakeCounters::new(100);
         events.clear();
-        stats = CertificatePoolStats::default();
+        stats = ConsensusPoolStats::default();
 
         // I voted for notarize b
         let hash_1 = Hash::new_unique();
@@ -222,7 +222,7 @@ mod tests {
         let mut counters = SlotStakeCounters::new(100);
 
         let mut events = vec![];
-        let mut stats = CertificatePoolStats::default();
+        let mut stats = ConsensusPoolStats::default();
         let slot = 2;
         // I voted for notarize b
         counters.add_vote(
@@ -262,7 +262,7 @@ mod tests {
         // Reset counters
         counters = SlotStakeCounters::new(100);
         events.clear();
-        stats = CertificatePoolStats::default();
+        stats = ConsensusPoolStats::default();
 
         // I voted for notarize b, 10% of stake holders voted with me
         let hash_1 = Hash::new_unique();
