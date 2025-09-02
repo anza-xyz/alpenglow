@@ -2303,9 +2303,8 @@ mod tests {
         let vote = Vote::new_notarization_vote(42, Hash::new_unique());
 
         let consensus_message = dummy_transaction(&validator_keypairs, &vote, rank_to_test);
-        let vote_message = match consensus_message {
-            ConsensusMessage::Vote(msg) => msg,
-            _ => panic!("Expected Vote message"),
+        let ConsensusMessage::Vote(vote_message) = consensus_message else {
+            panic!("Expected Vote message")
         };
 
         let validator_vote_keypair = &validator_keypairs[rank_to_test].vote_keypair;
