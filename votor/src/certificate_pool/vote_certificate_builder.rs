@@ -98,7 +98,7 @@ impl VoteCertificateBuilder {
 
             if current_vote_type == vote_types[0] {
                 self.input_bitmap_1.set(rank, true);
-            } else if vote_types.len() > 1 && current_vote_type == vote_types[1] {
+            } else if vote_types.len() == 2 && current_vote_type == vote_types[1] {
                 self.input_bitmap_2.set(rank, true);
             }
         }
@@ -368,7 +368,8 @@ mod tests {
             keypairs.push(keypair);
         }
 
-        // 2. Generation: Aggregate votes and build the certificate. This will use base2 encoding.
+        // 2. Generation: Aggregate votes and build the certificate. This will
+        // use base2 encoding because it only contains one type of vote.
         let mut builder = VoteCertificateBuilder::new(certificate_id);
         builder
             .aggregate(&vote_messages)
@@ -455,6 +456,6 @@ mod tests {
         // TODO(sam): The solana-bls-signatures library does not expose a public method to verify
         // a single aggregate signature against multiple different messages. Therefore, we cannot
         // perform a single cryptographic verification for this base3-encoded certificate.
-        // On `solana-bls-signatrures` v0.3.0, add verification test.
+        // Once `solana-bls-signatures` v0.3.0 is published, add verification test.
     }
 }
