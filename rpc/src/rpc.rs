@@ -496,7 +496,6 @@ impl JsonRpcRequestProcessor {
         );
 
         let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&bank));
-        let startup_verification_complete = Arc::clone(bank.get_startup_verification_complete());
         let slot = bank.slot();
         let optimistically_confirmed_bank =
             Arc::new(RwLock::new(OptimisticallyConfirmedBank { bank }));
@@ -516,7 +515,6 @@ impl JsonRpcRequestProcessor {
                 blockstore,
                 0,
                 exit,
-                startup_verification_complete,
             )),
             cluster_info,
             genesis_hash,

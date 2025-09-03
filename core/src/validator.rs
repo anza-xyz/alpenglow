@@ -956,11 +956,9 @@ impl Validator {
         let prioritization_fee_cache = Arc::new(PrioritizationFeeCache::default());
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
-        let startup_verification_complete;
         let (mut poh_recorder, entry_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
             let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
-            startup_verification_complete = Arc::clone(bank.get_startup_verification_complete());
             let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
                 hfb.feature_set
                     .activated_slot(&agave_feature_set::alpenglow::id())
@@ -1248,7 +1246,6 @@ impl Validator {
                 validator_exit: config.validator_exit.clone(),
                 exit: exit.clone(),
                 override_health_check: rpc_override_health_check.clone(),
-                startup_verification_complete,
                 optimistically_confirmed_bank: optimistically_confirmed_bank.clone(),
                 send_transaction_service_config: config.send_transaction_service_config.clone(),
                 max_slots: max_slots.clone(),

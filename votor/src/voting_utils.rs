@@ -171,9 +171,6 @@ pub fn generate_vote_tx(
     let bls_pubkey_in_vote_account;
     {
         let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
-        if !bank.has_initial_accounts_hash_verification_completed() {
-            return GenerateVoteTxResult::WaitForStartupVerification;
-        }
         if authorized_voter_keypairs.is_empty() {
             return GenerateVoteTxResult::NonVoting;
         }

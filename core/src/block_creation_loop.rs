@@ -297,10 +297,6 @@ enum StartLeaderError {
     #[error("Replay is behind for parent slot {0}")]
     ReplayIsBehind(/* parent slot */ Slot),
 
-    /// Startup verification is not yet complete
-    #[error("Startup verification is incomplete on parent bank {0}")]
-    StartupVerificationIncomplete(/* parent slot */ Slot),
-
     /// Bank forks already contains bank
     #[error("Already contain bank for leader slot {0}")]
     AlreadyHaveBank(/* leader slot */ Slot),
@@ -687,11 +683,6 @@ fn maybe_start_leader(
     if !parent_bank.is_frozen() {
         slot_metrics.replay_is_behind_count += 1;
         return Err(StartLeaderError::ReplayIsBehind(parent_slot));
-    }
-
-    if !parent_bank.has_initial_accounts_hash_verification_completed() {
-        slot_metrics.startup_verification_incomplete_count += 1;
-        return Err(StartLeaderError::StartupVerificationIncomplete(parent_slot));
     }
 
     // TODO(ashwin): plug this in from replay
