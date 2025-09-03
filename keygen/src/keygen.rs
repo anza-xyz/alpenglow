@@ -401,9 +401,7 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                         .index(1)
                         .value_name("KEYPAIR")
                         .takes_value(true)
-                        .value_parser(
-                            SignerSourceParserBuilder::default().allow_all().build()
-                        )
+                        .value_parser(SignerSourceParserBuilder::default().allow_all().build())
                         .help("Filepath or URL to a keypair"),
                 )
                 .arg(
@@ -424,7 +422,7 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                         .short('f')
                         .long("force")
                         .help("Overwrite the output file if it exists"),
-                )
+                ),
         )
         .subcommand(
             Command::new("recover")
