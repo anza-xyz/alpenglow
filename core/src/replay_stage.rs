@@ -3618,6 +3618,8 @@ impl ReplayStage {
                 //
                 // For non leader banks (2) is always true, so notify here
                 if *is_alpenglow_migration_complete && bank.block_id().is_some() {
+                    // XXX: this is the leader producing the block?
+
                     // Leader blocks will not have a block id, broadcast stage will
                     // take care of notifying the voting loop
                     let _ = votor_event_sender.send(VotorEvent::Block(CompletedBlock {

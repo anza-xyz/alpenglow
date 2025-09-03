@@ -42,6 +42,7 @@
 //!
 use {
     crate::{
+        alpenglow_metrics::VoteMetrics,
         certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
@@ -188,6 +189,7 @@ impl Votor {
             vote_history_storage,
         };
 
+        let vote_metrics = Arc::new(PlRwLock::new(VoteMetrics::default()));
         let voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -200,6 +202,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             root_bank: root_bank.clone(),
+            vote_metrics,
         };
 
         let root_context = RootContext {
