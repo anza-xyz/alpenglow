@@ -84,7 +84,11 @@ use {
     },
     solana_signer::Signer,
     solana_stake_interface::{self as stake, state::NEW_WARMUP_COOLDOWN_RATE},
-    solana_streamer::socket::SocketAddrSpace,
+    solana_streamer::{
+        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        socket::SocketAddrSpace,
+        streamer::StakedNodes,
+    },
     solana_system_interface::program as system_program,
     solana_system_transaction as system_transaction,
     solana_turbine::broadcast_stage::{
@@ -113,7 +117,7 @@ use {
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            Arc, Mutex, RwLock,
         },
         thread::{sleep, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -7348,7 +7352,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 #[test]
 #[serial]
 fn test_alpenglow_add_missing_parent_ready() {
-    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    solana_logger::setup_with_default(RUST_LOG_FILTER);
 
     // Configure total stake and stake distribution
     const TOTAL_STAKE: u64 = 10 * DEFAULT_NODE_STAKE;
@@ -7374,7 +7378,7 @@ fn test_alpenglow_add_missing_parent_ready() {
         leader_schedule: Arc::new(leader_schedule),
     };
 
-    // Create UDP socket to listen to votes for experiment control
+    // Create socket to listen to votes for experiment control
     let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
 
     // Create validator configs
@@ -7551,74 +7555,102 @@ fn test_alpenglow_add_missing_parent_ready() {
         }
     }
 
+    // Start a quick streamer to handle quick control packets
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    let exit = Arc::new(AtomicBool::new(false));
+    let stakes = validator_keys
+        .iter()
+        .zip(node_stakes)
+        .map(|(keypair, stake)| (keypair.pubkey(), stake))
+        .collect();
+    let staked_nodes: Arc<RwLock<StakedNodes>> = Arc::new(RwLock::new(StakedNodes::new(
+        Arc::new(stakes),
+        HashMap::<Pubkey, u64>::default(), // overrides
+    )));
+    let SpawnServerResult {
+        thread: quic_server_thread,
+        ..
+    } = spawn_server(
+        "AlpenglowLocalClusterTest",
+        "quic_streamer_test",
+        [vote_listener_socket],
+        &Keypair::new(),
+        sender,
+        exit.clone(),
+        staked_nodes,
+        QuicServerParams::default_for_tests(),
+    )
+    .unwrap();
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
-        let mut buf = [0u8; 65_535];
         let node_c_turbine_disabled = node_c_turbine_disabled.clone();
         let mut experiment_state = ExperimentState::new(node_stakes.len(), alpenglow_port_override);
         let timer = std::time::Instant::now();
 
         move || {
             loop {
-                let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
+                let Ok(packet_batch) = receiver.recv() else {
+                    break;
+                };
 
-                let consensus_message =
-                    bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
+                for packet in packet_batch.iter() {
+                    let consensus_message = packet.deserialize_slice(..).unwrap();
+                    match consensus_message {
+                        ConsensusMessage::Vote(vote_message) => {
+                            let vote = &vote_message.vote;
+                            let node_name = vote_message.rank as usize;
 
-                match consensus_message {
-                    ConsensusMessage::Vote(vote_message) => {
-                        let vote = &vote_message.vote;
-                        let node_name = vote_message.rank as usize;
+                            // Stage timeouts
+                            let elapsed_time = timer.elapsed();
 
-                        // Stage timeouts
-                        let elapsed_time = timer.elapsed();
-
-                        for stage in Stage::all() {
-                            if elapsed_time > stage.timeout() {
-                                panic!(
+                            for stage in Stage::all() {
+                                if elapsed_time > stage.timeout() {
+                                    panic!(
                                     "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}.",
                                     stage,
                                     node_c_turbine_disabled.load(Ordering::Acquire),
                                     vote,
                                 );
+                                }
                             }
+
+                            // Handle experiment phase transitions
+                            experiment_state.wait_for_nodes_ready(
+                                vote,
+                                node_name,
+                                &node_c_turbine_disabled,
+                                &validator_keys[2].pubkey(),
+                            );
+                            experiment_state.handle_experiment_start(
+                                vote,
+                                &mut cluster,
+                                &validator_keys[0].pubkey(),
+                            );
+                            experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
                         }
 
-                        // Handle experiment phase transitions
-                        experiment_state.wait_for_nodes_ready(
-                            vote,
-                            node_name,
-                            &node_c_turbine_disabled,
-                            &validator_keys[2].pubkey(),
-                        );
-                        experiment_state.handle_experiment_start(
-                            vote,
-                            &mut cluster,
-                            &validator_keys[0].pubkey(),
-                        );
-                        experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
+                        ConsensusMessage::Certificate(cert_message) => {
+                            // Wait until the final stage before looking for finalization certificates.
+                            if experiment_state.stage != Stage::ObserveLiveness {
+                                continue;
+                            }
+                            // Observing finalization certificates to ensure liveness.
+                            if [CertificateType::Finalize, CertificateType::FinalizeFast]
+                                .contains(&cert_message.certificate.certificate_type())
+                            {
+                                experiment_state
+                                    .record_certificate(cert_message.certificate.slot());
+                            }
+                        }
                     }
-
-                    ConsensusMessage::Certificate(cert_message) => {
-                        // Wait until the final stage before looking for finalization certificates.
-                        if experiment_state.stage != Stage::ObserveLiveness {
-                            continue;
-                        }
-                        // Observing finalization certificates to ensure liveness.
-                        if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                            .contains(&cert_message.certificate.certificate_type())
-                        {
-                            experiment_state.record_certificate(cert_message.certificate.slot());
-
-                            if experiment_state.sufficient_roots_created() {
-                                break;
-                            }
-                        }
+                    if experiment_state.sufficient_roots_created() {
+                        exit.store(true, Ordering::Relaxed);
+                        break;
                     }
                 }
             }
         }
     });
-
     vote_listener_thread.join().unwrap();
+    quic_server_thread.join().unwrap();
 }
