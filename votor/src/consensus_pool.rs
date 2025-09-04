@@ -1,15 +1,15 @@
 use {
     crate::{
         certificate_limits_and_vote_types,
-        certificate_pool::{
+        commitment::AlpenglowCommitmentError,
+        conflicting_types,
+        consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
-            stats::CertificatePoolStats,
+            stats::ConsensusPoolStats,
             vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
         },
-        commitment::AlpenglowCommitmentError,
-        conflicting_types,
         event::VotorEvent,
         vote_to_certificate_ids, Certificate, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
@@ -113,7 +113,7 @@ fn get_key_and_stakes(
     Ok((*vote_key, stake, epoch_stakes.total_stake()))
 }
 
-pub struct CertificatePool {
+pub struct ConsensusPool {
     my_pubkey: Pubkey,
     // Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<PoolId, VotePoolType>,
@@ -133,12 +133,12 @@ pub struct CertificatePool {
     /// The certificate sender, if set, newly created certificates will be sent here
     certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
     /// Stats for the certificate pool
-    stats: CertificatePoolStats,
+    stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
 }
 
-impl CertificatePool {
+impl ConsensusPool {
     pub fn new_from_root_bank(
         my_pubkey: Pubkey,
         bank: &Bank,
@@ -158,7 +158,7 @@ impl CertificatePool {
             highest_finalized_with_notarize: None,
             certificate_sender,
             parent_ready_tracker,
-            stats: CertificatePoolStats::new(),
+            stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
         }
     }
@@ -721,10 +721,10 @@ pub fn load_from_blockstore(
     blockstore: &Blockstore,
     certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
     events: &mut Vec<VotorEvent>,
-) -> CertificatePool {
+) -> ConsensusPool {
     let root_slot = root_bank.slot();
-    let mut cert_pool =
-        CertificatePool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
+    let mut consensus_pool =
+        ConsensusPool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
     for (slot, slot_cert) in blockstore.slot_certificates_iterator(root_slot).unwrap() {
         let certs = slot_cert
             .notarize_fallback_certificates
@@ -740,10 +740,10 @@ pub fn load_from_blockstore(
 
         for (cert_id, cert) in certs {
             trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            cert_pool.insert_certificate(cert_id, cert.into(), events);
+            consensus_pool.insert_certificate(cert_id, cert.into(), events);
         }
     }
-    cert_pool
+    consensus_pool
 }
 
 #[cfg(test)]
@@ -802,7 +802,7 @@ mod tests {
 
     fn create_initial_state() -> (
         Vec<ValidatorVoteKeypairs>,
-        CertificatePool,
+        ConsensusPool,
         Arc<RwLock<BankForks>>,
     ) {
         // Create 10 node validatorvotekeypairs vec
@@ -813,13 +813,13 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            CertificatePool::new_from_root_bank(Pubkey::new_unique(), &root_bank, None),
+            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank, None),
             bank_forks,
         )
     }
 
     fn add_certificate(
-        pool: &mut CertificatePool,
+        pool: &mut ConsensusPool,
         bank: &Bank,
         validator_keypairs: &[ValidatorVoteKeypairs],
         vote: Vote,
@@ -856,7 +856,7 @@ mod tests {
     }
 
     fn add_skip_vote_range(
-        pool: &mut CertificatePool,
+        pool: &mut ConsensusPool,
         root_bank: &Bank,
         start: Slot,
         end: Slot,
@@ -1140,11 +1140,11 @@ mod tests {
         let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
         let my_validator_ix = 5;
         let highest_slot_fn = match &vote {
-            Vote::Finalize(_) => |pool: &CertificatePool| pool.highest_finalized_slot(),
-            Vote::Notarize(_) => |pool: &CertificatePool| pool.highest_notarized_slot(),
-            Vote::NotarizeFallback(_) => |pool: &CertificatePool| pool.highest_notarized_slot(),
-            Vote::Skip(_) => |pool: &CertificatePool| pool.highest_skip_slot(),
-            Vote::SkipFallback(_) => |pool: &CertificatePool| pool.highest_skip_slot(),
+            Vote::Finalize(_) => |pool: &ConsensusPool| pool.highest_finalized_slot(),
+            Vote::Notarize(_) => |pool: &ConsensusPool| pool.highest_notarized_slot(),
+            Vote::NotarizeFallback(_) => |pool: &ConsensusPool| pool.highest_notarized_slot(),
+            Vote::Skip(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
+            Vote::SkipFallback(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
         assert!(pool
@@ -1326,7 +1326,7 @@ mod tests {
     }
 
     fn assert_single_certificate_range(
-        pool: &CertificatePool,
+        pool: &ConsensusPool,
         exp_range_start: Slot,
         exp_range_end: Slot,
     ) {
@@ -1873,7 +1873,7 @@ mod tests {
     }
 
     fn test_reject_conflicting_vote(
-        pool: &mut CertificatePool,
+        pool: &mut ConsensusPool,
         bank: &Bank,
         validator_keypairs: &[ValidatorVoteKeypairs],
         vote_type_1: VoteType,
@@ -1936,7 +1936,7 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
-        let mut pool = CertificatePool::new_from_root_bank(
+        let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
             None,

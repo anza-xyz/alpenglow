@@ -8,7 +8,7 @@ use {
 const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
-pub(crate) struct CertificatePoolStats {
+pub(crate) struct ConsensusPoolStats {
     pub(crate) conflicting_votes: u32,
     pub(crate) event_safe_to_notarize: u32,
     pub(crate) event_safe_to_skip: u32,
@@ -26,13 +26,13 @@ pub(crate) struct CertificatePoolStats {
     pub(crate) last_request_time: Instant,
 }
 
-impl Default for CertificatePoolStats {
+impl Default for ConsensusPoolStats {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CertificatePoolStats {
+impl ConsensusPoolStats {
     pub fn new() -> Self {
         let num_vote_types = (VoteType::SkipFallback as usize).saturating_add(1);
         let num_cert_types = (CertificateType::Skip as usize).saturating_add(1);
@@ -74,7 +74,7 @@ impl CertificatePoolStats {
 
     fn report(&self) {
         datapoint_info!(
-            "certificate_pool_stats",
+            "consensus_pool_stats",
             ("conflicting_votes", self.conflicting_votes as i64, i64),
             ("event_safe_to_skip", self.event_safe_to_skip as i64, i64),
             (
@@ -91,7 +91,7 @@ impl CertificatePoolStats {
         );
 
         datapoint_info!(
-            "certificate_pool_ingested_votes",
+            "consensus_ingested_votes",
             (
                 "finalize",
                 *self
@@ -176,7 +176,7 @@ impl CertificatePoolStats {
         );
 
         datapoint_info!(
-            "certificate_pool_generated_certs",
+            "consensus_pool_generated_certs",
             (
                 "finalize",
                 *self

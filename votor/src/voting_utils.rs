@@ -115,7 +115,7 @@ pub enum VoteError {
     InvalidConfig(Box<GenerateVoteTxResult>),
 
     #[error("Unable to send to certificate pool")]
-    CertificatePoolError(#[from] SendError<()>),
+    ConsensusPoolError(#[from] SendError<()>),
 
     #[error("Commitment sender error {0}")]
     CommitmentSenderError(#[from] AlpenglowCommitmentError),

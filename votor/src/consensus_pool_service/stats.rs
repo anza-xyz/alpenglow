@@ -6,7 +6,7 @@ use {
 const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
-pub(crate) struct CertificatePoolServiceStats {
+pub(crate) struct ConsensusPoolServiceStats {
     pub(crate) add_message_failed: u32,
     pub(crate) certificates_sent: u16,
     pub(crate) certificates_dropped: u16,
@@ -20,7 +20,7 @@ pub(crate) struct CertificatePoolServiceStats {
     last_request_time: Instant,
 }
 
-impl CertificatePoolServiceStats {
+impl ConsensusPoolServiceStats {
     pub fn new() -> Self {
         Self {
             add_message_failed: 0,
@@ -65,7 +65,7 @@ impl CertificatePoolServiceStats {
 
     fn report(&self) {
         datapoint_info!(
-            "cert_pool_service",
+            "consensus_pool_service",
             ("add_message_failed", self.add_message_failed, i64),
             ("certificates_sent", self.certificates_sent, i64),
             ("certificates_dropped", self.certificates_dropped, i64),

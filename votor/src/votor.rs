@@ -42,8 +42,8 @@
 //!
 use {
     crate::{
-        certificate_pool_service::{CertificatePoolContext, CertificatePoolService},
         commitment::AlpenglowCommitmentAggregationData,
+        consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
@@ -139,7 +139,7 @@ pub struct Votor {
     start: Arc<(Mutex<bool>, Condvar)>,
 
     event_handler: EventHandler,
-    certificate_pool_service: CertificatePoolService,
+    consensus_pool_service: ConsensusPoolService,
     timer_manager: Arc<PlRwLock<TimerManager>>,
 }
 
@@ -224,7 +224,7 @@ impl Votor {
             root_context,
         };
 
-        let cert_pool_context = CertificatePoolContext {
+        let consensus_pool_context = ConsensusPoolContext {
             exit: exit.clone(),
             start: start.clone(),
             cluster_info: cluster_info.clone(),
@@ -240,12 +240,12 @@ impl Votor {
         };
 
         let event_handler = EventHandler::new(event_handler_context);
-        let certificate_pool_service = CertificatePoolService::new(cert_pool_context);
+        let consensus_pool_service = ConsensusPoolService::new(consensus_pool_context);
 
         Self {
             start,
             event_handler,
-            certificate_pool_service,
+            consensus_pool_service,
             timer_manager,
         }
     }
@@ -273,7 +273,7 @@ impl Votor {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        self.certificate_pool_service.join()?;
+        self.consensus_pool_service.join()?;
 
         // Loop till we manage to unwrap the Arc and then we can join.
         let mut timer_manager = self.timer_manager;

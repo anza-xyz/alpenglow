@@ -436,7 +436,7 @@ pub struct BlockVersions {
 }
 
 /// Which column an associated block currently resides
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockLocation {
     Original,
     Alternate { block_id: Hash },
