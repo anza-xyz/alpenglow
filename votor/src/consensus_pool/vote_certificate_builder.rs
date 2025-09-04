@@ -83,23 +83,24 @@ impl VoteCertificateBuilder {
 
     /// Aggregates a slice of `VoteMessage`s into the builder.
     pub fn aggregate(&mut self, messages: &[VoteMessage]) -> Result<(), CertificateError> {
-        let Some(vote_type) = messages.first().map(|m| VoteType::get_type(&m.vote)) else {
+        if messages.is_empty() {
             return Ok(());
-        };
+        }
+
         let vote_types = certificate_limits_and_vote_types(self.certificate).1;
-
-        let target_bitmap = if vote_type == vote_types[0] {
-            &mut self.input_bitmap_1
-        } else {
-            &mut self.input_bitmap_2
-        };
-
         for vote_message in messages {
             let rank = vote_message.rank as usize;
             if MAXIMUM_VALIDATORS <= rank {
                 return Err(CertificateError::ValidatorDoesNotExist(vote_message.rank));
             }
-            target_bitmap.set(rank, true);
+
+            let current_vote_type = VoteType::get_type(&vote_message.vote);
+
+            if current_vote_type == vote_types[0] {
+                self.input_bitmap_1.set(rank, true);
+            } else if vote_types.len() == 2 && current_vote_type == vote_types[1] {
+                self.input_bitmap_2.set(rank, true);
+            }
         }
 
         let signature_iter = messages
@@ -149,7 +150,10 @@ impl VoteCertificateBuilder {
 mod tests {
     use {
         super::*,
-        solana_bls_signatures::{Keypair as BLSKeypair, Signature as BLSSignature},
+        solana_bls_signatures::{
+            Keypair as BLSKeypair, PubkeyProjective as BLSPubkeyProjective,
+            Signature as BLSSignature, VerifiablePubkey,
+        },
         solana_hash::Hash,
         solana_votor_messages::{
             consensus_message::{Certificate, CertificateType, VoteMessage},
@@ -337,5 +341,121 @@ mod tests {
                 DecodeError::UnsupportedEncoding
             ))
         );
+    }
+
+    #[test]
+    fn test_certificate_verification_base2_encoding() {
+        let slot = 10;
+        let hash = Hash::new_unique();
+        let certificate_id = Certificate::new(CertificateType::Notarize, slot, Some(hash));
+
+        // 1. Setup: Create keypairs and a single vote object.
+        // All validators will sign the same message, resulting in a single bitmap.
+        let num_validators = 5;
+        let mut keypairs = Vec::new();
+        let mut vote_messages = Vec::new();
+        let vote = Vote::new_notarization_vote(slot, hash);
+        let serialized_vote = bincode::serialize(&vote).unwrap();
+
+        for i in 0..num_validators {
+            let keypair = BLSKeypair::new();
+            let signature = keypair.sign(&serialized_vote);
+            vote_messages.push(VoteMessage {
+                vote,
+                signature: signature.into(),
+                rank: i as u16,
+            });
+            keypairs.push(keypair);
+        }
+
+        // 2. Generation: Aggregate votes and build the certificate. This will
+        // use base2 encoding because it only contains one type of vote.
+        let mut builder = VoteCertificateBuilder::new(certificate_id);
+        builder
+            .aggregate(&vote_messages)
+            .expect("Failed to aggregate votes");
+        let certificate_message = builder.build().expect("Failed to build certificate");
+
+        // 3. Verification: Aggregate the public keys and verify the signature.
+        let pubkey_refs: Vec<_> = keypairs.iter().map(|kp| &kp.public).collect();
+        let aggregate_pubkey =
+            BLSPubkeyProjective::aggregate(&pubkey_refs).expect("Failed to aggregate public keys");
+
+        let verification_result =
+            aggregate_pubkey.verify_signature(&certificate_message.signature, &serialized_vote);
+
+        assert!(
+            verification_result.unwrap_or(false),
+            "BLS aggregate signature verification failed for base2 encoded certificate"
+        );
+    }
+
+    #[test]
+    fn test_certificate_verification_base3_encoding() {
+        let slot = 20;
+        let hash = Hash::new_unique();
+        // A NotarizeFallback certificate can be composed of both Notarize and NotarizeFallback
+        // votes.
+        let certificate_id = Certificate::new(CertificateType::NotarizeFallback, slot, Some(hash));
+
+        // 1. Setup: Create two groups of validators signing two different vote types.
+        let mut all_vote_messages = Vec::new();
+
+        // Group 1: Signs a Notarize vote.
+        let notarize_vote = Vote::new_notarization_vote(slot, hash);
+        let serialized_notarize_vote = bincode::serialize(&notarize_vote).unwrap();
+        for i in 0..3 {
+            let keypair = BLSKeypair::new();
+            let signature = keypair.sign(&serialized_notarize_vote);
+            all_vote_messages.push(VoteMessage {
+                vote: notarize_vote,
+                signature: signature.into(),
+                rank: i as u16, // Ranks 0, 1, 2
+            });
+        }
+
+        // Group 2: Signs a NotarizeFallback vote.
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, hash);
+        let serialized_fallback_vote = bincode::serialize(&notarize_fallback_vote).unwrap();
+        for i in 3..6 {
+            let keypair = BLSKeypair::new();
+            let signature = keypair.sign(&serialized_fallback_vote);
+            all_vote_messages.push(VoteMessage {
+                vote: notarize_fallback_vote,
+                signature: signature.into(),
+                rank: i as u16, // Ranks 3, 4, 5
+            });
+        }
+
+        // 2. Generation: Aggregate votes. Because there are two vote types, this will use
+        //    base3 encoding.
+        let mut builder = VoteCertificateBuilder::new(certificate_id);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let certificate_message = builder.build().expect("Failed to build certificate");
+
+        // 3. Verification:
+        let decoded_bitmap =
+            decode(&certificate_message.bitmap, MAXIMUM_VALIDATORS).expect("Failed to decode");
+
+        match decoded_bitmap {
+            Decoded::Base2(_bitmap) => {
+                panic!("Expected Base3 encoding, but got Base2 encoding");
+            }
+            Decoded::Base3(bitmap1, bitmap2) => {
+                // Bitmap1 should correspond to the Notarize votes (ranks 0, 1, 2)
+                assert_eq!(bitmap1.count_ones(), 3);
+                assert!(bitmap1[0] && bitmap1[1] && bitmap1[2]);
+                // Bitmap2 should correspond to the NotarizeFallback votes (ranks 3, 4, 5)
+                assert_eq!(bitmap2.count_ones(), 3);
+                assert!(bitmap2[3] && bitmap2[4] && bitmap2[5]);
+            }
+        }
+
+        // TODO(sam): The solana-bls-signatures library does not expose a public method to verify
+        // a single aggregate signature against multiple different messages. Therefore, we cannot
+        // perform a single cryptographic verification for this base3-encoded certificate.
+        // Once `solana-bls-signatures` v0.3.0 is published, add verification test.
     }
 }

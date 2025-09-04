@@ -750,7 +750,10 @@ pub fn load_from_blockstore(
 mod tests {
     use {
         super::*,
-        solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature as BLSSignature},
+        solana_bls_signatures::{
+            keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
+            VerifiableSignature,
+        },
         solana_clock::Slot,
         solana_hash::Hash,
         solana_runtime::{
@@ -2291,5 +2294,33 @@ mod tests {
             slot: 12,
             parent_block: (11, h)
         } if h == &hash)));
+    }
+
+    #[test]
+    fn test_vote_message_signature_verification() {
+        let (validator_keypairs, _, _) = create_initial_state();
+        let rank_to_test = 3;
+        let vote = Vote::new_notarization_vote(42, Hash::new_unique());
+
+        let consensus_message = dummy_transaction(&validator_keypairs, &vote, rank_to_test);
+        let ConsensusMessage::Vote(vote_message) = consensus_message else {
+            panic!("Expected Vote message")
+        };
+
+        let validator_vote_keypair = &validator_keypairs[rank_to_test].vote_keypair;
+        let bls_keypair =
+            BLSKeypair::derive_from_signer(validator_vote_keypair, BLS_KEYPAIR_DERIVE_SEED)
+                .unwrap();
+        let bls_pubkey: BLSPubkey = bls_keypair.public;
+
+        let signed_message = bincode::serialize(&vote).unwrap();
+
+        assert!(
+            vote_message
+                .signature
+                .verify(&bls_pubkey, &signed_message)
+                .is_ok(),
+            "BLS signature verification failed for VoteMessage"
+        );
     }
 }
