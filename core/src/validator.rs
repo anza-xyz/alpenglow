@@ -1162,6 +1162,21 @@ impl Validator {
             ))
         };
 
+        let alpenglow_connection_cache = Arc::new(ConnectionCache::new_with_client_options(
+            "connection_cache_alpenglow_quic",
+            tpu_connection_pool_size,
+            Some(node.sockets.quic_alpenglow_client),
+            Some((
+                &identity_keypair,
+                node.info
+                    .alpenglow()
+                    .ok_or_else(|| {
+                        ValidatorError::Other(String::from("Invalid QUIC address for Alpenglow"))
+                    })?
+                    .ip(),
+            )),
+            Some((&staked_nodes, &identity_keypair.pubkey())),
+        ));
         // test-validator crate may start the validator in a tokio runtime
         // context which forces us to use the same runtime because a nested
         // runtime will cause panic at drop. Outside test-validator crate, we
@@ -1668,6 +1683,7 @@ impl Validator {
             wen_restart_repair_slots.clone(),
             slot_status_notifier,
             vote_connection_cache,
+            alpenglow_connection_cache,
             replay_highest_frozen,
             leader_window_notifier,
             config.voting_service_test_override.clone(),

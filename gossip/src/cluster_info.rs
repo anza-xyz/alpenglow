@@ -2394,6 +2394,8 @@ pub struct Sockets {
     pub tpu_transaction_forwarding_clients: Box<[UdpSocket]>,
     /// Connection cache endpoint for QUIC-based Vote
     pub quic_vote_client: UdpSocket,
+    /// Connection cache endpoint for QUIC-based Alpenglow messages
+    pub quic_alpenglow_client: UdpSocket,
     /// Client-side socket for RPC/SendTransactionService.
     pub rpc_sts_client: UdpSocket,
     pub vortexor_receivers: Option<Vec<UdpSocket>>,

@@ -185,6 +185,7 @@ impl Tvu {
         wen_restart_repair_slots: Option<Arc<RwLock<Vec<Slot>>>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
+        alpenglow_connection_cache: Arc<ConnectionCache>,
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
         voting_service_test_override: Option<VotingServiceOverride>,
@@ -390,6 +391,7 @@ impl Tvu {
             tower_storage,
             vote_history_storage.clone(),
             vote_connection_cache.clone(),
+            alpenglow_connection_cache,
             bank_forks.clone(),
             voting_service_test_override,
         );
@@ -585,6 +587,10 @@ pub mod tests {
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
         };
+        let alpenglow_connection_cache = ConnectionCache::new_quic(
+            "connection_cache_alpenglow",
+            DEFAULT_TPU_CONNECTION_POOL_SIZE,
+        );
         let (votor_event_sender, votor_event_receiver) = unbounded();
 
         let tvu = Tvu::new(
@@ -650,6 +656,7 @@ pub mod tests {
             wen_restart_repair_slots,
             None,
             Arc::new(connection_cache),
+            Arc::new(alpenglow_connection_cache),
             Arc::new(ReplayHighestFrozen::default()),
             Arc::new(LeaderWindowNotifier::default()),
             None,
