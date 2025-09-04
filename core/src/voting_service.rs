@@ -177,7 +177,7 @@ impl VotingService {
             .spawn(move || {
                 let mut staked_validators_cache = StakedValidatorsCache::new(
                     bank_forks.clone(),
-                    connection_cache.protocol(),
+                    alpenglow_connection_cache.protocol(),
                     Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
                     STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
                     false,
