@@ -406,16 +406,12 @@ pub fn run_cluster_partition<C>(
     additional_accounts: Vec<(Pubkey, AccountSharedData)>,
     is_alpenglow: bool,
 ) {
-    if is_alpenglow {
-        solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
-    } else {
-        solana_logger::setup_with_default(RUST_LOG_FILTER);
-    }
+    solana_logger::setup_with_default(RUST_LOG_FILTER);
     info!("PARTITION_TEST!");
     let num_nodes = partitions.len();
     let node_stakes: Vec<_> = partitions
         .iter()
-        .map(|stake_weight| 100 * *stake_weight as u64)
+        .map(|stake_weight| DEFAULT_NODE_STAKE * *stake_weight as u64)
         .collect();
     assert_eq!(node_stakes.len(), num_nodes);
     let mint_lamports = node_stakes.iter().sum::<u64>() * 2;
