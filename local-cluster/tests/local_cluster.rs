@@ -4546,7 +4546,7 @@ fn run_test_cluster_partition(num_partitions: usize, is_alpenglow: bool) {
     let on_partition_resolved = |cluster: &mut LocalCluster, _: &mut ()| {
         cluster.check_for_new_roots(16, "PARTITION_TEST", SocketAddrSpace::Unspecified);
     };
-    let partition_sizes = vec![1; num_partitions];
+    let partition_sizes = vec![DEFAULT_NODE_STAKE as usize; num_partitions];
     run_cluster_partition(
         &partition_sizes,
         None,
