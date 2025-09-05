@@ -320,13 +320,14 @@ fn start_receive_and_record_loop(
         // for now but can be longer if needed.
         match record_receiver.recv_timeout(Duration::from_millis(400)) {
             Ok(record) => {
+                let record_response = poh_recorder.write().unwrap().record(
+                    record.slot,
+                    record.mixins,
+                    record.transaction_batches,
+                );
                 if record
                     .sender
-                    .send(poh_recorder.write().unwrap().record(
-                        record.slot,
-                        record.mixins,
-                        record.transaction_batches,
-                    ))
+                    .send(record_response.map(|r| r.starting_transaction_index))
                     .is_err()
                 {
                     panic!("Error returning mixin hashes");
