@@ -248,9 +248,7 @@ impl ConsensusPoolService {
                         return Self::handle_channel_disconnected(&mut ctx, channel_name.as_str());
                     }
                     Err(e) => {
-                        trace!(
-                            "{my_pubkey}: unable to push standstill certificates into pool {e}"
-                        );
+                        trace!("{my_pubkey}: unable to push standstill certificates into pool {e}");
                     }
                 }
             }

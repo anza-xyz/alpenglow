@@ -1578,9 +1578,7 @@ impl Validator {
                     tower
                 }
                 Err(e) => {
-                    warn!(
-                        "Unable to retrieve tower: {e:?} creating default tower...."
-                    );
+                    warn!("Unable to retrieve tower: {e:?} creating default tower....");
                     Tower::default()
                 }
             };
@@ -2206,9 +2204,7 @@ fn post_process_restored_vote_history(
                     storage file has been copied to the correct directory. Aborting"
                 ));
             }
-            error!(
-                "Rebuilding an empty vote_history from root slot due to failed restore: {err}"
-            );
+            error!("Rebuilding an empty vote_history from root slot due to failed restore: {err}");
 
             VoteHistory::new(*validator_identity, bank_forks.root())
         }

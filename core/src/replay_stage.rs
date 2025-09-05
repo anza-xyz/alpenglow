@@ -730,9 +730,7 @@ impl ReplayStage {
                             return;
                         }
                     };
-                    warn!(
-                        "Identity changed during startup from {my_old_pubkey} to {my_pubkey}"
-                    );
+                    warn!("Identity changed during startup from {my_old_pubkey} to {my_pubkey}");
                 }
             }
             let (mut progress, heaviest_subtree_fork_choice) =
@@ -2143,9 +2141,7 @@ impl ReplayStage {
                 } else {
                     ""
                 };
-                info!(
-                    "LEADER CHANGE at slot: {bank_slot} leader: {new_leader}{msg}"
-                );
+                info!("LEADER CHANGE at slot: {bank_slot} leader: {new_leader}{msg}");
             }
         }
         current_leader.replace(new_leader.to_owned());
@@ -2219,9 +2215,7 @@ impl ReplayStage {
             .get(maybe_my_leader_slot)
             .is_some()
         {
-            warn!(
-                "{my_pubkey} already have bank in forks at {maybe_my_leader_slot}?"
-            );
+            warn!("{my_pubkey} already have bank in forks at {maybe_my_leader_slot}?");
             return false;
         }
         trace!(
@@ -2239,9 +2233,7 @@ impl ReplayStage {
                 return false;
             }
 
-            trace!(
-                "{my_pubkey} leader {next_leader} at poh slot: {maybe_my_leader_slot}"
-            );
+            trace!("{my_pubkey} leader {next_leader} at poh slot: {maybe_my_leader_slot}");
 
             // Poh: I guess I missed my slot
             // Alpenglow: It's not my slot yet
@@ -2305,9 +2297,7 @@ impl ReplayStage {
 
         let root_slot = bank_forks.read().unwrap().root();
         datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
-        info!(
-            "new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}"
-        );
+        info!("new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}");
 
         let root_distance = my_leader_slot - root_slot;
         let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
