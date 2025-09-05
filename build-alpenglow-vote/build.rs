@@ -40,7 +40,7 @@ fn generate_github_rev(rev: &str) -> PathBuf {
 
 fn generate_local_checkout(path: &str) -> PathBuf {
     let err = || {
-        format!("Local checkout path must be of the form: /x/y/z/alpenglow-vote-project-path/program. In particular, alpenglow-vote-project-path is the local checkout, which might typically just be called alpenglow-vote. Current checkout path: {}", path)
+        format!("Local checkout path must be of the form: /x/y/z/alpenglow-vote-project-path/program. In particular, alpenglow-vote-project-path is the local checkout, which might typically just be called alpenglow-vote. Current checkout path: {path}")
     };
     let path = PathBuf::from(path);
 

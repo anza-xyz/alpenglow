@@ -111,7 +111,7 @@ pub fn bls_pubkeys_of(matches: &ArgMatches<'_>, name: &str) -> Option<Vec<BLSPub
             .map(|value| {
                 BLSPubkey::from_str(value).unwrap_or_else(|_| {
                     //TODO(wen): support reading BLS keypair files
-                    panic!("Failed to parse BLS public key from value: {}", value)
+                    panic!("Failed to parse BLS public key from value: {value}")
                 })
             })
             .collect()
