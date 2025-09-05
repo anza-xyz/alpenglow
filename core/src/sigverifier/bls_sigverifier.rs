@@ -8,16 +8,26 @@ use {
         cluster_info_vote_listener::VerifiedVoteSender,
         sigverify_stage::{SigVerifier, SigVerifyServiceError},
     },
+    bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
-    rayon::iter::{IntoParallelRefMutIterator, ParallelIterator},
-    solana_bls_signatures::pubkey::{PubkeyProjective, VerifiablePubkey},
+    itertools::multiunzip,
+    rayon::iter::{
+        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
+        ParallelIterator,
+    },
+    solana_bls_signatures::{
+        pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
+        signature::SignatureProjective,
+    },
     solana_clock::Slot,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
-    solana_signer_store::Decoded,
+    solana_signer_store::decode,
     solana_streamer::packet::PacketBatch,
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::consensus_message::{
+        Certificate, CertificateMessage, ConsensusMessage, VoteMessage,
+    },
     stats::{BLSSigVerifierStats, StatsUpdater},
     std::{collections::HashMap, sync::Arc},
 };
@@ -37,21 +47,78 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
 }
 
+struct VoteToVerify<'a> {
+    vote_message: VoteMessage,
+    bls_pubkey: &'a BlsPubkey,
+    packet: PacketRefMut<'a>,
+}
+struct CertToVerify<'a> {
+    cert_message: CertificateMessage,
+    packet: PacketRefMut<'a>,
+}
+
 impl SigVerifier for BLSSigVerifier {
     type SendType = ConsensusMessage;
 
-    // TODO(sam): individually verifying each signatures for now
-    //            aggregate verification to be added
     fn verify_batches(
         &self,
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
     ) -> Vec<PacketBatch> {
-        batches.par_iter_mut().flatten().for_each(|mut packet| {
-            if !packet.meta().discard() && !self.verify_bls_packet(&mut packet) {
-                packet.meta_mut().set_discard(true);
+        // TODO(sam): ideally we want to avoid heap allocation, but let's use
+        //            `Vec` for now for clarity and then optimize for the final version
+        let mut votes_to_verify = Vec::new();
+        let mut certs_to_verify = Vec::new();
+
+        let bank = self.root_bank.load();
+
+        for mut packet in batches.iter_mut().flatten() {
+            if packet.meta().discard() {
+                continue;
             }
-        });
+
+            let message: ConsensusMessage = match packet.deserialize_slice(..) {
+                Ok(msg) => msg,
+                Err(_) => {
+                    packet.meta_mut().set_discard(true);
+                    continue;
+                }
+            };
+
+            match message {
+                ConsensusMessage::Vote(vote_message) => {
+                    if let Some(key_to_rank_map) =
+                        get_key_to_rank_map(&bank, vote_message.vote.slot())
+                    {
+                        if let Some((_, bls_pubkey)) =
+                            key_to_rank_map.get_pubkey(vote_message.rank.into())
+                        {
+                            votes_to_verify.push(VoteToVerify {
+                                vote_message,
+                                bls_pubkey,
+                                packet,
+                            });
+                        } else {
+                            packet.meta_mut().set_discard(true); // Invalid rank
+                        }
+                    } else {
+                        packet.meta_mut().set_discard(true); // Missing epoch stakes
+                    }
+                }
+                ConsensusMessage::Certificate(cert_message) => {
+                    certs_to_verify.push(CertToVerify {
+                        cert_message,
+                        packet,
+                    });
+                }
+            }
+        }
+
+        rayon::join(
+            || self.verify_votes(&mut votes_to_verify),
+            || self.verify_certificates(&mut certs_to_verify),
+        );
+
         batches
     }
 
@@ -157,84 +224,171 @@ impl BLSSigVerifier {
         self.stats.update(stats_updater);
     }
 
-    fn verify_bls_packet(&self, packet: &mut PacketRefMut) -> bool {
-        // Deserialize the packet into a ConsensusMessage. If it fails, the packet is invalid.
-        let message: ConsensusMessage = match packet.deserialize_slice(..) {
-            Ok(msg) => msg,
+    fn verify_votes(&self, votes_to_verify: &mut [VoteToVerify]) {
+        if votes_to_verify.is_empty() {
+            return;
+        }
+
+        let (mut successful_votes, messages): (Vec<_>, Vec<_>) =
+            multiunzip(votes_to_verify.iter_mut().filter_map(|vote| {
+                match bincode::serialize(&vote.vote_message.vote) {
+                    Ok(payload) => Some((vote, payload)),
+                    Err(_) => {
+                        vote.packet.meta_mut().set_discard(true);
+                        None
+                    }
+                }
+            }));
+
+        if successful_votes.is_empty() {
+            return;
+        }
+
+        let mut pubkeys = Vec::with_capacity(successful_votes.len());
+        let mut signatures = Vec::with_capacity(successful_votes.len());
+        let mut message_refs = Vec::with_capacity(successful_votes.len());
+
+        for (vote, message) in successful_votes.iter().zip(messages.iter()) {
+            pubkeys.push(vote.bls_pubkey);
+            signatures.push(&vote.vote_message.signature);
+            message_refs.push(message.as_ref());
+        }
+
+        // Optimistically verify signatures; this should be the most common case
+        if SignatureProjective::verify_distinct(&pubkeys, &signatures, &message_refs)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        // Fallback: If the batch fails, verify each vote signature individually in parallel
+        // to find the invalid ones.
+        //
+        // TODO(sam): keep a record of which validator's vote failed to incur penalty
+        successful_votes
+            .par_iter_mut()
+            .zip(messages.par_iter())
+            .for_each(|(vote_to_verify, signed_payload)| {
+                if !vote_to_verify
+                    .bls_pubkey
+                    .verify_signature(&vote_to_verify.vote_message.signature, signed_payload)
+                    .unwrap_or(false)
+                {
+                    vote_to_verify.packet.meta_mut().set_discard(true);
+                }
+            });
+    }
+
+    fn verify_certificates(&self, certs_to_verify: &mut [CertToVerify]) {
+        certs_to_verify.par_iter_mut().for_each(|cert_to_verify| {
+            if !self.verify_bls_certificate(&cert_to_verify.cert_message) {
+                cert_to_verify.packet.meta_mut().set_discard(true);
+            }
+        });
+    }
+
+    fn verify_bls_certificate(&self, certificate_message: &CertificateMessage) -> bool {
+        let signed_payload = match bincode::serialize(&certificate_message.certificate) {
+            Ok(payload) => payload,
             Err(_) => return false,
         };
 
-        let slot = match &message {
-            ConsensusMessage::Vote(vote_message) => vote_message.vote.slot(),
-            ConsensusMessage::Certificate(certificate_message) => {
-                certificate_message.certificate.slot()
-            }
-        };
-
         let bank = self.root_bank.load();
-        let Some(key_to_rank_map) = get_key_to_rank_map(&bank, slot) else {
+        let Some(key_to_rank_map) =
+            get_key_to_rank_map(&bank, certificate_message.certificate.slot())
+        else {
             return false;
         };
 
-        match &message {
-            ConsensusMessage::Vote(vote_message) => {
-                let signed_payload = match bincode::serialize(&vote_message.vote) {
-                    Ok(payload) => payload,
+        let max_len = key_to_rank_map.len();
+
+        let decoded_bitmap = match decode(&certificate_message.bitmap, max_len) {
+            Ok(decoded) => decoded,
+            Err(_) => return false,
+        };
+
+        match decoded_bitmap {
+            solana_signer_store::Decoded::Base2(bit_vec) => {
+                let pubkeys_to_aggregate = match bit_vec
+                    .iter_ones()
+                    .filter_map(|rank| key_to_rank_map.get_pubkey(rank))
+                    .map(|(_, bls_pubkey)| PubkeyProjective::try_from(bls_pubkey))
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(pks) => pks,
                     Err(_) => return false,
                 };
-
-                let Some((_, bls_pubkey)) = key_to_rank_map.get_pubkey(vote_message.rank.into())
-                else {
+                let pubkey_refs: Vec<_> = pubkeys_to_aggregate.iter().collect();
+                let Ok(aggregate_bls_pubkey) = PubkeyProjective::aggregate(&pubkey_refs) else {
                     return false;
-                };
-
-                bls_pubkey
-                    .verify_signature(&vote_message.signature, &signed_payload)
-                    .unwrap_or(false)
-            }
-            ConsensusMessage::Certificate(certificate_message) => {
-                let signed_payload = match bincode::serialize(&certificate_message.certificate) {
-                    Ok(payload) => payload,
-                    Err(_) => return false,
-                };
-
-                // TODO: use the `MAXIMUM_VALIDATORS` constant from `solana-votor` crate
-                //       this is currently hidden under a private submodule
-                let max_len = 4096;
-
-                let decoded_bitmap =
-                    match solana_signer_store::decode(&certificate_message.bitmap, max_len) {
-                        Ok(decoded) => decoded,
-                        Err(_) => return false,
-                    };
-
-                let aggregate_bls_pubkey = match decoded_bitmap {
-                    Decoded::Base2(bit_vec) => {
-                        let pubkeys_to_aggregate: Result<Vec<_>, _> = bit_vec
-                            .iter_ones()
-                            .filter_map(|rank| key_to_rank_map.get_pubkey(rank))
-                            .map(|(_, bls_pubkey)| PubkeyProjective::try_from(bls_pubkey))
-                            .collect();
-
-                        let Ok(pubkeys_to_aggregate) = pubkeys_to_aggregate else {
-                            return false;
-                        };
-
-                        let pubkey_refs: Vec<_> = pubkeys_to_aggregate.iter().collect();
-
-                        match PubkeyProjective::par_aggregate(&pubkey_refs) {
-                            Ok(aggregate_pubkey) => aggregate_pubkey,
-                            Err(_) => return false,
-                        }
-                    }
-                    Decoded::Base3(_, _) => {
-                        unimplemented!()
-                    }
                 };
 
                 aggregate_bls_pubkey
                     .verify_signature(&certificate_message.signature, &signed_payload)
                     .unwrap_or(false)
+            }
+            solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => {
+                // Helper closure to avoid duplicating the aggregation logic.
+                let aggregate_from_bitmap = |bit_vec: &BitVec<u8, Lsb0>| {
+                    let pubkeys: Result<Vec<_>, _> = bit_vec
+                        .iter_ones()
+                        .filter_map(|rank| key_to_rank_map.get_pubkey(rank))
+                        .map(|(_, bls_pubkey)| PubkeyProjective::try_from(*bls_pubkey))
+                        .collect();
+                    PubkeyProjective::aggregate(&pubkeys?.iter().collect::<Vec<_>>())
+                };
+
+                // 1. Aggregate the two sets of public keys separately.
+                let Ok(agg_pk1) = aggregate_from_bitmap(&bit_vec1) else {
+                    return false;
+                };
+                let Ok(agg_pk2) = aggregate_from_bitmap(&bit_vec2) else {
+                    return false;
+                };
+
+                let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
+                let pubkey_refs: Vec<&BlsPubkey> = pubkeys_affine.iter().collect();
+
+                // 2. Construct the two messages based on the certificate type.
+                let messages_to_verify: Vec<Vec<u8>> = {
+                    let certificate = &certificate_message.certificate;
+                    match certificate {
+                        Certificate::NotarizeFallback(slot, hash) => {
+                            let msg1 =
+                                bincode::serialize(&Certificate::Notarize(*slot, *hash)).ok()?;
+                            let msg2 = bincode::serialize(certificate).ok()?;
+                            vec![msg1, msg2]
+                        }
+                        Certificate::Skip(slot) => {
+                            // For a Skip, the fallback group signs for a NotarizeFallback on the parent.
+                            let parent_hash = bank.parent_hash();
+                            let msg1 = bincode::serialize(certificate).ok()?;
+                            let msg2 = bincode::serialize(&Certificate::NotarizeFallback(
+                                *slot,
+                                parent_hash,
+                            ))
+                            .ok()?;
+                            vec![msg1, msg2]
+                        }
+                        // As per your logic, other certificate types are not valid for Base3.
+                        _ => return false,
+                    }
+                };
+
+                // If message serialization failed, `messages_to_verify` will be None.
+                let Some(messages_to_verify) = Some(messages_to_verify) else {
+                    return false;
+                };
+                let message_refs: Vec<&[u8]> =
+                    messages_to_verify.iter().map(AsRef::as_ref).collect();
+
+                // 3. Verify the one aggregate signature against the two aggregate pubkeys and two messages.
+                SignatureProjective::verify_distinct_aggregated(
+                    &pubkey_refs,
+                    &certificate_message.signature,
+                    &message_refs,
+                )
+                .unwrap_or(false)
             }
         }
     }
