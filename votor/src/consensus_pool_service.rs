@@ -249,9 +249,7 @@ impl ConsensusPoolService {
                     }
                     Err(e) => {
                         trace!(
-                            "{}: unable to push standstill certificates into pool {}",
-                            my_pubkey,
-                            e
+                            "{my_pubkey}: unable to push standstill certificates into pool {e}"
                         );
                     }
                 }
@@ -378,9 +376,8 @@ impl ConsensusPoolService {
 
         if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
             warn!(
-                "{}: We have already produced shreds in the window {start_slot}-{end_slot}, \
-                    skipping production of our leader window",
-                my_pubkey,
+                "{my_pubkey}: We have already produced shreds in the window {start_slot}-{end_slot}, \
+                    skipping production of our leader window"
             );
             return;
         }
@@ -391,9 +388,8 @@ impl ConsensusPoolService {
         {
             BlockProductionParent::MissedWindow => {
                 warn!(
-                    "{}: Leader slot {start_slot} has already been certified, \
-                    skipping production of {start_slot}-{end_slot}",
-                    my_pubkey,
+                    "{my_pubkey}: Leader slot {start_slot} has already been certified, \
+                    skipping production of {start_slot}-{end_slot}"
                 );
                 ConsensusPoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
             }

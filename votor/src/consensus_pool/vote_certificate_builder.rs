@@ -123,8 +123,7 @@ impl VoteCertificateBuilder {
         let new_length = last_one_1.max(last_one_2);
         if new_length > MAXIMUM_VALIDATORS {
             error!(
-                "Bitmap length exceeds maximum allowed: {} should be caught during aggregation",
-                MAXIMUM_VALIDATORS
+                "Bitmap length exceeds maximum allowed: {MAXIMUM_VALIDATORS} should be caught during aggregation"
             );
             return Err(CertificateError::ValidatorDoesNotExist(new_length as u16));
         }

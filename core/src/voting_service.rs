@@ -275,7 +275,7 @@ impl VotingService {
         let buf = match serialize(message) {
             Ok(buf) => buf,
             Err(err) => {
-                error!("Failed to serialize alpenglow message: {:?}", err);
+                error!("Failed to serialize alpenglow message: {err:?}");
                 return;
             }
         };
@@ -291,7 +291,7 @@ impl VotingService {
         // not an issue, we can optimize this by using multi_targret_send or similar methods.
         for socket in sockets {
             if let Err(e) = send_message(buf.clone(), socket, &connection_cache) {
-                warn!("Failed to send alpenglow message to {}: {:?}", socket, e);
+                warn!("Failed to send alpenglow message to {socket}: {e:?}");
             }
         }
     }
@@ -312,7 +312,7 @@ impl VotingService {
             } => {
                 let mut measure = Measure::start("alpenglow vote history save");
                 if let Err(err) = vote_history_storage.store(&saved_vote_history) {
-                    error!("Unable to save vote history to storage: {:?}", err);
+                    error!("Unable to save vote history to storage: {err:?}");
                     std::process::exit(1);
                 }
                 measure.stop();
@@ -357,7 +357,7 @@ impl VotingService {
             } => {
                 let mut measure = Measure::start("tower storage save");
                 if let Err(err) = tower_storage.store(&saved_tower) {
-                    error!("Unable to save tower to storage: {:?}", err);
+                    error!("Unable to save tower to storage: {err:?}");
                     std::process::exit(1);
                 }
                 measure.stop();

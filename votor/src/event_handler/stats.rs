@@ -185,7 +185,7 @@ impl EventHandlerStats {
     pub fn incr_vote(&mut self, bls_op: &BLSOp) {
         if let BLSOp::PushVote { message, .. } = bls_op {
             let ConsensusMessage::Vote(vote) = **message else {
-                warn!("Unexpected BLS message type: {:?}", message);
+                warn!("Unexpected BLS message type: {message:?}");
                 return;
             };
             let vote_type = VoteType::get_type(&vote.vote);
@@ -199,7 +199,7 @@ impl EventHandlerStats {
                 entry.vote_skip = Some(Instant::now());
             }
         } else {
-            warn!("Unexpected BLS operation: {:?}", bls_op);
+            warn!("Unexpected BLS operation: {bls_op:?}");
         }
     }
 

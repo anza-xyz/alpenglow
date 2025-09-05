@@ -203,7 +203,7 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
     // Check for new roots
     cluster.check_for_new_roots(
         16,
-        &format!("test_{}_nodes_alpenglow", num_nodes),
+        &format!("test_{num_nodes}_nodes_alpenglow"),
         SocketAddrSpace::Unspecified,
     );
 }
@@ -2954,7 +2954,7 @@ fn test_oc_bad_signatures() {
             let vote_keypair = vote_keypair.insecure_clone();
             let num_votes_simulated = num_votes_simulated.clone();
             move |vote_slot, leader_vote_tx, parsed_vote, _cluster_info| {
-                info!("received vote for {}", vote_slot);
+                info!("received vote for {vote_slot}");
                 let parsed_vote = parsed_vote.as_tower_transaction_ref().unwrap();
                 let vote_hash = parsed_vote.hash();
                 info!("Simulating vote from our node on slot {vote_slot}, hash {vote_hash}");
@@ -6227,7 +6227,7 @@ fn broadcast_vote(
         let buf = bincode::serialize(&message).unwrap();
         let client = connection_cache.get_connection(tpu_socket_addr);
         client.send_data_async(Arc::new(buf)).unwrap_or_else(|_| {
-            panic!("Failed to broadcast vote to {}", tpu_socket_addr);
+            panic!("Failed to broadcast vote to {tpu_socket_addr}");
         });
     }
 }
@@ -6244,7 +6244,7 @@ fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     } else if vote.is_skip_fallback() {
         4
     } else {
-        panic!("Invalid vote type: {:?}", vote)
+        panic!("Invalid vote type: {vote:?}")
     };
 
     let slot = vote.slot();
@@ -6556,7 +6556,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                 .get_contact_info(pubkey)
                 .unwrap()
                 .tpu_vote(cluster.connection_cache.protocol())
-                .unwrap_or_else(|| panic!("Failed to get TPU address for {}", pubkey))
+                .unwrap_or_else(|| panic!("Failed to get TPU address for {pubkey}"))
         })
         .collect();
 
@@ -6936,7 +6936,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
             let (_, vote_type) = _vote_to_tuple(vote);
             let slot_pattern = self.vote_type_bitmap.entry(slot).or_insert([0u8; 4]);
 
-            assert!(node_index < NUM_NODES, "Invalid node index: {}", node_index);
+            assert!(node_index < NUM_NODES, "Invalid node index: {node_index}");
             slot_pattern[node_index] |= 1 << vote_type;
         }
 

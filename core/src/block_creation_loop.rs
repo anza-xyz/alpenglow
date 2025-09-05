@@ -403,8 +403,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             ctx.my_pubkey = my_pubkey;
 
             warn!(
-                "Identity changed from {} to {} during block creation loop",
-                my_old_pubkey, my_pubkey
+                "Identity changed from {my_old_pubkey} to {my_pubkey} during block creation loop"
             );
         }
 

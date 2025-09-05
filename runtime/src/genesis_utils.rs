@@ -358,8 +358,7 @@ pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpengl
         .and_then(|mut file| file.read_to_end(&mut program_data_elf))
         .unwrap_or_else(|err| {
             panic!(
-                "Error: failed to read alpenglow-vote program from path {}: {}",
-                alpenglow_so_path, err
+                "Error: failed to read alpenglow-vote program from path {alpenglow_so_path}: {err}"
             )
         });
 

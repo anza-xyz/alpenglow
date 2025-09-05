@@ -702,14 +702,14 @@ impl LocalCluster {
         socket_addr_space: SocketAddrSpace,
     ) {
         let alive_node_contact_infos = self.discover_nodes(socket_addr_space, test_name);
-        info!("{} looking for new processed slots on all nodes", test_name);
+        info!("{test_name} looking for new processed slots on all nodes");
         cluster_tests::check_for_new_processed(
             num_new_processed,
             &alive_node_contact_infos,
             &self.connection_cache,
             test_name,
         );
-        info!("{} done waiting for processed slots", test_name);
+        info!("{test_name} done waiting for processed slots");
     }
 
     pub fn check_no_new_roots(
@@ -785,7 +785,7 @@ impl LocalCluster {
         node_stakes: &[u64],
     ) {
         let alive_node_contact_infos = self.discover_nodes(socket_addr_space, test_name);
-        info!("{} looking for new notarized votes on all nodes", test_name);
+        info!("{test_name} looking for new notarized votes on all nodes");
         cluster_tests::check_for_new_notarized_votes(
             num_new_notarized_votes,
             &alive_node_contact_infos,
@@ -795,7 +795,7 @@ impl LocalCluster {
             validator_keys,
             node_stakes,
         );
-        info!("{} done waiting for notarized votes", test_name);
+        info!("{test_name} done waiting for notarized votes");
     }
 
     /// Attempt to send and confirm tx "attempts" times

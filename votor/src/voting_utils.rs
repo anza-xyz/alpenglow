@@ -226,8 +226,7 @@ pub fn generate_vote_tx(
     let my_bls_pubkey: BLSPubkey = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
         panic!(
-            "Vote account bls_pubkey mismatch: {:?} (expected: {:?}).  Unable to vote",
-            bls_pubkey_in_vote_account, my_bls_pubkey
+            "Vote account bls_pubkey mismatch: {bls_pubkey_in_vote_account:?} (expected: {my_bls_pubkey:?}).  Unable to vote"
         );
     }
     let vote_serialized = bincode::serialize(&vote).unwrap();
@@ -308,13 +307,13 @@ pub fn generate_vote_message(
     let bls_op = match insert_vote_and_create_bls_message(vote, is_refresh, vctx) {
         Ok(bls_op) => bls_op,
         Err(VoteError::InvalidConfig(e)) => {
-            warn!("Failed to generate vote and push to votes: {:?}", e);
+            warn!("Failed to generate vote and push to votes: {e:?}");
             // These are not fatal errors, just skip the vote for now. But they are misconfigurations
             // that should be warned about.
             return Ok(None);
         }
         Err(VoteError::TransientError(e)) => {
-            info!("Failed to generate vote and push to votes: {:?}", e);
+            info!("Failed to generate vote and push to votes: {e:?}");
             // These are transient errors, just skip the vote for now.
             return Ok(None);
         }

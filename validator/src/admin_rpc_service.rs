@@ -1478,7 +1478,7 @@ mod tests {
         if let VotorEvent::SetIdentity = event {
             info!("Received SetIdentity event as expected");
         } else {
-            panic!("Unexpected event received: {:?}", event);
+            panic!("Unexpected event received: {event:?}");
         }
     }
 

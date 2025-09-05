@@ -407,7 +407,7 @@ impl Tower {
             if voted_stake == 0 {
                 continue;
             }
-            trace!("{} {} with stake {}", vote_account_pubkey, key, voted_stake);
+            trace!("{vote_account_pubkey} {key} with stake {voted_stake}");
             let Some(vote_state_view) = account.vote_state_view() else {
                 continue; // not relevant to Alpenglow.
             };

@@ -3819,19 +3819,19 @@ mod tests {
         assert_eq!(keypair44.pubkey().to_string().len(), 44);
 
         let trace = cluster_info44.contact_info_trace();
-        info!("cluster:\n{}", trace);
+        info!("cluster:\n{trace}");
         assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info44.rpc_info_trace();
-        info!("rpc:\n{}", trace);
+        info!("rpc:\n{trace}");
         assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.contact_info_trace();
-        info!("cluster:\n{}", trace);
+        info!("cluster:\n{trace}");
         assert_eq!(trace.len(), CLUSTER_INFO_TRACE_LENGTH);
 
         let trace = cluster_info43.rpc_info_trace();
-        info!("rpc:\n{}", trace);
+        info!("rpc:\n{trace}");
         assert_eq!(trace.len(), RPC_INFO_TRACE_LENGTH);
     }
 

@@ -89,10 +89,7 @@ impl SlotStakeCounters {
         let skip_ratio = self.skip_total as f64 / self.total_stake as f64;
         let notarized_ratio = *stake as f64 / self.total_stake as f64;
         trace!(
-            "safe_to_notar {:?} {} {}",
-            block_id,
-            skip_ratio,
-            notarized_ratio,
+            "safe_to_notar {block_id:?} {skip_ratio} {notarized_ratio}"
         );
         // Check if the block fits condition (i) 40% of stake holders voted notarize
         notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY

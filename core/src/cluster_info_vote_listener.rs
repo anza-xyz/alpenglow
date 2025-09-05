@@ -556,7 +556,7 @@ impl ClusterInfoVoteListener {
                                 dependency_work,
                             ))
                             .unwrap_or_else(|err| {
-                                warn!("bank_notification_sender failed: {:?}", err)
+                                warn!("bank_notification_sender failed: {err:?}")
                             });
                     }
                 }

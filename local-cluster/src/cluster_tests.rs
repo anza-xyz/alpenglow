@@ -644,8 +644,7 @@ pub fn check_for_new_notarized_votes(
                     done = num_new_notarized_votes.iter().all(|&x| x > num_new_votes);
                     if done || last_print.elapsed().as_secs() > 3 {
                         info!(
-                            "{} waiting for {} new notarized votes.. observed: {:?}",
-                            test_name_owned, num_new_votes, num_new_notarized_votes
+                            "{test_name_owned} waiting for {num_new_votes} new notarized votes.. observed: {num_new_notarized_votes:?}"
                         );
                         last_print = Instant::now();
                         exit.store(true, Ordering::Relaxed);

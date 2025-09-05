@@ -2216,7 +2216,7 @@ mod tests {
                 .is_ok());
         }
         // events should now contain ParentReady for slot 4
-        error!("Events: {:?}", events);
+        error!("Events: {events:?}");
         assert!(events
             .iter()
             .any(|event| matches!(event, VotorEvent::ParentReady {
@@ -2244,7 +2244,7 @@ mod tests {
                 .is_ok());
         }
         // events should now contain ParentReady for slot 8
-        error!("Events: {:?}", events);
+        error!("Events: {events:?}");
         assert!(events
             .iter()
             .any(|event| matches!(event, VotorEvent::ParentReady {
@@ -2287,7 +2287,7 @@ mod tests {
             )
             .is_ok());
         // events should now contain ParentReady for slot 12
-        error!("Events: {:?}", events);
+        error!("Events: {events:?}");
         assert!(events
             .iter()
             .any(|event| matches!(event, VotorEvent::ParentReady {

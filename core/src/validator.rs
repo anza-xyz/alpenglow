@@ -1560,13 +1560,12 @@ impl Validator {
         {
             let vote_history = match process_blockstore.process_to_create_vote_history() {
                 Ok(vote_history) => {
-                    info!("Vote history: {:?}", vote_history);
+                    info!("Vote history: {vote_history:?}");
                     vote_history
                 }
                 Err(e) => {
                     warn!(
-                        "Unable to retrieve vote history: {:?} creating default vote history....",
-                        e
+                        "Unable to retrieve vote history: {e:?} creating default vote history...."
                     );
                     VoteHistory::default()
                 }
@@ -1575,13 +1574,12 @@ impl Validator {
         } else {
             let tower = match process_blockstore.process_to_create_tower() {
                 Ok(tower) => {
-                    info!("Tower state: {:?}", tower);
+                    info!("Tower state: {tower:?}");
                     tower
                 }
                 Err(e) => {
                     warn!(
-                        "Unable to retrieve tower: {:?} creating default tower....",
-                        e
+                        "Unable to retrieve tower: {e:?} creating default tower...."
                     );
                     Tower::default()
                 }
@@ -2171,7 +2169,7 @@ fn post_process_restored_vote_history(
             let message =
                 format!("Hard fork is detected; discarding vote_history restoration result: {vote_history:?}");
             datapoint_error!("vote_history_error", ("error", message, String),);
-            error!("{}", message);
+            error!("{message}");
 
             // unconditionally relax vote_history requirement
             should_require_vote_history = false;
@@ -2209,8 +2207,7 @@ fn post_process_restored_vote_history(
                 ));
             }
             error!(
-                "Rebuilding an empty vote_history from root slot due to failed restore: {}",
-                err
+                "Rebuilding an empty vote_history from root slot due to failed restore: {err}"
             );
 
             VoteHistory::new(*validator_identity, bank_forks.root())

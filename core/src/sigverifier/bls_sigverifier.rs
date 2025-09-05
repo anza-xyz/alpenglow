@@ -60,7 +60,7 @@ impl SigVerifier for BLSSigVerifier {
             let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    trace!("Failed to deserialize BLS message: {}", e);
+                    trace!("Failed to deserialize BLS message: {e}");
                     stats_updater.received_malformed += 1;
                     continue;
                 }
@@ -135,7 +135,7 @@ impl BLSSigVerifier {
                     stats_updater.verified_votes_sent += 1;
                 }
                 Err(e) => {
-                    trace!("Failed to send verified vote: {}", e);
+                    trace!("Failed to send verified vote: {e}");
                     stats_updater.verified_votes_sent_failed += 1;
                 }
             }
@@ -220,7 +220,7 @@ mod tests {
                 for msg in messages {
                     match receiver.recv_timeout(Duration::from_secs(1)) {
                         Ok(received_msg) => assert_eq!(received_msg, *msg),
-                        Err(e) => warn!("Failed to receive BLS message: {}", e),
+                        Err(e) => warn!("Failed to receive BLS message: {e}"),
                     }
                 }
             }
