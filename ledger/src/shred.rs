@@ -343,6 +343,10 @@ impl ErasureSetId {
         self.0
     }
 
+    pub(crate) fn fec_set_index(&self) -> u32 {
+        self.1
+    }
+
     // Storage key for ErasureMeta and MerkleRootMeta in blockstore db.
     // Note: ErasureMeta column uses u64 so this will need to be typecast
     pub(crate) fn store_key(&self) -> (Slot, /*fec_set_index:*/ u32) {
@@ -844,6 +848,11 @@ where
         }
     }
     false
+}
+
+/// Returns the index of the last data shred in this FEC set
+pub(crate) fn last_data_shred_index(fec_set_index: u32) -> u32 {
+    fec_set_index + (DATA_SHREDS_PER_FEC_BLOCK as u32) - 1
 }
 
 pub fn max_ticks_per_n_shreds(num_shreds: u64, shred_data_size: Option<usize>) -> u64 {

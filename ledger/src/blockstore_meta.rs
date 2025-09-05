@@ -2,7 +2,7 @@ use {
     crate::{
         bit_vec::BitVec,
         blockstore::BlockstoreError,
-        shred::{self, Shred, ShredType, MAX_DATA_SHREDS_PER_SLOT},
+        shred::{self, Shred, ShredType, DATA_SHREDS_PER_FEC_BLOCK, MAX_DATA_SHREDS_PER_SLOT},
     },
     bincode::Options,
     bitflags::bitflags,
@@ -513,6 +513,13 @@ impl Index {
     }
     pub(crate) fn coding_mut(&mut self) -> &mut ShredIndex {
         &mut self.coding
+    }
+
+    /// Checks the index to see if we have all the data shreds in this FEC set
+    pub(crate) fn is_data_set_complete(fec_set_index: u32, index: &Index) -> bool {
+        let data_indices =
+            u64::from(fec_set_index)..u64::from(fec_set_index) + (DATA_SHREDS_PER_FEC_BLOCK as u64);
+        index.data().range(data_indices).count() == DATA_SHREDS_PER_FEC_BLOCK
     }
 }
 
