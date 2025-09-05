@@ -28,7 +28,12 @@ use {
     solana_pubkey::Pubkey,
     solana_rpc_client::rpc_client::RpcClient,
     solana_signer::Signer,
-    solana_streamer::socket::SocketAddrSpace,
+    solana_streamer::{
+        packet::PacketBatch,
+        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        socket::SocketAddrSpace,
+        streamer::StakedNodes,
+    },
     solana_system_transaction as system_transaction,
     solana_time_utils::timestamp,
     solana_tpu_client::tpu_client::{TpuClient, TpuClientConfig, TpuSenderError},
@@ -415,6 +420,43 @@ pub fn check_for_new_processed(
     );
 }
 
+pub fn start_quic_streamer_to_listen_for_votes_and_certs(
+    vote_listener_socket: std::net::UdpSocket,
+    validator_keys: &[Arc<Keypair>],
+    node_stakes: &[u64],
+) -> (
+    Arc<AtomicBool>,
+    JoinHandle<()>,
+    crossbeam_channel::Receiver<PacketBatch>,
+) {
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    let exit = Arc::new(AtomicBool::new(false));
+    let stakes = validator_keys
+        .iter()
+        .zip(node_stakes)
+        .map(|(keypair, stake)| (keypair.pubkey(), *stake))
+        .collect();
+    let staked_nodes: Arc<RwLock<StakedNodes>> = Arc::new(RwLock::new(StakedNodes::new(
+        Arc::new(stakes),
+        HashMap::<Pubkey, u64>::default(), // overrides
+    )));
+    let SpawnServerResult {
+        thread: quic_server_thread,
+        ..
+    } = spawn_server(
+        "AlpenglowLocalClusterTest",
+        "quic_streamer_test",
+        [vote_listener_socket],
+        &Keypair::new(),
+        sender,
+        exit.clone(),
+        staked_nodes,
+        QuicServerParams::default_for_tests(),
+    )
+    .unwrap();
+    (exit, quic_server_thread, receiver)
+}
+
 fn check_for_new_commitment_slots(
     num_new_slots: usize,
     contact_infos: &[ContactInfo],
@@ -527,7 +569,9 @@ pub fn check_for_new_notarized_votes(
     contact_infos: &[ContactInfo],
     connection_cache: &Arc<ConnectionCache>,
     test_name: &str,
-    vote_listener: UdpSocket,
+    vote_listener_socket: UdpSocket,
+    validator_keys: &[Arc<Keypair>],
+    node_stakes: &[u64],
 ) {
     let loop_start = Instant::now();
     let loop_timeout = Duration::from_secs(180);
@@ -551,9 +595,14 @@ pub fn check_for_new_notarized_votes(
     let contact_infos_owned: Vec<ContactInfo> = contact_infos.to_vec();
     let test_name_owned = test_name.to_string();
 
+    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+        vote_listener_socket,
+        validator_keys,
+        node_stakes,
+    );
+
     // Now start vote listener and wait for new notarized votes.
     let vote_listener = std::thread::spawn({
-        let mut buf = [0_u8; 65_535];
         let mut num_new_notarized_votes = contact_infos_owned.iter().map(|_| 0).collect::<Vec<_>>();
         let mut last_notarized = contact_infos_owned
             .iter()
@@ -565,45 +614,50 @@ pub fn check_for_new_notarized_votes(
         move || {
             while !done {
                 assert!(loop_start.elapsed() < loop_timeout);
-                let n_bytes = vote_listener
-                    .recv_from(&mut buf)
-                    .expect("Failed to receive vote message")
-                    .0;
-                let message = bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
-                let ConsensusMessage::Vote(vote_message) = message else {
-                    continue;
+                let Ok(packet_batch) = receiver.recv() else {
+                    break;
                 };
-                let vote = vote_message.vote;
-                if !vote.is_notarization() {
-                    continue;
-                }
-                let rank = vote_message.rank;
-                if rank >= contact_infos_owned.len() as u16 {
-                    warn!(
-                        "Received vote with rank {} which is greater than number of nodes {}",
-                        rank,
-                        contact_infos_owned.len()
-                    );
-                    continue;
-                }
-                let slot = vote.slot();
-                if slot <= last_notarized[rank as usize] {
-                    continue;
-                }
-                last_notarized[rank as usize] = slot;
-                num_new_notarized_votes[rank as usize] += 1;
-                done = num_new_notarized_votes.iter().all(|&x| x > num_new_votes);
-                if done || last_print.elapsed().as_secs() > 3 {
-                    info!(
-                        "{} waiting for {} new notarized votes.. observed: {:?}",
-                        test_name_owned, num_new_votes, num_new_notarized_votes
-                    );
-                    last_print = Instant::now();
+                for packet in packet_batch.iter() {
+                    let Ok(ConsensusMessage::Vote(vote_message)) = packet.deserialize_slice(..)
+                    else {
+                        continue;
+                    };
+                    let vote = vote_message.vote;
+                    if !vote.is_notarization() {
+                        continue;
+                    }
+                    let rank = vote_message.rank;
+                    if rank >= contact_infos_owned.len() as u16 {
+                        warn!(
+                            "Received vote with rank {} which is greater than number of nodes {}",
+                            rank,
+                            contact_infos_owned.len()
+                        );
+                        continue;
+                    }
+                    let slot = vote.slot();
+                    if slot <= last_notarized[rank as usize] {
+                        continue;
+                    }
+                    last_notarized[rank as usize] = slot;
+                    num_new_notarized_votes[rank as usize] += 1;
+                    done = num_new_notarized_votes.iter().all(|&x| x > num_new_votes);
+                    if done || last_print.elapsed().as_secs() > 3 {
+                        info!(
+                            "{} waiting for {} new notarized votes.. observed: {:?}",
+                            test_name_owned, num_new_votes, num_new_notarized_votes
+                        );
+                        last_print = Instant::now();
+                        exit.store(true, Ordering::Relaxed);
+                    }
                 }
             }
         }
     });
     vote_listener.join().expect("Vote listener thread panicked");
+    quic_server_thread
+        .join()
+        .expect("QUIC server thread panicked");
 }
 
 fn poll_all_nodes_for_signature(

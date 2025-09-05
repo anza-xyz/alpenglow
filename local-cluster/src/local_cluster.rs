@@ -781,6 +781,8 @@ impl LocalCluster {
         test_name: &str,
         socket_addr_space: SocketAddrSpace,
         vote_listener_addr: UdpSocket,
+        validator_keys: &[Arc<Keypair>],
+        node_stakes: &[u64],
     ) {
         let alive_node_contact_infos = self.discover_nodes(socket_addr_space, test_name);
         info!("{} looking for new notarized votes on all nodes", test_name);
@@ -790,6 +792,8 @@ impl LocalCluster {
             &self.connection_cache,
             test_name,
             vote_listener_addr,
+            validator_keys,
+            node_stakes,
         );
         info!("{} done waiting for notarized votes", test_name);
     }

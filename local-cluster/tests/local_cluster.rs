@@ -1,5 +1,6 @@
 #![allow(clippy::arithmetic_side_effects)]
 use {
+    crate::cluster_tests::start_quic_streamer_to_listen_for_votes_and_certs,
     assert_matches::assert_matches,
     crossbeam_channel::{unbounded, Receiver},
     gag::BufferRedirect,
@@ -84,12 +85,7 @@ use {
     },
     solana_signer::Signer,
     solana_stake_interface::{self as stake, state::NEW_WARMUP_COOLDOWN_RATE},
-    solana_streamer::{
-        packet::PacketBatch,
-        quic::{spawn_server, QuicServerParams, SpawnServerResult},
-        socket::SocketAddrSpace,
-        streamer::StakedNodes,
-    },
+    solana_streamer::socket::SocketAddrSpace,
     solana_system_interface::program as system_program,
     solana_system_transaction as system_transaction,
     solana_turbine::broadcast_stage::{
@@ -118,7 +114,7 @@ use {
         path::Path,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex, RwLock,
+            Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -6167,7 +6163,7 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     // Cluster config
     let mut cluster_config = ClusterConfig {
         mint_lamports: total_stake,
-        node_stakes,
+        node_stakes: node_stakes.clone(),
         validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
         validator_keys: Some(
             validator_keys
@@ -6213,6 +6209,8 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         "test_alpenglow_imbalanced_stakes_catchup",
         SocketAddrSpace::Unspecified,
         vote_listener_addr,
+        &validator_keys,
+        &node_stakes,
     );
 }
 
@@ -6252,43 +6250,6 @@ fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     let slot = vote.slot();
 
     (slot, discriminant)
-}
-
-fn start_quic_streamer_to_listen_for_votes_and_certs(
-    vote_listener_socket: std::net::UdpSocket,
-    validator_keys: &[Arc<Keypair>],
-    node_stakes: &[u64],
-) -> (
-    Arc<AtomicBool>,
-    JoinHandle<()>,
-    crossbeam_channel::Receiver<PacketBatch>,
-) {
-    let (sender, receiver) = crossbeam_channel::unbounded();
-    let exit = Arc::new(AtomicBool::new(false));
-    let stakes = validator_keys
-        .iter()
-        .zip(node_stakes)
-        .map(|(keypair, stake)| (keypair.pubkey(), *stake))
-        .collect();
-    let staked_nodes: Arc<RwLock<StakedNodes>> = Arc::new(RwLock::new(StakedNodes::new(
-        Arc::new(stakes),
-        HashMap::<Pubkey, u64>::default(), // overrides
-    )));
-    let SpawnServerResult {
-        thread: quic_server_thread,
-        ..
-    } = spawn_server(
-        "AlpenglowLocalClusterTest",
-        "quic_streamer_test",
-        [vote_listener_socket],
-        &Keypair::new(),
-        sender,
-        exit.clone(),
-        staked_nodes,
-        QuicServerParams::default_for_tests(),
-    )
-    .unwrap();
-    (exit, quic_server_thread, receiver)
 }
 
 /// This test validates the Alpenglow consensus protocol's ability to maintain liveness when a node
