@@ -2749,7 +2749,7 @@ fn test_alpenglow_run_test_load_program_accounts_partition_root() {
 
 fn run_test_load_program_accounts_partition(scan_commitment: CommitmentConfig, is_alpenglow: bool) {
     let num_slots_per_validator = 8;
-    let partitions: [usize; 2] = [1, 1];
+    let partitions: [usize; 2] = [DEFAULT_NODE_STAKE as usize; 2];
     let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[
         num_slots_per_validator,
         num_slots_per_validator,
