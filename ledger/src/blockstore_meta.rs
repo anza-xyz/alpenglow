@@ -514,6 +514,13 @@ impl Index {
     pub(crate) fn coding_mut(&mut self) -> &mut ShredIndex {
         &mut self.coding
     }
+
+    /// Checks the index to see if we have all the data shreds in this FEC set
+    pub(crate) fn is_data_set_complete(fec_set_index: u32, index: &Index) -> bool {
+        let data_indices =
+            u64::from(fec_set_index)..u64::from(fec_set_index) + (DATA_SHREDS_PER_FEC_BLOCK as u64);
+        index.data().range(data_indices).count() == DATA_SHREDS_PER_FEC_BLOCK
+    }
 }
 
 #[cfg(test)]
@@ -836,11 +843,6 @@ impl ErasureMeta {
         self.fec_set_index.checked_add(num_data)
     }
 
-    /// Returns the index of the last data shred in this FEC set
-    pub(crate) fn last_data_shred_index(fec_set_index: u32) -> u32 {
-        fec_set_index + (DATA_SHREDS_PER_FEC_BLOCK as u32) - 1
-    }
-
     // Returns true if some data shreds are missing, but there are enough data
     // and coding shreds to recover the erasure batch.
     // TODO: In order to retransmit all shreds from the erasure batch, we need
@@ -855,13 +857,6 @@ impl ErasureMeta {
         }
         let num_coding = index.coding().range(self.coding_shreds_indices()).count();
         self.config.num_data <= num_data + num_coding
-    }
-
-    /// Checks the index to see if we have all the data shreds in this FEC set
-    pub(crate) fn is_data_set_complete(fec_set_index: u32, index: &Index) -> bool {
-        let data_indices =
-            u64::from(fec_set_index)..u64::from(fec_set_index) + (DATA_SHREDS_PER_FEC_BLOCK as u64);
-        index.data().range(data_indices).count() == DATA_SHREDS_PER_FEC_BLOCK
     }
 
     #[cfg(test)]

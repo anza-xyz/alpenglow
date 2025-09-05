@@ -1882,7 +1882,7 @@ impl Blockstore {
         location: BlockLocation,
         just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> bool {
-        let last_data_shred_index = ErasureMeta::last_data_shred_index(erasure_set.fec_set_index());
+        let last_data_shred_index = shred::last_data_shred_index(erasure_set.fec_set_index());
         let shred_id = ShredId::new(erasure_set.slot(), last_data_shred_index, ShredType::Data);
 
         let shred = self
@@ -2111,7 +2111,7 @@ impl Blockstore {
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
 
-        if ErasureMeta::is_data_set_complete(fec_set_index, index_meta) {
+        if Index::is_data_set_complete(fec_set_index, index_meta) {
             let is_last_in_slot =
                 self.is_complete_fec_set_last_in_slot(erasure_set, location, just_inserted_shreds);
             shred_insertion_tracker

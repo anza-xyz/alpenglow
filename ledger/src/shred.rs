@@ -837,6 +837,11 @@ where
     false
 }
 
+/// Returns the index of the last data shred in this FEC set
+pub(crate) fn last_data_shred_index(fec_set_index: u32) -> u32 {
+    fec_set_index + (DATA_SHREDS_PER_FEC_BLOCK as u32) - 1
+}
+
 pub fn max_ticks_per_n_shreds(num_shreds: u64, shred_data_size: Option<usize>) -> u64 {
     let ticks = create_ticks(1, 0, Hash::default());
     max_entries_per_n_shred(&ticks[0], num_shreds, shred_data_size)
