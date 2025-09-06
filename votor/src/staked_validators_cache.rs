@@ -233,7 +233,7 @@ impl StakedValidatorsCache {
         let refresh_cache = self
             .cache
             .get(&epoch)
-            .map(|v| access_time > v.creation_time + self.ttl)
+            .map(|v| Some(access_time) > v.creation_time.checked_add(self.ttl))
             .unwrap_or(true);
 
         if refresh_cache {
@@ -384,12 +384,15 @@ mod tests {
                             assert!(contact_info
                                 .set_tpu_vote(
                                     protocol,
-                                    (Ipv4Addr::LOCALHOST, 8005 + node_ix as u16),
+                                    (Ipv4Addr::LOCALHOST, 8005_u16.saturating_add(node_ix as u16)),
                                 )
                                 .is_ok());
 
                             assert!(contact_info
-                                .set_alpenglow((Ipv4Addr::LOCALHOST, 8080 + node_ix as u16))
+                                .set_alpenglow((
+                                    Ipv4Addr::LOCALHOST,
+                                    8080_u16.saturating_add(node_ix as u16)
+                                ))
                                 .is_ok());
 
                             contact_info
@@ -501,7 +504,10 @@ mod tests {
         };
 
         assert!(refreshed);
-        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(
+            num_nodes.saturating_sub(num_zero_stake_nodes),
+            sockets.len()
+        );
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right before the 5-second deadline
@@ -509,18 +515,21 @@ mod tests {
             svc.get_staked_validators_by_slot_with_alpenglow_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs_f64(4.999),
+                now.checked_add(Duration::from_secs_f64(4.999)).unwrap(),
             )
         } else {
             svc.get_staked_validators_by_slot_with_tpu_vote_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs_f64(4.999),
+                now.checked_add(Duration::from_secs_f64(4.999)).unwrap(),
             )
         };
 
         assert!(!refreshed);
-        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(
+            num_nodes.saturating_sub(num_zero_stake_nodes),
+            sockets.len()
+        );
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right at the 5-second deadline - we still shouldn't refresh.
@@ -528,18 +537,21 @@ mod tests {
             svc.get_staked_validators_by_slot_with_alpenglow_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs(5),
+                now.checked_add(Duration::from_secs(5)).unwrap(),
             )
         } else {
             svc.get_staked_validators_by_slot_with_tpu_vote_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs(5),
+                now.checked_add(Duration::from_secs(5)).unwrap(),
             )
         };
 
         assert!(!refreshed);
-        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(
+            num_nodes.saturating_sub(num_zero_stake_nodes),
+            sockets.len()
+        );
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right after the 5-second deadline - now we should refresh.
@@ -547,18 +559,21 @@ mod tests {
             svc.get_staked_validators_by_slot_with_alpenglow_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs_f64(5.001),
+                now.checked_add(Duration::from_secs_f64(5.001)).unwrap(),
             )
         } else {
             svc.get_staked_validators_by_slot_with_tpu_vote_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs_f64(5.001),
+                now.checked_add(Duration::from_secs_f64(5.001)).unwrap(),
             )
         };
 
         assert!(refreshed);
-        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(
+            num_nodes.saturating_sub(num_zero_stake_nodes),
+            sockets.len()
+        );
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache well after the 5-second deadline - we should refresh.
@@ -566,18 +581,21 @@ mod tests {
             svc.get_staked_validators_by_slot_with_alpenglow_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs(100),
+                now.checked_add(Duration::from_secs(100)).unwrap(),
             )
         } else {
             svc.get_staked_validators_by_slot_with_tpu_vote_ports(
                 slot_num,
                 &cluster_info,
-                now + Duration::from_secs(100),
+                now.checked_add(Duration::from_secs(100)).unwrap(),
             )
         };
 
         assert!(refreshed);
-        assert_eq!(num_nodes - num_zero_stake_nodes, sockets.len());
+        assert_eq!(
+            num_nodes.saturating_sub(num_zero_stake_nodes),
+            sockets.len()
+        );
         assert_eq!(1, svc.len());
     }
 
@@ -612,16 +630,16 @@ mod tests {
 
         // Populate the first five entries; accessing the cache once again shouldn't trigger any
         // refreshes.
-        for entry_ix in 1..=5 {
+        for entry_ix in 1_u64..=5_u64 {
             let (_, refreshed) = if use_alpenglow_socket {
                 svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
                     now,
                 )
             } else {
                 svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
                     now,
                 )
@@ -631,13 +649,13 @@ mod tests {
 
             let (_, refreshed) = if use_alpenglow_socket {
                 svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
                     now,
                 )
             } else {
                 svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
                     now,
                 )
@@ -663,24 +681,26 @@ mod tests {
         assert!(!svc.cache.contains(&svc.cur_epoch(base_slot)));
 
         // Epochs 2 - 6 should have entries
-        for entry_ix in 2..=6 {
-            assert!(svc.cache.contains(&svc.cur_epoch(entry_ix * base_slot)));
+        for entry_ix in 2_u64..=6_u64 {
+            assert!(svc
+                .cache
+                .contains(&svc.cur_epoch(entry_ix.saturating_mul(base_slot))));
         }
 
         // Accessing the cache after TTL should recalculate everything; the size remains 5, since
         // we only ever lazily evict cache entries.
-        for entry_ix in 1..=5 {
+        for entry_ix in 1_u64..=5_u64 {
             let (_, refreshed) = if use_alpenglow_socket {
                 svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
-                    now + Duration::from_secs(10),
+                    now.checked_add(Duration::from_secs(10)).unwrap(),
                 )
             } else {
                 svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix * base_slot,
+                    entry_ix.saturating_mul(base_slot),
                     &cluster_info,
-                    now + Duration::from_secs(10),
+                    now.checked_add(Duration::from_secs(10)).unwrap(),
                 )
             };
             assert!(refreshed);
@@ -824,7 +844,7 @@ mod tests {
             )
         };
         // We should have num_nodes - 1 sockets, since we exclude our own socket address.
-        assert_eq!(sockets.len(), num_nodes - 1);
+        assert_eq!(sockets.len(), num_nodes.checked_sub(1).unwrap());
         assert!(!sockets.contains(&my_socket_addr));
     }
 

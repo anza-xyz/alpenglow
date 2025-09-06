@@ -31,7 +31,6 @@ use {
             ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE, MAX_ALPENGLOW_PACKET_NUM,
         },
         tvu::{Tvu, TvuConfig, TvuSockets},
-        voting_service::VotingServiceOverride,
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
@@ -145,6 +144,7 @@ use {
     solana_votor::{
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
+        voting_service::VotingServiceOverride,
         votor::LeaderWindowNotifier,
     },
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},

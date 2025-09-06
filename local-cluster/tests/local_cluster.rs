@@ -29,7 +29,6 @@ use {
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         validator::{BlockVerificationMethod, ValidatorConfig},
-        voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
@@ -98,6 +97,7 @@ use {
     },
     solana_vote_interface::state::TowerSync,
     solana_vote_program::vote_state::MAX_LOCKOUT_HISTORY,
+    solana_votor::voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     solana_votor_messages::{
         consensus_message::{
             CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,

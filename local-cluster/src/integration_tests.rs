@@ -27,7 +27,6 @@ use {
         consensus::{tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD},
         snapshot_packager_service::SnapshotPackagerService,
         validator::{is_snapshot_config_valid, ValidatorConfig},
-        voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     },
     solana_gossip::gossip_service::discover_validators,
     solana_hash::Hash,
@@ -46,6 +45,7 @@ use {
     solana_signer::Signer,
     solana_streamer::socket::SocketAddrSpace,
     solana_turbine::broadcast_stage::BroadcastStageType,
+    solana_votor::voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     static_assertions,
     std::{
         collections::{HashMap, HashSet},
