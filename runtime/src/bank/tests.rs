@@ -5330,7 +5330,6 @@ fn test_bank_hash_consistency() {
         Arc::new(RuntimeConfig::default()),
         vec![],
         None,
-        false,
         BankTestConfig::default().accounts_db_config,
         None,
         Some(Pubkey::from([42; 32])),
@@ -6932,8 +6931,8 @@ fn test_block_limits() {
         &feature_set::raise_block_limits_to_100m::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // compute_and_apply_activated_features will not cause the block limit to be updated
-    bank.compute_and_apply_activated_features(true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS,
@@ -6967,8 +6966,8 @@ fn test_block_limits() {
         &feature::create_account(&Feature::default(), 42),
     );
 
-    // compute_and_apply_activated_features will not cause the block limit to be updated
-    bank.compute_and_apply_activated_features(true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_account_limit(),
         MAX_WRITABLE_ACCOUNT_UNITS,
@@ -6992,8 +6991,8 @@ fn test_block_limits() {
         &feature_set::raise_account_cu_limit::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // compute_and_apply_activated_features will not cause the block limit to be updated
-    bank.compute_and_apply_activated_features(true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_account_limit(),
         MAX_WRITABLE_ACCOUNT_UNITS,
@@ -7018,8 +7017,8 @@ fn test_block_limits() {
         &feature_set::raise_block_limits_to_100m::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // compute_and_apply_activated_features will not cause the block limit to be updated
-    bank.compute_and_apply_activated_features(true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS,
@@ -7417,8 +7416,7 @@ fn test_invoke_non_program_account_owned_by_a_builtin(
 #[test]
 fn test_debug_bank() {
     let (genesis_config, _mint_keypair) = create_genesis_config(50000);
-    let mut bank = Bank::new_for_tests(&genesis_config);
-    bank.finish_init(false);
+    let bank = Bank::new_for_tests(&genesis_config);
     let debug = format!("{bank:#?}");
     assert!(!debug.is_empty());
 }
@@ -8250,7 +8248,6 @@ fn test_epoch_schedule_from_genesis_config() {
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
         None,
-        false,
         ACCOUNTS_DB_CONFIG_FOR_TESTING,
         None,
         None,
@@ -8279,7 +8276,6 @@ where
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
         None,
-        false,
         ACCOUNTS_DB_CONFIG_FOR_TESTING,
         None,
         None,
@@ -12391,7 +12387,7 @@ fn test_apply_builtin_program_feature_transitions_for_new_epoch() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(false);
+    bank.compute_and_apply_genesis_features();
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12422,7 +12418,7 @@ fn test_startup_from_snapshot_after_precompile_transition() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(false);
+    bank.compute_and_apply_genesis_features();
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12433,7 +12429,7 @@ fn test_startup_from_snapshot_after_precompile_transition() {
     bank.freeze();
 
     // Simulate starting up from snapshot finishing the initialization for a frozen bank
-    bank.finish_init(false);
+    bank.compute_and_apply_features_after_snapshot_restore();
 }
 
 #[test]
