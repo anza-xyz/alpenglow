@@ -13,7 +13,7 @@ use {
             self, parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
         },
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
-        voting_utils::BLSOp,
+        voting_service::BLSOp,
         votor::Votor,
         Certificate, DELTA_STANDSTILL,
     },

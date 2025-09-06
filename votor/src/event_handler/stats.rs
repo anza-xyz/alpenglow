@@ -1,5 +1,5 @@
 use {
-    crate::{event::VotorEvent, voting_utils::BLSOp, VoteType},
+    crate::{event::VotorEvent, voting_service::BLSOp, VoteType},
     solana_clock::Slot,
     solana_metrics::datapoint_info,
     solana_votor_messages::consensus_message::ConsensusMessage,

@@ -2,7 +2,7 @@ use {
     crate::voting_service::AlpenglowPortOverride,
     lru::LruCache,
     solana_clock::{Epoch, Slot},
-    solana_gossip::{cluster_info::ClusterInfo, contact_info::Protocol},
+    solana_gossip::cluster_info::ClusterInfo,
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::BankForks,
     std::{
@@ -14,9 +14,6 @@ use {
 };
 
 struct StakedValidatorsCacheEntry {
-    /// TPU Vote Sockets associated with the staked validators
-    validator_sockets: Vec<SocketAddr>,
-
     /// Alpenglow Sockets associated with the staked validators
     alpenglow_sockets: Vec<SocketAddr>,
 
@@ -41,9 +38,6 @@ pub struct StakedValidatorsCache {
     /// Bank forks
     bank_forks: Arc<RwLock<BankForks>>,
 
-    /// Protocol
-    protocol: Protocol,
-
     /// Whether to include the running validator's socket address in cache entries
     include_self: bool,
 
@@ -54,15 +48,9 @@ pub struct StakedValidatorsCache {
     alpenglow_port_override_last_modified: Instant,
 }
 
-enum PortsToUse {
-    TpuVote,
-    Alpenglow,
-}
-
 impl StakedValidatorsCache {
     pub fn new(
         bank_forks: Arc<RwLock<BankForks>>,
-        protocol: Protocol,
         ttl: Duration,
         max_cache_size: usize,
         include_self: bool,
@@ -72,7 +60,6 @@ impl StakedValidatorsCache {
             cache: LruCache::new(max_cache_size),
             ttl,
             bank_forks,
-            protocol,
             include_self,
             alpenglow_port_override,
             alpenglow_port_override_last_modified: Instant::now(),
@@ -108,9 +95,7 @@ impl StakedValidatorsCache {
         struct Node {
             pubkey: Pubkey,
             stake: u64,
-            tpu_socket: SocketAddr,
-            // TODO(wen): this should not be an Option after BLS all-to-all is submitted.
-            alpenglow_socket: Option<SocketAddr>,
+            alpenglow_socket: SocketAddr,
         }
 
         let mut nodes: Vec<_> = epoch_staked_nodes
@@ -123,72 +108,46 @@ impl StakedValidatorsCache {
             })
             .filter_map(|(pubkey, stake)| {
                 cluster_info.lookup_contact_info(pubkey, |node| {
-                    let tpu_socket = node.tpu_vote(self.protocol);
-                    let alpenglow_socket = node.alpenglow();
-                    // To not change current behavior, we only consider nodes that have a
-                    // TPU socket, and ignore nodes that only have an Alpenglow socket.
-                    // TODO(wen): tpu_socket is no longer needed after Alpenglow migration.
-                    tpu_socket.map(|tpu_socket| Node {
+                    node.alpenglow().map(|alpenglow_socket| Node {
                         pubkey: *pubkey,
                         stake: *stake,
-                        tpu_socket,
                         alpenglow_socket,
                     })
                 })?
             })
             .collect();
 
-        // TODO(wen): After Alpenglow vote is no longer transaction, we dedup by alpenglow socket.
-        nodes.dedup_by_key(|node| node.tpu_socket);
+        nodes.dedup_by_key(|node| node.alpenglow_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        let mut validator_sockets = Vec::new();
         let mut alpenglow_sockets = Vec::new();
         let override_map = self
             .alpenglow_port_override
             .as_ref()
             .map(|x| x.get_override_map());
         for node in nodes {
-            validator_sockets.push(node.tpu_socket);
-
-            if let Some(alpenglow_socket) = node.alpenglow_socket {
-                let socket = if let Some(override_map) = &override_map {
-                    // If we have an override, use it.
-                    override_map
-                        .get(&node.pubkey)
-                        .cloned()
-                        .unwrap_or(alpenglow_socket)
-                } else {
-                    alpenglow_socket
-                };
-                alpenglow_sockets.push(socket);
-            }
+            let alpenglow_socket = node.alpenglow_socket;
+            let socket = if let Some(override_map) = &override_map {
+                // If we have an override, use it.
+                override_map
+                    .get(&node.pubkey)
+                    .cloned()
+                    .unwrap_or(alpenglow_socket)
+            } else {
+                alpenglow_socket
+            };
+            alpenglow_sockets.push(socket);
         }
         self.cache.push(
             epoch,
             StakedValidatorsCacheEntry {
-                validator_sockets,
                 alpenglow_sockets,
                 creation_time: update_time,
             },
         );
     }
 
-    pub fn get_staked_validators_by_slot_with_tpu_vote_ports(
-        &mut self,
-        slot: Slot,
-        cluster_info: &ClusterInfo,
-        access_time: Instant,
-    ) -> (&[SocketAddr], bool) {
-        self.get_staked_validators_by_epoch(
-            self.cur_epoch(slot),
-            cluster_info,
-            access_time,
-            PortsToUse::TpuVote,
-        )
-    }
-
-    pub fn get_staked_validators_by_slot_with_alpenglow_ports(
+    pub fn get_staked_validators_by_slot(
         &mut self,
         slot: Slot,
         cluster_info: &ClusterInfo,
@@ -209,12 +168,7 @@ impl StakedValidatorsCache {
             }
         }
 
-        self.get_staked_validators_by_epoch(
-            self.cur_epoch(slot),
-            cluster_info,
-            access_time,
-            PortsToUse::Alpenglow,
-        )
+        self.get_staked_validators_by_epoch(self.cur_epoch(slot), cluster_info, access_time)
     }
 
     fn get_staked_validators_by_epoch(
@@ -222,7 +176,6 @@ impl StakedValidatorsCache {
         epoch: Epoch,
         cluster_info: &ClusterInfo,
         access_time: Instant,
-        ports_to_use: PortsToUse,
     ) -> (&[SocketAddr], bool) {
         // For a given epoch, if we either:
         //
@@ -245,19 +198,18 @@ impl StakedValidatorsCache {
             // self.cache[epoch].
             self.cache
                 .get(&epoch)
-                .map(|v| match ports_to_use {
-                    PortsToUse::TpuVote => &*v.validator_sockets,
-                    PortsToUse::Alpenglow => &*v.alpenglow_sockets,
-                })
+                .map(|v| &*v.alpenglow_sockets)
                 .unwrap(),
             refresh_cache,
         )
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
@@ -272,12 +224,8 @@ mod tests {
         solana_clock::{Clock, Slot},
         solana_genesis_config::GenesisConfig,
         solana_gossip::{
-            cluster_info::ClusterInfo,
-            contact_info::{ContactInfo, Protocol},
-            crds::GossipRoute,
-            crds_data::CrdsData,
-            crds_value::CrdsValue,
-            node::Node,
+            cluster_info::ClusterInfo, contact_info::ContactInfo, crds::GossipRoute,
+            crds_data::CrdsData, crds_value::CrdsValue, node::Node,
         },
         solana_keypair::Keypair,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
@@ -295,7 +243,7 @@ mod tests {
             sync::{Arc, RwLock},
             time::{Duration, Instant},
         },
-        test_case::{test_case, test_matrix},
+        test_case::test_case,
     };
 
     fn new_rand_vote_account<R: rand::Rng>(
@@ -370,7 +318,6 @@ mod tests {
             slot: Slot,
             node_keypair_map: HashMap<Pubkey, Keypair>,
             vote_accounts: VoteAccountsHashMap,
-            protocol: Protocol,
         ) -> Self {
             // Update cluster info
             {
@@ -380,13 +327,6 @@ mod tests {
                         .enumerate()
                         .map(|(node_ix, pubkey)| {
                             let mut contact_info = ContactInfo::new(*pubkey, 0_u64, 0_u16);
-
-                            assert!(contact_info
-                                .set_tpu_vote(
-                                    protocol,
-                                    (Ipv4Addr::LOCALHOST, 8005_u16.saturating_add(node_ix as u16)),
-                                )
-                                .is_ok());
 
                             assert!(contact_info
                                 .set_alpenglow((
@@ -463,20 +403,13 @@ mod tests {
         (node_keypair_map, vahm)
     }
 
-    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, false)]
-    #[test_case(1_usize, 0_usize, 10_usize, Protocol::UDP, true)]
-    #[test_case(3_usize, 0_usize, 10_usize, Protocol::QUIC, false)]
-    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, false)]
-    #[test_case(10_usize, 2_usize, 10_usize, Protocol::UDP, true)]
-    #[test_case(10_usize, 10_usize, 10_usize, Protocol::QUIC, false)]
-    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, false)]
-    #[test_case(50_usize, 7_usize, 60_usize, Protocol::UDP, true)]
+    #[test_case(1_usize, 0_usize, 10_usize)]
+    #[test_case(10_usize, 2_usize, 10_usize)]
+    #[test_case(50_usize, 7_usize, 60_usize)]
     fn test_detect_only_staked_nodes_and_refresh_after_ttl(
         num_nodes: usize,
         num_zero_stake_nodes: usize,
         num_vote_accounts: usize,
-        protocol: Protocol,
-        use_alpenglow_socket: bool,
     ) {
         let slot_num = 325_000_000_u64;
         let genesis_lamports = 123_u64;
@@ -488,20 +421,15 @@ mod tests {
 
         let (bank_forks, cluster_info) =
             StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .with_vote_accounts(slot_num, keypair_map, vahm)
                 .bank_forks();
 
         // Create our staked validators cache
-        let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
+        let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
-        let (sockets, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
-        };
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
 
         assert!(refreshed);
         assert_eq!(
@@ -511,19 +439,11 @@ mod tests {
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right before the 5-second deadline
-        let (sockets, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs_f64(4.999)).unwrap(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs_f64(4.999)).unwrap(),
-            )
-        };
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now.checked_add(Duration::from_secs_f64(4.999)).unwrap(),
+        );
 
         assert!(!refreshed);
         assert_eq!(
@@ -533,20 +453,11 @@ mod tests {
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right at the 5-second deadline - we still shouldn't refresh.
-        let (sockets, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs(5)).unwrap(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs(5)).unwrap(),
-            )
-        };
-
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now.checked_add(Duration::from_secs(5)).unwrap(),
+        );
         assert!(!refreshed);
         assert_eq!(
             num_nodes.saturating_sub(num_zero_stake_nodes),
@@ -555,19 +466,11 @@ mod tests {
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache right after the 5-second deadline - now we should refresh.
-        let (sockets, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs_f64(5.001)).unwrap(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs_f64(5.001)).unwrap(),
-            )
-        };
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now.checked_add(Duration::from_secs_f64(5.001)).unwrap(),
+        );
 
         assert!(refreshed);
         assert_eq!(
@@ -577,19 +480,11 @@ mod tests {
         assert_eq!(1, svc.len());
 
         // Re-fetch from the cache well after the 5-second deadline - we should refresh.
-        let (sockets, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs(100)).unwrap(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                now.checked_add(Duration::from_secs(100)).unwrap(),
-            )
-        };
+        let (sockets, refreshed) = svc.get_staked_validators_by_slot(
+            slot_num,
+            &cluster_info,
+            now.checked_add(Duration::from_secs(100)).unwrap(),
+        );
 
         assert!(refreshed);
         assert_eq!(
@@ -599,9 +494,8 @@ mod tests {
         assert_eq!(1, svc.len());
     }
 
-    #[test_case(true)]
-    #[test_case(false)]
-    fn test_cache_eviction(use_alpenglow_socket: bool) {
+    #[test]
+    fn test_cache_eviction() {
         // Create our harness
         let (keypair_map, vahm) = build_epoch_stakes(50, 7, 60);
 
@@ -610,18 +504,11 @@ mod tests {
         let base_slot = 325_000_000_000;
         let (bank_forks, cluster_info) =
             StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(base_slot, keypair_map, vahm, Protocol::UDP)
+                .with_vote_accounts(base_slot, keypair_map, vahm)
                 .bank_forks();
 
         // Create our staked validators cache
-        let mut svc = StakedValidatorsCache::new(
-            bank_forks,
-            Protocol::UDP,
-            Duration::from_secs(5),
-            5,
-            true,
-            None,
-        );
+        let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
 
         assert_eq!(0, svc.len());
         assert!(svc.is_empty());
@@ -631,49 +518,25 @@ mod tests {
         // Populate the first five entries; accessing the cache once again shouldn't trigger any
         // refreshes.
         for entry_ix in 1_u64..=5_u64 {
-            let (_, refreshed) = if use_alpenglow_socket {
-                svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now,
-                )
-            } else {
-                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now,
-                )
-            };
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix.saturating_mul(base_slot),
+                &cluster_info,
+                now,
+            );
             assert!(refreshed);
             assert_eq!(entry_ix as usize, svc.len());
 
-            let (_, refreshed) = if use_alpenglow_socket {
-                svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now,
-                )
-            } else {
-                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now,
-                )
-            };
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix.saturating_mul(base_slot),
+                &cluster_info,
+                now,
+            );
             assert!(!refreshed);
             assert_eq!(entry_ix as usize, svc.len());
         }
 
         // Entry 6 - this shouldn't increase the cache length.
-        let (_, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                6 * base_slot,
-                &cluster_info,
-                now,
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(6 * base_slot, &cluster_info, now)
-        };
+        let (_, refreshed) = svc.get_staked_validators_by_slot(6 * base_slot, &cluster_info, now);
         assert!(refreshed);
         assert_eq!(5, svc.len());
 
@@ -690,33 +553,23 @@ mod tests {
         // Accessing the cache after TTL should recalculate everything; the size remains 5, since
         // we only ever lazily evict cache entries.
         for entry_ix in 1_u64..=5_u64 {
-            let (_, refreshed) = if use_alpenglow_socket {
-                svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now.checked_add(Duration::from_secs(10)).unwrap(),
-                )
-            } else {
-                svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                    entry_ix.saturating_mul(base_slot),
-                    &cluster_info,
-                    now.checked_add(Duration::from_secs(10)).unwrap(),
-                )
-            };
+            let (_, refreshed) = svc.get_staked_validators_by_slot(
+                entry_ix.saturating_mul(base_slot),
+                &cluster_info,
+                now.checked_add(Duration::from_secs(10)).unwrap(),
+            );
             assert!(refreshed);
             assert_eq!(5, svc.len());
         }
     }
 
-    #[test_case(true)]
-    #[test_case(false)]
-    fn test_only_update_once_per_epoch(use_alpenglow_socket: bool) {
+    #[test]
+    fn test_only_update_once_per_epoch() {
         let slot_num = 325_000_000_u64;
         let num_nodes = 10_usize;
         let num_zero_stake_nodes = 2_usize;
         let num_vote_accounts = 10_usize;
         let genesis_lamports = 123_u64;
-        let protocol = Protocol::UDP;
 
         // Create our harness
         let (keypair_map, vahm) =
@@ -726,47 +579,27 @@ mod tests {
 
         let (bank_forks, cluster_info) =
             StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .with_vote_accounts(slot_num, keypair_map, vahm)
                 .bank_forks();
 
         // Create our staked validators cache
-        let mut svc =
-            StakedValidatorsCache::new(bank_forks, protocol, Duration::from_secs(5), 5, true, None);
+        let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
 
         let now = Instant::now();
 
-        let (_, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
-        };
+        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
         assert!(refreshed);
 
-        let (_, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(slot_num, &cluster_info, now)
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(slot_num, &cluster_info, now)
-        };
+        let (_, refreshed) = svc.get_staked_validators_by_slot(slot_num, &cluster_info, now);
         assert!(!refreshed);
 
-        let (_, refreshed) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(2 * slot_num, &cluster_info, now)
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(2 * slot_num, &cluster_info, now)
-        };
+        let (_, refreshed) = svc.get_staked_validators_by_slot(2 * slot_num, &cluster_info, now);
         assert!(refreshed);
     }
 
-    #[test_matrix(
-    [1_usize, 10_usize],
-    [Protocol::UDP, Protocol::QUIC],
-    [false, true]
-)]
-    fn test_exclude_self_from_cache(
-        num_nodes: usize,
-        protocol: Protocol,
-        use_alpenglow_socket: bool,
-    ) {
+    #[test_case(1_usize)]
+    #[test_case(10_usize)]
+    fn test_exclude_self_from_cache(num_nodes: usize) {
         let slot_num = 325_000_000_u64;
         let num_vote_accounts = 10_usize;
         let genesis_lamports = 123_u64;
@@ -781,68 +614,28 @@ mod tests {
 
         let (bank_forks, cluster_info) =
             StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
-                .with_vote_accounts(slot_num, keypair_map, vahm, protocol)
+                .with_vote_accounts(slot_num, keypair_map, vahm)
                 .bank_forks();
 
         let my_socket_addr = cluster_info
-            .lookup_contact_info(&keypair.pubkey(), |node| {
-                if use_alpenglow_socket {
-                    node.alpenglow().unwrap()
-                } else {
-                    node.tpu_vote(protocol).unwrap()
-                }
-            })
+            .lookup_contact_info(&keypair.pubkey(), |node| node.alpenglow().unwrap())
             .unwrap();
 
         // Create our staked validators cache - set include_self to true
-        let mut svc = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            protocol,
-            Duration::from_secs(5),
-            5,
-            true,
-            None,
-        );
+        let mut svc =
+            StakedValidatorsCache::new(bank_forks.clone(), Duration::from_secs(5), 5, true, None);
 
-        let (sockets, _) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                Instant::now(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                Instant::now(),
-            )
-        };
+        let (sockets, _) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
         assert_eq!(sockets.len(), num_nodes);
         assert!(sockets.contains(&my_socket_addr));
 
         // Create our staked validators cache - set include_self to false
-        let mut svc = StakedValidatorsCache::new(
-            bank_forks.clone(),
-            protocol,
-            Duration::from_secs(5),
-            5,
-            false,
-            None,
-        );
+        let mut svc =
+            StakedValidatorsCache::new(bank_forks.clone(), Duration::from_secs(5), 5, false, None);
 
-        let (sockets, _) = if use_alpenglow_socket {
-            svc.get_staked_validators_by_slot_with_alpenglow_ports(
-                slot_num,
-                &cluster_info,
-                Instant::now(),
-            )
-        } else {
-            svc.get_staked_validators_by_slot_with_tpu_vote_ports(
-                slot_num,
-                &cluster_info,
-                Instant::now(),
-            )
-        };
+        let (sockets, _) =
+            svc.get_staked_validators_by_slot(slot_num, &cluster_info, Instant::now());
         // We should have num_nodes - 1 sockets, since we exclude our own socket address.
         assert_eq!(sockets.len(), num_nodes.checked_sub(1).unwrap());
         assert!(!sockets.contains(&my_socket_addr));
@@ -860,34 +653,25 @@ mod tests {
 
         let (bank_forks, cluster_info) =
             StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
-                .with_vote_accounts(0, keypair_map, vahm, Protocol::UDP)
+                .with_vote_accounts(0, keypair_map, vahm)
                 .bank_forks();
 
         // Create our staked validators cache - set include_self to false
         let mut svc = StakedValidatorsCache::new(
             bank_forks.clone(),
-            Protocol::UDP,
             Duration::from_secs(5),
             5,
             false,
             Some(alpenglow_port_override.clone()),
         );
         // Nothing in the override, so we should get the original socket addresses.
-        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
-            0,
-            &cluster_info,
-            Instant::now(),
-        );
+        let (sockets, _) = svc.get_staked_validators_by_slot(0, &cluster_info, Instant::now());
         assert_eq!(sockets.len(), 2);
         assert!(!sockets.contains(&blackhole_addr));
 
         // Add an override for pubkey_B, and check that we get the overridden socket address.
         alpenglow_port_override.update_override(HashMap::from([(pubkey_b, blackhole_addr)]));
-        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
-            0,
-            &cluster_info,
-            Instant::now(),
-        );
+        let (sockets, _) = svc.get_staked_validators_by_slot(0, &cluster_info, Instant::now());
         assert_eq!(sockets.len(), 2);
         // Sort sockets to ensure the blackhole address is at index 0.
         let mut sockets: Vec<_> = sockets.to_vec();
@@ -897,11 +681,7 @@ mod tests {
 
         // Now clear the override, and check that we get the original socket addresses.
         alpenglow_port_override.clear();
-        let (sockets, _) = svc.get_staked_validators_by_slot_with_alpenglow_ports(
-            0,
-            &cluster_info,
-            Instant::now(),
-        );
+        let (sockets, _) = svc.get_staked_validators_by_slot(0, &cluster_info, Instant::now());
         assert_eq!(sockets.len(), 2);
         assert!(!sockets.contains(&blackhole_addr));
     }

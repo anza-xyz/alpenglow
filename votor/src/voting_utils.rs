@@ -3,6 +3,7 @@ use {
         commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
+        voting_service::BLSOp,
     },
     crossbeam_channel::{SendError, Sender},
     solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
@@ -13,9 +14,7 @@ use {
     solana_signer::Signer,
     solana_transaction::Transaction,
     solana_votor_messages::{
-        consensus_message::{
-            CertificateMessage, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
-        },
+        consensus_message::{ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     std::{collections::HashMap, sync::Arc},
@@ -92,18 +91,6 @@ impl GenerateVoteTxResult {
             Self::Tx(_) | Self::ConsensusMessage(_) => false,
         }
     }
-}
-
-#[derive(Debug)]
-pub enum BLSOp {
-    PushVote {
-        message: Arc<ConsensusMessage>,
-        slot: Slot,
-        saved_vote_history: SavedVoteHistoryVersions,
-    },
-    PushCertificate {
-        certificate: Arc<CertificateMessage>,
-    },
 }
 
 #[derive(Debug, Error)]

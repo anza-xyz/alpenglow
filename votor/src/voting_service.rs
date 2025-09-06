@@ -1,7 +1,7 @@
 use {
     crate::{
-        staked_validators_cache::StakedValidatorsCache, vote_history_storage::VoteHistoryStorage,
-        voting_utils::BLSOp,
+        staked_validators_cache::StakedValidatorsCache,
+        vote_history_storage::{SavedVoteHistoryVersions, VoteHistoryStorage},
     },
     bincode::serialize,
     crossbeam_channel::Receiver,
@@ -13,7 +13,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::BankForks,
     solana_transaction_error::TransportError,
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
     std::{
         collections::HashMap,
         net::SocketAddr,
@@ -33,6 +33,18 @@ enum SendVoteError {
     BincodeError(#[from] bincode::Error),
     #[error(transparent)]
     TransportError(#[from] TransportError),
+}
+
+#[derive(Debug)]
+pub enum BLSOp {
+    PushVote {
+        message: Arc<ConsensusMessage>,
+        slot: Slot,
+        saved_vote_history: SavedVoteHistoryVersions,
+    },
+    PushCertificate {
+        certificate: Arc<CertificateMessage>,
+    },
 }
 
 fn send_message(
@@ -132,7 +144,6 @@ impl VotingService {
             .spawn(move || {
                 let mut staked_validators_cache = StakedValidatorsCache::new(
                     bank_forks.clone(),
-                    connection_cache.protocol(),
                     Duration::from_secs(STAKED_VALIDATORS_CACHE_TTL_S),
                     STAKED_VALIDATORS_CACHE_NUM_EPOCH_CAP,
                     false,
@@ -143,7 +154,7 @@ impl VotingService {
                     let Ok(bls_op) = bls_receiver.recv() else {
                         break;
                     };
-                    Self::handle_bls_vote(
+                    Self::handle_bls_op(
                         &cluster_info,
                         vote_history_storage.as_ref(),
                         bls_op,
@@ -157,7 +168,7 @@ impl VotingService {
         Self { thread_hdl }
     }
 
-    fn broadcast_alpenglow_message(
+    fn broadcast_consensus_message(
         slot: Slot,
         cluster_info: &ClusterInfo,
         message: &ConsensusMessage,
@@ -174,7 +185,7 @@ impl VotingService {
         };
 
         let (staked_validator_alpenglow_sockets, _) = staked_validators_cache
-            .get_staked_validators_by_slot_with_alpenglow_ports(slot, cluster_info, Instant::now());
+            .get_staked_validators_by_slot(slot, cluster_info, Instant::now());
         let sockets = additional_listeners
             .iter()
             .chain(staked_validator_alpenglow_sockets.iter());
@@ -189,7 +200,7 @@ impl VotingService {
         }
     }
 
-    pub fn handle_bls_vote(
+    fn handle_bls_op(
         cluster_info: &ClusterInfo,
         vote_history_storage: &dyn VoteHistoryStorage,
         bls_op: BLSOp,
@@ -211,7 +222,7 @@ impl VotingService {
                 measure.stop();
                 trace!("{measure}");
 
-                Self::broadcast_alpenglow_message(
+                Self::broadcast_consensus_message(
                     slot,
                     cluster_info,
                     &message,
@@ -223,7 +234,7 @@ impl VotingService {
             BLSOp::PushCertificate { certificate } => {
                 let vote_slot = certificate.certificate.slot();
                 let message = ConsensusMessage::Certificate((*certificate).clone());
-                Self::broadcast_alpenglow_message(
+                Self::broadcast_consensus_message(
                     vote_slot,
                     cluster_info,
                     &message,
@@ -259,18 +270,31 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_streamer::{packet::Packet, recvmmsg::recv_mmsg, socket::SocketAddrSpace},
+        solana_streamer::{
+            quic::{spawn_server, QuicServerParams, SpawnServerResult},
+            socket::SocketAddrSpace,
+            streamer::StakedNodes,
+        },
         solana_votor_messages::{
             consensus_message::{
                 Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
             },
             vote::Vote,
         },
-        std::{net::SocketAddr, sync::Arc},
+        std::{
+            net::SocketAddr,
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc,
+            },
+        },
         test_case::test_case,
     };
 
-    fn create_voting_service(bls_receiver: Receiver<BLSOp>, listener: SocketAddr) -> VotingService {
+    fn create_voting_service(
+        bls_receiver: Receiver<BLSOp>,
+        listener: SocketAddr,
+    ) -> (VotingService, Vec<ValidatorVoteKeypairs>) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
@@ -290,19 +314,22 @@ mod tests {
             SocketAddrSpace::Unspecified,
         );
 
-        VotingService::new(
-            bls_receiver,
-            Arc::new(cluster_info),
-            Arc::new(NullVoteHistoryStorage::default()),
-            Arc::new(ConnectionCache::with_udp(
-                "TestAlpenglowConnectionCache",
-                10,
-            )),
-            bank_forks.clone(),
-            Some(VotingServiceOverride {
-                additional_listeners: vec![listener],
-                alpenglow_port_override: AlpenglowPortOverride::default(),
-            }),
+        (
+            VotingService::new(
+                bls_receiver,
+                Arc::new(cluster_info),
+                Arc::new(NullVoteHistoryStorage::default()),
+                Arc::new(ConnectionCache::new_quic(
+                    "TestAlpenglowConnectionCache",
+                    10,
+                )),
+                bank_forks.clone(),
+                Some(VotingServiceOverride {
+                    additional_listeners: vec![listener],
+                    alpenglow_port_override: AlpenglowPortOverride::default(),
+                }),
+            ),
+            validator_keypairs,
         )
     }
 
@@ -340,17 +367,37 @@ mod tests {
         let listener_addr = socket.local_addr().unwrap();
 
         // Create VotingService with the listener address
-        let _ = create_voting_service(bls_receiver, listener_addr);
+        let (_, validator_keypairs) = create_voting_service(bls_receiver, listener_addr);
 
         // Send a BLS message via the VotingService
         assert!(bls_sender.send(bls_op).is_ok());
 
-        // Wait for the listener to receive the message
-        let mut packets = vec![Packet::default(); 1];
-        socket
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        assert!(recv_mmsg(&socket, &mut packets[..]).is_ok());
+        // Start a quick streamer to handle quick control packets
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let exit = Arc::new(AtomicBool::new(false));
+        let stakes = validator_keypairs
+            .iter()
+            .map(|x| (x.node_keypair.pubkey(), 100))
+            .collect();
+        let staked_nodes: Arc<RwLock<StakedNodes>> = Arc::new(RwLock::new(StakedNodes::new(
+            Arc::new(stakes),
+            HashMap::<Pubkey, u64>::default(), // overrides
+        )));
+        let SpawnServerResult {
+            thread: quic_server_thread,
+            ..
+        } = spawn_server(
+            "AlpenglowLocalClusterTest",
+            "quic_streamer_test",
+            [socket],
+            &Keypair::new(),
+            sender,
+            exit.clone(),
+            staked_nodes,
+            QuicServerParams::default_for_tests(),
+        )
+        .unwrap();
+        let packets = receiver.recv().unwrap();
         let packet = packets.first().expect("No packets received");
         let received_message = packet
             .deserialize_slice::<ConsensusMessage, _>(..)
@@ -362,5 +409,7 @@ mod tests {
                 )
             });
         assert_eq!(received_message, expected_message);
+        exit.store(true, Ordering::Relaxed);
+        quic_server_thread.join().unwrap();
     }
 }
