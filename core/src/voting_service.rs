@@ -70,7 +70,6 @@ pub struct VotingService {
 }
 
 impl VotingService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         vote_receiver: Receiver<VoteOp>,
         cluster_info: Arc<ClusterInfo>,
