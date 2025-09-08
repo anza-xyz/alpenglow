@@ -733,25 +733,34 @@ impl Blockstore {
                     *candidate_fec_set_index != u64::from(fec_set_index)
                 })
                 // Do not consider sets from the previous slot
-                .and_then(|((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
-                    (candidate_slot == slot).then_some((
-                        u32::try_from(candidate_fec_set_index)
-                            .expect("fec_set_index from a previously inserted erasure meta should fit in a u32"),
-                        candidate_erasure_meta
-                    ))
-                }),
+                .and_then(
+                    |((candidate_slot, candidate_fec_set_index), candidate_erasure_meta)| {
+                        (candidate_slot == slot).then_some((
+                            u32::try_from(candidate_fec_set_index).expect(
+                                "fec_set_index from a previously inserted erasure meta should fit \
+                                 in a u32",
+                            ),
+                            candidate_erasure_meta,
+                        ))
+                    },
+                ),
             BlockLocation::Alternate { block_id } => {
                 // Shreds are only inserted in the alternate column as part of alpenglow. Alpenglow will launch after
                 // SIMD-0317 which enforces fixed FEC sets of DATA_SHREDS_PER_FEC_BLOCK. Thus we can avoid the scan,
                 // as we know the previous fec set index
                 debug_assert!(fec_set_index % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0);
                 debug_assert!(fec_set_index >= DATA_SHREDS_PER_FEC_BLOCK as u32);
-                let prev_fec_set_index = fec_set_index.saturating_sub(DATA_SHREDS_PER_FEC_BLOCK as u32);
-                self
-                    .alt_erasure_meta_cf
+                let prev_fec_set_index =
+                    fec_set_index.saturating_sub(DATA_SHREDS_PER_FEC_BLOCK as u32);
+                self.alt_erasure_meta_cf
                     .get_bytes((slot, prev_fec_set_index, block_id))?
-                    .map(|candidate_erasure_meta| (prev_fec_set_index, candidate_erasure_meta.into_boxed_slice()))
-            },
+                    .map(|candidate_erasure_meta| {
+                        (
+                            prev_fec_set_index,
+                            candidate_erasure_meta.into_boxed_slice(),
+                        )
+                    })
+            }
         }) else {
             // No potential candidates
             return Ok(None);
@@ -4150,8 +4159,8 @@ impl Blockstore {
         let Ok(results) = results else {
             if !is_leader {
                 warn!(
-                    "Unable to check the last fec set for slot {slot} {bank_hash}, \
-                 marking as dead: {results:?}",
+                    "Unable to check the last fec set for slot {slot} {bank_hash}, marking as \
+                     dead: {results:?}",
                 );
             }
             if feature_set.is_active(&agave_feature_set::vote_only_full_fec_sets::id()) {

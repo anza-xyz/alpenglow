@@ -87,10 +87,16 @@ impl StakedValidatorsCache {
             [bank_forks.root_bank(), bank_forks.working_bank()]
         };
 
-        let epoch_staked_nodes = banks.iter().find_map(|bank| bank.epoch_staked_nodes(epoch)).unwrap_or_else(|| {
-            error!("StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: {epoch}");
-            Arc::<HashMap<Pubkey, u64>>::default()
-        });
+        let epoch_staked_nodes = banks
+            .iter()
+            .find_map(|bank| bank.epoch_staked_nodes(epoch))
+            .unwrap_or_else(|| {
+                error!(
+                    "StakedValidatorsCache::get: unknown Bank::epoch_staked_nodes for epoch: \
+                     {epoch}"
+                );
+                Arc::<HashMap<Pubkey, u64>>::default()
+            });
 
         struct Node {
             pubkey: Pubkey,
@@ -161,9 +167,10 @@ impl StakedValidatorsCache {
                 self.alpenglow_port_override_last_modified =
                     alpenglow_port_override.last_modified();
                 trace!(
-                        "refreshing cache entry for epoch {} due to alpenglow port override last_modified change",
-                        self.cur_epoch(slot)
-                    );
+                    "refreshing cache entry for epoch {} due to alpenglow port override \
+                     last_modified change",
+                    self.cur_epoch(slot)
+                );
                 self.refresh_cache_entry(self.cur_epoch(slot), cluster_info, access_time);
             }
         }

@@ -657,7 +657,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             Arg::with_name("alpenglow")
                 .long("alpenglow")
                 .takes_value(true)
-                .help("Path to spl-alpenglow_vote.so. When specified, we use Alpenglow consensus; when not specified, we use POH."),
+                .help(
+                    "Path to spl-alpenglow_vote.so. When specified, we use Alpenglow consensus; \
+                     when not specified, we use POH.",
+                ),
         )
         .get_matches();
 

@@ -573,7 +573,8 @@ impl ClusterInfo {
                     }
                     let ip_addr = node.gossip().as_ref().map(SocketAddr::ip);
                     Some(format!(
-                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {:5}| {}\n",
+                        "{:15} {:2}| {:5} | {:44} |{:^9}| {:5}|  {:5}| {:5}| {:5}| {:5}| {:5}| \
+                         {:5}| {:5}| {}\n",
                         node.gossip()
                             .filter(|addr| self.socket_addr_space.check(addr))
                             .as_ref()
@@ -602,7 +603,10 @@ impl ClusterInfo {
                         ),
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::UDP)),
                         self.addr_to_string(&ip_addr, &node.tvu(contact_info::Protocol::QUIC)),
-                        self.addr_to_string(&ip_addr, &node.serve_repair(contact_info::Protocol::UDP)),
+                        self.addr_to_string(
+                            &ip_addr,
+                            &node.serve_repair(contact_info::Protocol::UDP)
+                        ),
                         self.addr_to_string(&ip_addr, &node.alpenglow()),
                         node.shred_version(),
                     ))

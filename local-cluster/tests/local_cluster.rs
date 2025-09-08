@@ -7011,12 +7011,13 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
-                                    stage,
-                                    node_c_turbine_disabled.load(Ordering::Acquire),
-                                    vote,
-                                    experiment_state
-                                );
+                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
+                                         Latest vote: {:#?}. Experiment state: {:#?}",
+                                        stage,
+                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        vote,
+                                        experiment_state
+                                    );
                                 }
                             }
 
@@ -7350,12 +7351,13 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
-                                    stage,
-                                    node_c_turbine_disabled.load(Ordering::Acquire),
-                                    vote,
-                                    experiment_state
-                                );
+                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
+                                         Latest vote: {:#?}. Experiment state: {:#?}",
+                                        stage,
+                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        vote,
+                                        experiment_state
+                                    );
                                 }
                             }
 
@@ -7540,7 +7542,11 @@ fn test_alpenglow_add_missing_parent_ready() {
             // Wait until we have observed a notarization vote from all nodes.
             if self.initial_notar_votes.len() >= self.number_of_nodes {
                 // Phase 1: Take Node C offline, A and B should happily finalize blocks
-                info!("Phase 1: Put Node C in partition. Transitioning to stability phase. current slot {}", vote.slot());
+                info!(
+                    "Phase 1: Put Node C in partition. Transitioning to stability phase. current \
+                     slot {}",
+                    vote.slot()
+                );
                 node_c_turbine_disabled.store(true, Ordering::Relaxed);
                 let blackhole_addr: SocketAddr = solana_net_utils::bind_to_localhost()
                     .unwrap()
@@ -7592,7 +7598,10 @@ fn test_alpenglow_add_missing_parent_ready() {
                     node_c_turbine_disabled.store(false, Ordering::Relaxed);
                     self.alpenglow_port_override.clear();
                     self.stage = Stage::ObserveLiveness;
-                    info!("Phase 2: Node C turbine re-enabled. Transitioning to ObserveLiveness stage.");
+                    info!(
+                        "Phase 2: Node C turbine re-enabled. Transitioning to ObserveLiveness \
+                         stage."
+                    );
                 } else {
                     self.stuck_at = Some(Instant::now());
                     info!("Phase 2 started, count 10 seconds for standstill.");
@@ -7640,11 +7649,12 @@ fn test_alpenglow_add_missing_parent_ready() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}.",
-                                    stage,
-                                    node_c_turbine_disabled.load(Ordering::Acquire),
-                                    vote,
-                                );
+                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
+                                         Latest vote: {:#?}.",
+                                        stage,
+                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        vote,
+                                    );
                                 }
                             }
 

@@ -353,7 +353,10 @@ impl ConsensusPoolService {
             .leader_schedule_cache
             .slot_leader_at(*highest_parent_ready, Some(&root_bank))
         else {
-            error!("Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, exiting");
+            error!(
+                "Unable to compute the leader at slot {highest_parent_ready}. Something is wrong, \
+                 exiting"
+            );
             ctx.exit.store(true, Ordering::Relaxed);
             return;
         };
@@ -367,8 +370,8 @@ impl ConsensusPoolService {
 
         if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
             warn!(
-                "{my_pubkey}: We have already produced shreds in the window {start_slot}-{end_slot}, \
-                    skipping production of our leader window"
+                "{my_pubkey}: We have already produced shreds in the window \
+                 {start_slot}-{end_slot}, skipping production of our leader window"
             );
             return;
         }
@@ -379,8 +382,8 @@ impl ConsensusPoolService {
         {
             BlockProductionParent::MissedWindow => {
                 warn!(
-                    "{my_pubkey}: Leader slot {start_slot} has already been certified, \
-                    skipping production of {start_slot}-{end_slot}"
+                    "{my_pubkey}: Leader slot {start_slot} has already been certified, skipping \
+                     production of {start_slot}-{end_slot}"
                 );
                 ConsensusPoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
             }

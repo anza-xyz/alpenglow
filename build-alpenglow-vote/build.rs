@@ -40,7 +40,11 @@ fn generate_github_rev(rev: &str) -> PathBuf {
 
 fn generate_local_checkout(path: &str) -> PathBuf {
     let err = || {
-        format!("Local checkout path must be of the form: /x/y/z/alpenglow-vote-project-path/program. In particular, alpenglow-vote-project-path is the local checkout, which might typically just be called alpenglow-vote. Current checkout path: {path}")
+        format!(
+            "Local checkout path must be of the form: /x/y/z/alpenglow-vote-project-path/program. \
+             In particular, alpenglow-vote-project-path is the local checkout, which might \
+             typically just be called alpenglow-vote. Current checkout path: {path}"
+        )
     };
     let path = PathBuf::from(path);
 
@@ -91,7 +95,9 @@ fn main() {
     // Find alpenglow-vote
     let workspace_dependencies = &project_cargo_toml["workspace"]["dependencies"];
 
-    let err = "alpenglow-vote must either be of form: (1) if you're trying to fetch from a git repo: { git = \"...\", rev = \"...\" } or (2) if you're trying to use a local checkout of alpenglow-vote : { path = \"...\" }";
+    let err = "alpenglow-vote must either be of form: (1) if you're trying to fetch from a git \
+               repo: { git = \"...\", rev = \"...\" } or (2) if you're trying to use a local \
+               checkout of alpenglow-vote : { path = \"...\" }";
 
     let alpenglow_vote = workspace_dependencies
         .get("alpenglow-vote")

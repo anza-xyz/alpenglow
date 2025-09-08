@@ -721,8 +721,9 @@ impl ReplayStage {
                         Ok(tower) => tower,
                         Err(err) => {
                             error!(
-                                "Unable to load new tower when attempting to change identity from {my_old_pubkey} \
-                                to {my_pubkey} on ReplayStage startup, Exiting: {err}"
+                                "Unable to load new tower when attempting to change identity from \
+                                 {my_old_pubkey} to {my_pubkey} on ReplayStage startup, Exiting: \
+                                 {err}"
                             );
                             // drop(_exit) will set the exit flag, eventually tearing down the entire process
                             return;
@@ -2265,8 +2266,8 @@ impl ReplayStage {
             let latest_unconfirmed_leader_slot = progress_map
                 .get_latest_leader_slot_must_exist(parent_slot)
                 .expect(
-                    "In order for propagated check to fail, latest leader must exist in \
-                            progress map",
+                    "In order for propagated check to fail, latest leader must exist in progress \
+                     map",
                 );
             if my_leader_slot != skipped_slots_info.last_skipped_slot {
                 datapoint_info!(
@@ -2382,7 +2383,8 @@ impl ReplayStage {
                 // TODO: need to keep the ticks around for parent slots in previous epoch
                 // because reset below will delete those ticks
                 info!(
-                    "initiating alpenglow migration from maybe_start_leader() for slot {maybe_my_leader_slot}"
+                    "initiating alpenglow migration from maybe_start_leader() for slot \
+                     {maybe_my_leader_slot}"
                 );
                 Self::initiate_alpenglow_migration(poh_recorder, is_alpenglow_migration_complete);
             }
@@ -2752,7 +2754,8 @@ impl ReplayStage {
         let vote_state_view = match vote_account.vote_state_view() {
             None => {
                 warn!(
-                    "Vote account {vote_account_pubkey} does not have a vote state.  Unable to vote"
+                    "Vote account {vote_account_pubkey} does not have a vote state.  Unable to \
+                     vote"
                 );
                 return GenerateVoteTxResult::NoVoteState(*vote_account_pubkey);
             }
