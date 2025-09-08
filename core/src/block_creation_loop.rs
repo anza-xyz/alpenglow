@@ -426,10 +426,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             guard.take().unwrap()
         };
 
-        trace!(
-            "Received window notification for {start_slot} to {end_slot} \
-            parent: {parent_slot}"
-        );
+        trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
 
         if let Err(e) = start_leader_retry_replay(
             start_slot,
@@ -443,8 +440,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         ) {
             // Give up on this leader window
             error!(
-                "{my_pubkey}: Unable to produce first slot {start_slot}, skipping production of our entire leader window \
-                {start_slot}-{end_slot}: {e:?}"
+                "{my_pubkey}: Unable to produce first slot {start_slot}, skipping production of \
+                 our entire leader window {start_slot}-{end_slot}: {e:?}"
             );
             continue;
         }
@@ -535,7 +532,10 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
                 &mut metrics,
                 &mut slot_metrics,
             ) {
-                error!("{my_pubkey}: Unable to produce {slot}, skipping rest of leader window {slot} - {end_slot}: {e:?}");
+                error!(
+                    "{my_pubkey}: Unable to produce {slot}, skipping rest of leader window {slot} \
+                     - {end_slot}: {e:?}"
+                );
                 break;
             }
         }
@@ -592,8 +592,9 @@ fn start_leader_retry_replay(
             .0;
         if highest_parent_ready_slot > end_slot {
             trace!(
-                    "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is {highest_parent_ready_slot} > end slot {end_slot}"
-                );
+                "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is \
+                 {highest_parent_ready_slot} > end slot {end_slot}"
+            );
             metrics.skipped_window_behind_parent_ready_count += 1;
             return Err(StartLeaderError::ClusterConfirmedBlocksAfterWindow(
                 highest_parent_ready_slot,
@@ -617,8 +618,8 @@ fn start_leader_retry_replay(
                 // slot_metrics.replay_is_behind_count already gets incremented in maybe_start_leader
 
                 trace!(
-                    "{my_pubkey}: Attempting to produce slot {slot}, however replay of the \
-                    the parent {parent_slot} is not yet finished, waiting. Skip timer {}",
+                    "{my_pubkey}: Attempting to produce slot {slot}, however replay of the the \
+                     parent {parent_slot} is not yet finished, waiting. Skip timer {}",
                     skip_timer.elapsed().as_millis()
                 );
                 let highest_frozen_slot = ctx
@@ -649,8 +650,7 @@ fn start_leader_retry_replay(
     }
 
     error!(
-        "{my_pubkey}: Skipping production of {slot}: \
-        Unable to replay parent {parent_slot} in time"
+        "{my_pubkey}: Skipping production of {slot}: Unable to replay parent {parent_slot} in time"
     );
     Err(StartLeaderError::ReplayIsBehind(parent_slot))
 }
@@ -705,7 +705,7 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &Leade
     if let Some(bank) = ctx.poh_recorder.read().unwrap().bank() {
         panic!(
             "{}: Attempting to produce a block for {slot}, however we still are in production of \
-            {}. Something has gone wrong with the block creation loop. exiting",
+             {}. Something has gone wrong with the block creation loop. exiting",
             ctx.my_pubkey,
             bank.slot(),
         );
