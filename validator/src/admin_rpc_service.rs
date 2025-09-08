@@ -1081,7 +1081,7 @@ mod tests {
                         RwLock<repair_service::OutstandingShredRepairs>,
                     >::default(),
                     cluster_slots: Arc::new(
-                        solana_core::cluster_slots_service::cluster_slots::ClusterSlots::default(),
+                        solana_core::cluster_slots_service::cluster_slots::ClusterSlots::default_for_tests(),
                     ),
                     votor_event_sender,
                     node: None,
