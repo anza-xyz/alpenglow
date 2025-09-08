@@ -518,8 +518,8 @@ impl Index {
     /// Checks the index to see if we have all the data shreds in this FEC set
     pub(crate) fn is_data_set_complete(fec_set_index: u32, index: &Index) -> bool {
         let data_indices =
-            u64::from(fec_set_index)..u64::from(fec_set_index) + (DATA_SHREDS_PER_FEC_BLOCK as u64);
-        index.data().range(data_indices).count() == DATA_SHREDS_PER_FEC_BLOCK
+            (fec_set_index as usize)..(fec_set_index as usize + DATA_SHREDS_PER_FEC_BLOCK);
+        index.data().count_ones_in_range(data_indices) == DATA_SHREDS_PER_FEC_BLOCK
     }
 }
 
@@ -636,6 +636,13 @@ impl ShredIndexV2 {
             .range((start, end))
             .iter_ones()
             .map(|idx| idx as u64)
+    }
+
+    pub(crate) fn count_ones_in_range<R>(&self, range: R) -> usize
+    where
+        R: RangeBounds<usize>,
+    {
+        self.index.range(range).count_ones()
     }
 
     fn iter(&self) -> impl Iterator<Item = u64> + '_ {
