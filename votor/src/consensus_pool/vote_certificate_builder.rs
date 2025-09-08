@@ -151,7 +151,7 @@ mod tests {
         super::*,
         solana_bls_signatures::{
             Keypair as BLSKeypair, PubkeyProjective as BLSPubkeyProjective,
-            Signature as BLSSignature, VerifiablePubkey,
+            Signature as BLSSignature, SignatureProjective, VerifiablePubkey,
         },
         solana_hash::Hash,
         solana_votor_messages::{
@@ -399,6 +399,8 @@ mod tests {
 
         // 1. Setup: Create two groups of validators signing two different vote types.
         let mut all_vote_messages = Vec::new();
+        let mut all_pubkeys = Vec::new();
+        let mut all_messages = Vec::new();
 
         // Group 1: Signs a Notarize vote.
         let notarize_vote = Vote::new_notarization_vote(slot, hash);
@@ -411,6 +413,8 @@ mod tests {
                 signature: signature.into(),
                 rank: i as u16, // Ranks 0, 1, 2
             });
+            all_pubkeys.push(keypair.public);
+            all_messages.push(serialized_notarize_vote.clone());
         }
 
         // Group 2: Signs a NotarizeFallback vote.
@@ -424,6 +428,8 @@ mod tests {
                 signature: signature.into(),
                 rank: i as u16, // Ranks 3, 4, 5
             });
+            all_pubkeys.push(keypair.public);
+            all_messages.push(serialized_fallback_vote.clone());
         }
 
         // 2. Generation: Aggregate votes. Because there are two vote types, this will use
@@ -452,9 +458,18 @@ mod tests {
             }
         }
 
-        // TODO(sam): The solana-bls-signatures library does not expose a public method to verify
-        // a single aggregate signature against multiple different messages. Therefore, we cannot
-        // perform a single cryptographic verification for this base3-encoded certificate.
-        // Once `solana-bls-signatures` v0.3.0 is published, add verification test.
+        let pubkey_refs: Vec<_> = all_pubkeys.iter().collect();
+        let message_refs: Vec<&[u8]> = all_messages.iter().map(|m| m.as_slice()).collect();
+
+        let verification_result = SignatureProjective::verify_distinct_aggregated(
+            &pubkey_refs,
+            &certificate_message.signature,
+            &message_refs,
+        );
+
+        assert!(
+            verification_result.unwrap_or(false),
+            "BLS aggregate signature verification failed for base3 encoded certificate",
+        );
     }
 }
