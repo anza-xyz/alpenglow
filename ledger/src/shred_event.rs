@@ -42,14 +42,14 @@ pub enum ShredEvent {
         conflicting_shred_type: ShredType,
     },
 
-    /// We have observed incorrectly chained shreds in `slot` across two fec sets `lower_fec_set_index` and 
-    /// `higher_fec_set_index` in blockstore location `location`.
+    /// We have observed incorrectly chained shreds in `slot` across two fec sets.
+    /// The `merkle_root` of `fec_set_index` does not match the `chained_merkle_root`
+    /// of the next fec set
     ChainedMerkleRootConflict {
         location: BlockLocation,
         slot: Slot,
-        lower_fec_set_index: u32,
-        lower_merkle_root: Hash,
-        higher_fec_set_index: u32,
-        higher_chained_merkle_root: Hash,
+        fec_set_index: u32,
+        merkle_root: Hash,
+        chained_merkle_root: Hash,
     },
 }

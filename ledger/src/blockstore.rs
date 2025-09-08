@@ -2355,10 +2355,9 @@ impl Blockstore {
             shred_events.push(ShredEvent::ChainedMerkleRootConflict {
                 location,
                 slot,
-                lower_fec_set_index: erasure_set.fec_set_index(),
-                lower_merkle_root: merkle_root.unwrap_or_default(),
-                higher_fec_set_index: next_erasure_set.fec_set_index(),
-                higher_chained_merkle_root: chained_merkle_root.unwrap_or_default(),
+                fec_set_index: erasure_set.fec_set_index(),
+                merkle_root: merkle_root.unwrap_or_default(),
+                chained_merkle_root: chained_merkle_root.unwrap_or_default(),
             });
 
             if !self.has_duplicate_shreds_in_slot(shred.slot()) {
@@ -2453,10 +2452,9 @@ impl Blockstore {
             shred_events.push(ShredEvent::ChainedMerkleRootConflict {
                 location,
                 slot,
-                lower_fec_set_index: prev_erasure_set.fec_set_index(),
-                lower_merkle_root: merkle_root.unwrap_or_default(),
-                higher_fec_set_index: erasure_set.fec_set_index(),
-                higher_chained_merkle_root: chained_merkle_root.unwrap_or_default(),
+                fec_set_index: prev_erasure_set.fec_set_index(),
+                merkle_root: merkle_root.unwrap_or_default(),
+                chained_merkle_root: chained_merkle_root.unwrap_or_default(),
             });
 
             if !self.has_duplicate_shreds_in_slot(shred.slot()) {
