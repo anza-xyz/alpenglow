@@ -275,8 +275,6 @@ impl BLSSigVerifier {
     }
 
     fn verify_bls_certificate(&self, cert_to_verify: &CertToVerify, bank: &Bank) -> bool {
-        let signed_payload = cert_to_verify.payload_slice();
-
         let Some(key_to_rank_map) =
             get_key_to_rank_map(bank, cert_to_verify.cert_message.certificate.slot())
         else {
@@ -290,12 +288,9 @@ impl BLSSigVerifier {
         };
 
         match decoded_bitmap {
-            solana_signer_store::Decoded::Base2(bit_vec) => self.verify_base2_certificate(
-                &cert_to_verify.cert_message.signature,
-                signed_payload,
-                &bit_vec,
-                key_to_rank_map,
-            ),
+            solana_signer_store::Decoded::Base2(bit_vec) => {
+                self.verify_base2_certificate(cert_to_verify, &bit_vec, key_to_rank_map)
+            }
             solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => {
                 self.verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, key_to_rank_map)
             }
@@ -304,18 +299,27 @@ impl BLSSigVerifier {
 
     fn verify_base2_certificate(
         &self,
-        signature: &BlsSignature,
-        signed_payload: &[u8],
+        cert_to_verify: &CertToVerify,
         bit_vec: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
     ) -> bool {
+        let Some(original_vote) =
+            certificate_to_vote_message_base2(&cert_to_verify.cert_message.certificate)
+        else {
+            return false;
+        };
+
+        let Ok(signed_payload) = bincode::serialize(&original_vote) else {
+            return false;
+        };
+
         let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, key_to_rank_map)
         else {
             return false;
         };
 
         aggregate_bls_pubkey
-            .verify_signature(signature, signed_payload)
+            .verify_signature(&cert_to_verify.cert_message.signature, &signed_payload)
             .unwrap_or(false)
     }
 
@@ -326,6 +330,21 @@ impl BLSSigVerifier {
         bit_vec2: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
     ) -> bool {
+        let Some((vote1, vote2)) =
+            certificate_to_vote_messages_base3(&cert_to_verify.cert_message.certificate)
+        else {
+            return false;
+        };
+
+        let Ok(signed_payload1) = bincode::serialize(&vote1) else {
+            return false;
+        };
+        let Ok(signed_payload2) = bincode::serialize(&vote2) else {
+            return false;
+        };
+
+        let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
+
         // 1. Aggregate the two sets of public keys separately from the two bitmaps.
         let Some(agg_pk1) = aggregate_keys_from_bitmap(bit_vec1, key_to_rank_map) else {
             return false;
@@ -337,46 +356,10 @@ impl BLSSigVerifier {
         let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
         let pubkey_refs: Vec<&BlsPubkey> = pubkeys_affine.iter().collect();
 
-        // 2. Construct the two distinct messages that correspond to the two bitmaps.
-        //    The content of these messages depends on the certificate type being verified.
-        let Some(messages_to_verify) = ({
-            let certificate = &cert_to_verify.cert_message.certificate;
-            match certificate {
-                // For a NotarizeFallback certificate, the first bitmap corresponds to `Notarize`
-                // votes, and the second corresponds to `NotarizeFallback` votes.
-                Certificate::NotarizeFallback(slot, hash) => {
-                    bincode::serialize(&Vote::new_notarization_vote(*slot, *hash))
-                        .ok()
-                        .and_then(|msg1| {
-                            bincode::serialize(&Vote::new_notarization_fallback_vote(*slot, *hash))
-                                .ok()
-                                .map(|msg2| vec![msg1, msg2])
-                        })
-                }
-                // For a Skip certificate, the first bitmap is for `Skip` votes, and the second
-                // is for `SkipFallback` votes
-                Certificate::Skip(slot) => bincode::serialize(&Vote::new_skip_vote(*slot))
-                    .ok()
-                    .and_then(|msg1| {
-                        bincode::serialize(&Vote::new_skip_fallback_vote(*slot))
-                            .ok()
-                            .map(|msg2| vec![msg1, msg2])
-                    }),
-                // Other certificate types are not expected to use Base3 encoding.
-                _ => return false,
-            }
-        }) else {
-            return false;
-        };
-
-        let message_refs: Vec<&[u8]> = messages_to_verify.iter().map(AsRef::as_ref).collect();
-
-        // 3. Verify the one aggregate signature against the two aggregate public keys
-        //    and their two corresponding messages.
         SignatureProjective::par_verify_distinct_aggregated(
             &pubkey_refs,
             &cert_to_verify.cert_message.signature,
-            &message_refs,
+            &messages_to_verify,
         )
         .unwrap_or(false)
     }
@@ -413,22 +396,48 @@ struct CertToVerify<'a> {
     packet: PacketRefMut<'a>,
 }
 
-impl CertToVerify<'_> {
-    fn payload_slice(&self) -> &[u8] {
-        // The bincode serialization of `ConsensusMessage::Vote(VoteMessage)` has the layout:
-        // [ 4-byte Enum Discriminant | Certificate Payload | 96-byte Signature | 8-byte Bitmap Length | Bitmap bytes ]
-        const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = 4;
+fn certificate_to_vote_message_base2(certificate: &Certificate) -> Option<Vote> {
+    match certificate {
+        Certificate::Notarize(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
 
-        // Calculate the end of the `Certificate Payload` by subtracting the known size of
-        // the trailing fields (Signature, Bitmap Length, and the variable-length Bitmap)
-        let vote_payload_end = self
-            .packet
-            .meta()
-            .size
-            .saturating_sub(std::mem::size_of::<BlsSignature>())
-            .saturating_sub(std::mem::size_of::<u64>())
-            .saturating_sub(self.cert_message.bitmap.len());
-        &self.packet.data(..).unwrap()[BINCODE_ENUM_DISCRIMINANT_SIZE..vote_payload_end]
+        Certificate::FinalizeFast(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
+
+        Certificate::Finalize(slot) => Some(Vote::new_finalization_vote(*slot)),
+
+        Certificate::NotarizeFallback(slot, hash) => {
+            // In the Base2 path, a NotarizeFallback certificate must have been formed
+            // exclusively from Notarize votes, which populate the first bitmap
+            Some(Vote::new_notarization_vote(*slot, *hash))
+        }
+
+        Certificate::Skip(slot) => {
+            // In the Base2 path, a Skip certificate must have been formed
+            // exclusively from Skip votes, which populate the first bitmap
+            Some(Vote::new_skip_vote(*slot))
+        }
+    }
+}
+
+fn certificate_to_vote_messages_base3(certificate: &Certificate) -> Option<(Vote, Vote)> {
+    match certificate {
+        Certificate::NotarizeFallback(slot, hash) => {
+            // Per the protocol, the first bitmap is for `Notarize` votes and the
+            // second is for `NotarizeFallback` votes
+            let vote1 = Vote::new_notarization_vote(*slot, *hash);
+            let vote2 = Vote::new_notarization_fallback_vote(*slot, *hash);
+            Some((vote1, vote2))
+        }
+
+        Certificate::Skip(slot) => {
+            // Per the protocol, the first bitmap is for `Skip` votes and the
+            // second is for `SkipFallback` votes
+            let vote1 = Vote::new_skip_vote(*slot);
+            let vote2 = Vote::new_skip_fallback_vote(*slot);
+            Some((vote1, vote2))
+        }
+
+        // Other certificate types do not use Base3 encoding.
+        _ => None,
     }
 }
 
@@ -853,7 +862,9 @@ mod tests {
         let block_hash = Hash::new_unique();
 
         let certificate = Certificate::Notarize(slot, block_hash);
-        let signed_payload = bincode::serialize(&certificate).unwrap();
+
+        let original_vote = Vote::new_notarization_vote(slot, block_hash);
+        let signed_payload = bincode::serialize(&original_vote).unwrap();
 
         let signatures: Vec<SignatureProjective> = (0..num_signers)
             .map(|i| validator_keypairs[i].bls_keypair.sign(&signed_payload))
@@ -1003,7 +1014,8 @@ mod tests {
 
         let num_cert_signers = 7;
         let certificate = Certificate::Notarize(10, Hash::new_unique());
-        let cert_payload = bincode::serialize(&certificate).unwrap();
+        let cert_original_vote = Vote::new_notarization_vote(10, certificate.to_block().unwrap().1);
+        let cert_payload = bincode::serialize(&cert_original_vote).unwrap();
         let signatures: Vec<SignatureProjective> = (0..num_cert_signers)
             .map(|i| validator_keypairs[i].bls_keypair.sign(&cert_payload))
             .collect();
