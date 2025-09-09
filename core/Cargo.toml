@@ -227,7 +227,10 @@ name = "banking_stage"
 name = "gen_keys"
 
 [[bench]]
-name = "sigverify_stage"
+name = "ed25519_sigverify"
+
+[[bench]]
+name = "bls_sigverify"
 
 [[bench]]
 name = "receive_and_buffer"
