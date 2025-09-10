@@ -6203,9 +6203,9 @@ dependencies = [
 
 [[package]]
 name = "solana-bls-signatures"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "210bb2fc7efc40b34d4e506759c3b1f21360b53d02c2e5ca3601feca7a9fd269"
+checksum = "a40ce56d14f58c3ebe9275c3739c4052748ec5c4922854c12dc823dbf450ebd1"
 dependencies = [
  "base64 0.22.1",
  "blst",
@@ -6216,6 +6216,7 @@ dependencies = [
  "group",
  "pairing",
  "rand 0.8.5",
+ "rayon",
  "serde",
  "serde_json",
  "serde_with",
@@ -6376,7 +6377,7 @@ dependencies = [
  "chrono",
  "clap",
  "rpassword",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-clock 3.0.0",
  "solana-cluster-type",
  "solana-commitment-config",
@@ -6696,7 +6697,7 @@ dependencies = [
  "solana-address-lookup-table-interface 3.0.0",
  "solana-bincode 3.0.0",
  "solana-bloom",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-builtins-default-costs",
  "solana-client",
  "solana-clock 3.0.0",
@@ -6748,6 +6749,7 @@ dependencies = [
  "solana-shred-version",
  "solana-signature 3.1.0",
  "solana-signer 3.0.0",
+ "solana-signer-store",
  "solana-slot-hashes 3.0.0",
  "solana-slot-history 3.0.0",
  "solana-streamer",
@@ -8810,7 +8812,7 @@ dependencies = [
  "solana-account-info 3.0.0",
  "solana-accounts-db",
  "solana-address-lookup-table-interface 3.0.0",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-bpf-loader-program",
  "solana-bucket-map",
  "solana-build-alpenglow-vote",
@@ -10534,7 +10536,7 @@ dependencies = [
  "serde_json",
  "solana-account 3.0.0",
  "solana-accounts-db",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-cli-output",
  "solana-clock 3.0.0",
  "solana-cluster-type",
@@ -10935,7 +10937,7 @@ dependencies = [
  "serde_derive",
  "solana-account 3.0.0",
  "solana-bincode 3.0.0",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-clock 3.0.0",
  "solana-hash 3.0.0",
  "solana-instruction 3.0.0",
@@ -11061,7 +11063,7 @@ dependencies = [
  "solana-account 3.0.0",
  "solana-accounts-db",
  "solana-bloom",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-client",
  "solana-clock 3.0.0",
  "solana-connection-cache",
@@ -11100,7 +11102,7 @@ dependencies = [
  "num_enum",
  "serde",
  "solana-account 3.0.0",
- "solana-bls-signatures 0.2.0",
+ "solana-bls-signatures 0.3.0",
  "solana-clock 3.0.0",
  "solana-hash 3.0.0",
  "solana-logger",

@@ -16,21 +16,27 @@ use {
         signature::{Signature as BlsSignature, SignatureProjective},
     },
     solana_clock::Slot,
+    solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
-    solana_signer_store::decode,
+    solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateMessage, ConsensusMessage, VoteMessage},
+        consensus_message::{
+            Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+        },
         vote::Vote,
     },
-    stats::{BLSSigVerifierStats, StatsUpdater},
-    std::{collections::HashMap, sync::Arc},
+    stats::BLSSigVerifierStats,
+    std::{
+        collections::HashMap,
+        sync::{atomic::Ordering, Arc},
+    },
+    thiserror::Error,
 };
 
 // TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
-// TODO(sam): Should add stats for verification results and every failure case.
 
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
     let stakes = bank.epoch_stakes_map();
@@ -53,6 +59,27 @@ fn aggregate_keys_from_bitmap(
     PubkeyProjective::par_aggregate(&pubkeys.iter().collect::<Vec<_>>()).ok()
 }
 
+#[derive(Debug, Error, PartialEq)]
+enum CertVerifyError {
+    #[error("Failed to find key to rank map for slot {0}")]
+    KeyToRankMapNotFound(Slot),
+
+    #[error("Failed to decode bitmap {0:?}")]
+    BitmapDecodingFailed(DecodeError),
+
+    #[error("Failed to aggregate public keys")]
+    KeyAggregationFailed,
+
+    #[error("Failed to serialize original vote")]
+    SerializationFailed,
+
+    #[error("The signature doesn't match")]
+    SignatureVerificationFailed,
+
+    #[error("Base 3 encoding on unexpected cert {0:?}")]
+    Base3EncodingOnUnexpectedCert(CertificateType),
+}
+
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     message_sender: Sender<ConsensusMessage>,
@@ -68,21 +95,30 @@ impl SigVerifier for BLSSigVerifier {
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
     ) -> Vec<PacketBatch> {
+        let mut verification_votes_time = Measure::start("verification_votes");
+        let mut verification_certs_time = Measure::start("verification_certs");
+
         // TODO(sam): ideally we want to avoid heap allocation, but let's use
         //            `Vec` for now for clarity and then optimize for the final version
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
 
         let bank = self.root_bank.load();
-
         for mut packet in batches.iter_mut().flatten() {
+            self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
+                self.stats
+                    .received_discarded
+                    .fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
             let message: ConsensusMessage = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(_) => {
+                    self.stats
+                        .received_malformed
+                        .fetch_add(1, Ordering::Relaxed);
                     packet.meta_mut().set_discard(true);
                     continue;
                 }
@@ -94,6 +130,9 @@ impl SigVerifier for BLSSigVerifier {
                     let Some(key_to_rank_map) =
                         get_key_to_rank_map(&bank, vote_message.vote.slot())
                     else {
+                        self.stats
+                            .received_no_epoch_stakes
+                            .fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     };
@@ -102,6 +141,7 @@ impl SigVerifier for BLSSigVerifier {
                     let Some((_, bls_pubkey)) =
                         key_to_rank_map.get_pubkey(vote_message.rank.into())
                     else {
+                        self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     };
@@ -122,10 +162,27 @@ impl SigVerifier for BLSSigVerifier {
         }
 
         rayon::join(
-            || self.verify_votes(&mut votes_to_verify),
-            || self.verify_certificates(&mut certs_to_verify, &bank),
+            || {
+                if !votes_to_verify.is_empty() {
+                    self.verify_votes(&mut votes_to_verify);
+                    verification_votes_time.stop();
+                    self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .votes_batch_elapsed_us
+                        .fetch_add(verification_votes_time.as_us(), Ordering::Relaxed);
+                }
+            },
+            || {
+                if !certs_to_verify.is_empty() {
+                    self.verify_certificates(&mut certs_to_verify, &bank);
+                    verification_certs_time.stop();
+                    self.stats.certs_batch_count.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .certs_batch_elapsed_us
+                        .fetch_add(verification_certs_time.as_us(), Ordering::Relaxed);
+                }
+            },
         );
-
         batches
     }
 
@@ -133,23 +190,16 @@ impl SigVerifier for BLSSigVerifier {
         &mut self,
         packet_batches: Vec<PacketBatch>,
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
-        // TODO(wen): just a placeholder without any batching.
         let mut verified_votes = HashMap::new();
-        let mut stats_updater = StatsUpdater::default();
-
         for packet in packet_batches.iter().flatten() {
-            stats_updater.received += 1;
-
             if packet.meta().discard() {
-                stats_updater.received_discarded += 1;
                 continue;
             }
 
             let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    trace!("Failed to deserialize BLS message: {e}");
-                    stats_updater.received_malformed += 1;
+                    error!("Failed to deserialize BLS message: {e}, should not happen because verification succeeded");
                     continue;
                 }
             };
@@ -163,17 +213,19 @@ impl SigVerifier for BLSSigVerifier {
 
             let bank = self.root_bank.load();
             let Some(rank_to_pubkey_map) = get_key_to_rank_map(&bank, slot) else {
-                stats_updater.received_no_epoch_stakes += 1;
+                error!("This should not happen because verification succeeded");
                 continue;
             };
 
             if let ConsensusMessage::Vote(vote_message) = &message {
                 let vote = &vote_message.vote;
-                stats_updater.received_votes += 1;
+                self.stats.received_votes.fetch_add(1, Ordering::Relaxed);
                 if vote.is_notarization_or_finalization() || vote.is_notarize_fallback() {
                     let Some((pubkey, _)) = rank_to_pubkey_map.get_pubkey(vote_message.rank.into())
                     else {
-                        stats_updater.received_malformed += 1;
+                        self.stats
+                            .received_malformed
+                            .fetch_add(1, Ordering::Relaxed);
                         continue;
                     };
                     let cur_slots: &mut Vec<Slot> = verified_votes.entry(*pubkey).or_default();
@@ -185,9 +237,11 @@ impl SigVerifier for BLSSigVerifier {
 
             // Now send the BLS message to certificate pool.
             match self.message_sender.try_send(message) {
-                Ok(()) => stats_updater.sent += 1,
+                Ok(()) => {
+                    self.stats.sent.fetch_add(1, Ordering::Relaxed);
+                }
                 Err(TrySendError::Full(_)) => {
-                    stats_updater.sent_failed += 1;
+                    self.stats.sent_failed.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e @ TrySendError::Disconnected(_)) => {
                     return Err(e.into());
@@ -195,7 +249,6 @@ impl SigVerifier for BLSSigVerifier {
             }
         }
         self.send_verified_votes(verified_votes);
-        self.stats.update(stats_updater);
         self.stats.maybe_report_stats();
         Ok(())
     }
@@ -216,19 +269,21 @@ impl BLSSigVerifier {
     }
 
     fn send_verified_votes(&mut self, verified_votes: HashMap<Pubkey, Vec<Slot>>) {
-        let mut stats_updater = StatsUpdater::default();
         for (pubkey, slots) in verified_votes {
             match self.verified_votes_sender.try_send((pubkey, slots)) {
                 Ok(()) => {
-                    stats_updater.verified_votes_sent += 1;
+                    self.stats
+                        .verified_votes_sent
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) => {
                     trace!("Failed to send verified vote: {e}");
-                    stats_updater.verified_votes_sent_failed += 1;
+                    self.stats
+                        .verified_votes_sent_failed
+                        .fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
-        self.stats.update(stats_updater);
     }
 
     fn verify_votes(&self, votes_to_verify: &mut [VoteToVerify]) {
@@ -261,6 +316,9 @@ impl BLSSigVerifier {
                 )
                 .unwrap_or(false)
             {
+                self.stats
+                    .received_bad_signature_votes
+                    .fetch_add(1, Ordering::Relaxed);
                 vote_to_verify.packet.meta_mut().set_discard(true);
             }
         });
@@ -271,23 +329,36 @@ impl BLSSigVerifier {
             return;
         }
         certs_to_verify.par_iter_mut().for_each(|cert_to_verify| {
-            if !self.verify_bls_certificate(cert_to_verify, bank) {
+            if let Err(e) = self.verify_bls_certificate(cert_to_verify, bank) {
+                trace!(
+                    "Failed to verify BLS certificate: {:?}, error: {e}",
+                    cert_to_verify.cert_message.certificate
+                );
+                self.stats
+                    .received_bad_signature_certs
+                    .fetch_add(1, Ordering::Relaxed);
                 cert_to_verify.packet.meta_mut().set_discard(true);
             }
         });
     }
 
-    fn verify_bls_certificate(&self, cert_to_verify: &CertToVerify, bank: &Bank) -> bool {
-        let Some(key_to_rank_map) =
-            get_key_to_rank_map(bank, cert_to_verify.cert_message.certificate.slot())
-        else {
-            return false;
+    fn verify_bls_certificate(
+        &self,
+        cert_to_verify: &CertToVerify,
+        bank: &Bank,
+    ) -> Result<(), CertVerifyError> {
+        let slot = cert_to_verify.cert_message.certificate.slot();
+        let Some(key_to_rank_map) = get_key_to_rank_map(bank, slot) else {
+            return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
         let max_len = key_to_rank_map.len();
 
-        let Ok(decoded_bitmap) = decode(&cert_to_verify.cert_message.bitmap, max_len) else {
-            return false;
+        let decoded_bitmap = match decode(&cert_to_verify.cert_message.bitmap, max_len) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                return Err(CertVerifyError::BitmapDecodingFailed(e));
+            }
         };
 
         match decoded_bitmap {
@@ -305,25 +376,26 @@ impl BLSSigVerifier {
         cert_to_verify: &CertToVerify,
         bit_vec: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-    ) -> bool {
-        let Some(original_vote) =
-            certificate_to_vote_message_base2(&cert_to_verify.cert_message.certificate)
-        else {
-            return false;
-        };
+    ) -> Result<(), CertVerifyError> {
+        let original_vote =
+            certificate_to_vote_message_base2(&cert_to_verify.cert_message.certificate);
 
         let Ok(signed_payload) = bincode::serialize(&original_vote) else {
-            return false;
+            return Err(CertVerifyError::SerializationFailed);
         };
 
         let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, key_to_rank_map)
         else {
-            return false;
+            return Err(CertVerifyError::KeyAggregationFailed);
         };
 
-        aggregate_bls_pubkey
+        if let Ok(true) = aggregate_bls_pubkey
             .verify_signature(&cert_to_verify.cert_message.signature, &signed_payload)
-            .unwrap_or(false)
+        {
+            Ok(())
+        } else {
+            Err(CertVerifyError::SignatureVerificationFailed)
+        }
     }
 
     fn verify_base3_certificate(
@@ -332,39 +404,43 @@ impl BLSSigVerifier {
         bit_vec1: &BitVec<u8, Lsb0>,
         bit_vec2: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-    ) -> bool {
+    ) -> Result<(), CertVerifyError> {
         let Some((vote1, vote2)) =
             certificate_to_vote_messages_base3(&cert_to_verify.cert_message.certificate)
         else {
-            return false;
+            return Err(CertVerifyError::Base3EncodingOnUnexpectedCert(
+                cert_to_verify.cert_message.certificate.certificate_type(),
+            ));
         };
 
         let Ok(signed_payload1) = bincode::serialize(&vote1) else {
-            return false;
+            return Err(CertVerifyError::SerializationFailed);
         };
         let Ok(signed_payload2) = bincode::serialize(&vote2) else {
-            return false;
+            return Err(CertVerifyError::SerializationFailed);
         };
 
         let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
 
         // Aggregate the two sets of public keys separately from the two bitmaps.
         let Some(agg_pk1) = aggregate_keys_from_bitmap(bit_vec1, key_to_rank_map) else {
-            return false;
+            return Err(CertVerifyError::KeyAggregationFailed);
         };
         let Some(agg_pk2) = aggregate_keys_from_bitmap(bit_vec2, key_to_rank_map) else {
-            return false;
+            return Err(CertVerifyError::KeyAggregationFailed);
         };
 
         let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
         let pubkey_refs: Vec<&BlsPubkey> = pubkeys_affine.iter().collect();
 
-        SignatureProjective::par_verify_distinct_aggregated(
+        match SignatureProjective::par_verify_distinct_aggregated(
             &pubkey_refs,
             &cert_to_verify.cert_message.signature,
             &messages_to_verify,
-        )
-        .unwrap_or(false)
+        ) {
+            Ok(true) => Ok(()),
+            _ => Err(CertVerifyError::SignatureVerificationFailed),
+        }
     }
 }
 
@@ -407,24 +483,24 @@ struct CertToVerify<'a> {
 }
 
 // TODO(sam): These functions should probably live inside the votor or votor-messages crate
-fn certificate_to_vote_message_base2(certificate: &Certificate) -> Option<Vote> {
+fn certificate_to_vote_message_base2(certificate: &Certificate) -> Vote {
     match certificate {
-        Certificate::Notarize(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
+        Certificate::Notarize(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
 
-        Certificate::FinalizeFast(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
+        Certificate::FinalizeFast(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
 
-        Certificate::Finalize(slot) => Some(Vote::new_finalization_vote(*slot)),
+        Certificate::Finalize(slot) => Vote::new_finalization_vote(*slot),
 
         Certificate::NotarizeFallback(slot, hash) => {
             // In the Base2 path, a NotarizeFallback certificate must have been formed
             // exclusively from Notarize votes, which populate the first bitmap
-            Some(Vote::new_notarization_vote(*slot, *hash))
+            Vote::new_notarization_vote(*slot, *hash)
         }
 
         Certificate::Skip(slot) => {
             // In the Base2 path, a Skip certificate must have been formed
             // exclusively from Skip votes, which populate the first bitmap
-            Some(Vote::new_skip_vote(*slot))
+            Vote::new_skip_vote(*slot)
         }
     }
 }
@@ -524,6 +600,7 @@ mod tests {
             })
             .collect::<Vec<Packet>>();
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        verifier.verify_batches(packet_batches.clone(), 0);
         if expect_send_packets_ok {
             assert!(verifier.send_packets(packet_batches).is_ok());
             if let Some(receiver) = receiver {
@@ -569,9 +646,9 @@ mod tests {
             }),
         ];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
-        assert_eq!(verifier.stats.sent, 2);
-        assert_eq!(verifier.stats.received, 2);
-        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -585,9 +662,9 @@ mod tests {
             rank: vote_rank as u16,
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
-        assert_eq!(verifier.stats.sent, 3);
-        assert_eq!(verifier.stats.received, 3);
-        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 3);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -604,9 +681,9 @@ mod tests {
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         // Since we just logged all stats (including the packet just sent), stats should be reset
-        assert_eq!(verifier.stats.sent, 0);
-        assert_eq!(verifier.stats.received, 0);
-        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
         let received_verified_votes = verfied_vote_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes,
@@ -615,18 +692,23 @@ mod tests {
     }
 
     #[test]
-    fn test_blssigverifier_send_packets_malformed() {
+    fn test_blssigverifier_verify_malformed() {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
 
         let packets = vec![Packet::default()];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.send_packets(packet_batches).is_ok());
-        assert_eq!(verifier.stats.sent, 0);
-        assert_eq!(verifier.stats.received, 1);
-        assert_eq!(verifier.stats.received_malformed, 1);
-        assert_eq!(verifier.stats.received_no_epoch_stakes, 0);
+        verifier.verify_batches(packet_batches, 0);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            verifier
+                .stats
+                .received_no_epoch_stakes
+                .load(Ordering::Relaxed),
+            0
+        );
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -638,10 +720,16 @@ mod tests {
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
-        assert_eq!(verifier.stats.sent, 0);
-        assert_eq!(verifier.stats.received, 2);
-        assert_eq!(verifier.stats.received_malformed, 1);
-        assert_eq!(verifier.stats.received_no_epoch_stakes, 1);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            verifier
+                .stats
+                .received_no_epoch_stakes
+                .load(Ordering::Relaxed),
+            1
+        );
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -653,10 +741,16 @@ mod tests {
             rank: 1000, // Invalid rank
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
-        assert_eq!(verifier.stats.sent, 0);
-        assert_eq!(verifier.stats.received, 3);
-        assert_eq!(verifier.stats.received_malformed, 2);
-        assert_eq!(verifier.stats.received_no_epoch_stakes, 1);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            verifier
+                .stats
+                .received_no_epoch_stakes
+                .load(Ordering::Relaxed),
+            1
+        );
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -683,9 +777,9 @@ mod tests {
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
 
         // We failed to send the second message because the channel is full.
-        assert_eq!(verifier.stats.sent, 1);
-        assert_eq!(verifier.stats.received, 2);
-        assert_eq!(verifier.stats.received_malformed, 0);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -720,16 +814,32 @@ mod tests {
         packet.meta_mut().set_discard(true);
         let packets = vec![packet];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        let packet_batches = verifier.verify_batches(packet_batches, 0);
         assert!(verifier.send_packets(packet_batches).is_ok());
-        assert_eq!(verifier.stats.sent, 0);
-        assert_eq!(verifier.stats.sent_failed, 0);
-        assert_eq!(verifier.stats.verified_votes_sent, 0);
-        assert_eq!(verifier.stats.verified_votes_sent_failed, 0);
-        assert_eq!(verifier.stats.received, 1);
-        assert_eq!(verifier.stats.received_discarded, 1);
-        assert_eq!(verifier.stats.received_malformed, 0);
-        assert_eq!(verifier.stats.received_no_epoch_stakes, 0);
-        assert_eq!(verifier.stats.received_votes, 0);
+        assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(verifier.stats.sent_failed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            verifier.stats.verified_votes_sent.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            verifier
+                .stats
+                .verified_votes_sent_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received_discarded.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            verifier
+                .stats
+                .received_no_epoch_stakes
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(verifier.stats.received_votes.load(Ordering::Relaxed), 0);
         assert!(receiver.is_empty());
     }
 
