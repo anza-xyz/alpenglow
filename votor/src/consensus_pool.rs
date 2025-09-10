@@ -39,7 +39,7 @@ use {
 pub mod parent_ready_tracker;
 mod slot_stake_counters;
 mod stats;
-mod vote_certificate_builder;
+pub mod vote_certificate_builder;
 mod vote_pool;
 
 impl VoteType {

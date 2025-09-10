@@ -348,7 +348,7 @@ impl BLSSigVerifier {
 
         let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
 
-        // 1. Aggregate the two sets of public keys separately from the two bitmaps.
+        // Aggregate the two sets of public keys separately from the two bitmaps.
         let Some(agg_pk1) = aggregate_keys_from_bitmap(bit_vec1, key_to_rank_map) else {
             return false;
         };
@@ -470,7 +470,8 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_signer_store::{encode_base2, encode_base3},
+        solana_signer_store::encode_base2,
+        solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
         solana_votor_messages::{
             consensus_message::{
                 Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
@@ -876,27 +877,22 @@ mod tests {
 
         let original_vote = Vote::new_notarization_vote(slot, block_hash);
         let signed_payload = bincode::serialize(&original_vote).unwrap();
-
-        let signatures: Vec<SignatureProjective> = (0..num_signers)
-            .map(|i| validator_keypairs[i].bls_keypair.sign(&signed_payload))
+        let vote_messages: Vec<VoteMessage> = (0..num_signers)
+            .map(|i| {
+                let signature = validator_keypairs[i].bls_keypair.sign(&signed_payload);
+                VoteMessage {
+                    vote: original_vote,
+                    signature: signature.into(),
+                    rank: i as u16,
+                }
+            })
             .collect();
-        let signature_refs: Vec<&SignatureProjective> = signatures.iter().collect();
-        let aggregate_signature: BlsSignature = SignatureProjective::aggregate(&signature_refs)
-            .unwrap()
-            .into();
 
-        let mut bitmap = BitVec::<u8, Lsb0>::new();
-        bitmap.resize(num_signers, false);
-        for i in 0..num_signers {
-            bitmap.set(i, true);
-        }
-        let encoded_bitmap = encode_base2(&bitmap).unwrap();
-
-        let cert_message = CertificateMessage {
-            certificate,
-            signature: aggregate_signature,
-            bitmap: encoded_bitmap,
-        };
+        let mut builder = VoteCertificateBuilder::new(certificate);
+        builder
+            .aggregate(&vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert_message = builder.build().expect("Failed to build certificate");
         let consensus_message = ConsensusMessage::Certificate(cert_message);
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
@@ -916,43 +912,39 @@ mod tests {
         let slot = 20;
         let block_hash = Hash::new_unique();
 
-        let notarize_payload =
-            bincode::serialize(&Vote::new_notarization_vote(slot, block_hash)).unwrap();
-        let notarize_fallback_payload =
-            bincode::serialize(&Vote::new_notarization_fallback_vote(slot, block_hash)).unwrap();
+        let notarize_vote = Vote::new_notarization_vote(slot, block_hash);
+        let notarize_payload = bincode::serialize(&notarize_vote).unwrap();
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, block_hash);
+        let notarize_fallback_payload = bincode::serialize(&notarize_fallback_vote).unwrap();
 
-        let mut all_signatures = Vec::new();
+        let mut all_vote_messages = Vec::new();
         // Ranks 0-3 (4 validators) sign the Notarize payload.
-        for validator_keypair in validator_keypairs.iter().take(4) {
-            all_signatures.push(validator_keypair.bls_keypair.sign(&notarize_payload));
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(4) {
+            let signature = validator_keypair.bls_keypair.sign(&notarize_payload);
+            all_vote_messages.push(VoteMessage {
+                vote: notarize_vote,
+                signature: signature.into(),
+                rank: i as u16,
+            });
         }
         // Ranks 4-6 (3 validators) sign the NotarizeFallback payload.
-        for validator_keypair in validator_keypairs.iter().take(7).skip(4) {
-            all_signatures.push(
-                validator_keypair
-                    .bls_keypair
-                    .sign(&notarize_fallback_payload),
-            );
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(7).skip(4) {
+            let signature = validator_keypair
+                .bls_keypair
+                .sign(&notarize_fallback_payload);
+            all_vote_messages.push(VoteMessage {
+                vote: notarize_fallback_vote,
+                signature: signature.into(),
+                rank: i as u16,
+            });
         }
-        let signature_refs: Vec<&SignatureProjective> = all_signatures.iter().collect();
-        let aggregate_signature: BlsSignature = SignatureProjective::aggregate(&signature_refs)
-            .unwrap()
-            .into();
 
-        let mut bitmap1 = BitVec::<u8, Lsb0>::new();
-        bitmap1.resize(7, false);
-        (0..4).for_each(|i| bitmap1.set(i, true));
-
-        let mut bitmap2 = BitVec::<u8, Lsb0>::new();
-        bitmap2.resize(7, false);
-        (4..7).for_each(|i| bitmap2.set(i, true));
-
-        let encoded_bitmap = encode_base3(&bitmap1, &bitmap2).unwrap();
-        let cert_message = CertificateMessage {
-            certificate: Certificate::NotarizeFallback(slot, block_hash),
-            signature: aggregate_signature,
-            bitmap: encoded_bitmap,
-        };
+        let certificate = Certificate::NotarizeFallback(slot, block_hash);
+        let mut builder = VoteCertificateBuilder::new(certificate);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert_message = builder.build().expect("Failed to build certificate");
         let consensus_message = ConsensusMessage::Certificate(cert_message);
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
@@ -1027,27 +1019,29 @@ mod tests {
         let certificate = Certificate::Notarize(10, Hash::new_unique());
         let cert_original_vote = Vote::new_notarization_vote(10, certificate.to_block().unwrap().1);
         let cert_payload = bincode::serialize(&cert_original_vote).unwrap();
-        let signatures: Vec<SignatureProjective> = (0..num_cert_signers)
-            .map(|i| validator_keypairs[i].bls_keypair.sign(&cert_payload))
+
+        let cert_vote_messages: Vec<VoteMessage> = (0..num_cert_signers)
+            .map(|i| {
+                let signature = validator_keypairs[i].bls_keypair.sign(&cert_payload);
+                VoteMessage {
+                    vote: cert_original_vote,
+                    signature: signature.into(),
+                    rank: i as u16,
+                }
+            })
             .collect();
-        let signature_refs: Vec<&SignatureProjective> = signatures.iter().collect();
-        let aggregate_signature: BlsSignature = SignatureProjective::aggregate(&signature_refs)
-            .unwrap()
-            .into();
-        let mut bitmap = BitVec::<u8, Lsb0>::new();
-        bitmap.resize(num_cert_signers, false);
-        (0..num_cert_signers).for_each(|i| bitmap.set(i, true));
-        let encoded_bitmap = encode_base2(&bitmap).unwrap();
-        let cert_message = CertificateMessage {
-            certificate,
-            signature: aggregate_signature,
-            bitmap: encoded_bitmap,
-        };
+        let mut builder =
+            solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder::new(
+                certificate,
+            );
+        builder
+            .aggregate(&cert_vote_messages)
+            .expect("Failed to aggregate votes for certificate");
+        let cert_message = builder.build().expect("Failed to build certificate");
         let consensus_message = ConsensusMessage::Certificate(cert_message);
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
         packets.push(packet);
-
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         let result_batches = verifier.verify_batches(packet_batches, num_votes + 1);
 
