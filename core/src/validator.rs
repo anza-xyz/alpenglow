@@ -89,6 +89,7 @@ use {
         poh_controller::PohController,
         poh_recorder::PohRecorder,
         poh_service::{self, PohService},
+        record_channels::record_channels,
         transaction_recorder::TransactionRecorder,
     },
     solana_pubkey::Pubkey,
@@ -960,7 +961,7 @@ impl Validator {
         let prioritization_fee_cache = Arc::new(PrioritizationFeeCache::default());
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
-        let (mut poh_recorder, entry_receiver) = {
+        let (poh_recorder, entry_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
             let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
             let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
@@ -985,12 +986,8 @@ impl Validator {
                 is_alpenglow_enabled,
             )
         };
-        if transaction_status_sender.is_some() {
-            poh_recorder.track_transaction_indexes();
-        }
-        let (record_sender, record_receiver) = unbounded();
-        let transaction_recorder =
-            TransactionRecorder::new(record_sender, poh_recorder.is_exited.clone());
+        let (record_sender, record_receiver) = record_channels(transaction_status_sender.is_some());
+        let transaction_recorder = TransactionRecorder::new(record_sender);
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let (poh_controller, poh_service_message_receiver) = PohController::new();
 
@@ -1429,7 +1426,6 @@ impl Validator {
             rpc_subscriptions: rpc_subscriptions.clone(),
             banking_tracer: banking_tracer.clone(),
             slot_status_notifier: slot_status_notifier.clone(),
-            record_receiver: record_receiver.clone(),
             leader_window_notifier: leader_window_notifier.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
         };
