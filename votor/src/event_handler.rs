@@ -244,6 +244,16 @@ impl EventHandler {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
+                match vctx
+                    .ag_metrics
+                    .write()
+                    .record_block_hash_seen(*bank.collector_id(), slot)
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        error!("{my_pubkey}: recording block on slot {slot} failed with {err:?}");
+                    }
+                }
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
                 if Self::try_notar(
