@@ -29,6 +29,9 @@ use {
     std::{collections::HashMap, sync::Arc},
 };
 
+// TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
+// TODO(sam): Should add stats for verification results and every failure case.
+
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
     let stakes = bank.epoch_stakes_map();
     let epoch = bank.epoch_schedule().get_epoch(slot);
@@ -374,6 +377,13 @@ struct VoteToVerify<'a> {
 
 impl VoteToVerify<'_> {
     fn payload_slice(&self) -> &[u8] {
+        // TODO(sam): This logic of extracting the message payload for signature verification
+        //            is brittle, but another bincode serialization would be wasteful.
+        //            Revisit this to figure out the best way to handle this.
+
+        // TODO(sam): It is very likely that we receive the same kind of votes in batches, so
+        //            consider caching.
+
         // The bincode serialization of `ConsensusMessage::Vote(VoteMessage)` has the layout:
         // [ 4-byte Enum Discriminant | Vote Payload | 96-byte Signature | 2-byte Rank ]
         const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = 4;
@@ -396,6 +406,7 @@ struct CertToVerify<'a> {
     packet: PacketRefMut<'a>,
 }
 
+// TODO(sam): These functions should probably live inside the votor or votor-messages crate
 fn certificate_to_vote_message_base2(certificate: &Certificate) -> Option<Vote> {
     match certificate {
         Certificate::Notarize(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
