@@ -461,15 +461,11 @@ mod tests {
         let pubkey_refs: Vec<_> = all_pubkeys.iter().collect();
         let message_refs: Vec<&[u8]> = all_messages.iter().map(|m| m.as_slice()).collect();
 
-        let verification_result = SignatureProjective::verify_distinct_aggregated(
+        SignatureProjective::verify_distinct_aggregated(
             &pubkey_refs,
             &certificate_message.signature,
             &message_refs,
-        );
-
-        assert!(
-            verification_result.unwrap_or(false),
-            "BLS aggregate signature verification failed for base3 encoded certificate",
-        );
+        )
+        .unwrap();
     }
 }
