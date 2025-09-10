@@ -27,6 +27,13 @@ struct BenchSetup {
     validator_keypairs: Vec<ValidatorVoteKeypairs>,
 }
 
+enum InvalidVoteRatio {
+    AllValid,
+    OneInvalid,
+    TwentyPercentInvalid,
+    // TODO(sam): add more test cases
+}
+
 fn setup_bls_sigverify_stage() -> BenchSetup {
     const NUM_VALIDATORS: usize = 100;
 
@@ -62,7 +69,7 @@ fn setup_bls_sigverify_stage() -> BenchSetup {
 fn gen_vote_batches(
     validator_keypairs: &[ValidatorVoteKeypairs],
     num_packets: usize,
-    all_valid: bool,
+    invalid_ratio: &InvalidVoteRatio,
 ) -> Vec<PacketBatch> {
     let vote = Vote::new_skip_vote(42);
     let valid_vote_payload = bincode::serialize(&vote).expect("Failed to serialize vote");
@@ -75,7 +82,13 @@ fn gen_vote_batches(
             let validator_keypair = &validator_keypairs[rank as usize];
             let bls_keypair = &validator_keypair.bls_keypair;
 
-            let is_invalid = !all_valid && i == 1;
+            let is_invalid = match invalid_ratio {
+                InvalidVoteRatio::AllValid => false,
+                InvalidVoteRatio::OneInvalid => i == 1,
+                // Making every 5th packet invalid to achieve a 20% invalid ratio
+                InvalidVoteRatio::TwentyPercentInvalid => i % 5 == 0,
+            };
+
             let signature: BlsSignature = if is_invalid {
                 bls_keypair.sign(&invalid_vote_payload).into()
             } else {
@@ -100,7 +113,7 @@ fn gen_vote_batches(
         .collect()
 }
 
-fn bench_bls_sigverify_stage(b: &mut Bencher, all_valid: bool) {
+fn bench_bls_sigverify_stage(b: &mut Bencher, invalid_ratio: InvalidVoteRatio) {
     let setup = setup_bls_sigverify_stage();
     let BenchSetup {
         stage,
@@ -112,14 +125,18 @@ fn bench_bls_sigverify_stage(b: &mut Bencher, all_valid: bool) {
     const NUM_PACKETS: usize = 4096;
 
     b.iter(move || {
-        let batches = gen_vote_batches(&validator_keypairs, NUM_PACKETS, all_valid);
+        let batches = gen_vote_batches(&validator_keypairs, NUM_PACKETS, &invalid_ratio);
         let mut sent_len = 0;
         for batch in batches {
             sent_len += batch.len();
             packet_sender.send(batch).unwrap();
         }
 
-        let expected_len = if all_valid { sent_len } else { sent_len - 1 };
+        let expected_len = match invalid_ratio {
+            InvalidVoteRatio::AllValid => sent_len,
+            InvalidVoteRatio::OneInvalid => sent_len - 1,
+            InvalidVoteRatio::TwentyPercentInvalid => sent_len - (sent_len / 5),
+        };
         let mut received_len = 0;
         let start = Instant::now();
         loop {
@@ -141,10 +158,13 @@ fn bench_bls_sigverify_stage(b: &mut Bencher, all_valid: bool) {
 fn bench_bls(c: &mut Criterion) {
     solana_logger::setup();
     c.bench_function("bls_sigverify_stage_all_valid", |b| {
-        bench_bls_sigverify_stage(b, true);
+        bench_bls_sigverify_stage(b, InvalidVoteRatio::AllValid);
     });
     c.bench_function("bls_sigverify_stage_one_invalid", |b| {
-        bench_bls_sigverify_stage(b, false);
+        bench_bls_sigverify_stage(b, InvalidVoteRatio::OneInvalid);
+    });
+    c.bench_function("bls_sigverify_stage_20p_invalid", |b| {
+        bench_bls_sigverify_stage(b, InvalidVoteRatio::TwentyPercentInvalid);
     });
 }
 
