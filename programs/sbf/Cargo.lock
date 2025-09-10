@@ -7110,6 +7110,7 @@ dependencies = [
  "solana-logger",
  "solana-message 3.0.1",
  "solana-metrics",
+ "solana-net-utils",
  "solana-packet",
  "solana-pubkey 3.0.0",
  "solana-signer 3.0.0",
