@@ -292,13 +292,12 @@ impl BLSSigVerifier {
         if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &messages)
             .unwrap_or(false)
         {
+            votes_batch_optimistic_time.stop();
+            self.stats
+                .votes_batch_optimistic_elapsed_us
+                .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
             return;
         }
-        votes_batch_optimistic_time.stop();
-        self.stats
-            .votes_batch_optimistic_elapsed_us
-            .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
-
         // Fallback: If the batch fails, verify each vote signature individually in parallel
         // to find the invalid ones.
         //
