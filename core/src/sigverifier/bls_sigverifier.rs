@@ -381,8 +381,9 @@ impl BLSSigVerifier {
         bit_vec: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
     ) -> Result<(), CertVerifyError> {
-        let original_vote =
-            certificate_to_vote_message_base2(&cert_to_verify.cert_message.certificate);
+        let original_vote = cert_to_verify.cert_message.certificate.to_source_vote() else {
+            return false;
+        };
 
         let Ok(signed_payload) = bincode::serialize(&original_vote) else {
             return Err(CertVerifyError::SerializationFailed);
@@ -409,9 +410,7 @@ impl BLSSigVerifier {
         bit_vec2: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
     ) -> Result<(), CertVerifyError> {
-        let Some((vote1, vote2)) =
-            certificate_to_vote_messages_base3(&cert_to_verify.cert_message.certificate)
-        else {
+        let Some((vote1, vote2)) = cert_to_verify.cert_message.certificate.to_source_votes() else {
             return Err(CertVerifyError::Base3EncodingOnUnexpectedCert(
                 cert_to_verify.cert_message.certificate.certificate_type(),
             ));
@@ -484,52 +483,6 @@ impl VoteToVerify<'_> {
 struct CertToVerify<'a> {
     cert_message: CertificateMessage,
     packet: PacketRefMut<'a>,
-}
-
-// TODO(sam): These functions should probably live inside the votor or votor-messages crate
-fn certificate_to_vote_message_base2(certificate: &Certificate) -> Vote {
-    match certificate {
-        Certificate::Notarize(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-
-        Certificate::FinalizeFast(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-
-        Certificate::Finalize(slot) => Vote::new_finalization_vote(*slot),
-
-        Certificate::NotarizeFallback(slot, hash) => {
-            // In the Base2 path, a NotarizeFallback certificate must have been formed
-            // exclusively from Notarize votes, which populate the first bitmap
-            Vote::new_notarization_vote(*slot, *hash)
-        }
-
-        Certificate::Skip(slot) => {
-            // In the Base2 path, a Skip certificate must have been formed
-            // exclusively from Skip votes, which populate the first bitmap
-            Vote::new_skip_vote(*slot)
-        }
-    }
-}
-
-fn certificate_to_vote_messages_base3(certificate: &Certificate) -> Option<(Vote, Vote)> {
-    match certificate {
-        Certificate::NotarizeFallback(slot, hash) => {
-            // Per the protocol, the first bitmap is for `Notarize` votes and the
-            // second is for `NotarizeFallback` votes
-            let vote1 = Vote::new_notarization_vote(*slot, *hash);
-            let vote2 = Vote::new_notarization_fallback_vote(*slot, *hash);
-            Some((vote1, vote2))
-        }
-
-        Certificate::Skip(slot) => {
-            // Per the protocol, the first bitmap is for `Skip` votes and the
-            // second is for `SkipFallback` votes
-            let vote1 = Vote::new_skip_vote(*slot);
-            let vote2 = Vote::new_skip_fallback_vote(*slot);
-            Some((vote1, vote2))
-        }
-
-        // Other certificate types do not use Base3 encoding.
-        _ => None,
-    }
 }
 
 // Add tests for the BLS signature verifier
