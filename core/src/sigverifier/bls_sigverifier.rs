@@ -95,7 +95,7 @@ impl SigVerifier for BLSSigVerifier {
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
     ) -> Vec<PacketBatch> {
-        let mut verify_preprocess_time = Measure::start("verify_preprocess");
+        let mut preprocess_time = Measure::start("preprocess");
         // TODO(sam): ideally we want to avoid heap allocation, but let's use
         //            `Vec` for now for clarity and then optimize for the final version
         let mut votes_to_verify = Vec::new();
@@ -158,13 +158,11 @@ impl SigVerifier for BLSSigVerifier {
                 }
             }
         }
-        verify_preprocess_time.stop();
+        preprocess_time.stop();
+        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
         self.stats
-            .verify_preprocess_count
-            .fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .verify_preprocess_elapsed_us
-            .fetch_add(verify_preprocess_time.as_us(), Ordering::Relaxed);
+            .preprocess_elapsed_us
+            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         rayon::join(
             || {
