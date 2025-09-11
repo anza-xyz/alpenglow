@@ -10,10 +10,13 @@ use {
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
     itertools::Itertools,
-    rayon::iter::{IntoParallelRefMutIterator, ParallelIterator},
+    rayon::iter::{
+        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
+        ParallelIterator,
+    },
     solana_bls_signatures::{
         pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
-        signature::{Signature as BlsSignature, SignatureProjective},
+        signature::SignatureProjective,
     },
     solana_clock::Slot,
     solana_perf::packet::PacketRefMut,
@@ -26,11 +29,17 @@ use {
         vote::Vote,
     },
     stats::{BLSSigVerifierStats, StatsUpdater},
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        sync::{Arc, RwLock},
+    },
 };
 
 // TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
 // TODO(sam): Should add stats for verification results and every failure case.
+// TODO(sam): This logic of extracting the message payload for signature verification
+//            is brittle, but another bincode serialization would be wasteful.
+//            Revisit this to figure out the best way to handle this.
 
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
     let stakes = bank.epoch_stakes_map();
@@ -58,6 +67,7 @@ pub struct BLSSigVerifier {
     message_sender: Sender<ConsensusMessage>,
     root_bank: SharableBank,
     stats: BLSSigVerifierStats,
+    vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -212,6 +222,7 @@ impl BLSSigVerifier {
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
+            vote_payload_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -236,13 +247,19 @@ impl BLSSigVerifier {
             return;
         }
 
-        let (pubkeys, signatures, messages): (Vec<_>, Vec<_>, Vec<_>) = votes_to_verify
+        let payloads: Vec<_> = votes_to_verify
             .iter()
-            .map(|v| (v.bls_pubkey, &v.vote_message.signature, v.payload_slice()))
+            .map(|v| self.get_vote_payload(&v.vote_message.vote))
+            .collect();
+        let payload_slices: Vec<&[u8]> = payloads.iter().map(|p| p.as_slice()).collect();
+
+        let (pubkeys, signatures): (Vec<_>, Vec<_>) = votes_to_verify
+            .iter()
+            .map(|v| (v.bls_pubkey, &v.vote_message.signature))
             .multiunzip();
 
         // Optimistically verify signatures; this should be the most common case
-        if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &messages)
+        if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &payload_slices)
             .unwrap_or(false)
         {
             return;
@@ -252,18 +269,18 @@ impl BLSSigVerifier {
         // to find the invalid ones.
         //
         // TODO(sam): keep a record of which validator's vote failed to incur penalty
-        votes_to_verify.par_iter_mut().for_each(|vote_to_verify| {
-            if !vote_to_verify
-                .bls_pubkey
-                .verify_signature(
-                    &vote_to_verify.vote_message.signature,
-                    vote_to_verify.payload_slice(),
-                )
-                .unwrap_or(false)
-            {
-                vote_to_verify.packet.meta_mut().set_discard(true);
-            }
-        });
+        votes_to_verify
+            .par_iter_mut()
+            .zip(payloads.par_iter())
+            .for_each(|(vote_to_verify, payload)| {
+                if !vote_to_verify
+                    .bls_pubkey
+                    .verify_signature(&vote_to_verify.vote_message.signature, payload)
+                    .unwrap_or(false)
+                {
+                    vote_to_verify.packet.meta_mut().set_discard(true);
+                }
+            });
     }
 
     fn verify_certificates(&self, certs_to_verify: &mut [CertToVerify], bank: &Bank) {
@@ -366,6 +383,24 @@ impl BLSSigVerifier {
         )
         .unwrap_or(false)
     }
+
+    fn get_vote_payload(&self, vote: &Vote) -> Arc<Vec<u8>> {
+        let read_cache = self.vote_payload_cache.read().unwrap();
+        if let Some(payload) = read_cache.get(vote) {
+            return payload.clone();
+        }
+        drop(read_cache);
+
+        // Not in cache, so get a write lock
+        let mut write_cache = self.vote_payload_cache.write().unwrap();
+        if let Some(payload) = write_cache.get(vote) {
+            return payload.clone();
+        }
+
+        let payload = Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"));
+        write_cache.insert(*vote, payload.clone());
+        payload
+    }
 }
 
 #[derive(Debug)]
@@ -373,32 +408,6 @@ struct VoteToVerify<'a> {
     vote_message: VoteMessage,
     bls_pubkey: &'a BlsPubkey,
     packet: PacketRefMut<'a>,
-}
-
-impl VoteToVerify<'_> {
-    fn payload_slice(&self) -> &[u8] {
-        // TODO(sam): This logic of extracting the message payload for signature verification
-        //            is brittle, but another bincode serialization would be wasteful.
-        //            Revisit this to figure out the best way to handle this.
-
-        // TODO(sam): It is very likely that we receive the same kind of votes in batches, so
-        //            consider caching.
-
-        // The bincode serialization of `ConsensusMessage::Vote(VoteMessage)` has the layout:
-        // [ 4-byte Enum Discriminant | Vote Payload | 96-byte Signature | 2-byte Rank ]
-        const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = 4;
-
-        // Calculate the end of the `Vote Payload` by subtracting the known size of the trailing
-        // fields (Signature and Rank) from the total packet size
-        let vote_payload_end = self
-            .packet
-            .meta()
-            .size
-            .saturating_sub(std::mem::size_of::<BlsSignature>())
-            .saturating_sub(std::mem::size_of::<u16>());
-
-        &self.packet.data(..).unwrap()[BINCODE_ENUM_DISCRIMINANT_SIZE..vote_payload_end]
-    }
 }
 
 struct CertToVerify<'a> {
@@ -974,7 +983,7 @@ mod tests {
 
         let cert_message = CertificateMessage {
             certificate,
-            signature: BlsSignature::default(), // Use a default/wrong signature
+            signature: BLSSignature::default(), // Use a default/wrong signature
             bitmap: encoded_bitmap,
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
