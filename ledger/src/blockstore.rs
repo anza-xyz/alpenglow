@@ -3076,18 +3076,18 @@ impl Blockstore {
             return Err(BlockstoreError::SlotUnavailable);
         }
 
-        let (slot_components, _, _) = self.get_slot_entries_with_shred_info(
+        let (slot_entries, _, _) = self.get_slot_entries_with_shred_info(
             slot,
             /*shred_start_index:*/ 0,
             allow_dead_slots,
         )?;
 
-        if slot_components.is_empty() {
+        if slot_entries.is_empty() {
             trace!("do_get_complete_block_with_entries() failed for {slot} (slot not full)");
             return Err(BlockstoreError::SlotUnavailable);
         }
 
-        let blockhash = slot_components
+        let blockhash = slot_entries
             .iter()
             .last()
             .map(|entry| entry.hash)
@@ -3095,12 +3095,12 @@ impl Blockstore {
 
         let mut starting_transaction_index = 0;
         let mut entries = if populate_entries {
-            Vec::with_capacity(slot_components.len())
+            Vec::with_capacity(slot_entries.len())
         } else {
             Vec::new()
         };
 
-        let slot_transaction_iterator = slot_components
+        let slot_transaction_iterator = slot_entries
             .into_iter()
             .flat_map(|entry| {
                 if populate_entries {
