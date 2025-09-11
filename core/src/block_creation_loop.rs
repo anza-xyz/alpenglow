@@ -7,6 +7,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
+    crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -15,7 +16,7 @@ use {
     },
     solana_measure::measure::Measure,
     solana_metrics::datapoint_info,
-    solana_poh::poh_recorder::{PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
+    solana_poh::poh_recorder::{PohRecorder, Record, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     solana_pubkey::Pubkey,
     solana_rpc::{rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier},
     solana_runtime::{
@@ -29,6 +30,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
+        thread,
         time::{Duration, Instant},
     },
     thiserror::Error,
@@ -50,6 +52,7 @@ pub struct BlockCreationLoopConfig {
     pub slot_status_notifier: Option<SlotStatusNotifier>,
 
     // Receivers / notifications from banking stage / replay / voting loop
+    pub record_receiver: Receiver<Record>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
 }
@@ -307,6 +310,38 @@ enum StartLeaderError {
     ClusterConfirmedBlocksAfterWindow(/* slot */ Slot),
 }
 
+fn start_receive_and_record_loop(
+    exit: Arc<AtomicBool>,
+    poh_recorder: Arc<RwLock<PohRecorder>>,
+    record_receiver: Receiver<Record>,
+) {
+    while !exit.load(Ordering::Relaxed) {
+        // We need a timeout here to check the exit flag, chose 400ms
+        // for now but can be longer if needed.
+        match record_receiver.recv_timeout(Duration::from_millis(400)) {
+            Ok(record) => {
+                let record_response = poh_recorder.write().unwrap().record(
+                    record.slot,
+                    record.mixins,
+                    record.transaction_batches,
+                );
+                if record
+                    .sender
+                    .send(record_response.map(|r| r.starting_transaction_index))
+                    .is_err()
+                {
+                    panic!("Error returning mixin hashes");
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                info!("Record receiver disconnected");
+                return;
+            }
+            Err(RecvTimeoutError::Timeout) => (),
+        }
+    }
+}
+
 /// The block creation loop.
 ///
 /// The `votor::consensus_pool_service` tracks when it is our leader window, and populates
@@ -325,6 +360,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         slot_status_notifier,
         leader_window_notifier,
         replay_highest_frozen,
+        record_receiver,
     } = config;
 
     // Similar to the voting loop, if this loop dies kill the validator
@@ -350,6 +386,13 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
 
     // Setup poh
     reset_poh_recorder(&ctx.bank_forks.read().unwrap().working_bank(), &ctx);
+
+    // Start receive and record loop
+    let exit_c = exit.clone();
+    let p_rec = poh_recorder.clone();
+    let receive_record_loop = thread::spawn(move || {
+        start_receive_and_record_loop(exit_c, p_rec, record_receiver);
+    });
 
     while !exit.load(Ordering::Relaxed) {
         // Check if set-identity was called at each leader window start
@@ -501,6 +544,8 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         metrics.loop_count += 1;
         metrics.report(1000);
     }
+
+    receive_record_loop.join().unwrap();
 }
 
 /// Resets poh recorder
