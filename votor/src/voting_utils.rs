@@ -213,7 +213,8 @@ pub fn generate_vote_tx(
     let my_bls_pubkey: BLSPubkey = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
         panic!(
-            "Vote account bls_pubkey mismatch: {bls_pubkey_in_vote_account:?} (expected: {my_bls_pubkey:?}).  Unable to vote"
+            "Vote account bls_pubkey mismatch: {bls_pubkey_in_vote_account:?} (expected: \
+             {my_bls_pubkey:?}).  Unable to vote"
         );
     }
     let vote_serialized = bincode::serialize(&vote).unwrap();

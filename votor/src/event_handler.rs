@@ -133,8 +133,8 @@ impl EventHandler {
         // Check for set identity
         if let Err(e) = Self::handle_set_identity(&mut local_context.my_pubkey, &ctx, &mut vctx) {
             error!(
-                "Unable to load new vote history when attempting to change identity from {} \
-                 to {} on voting loop startup, Exiting: {}",
+                "Unable to load new vote history when attempting to change identity from {} to {} \
+                 on voting loop startup, Exiting: {}",
                 vctx.vote_history.node_pubkey,
                 ctx.cluster_info.id(),
                 e
@@ -370,9 +370,9 @@ impl EventHandler {
                 if let Some(old_window_info) = l_window_info.as_ref() {
                     stats.leader_window_replaced = stats.leader_window_replaced.saturating_add(1);
                     error!(
-                        "{my_pubkey}: Attempting to start leader window for {}-{}, \
-                        however there is already a pending window to produce {}-{}. \
-                        Our production is lagging, discarding in favor of the newer window",
+                        "{my_pubkey}: Attempting to start leader window for {}-{}, however there \
+                         is already a pending window to produce {}-{}. Our production is lagging, \
+                         discarding in favor of the newer window",
                         window_info.start_slot,
                         window_info.end_slot,
                         old_window_info.start_slot,
@@ -424,12 +424,12 @@ impl EventHandler {
                 info!("{my_pubkey}: SetIdentity");
                 if let Err(e) = Self::handle_set_identity(my_pubkey, ctx, vctx) {
                     error!(
-                            "Unable to load new vote history when attempting to change identity from {} \
-                             to {} in voting loop, Exiting: {}",
-                             vctx.vote_history.node_pubkey,
-                             ctx.cluster_info.id(),
-                             e
-                        );
+                        "Unable to load new vote history when attempting to change identity from \
+                         {} to {} in voting loop, Exiting: {}",
+                        vctx.vote_history.node_pubkey,
+                        ctx.cluster_info.id(),
+                        e
+                    );
                     return Err(EventLoopError::SetIdentityError(e));
                 }
             }
@@ -495,7 +495,8 @@ impl EventHandler {
             return None;
         };
         info!(
-            "{}: Triggering parent ready for slot {slot} with parent {parent_slot} {parent_block_id}",
+            "{}: Triggering parent ready for slot {slot} with parent {parent_slot} \
+             {parent_block_id}",
             local_context.my_pubkey
         );
         Some((slot, (parent_slot, parent_block_id)))

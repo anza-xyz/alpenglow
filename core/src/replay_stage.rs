@@ -724,8 +724,9 @@ impl ReplayStage {
                         Ok(tower) => tower,
                         Err(err) => {
                             error!(
-                                "Unable to load new tower when attempting to change identity from {my_old_pubkey} \
-                                to {my_pubkey} on ReplayStage startup, Exiting: {err}"
+                                "Unable to load new tower when attempting to change identity from \
+                                 {my_old_pubkey} to {my_pubkey} on ReplayStage startup, Exiting: \
+                                 {err}"
                             );
                             // drop(_exit) will set the exit flag, eventually tearing down the entire process
                             return;
@@ -1202,7 +1203,8 @@ impl ReplayStage {
                                     Err(err) => {
                                         error!(
                                             "Unable to load new tower when attempting to change \
-                                         identity from {my_old_pubkey} to {my_pubkey} on set-identity, Exiting: {err}"
+                                             identity from {my_old_pubkey} to {my_pubkey} on \
+                                             set-identity, Exiting: {err}"
                                         );
                                         // drop(_exit) will set the exit flag, eventually tearing down the entire process
                                         return;
@@ -2267,8 +2269,8 @@ impl ReplayStage {
             let latest_unconfirmed_leader_slot = progress_map
                 .get_latest_leader_slot_must_exist(parent_slot)
                 .expect(
-                    "In order for propagated check to fail, latest leader must exist in \
-                            progress map",
+                    "In order for propagated check to fail, latest leader must exist in progress \
+                     map",
                 );
             if my_leader_slot != skipped_slots_info.last_skipped_slot {
                 datapoint_info!(
@@ -2384,7 +2386,8 @@ impl ReplayStage {
                 // TODO: need to keep the ticks around for parent slots in previous epoch
                 // because reset below will delete those ticks
                 info!(
-                    "initiating alpenglow migration from maybe_start_leader() for slot {maybe_my_leader_slot}"
+                    "initiating alpenglow migration from maybe_start_leader() for slot \
+                     {maybe_my_leader_slot}"
                 );
                 Self::initiate_alpenglow_migration(poh_recorder, is_alpenglow_migration_complete);
             }
@@ -2651,7 +2654,8 @@ impl ReplayStage {
                     .activated_slot(&agave_feature_set::alpenglow::id());
                 if let Some(first_alpenglow_slot) = first_alpenglow_slot {
                     info!(
-                        "alpenglow feature detected in root bank {new_root}, to be enabled on slot {first_alpenglow_slot}"
+                        "alpenglow feature detected in root bank {new_root}, to be enabled on \
+                         slot {first_alpenglow_slot}",
                     );
                 }
             }
@@ -2753,7 +2757,8 @@ impl ReplayStage {
         let vote_state_view = match vote_account.vote_state_view() {
             None => {
                 warn!(
-                    "Vote account {vote_account_pubkey} does not have a vote state.  Unable to vote"
+                    "Vote account {vote_account_pubkey} does not have a vote state.  Unable to \
+                     vote"
                 );
                 return GenerateVoteTxResult::NoVoteState(*vote_account_pubkey);
             }
@@ -5695,7 +5700,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -5746,7 +5751,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -5781,7 +5786,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -5820,7 +5825,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut vote_simulator.progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &vote_simulator.bank_forks,
             heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -5888,7 +5893,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut vote_simulator.progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &vote_simulator.bank_forks,
             &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
@@ -6179,7 +6184,7 @@ pub(crate) mod tests {
             10,
             &bank_forks_arc,
             &vote_tracker,
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
         );
 
         let propagated_stats = &progress_map.get(&10).unwrap().propagated_stats;
@@ -6273,7 +6278,7 @@ pub(crate) mod tests {
             10,
             &bank_forks_arc,
             &vote_tracker,
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
         );
 
         for i in 1..=10 {
@@ -6360,7 +6365,7 @@ pub(crate) mod tests {
             10,
             &bank_forks_arc,
             &vote_tracker,
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
         );
 
         // Only the first 5 banks should have reached the threshold
@@ -7013,7 +7018,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &vote_tracker,
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut HeaviestSubtreeForkChoice::new_from_bank_forks(bank_forks.clone()),
             &mut LatestValidatorVotesForFrozenBanks::default(),
@@ -7635,7 +7640,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -7759,7 +7764,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -7980,7 +7985,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-            ConnectionCache::new_quic(
+            ConnectionCache::new_quic_for_tests(
                 "connection_cache_vote_quic",
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
@@ -8085,7 +8090,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-            ConnectionCache::new_quic(
+            ConnectionCache::new_quic_for_tests(
                 "connection_cache_vote_quic",
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
@@ -8213,7 +8218,7 @@ pub(crate) mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
         let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-            ConnectionCache::new_quic(
+            ConnectionCache::new_quic_for_tests(
                 "connection_cache_vote_quic",
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
@@ -8356,7 +8361,7 @@ pub(crate) mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
         let connection_cache = if DEFAULT_VOTE_USE_QUIC {
-            ConnectionCache::new_quic(
+            ConnectionCache::new_quic_for_tests(
                 "connection_cache_vote_quic",
                 DEFAULT_TPU_CONNECTION_POOL_SIZE,
             )
@@ -8544,7 +8549,7 @@ pub(crate) mod tests {
             &mut tower,
             &mut progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
@@ -9068,7 +9073,7 @@ pub(crate) mod tests {
             tower,
             progress,
             &VoteTracker::default(),
-            &ClusterSlots::default(),
+            &ClusterSlots::default_for_tests(),
             bank_forks,
             heaviest_subtree_fork_choice,
             latest_validator_votes_for_frozen_banks,

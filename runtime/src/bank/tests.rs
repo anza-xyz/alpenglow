@@ -5325,12 +5325,11 @@ fn test_bank_hash_consistency() {
     // in the hash computation that may arise from feature set changes
     let feature_set = FeatureSet::all_enabled();
 
-    let mut bank = Arc::new(Bank::new_with_paths(
+    let mut bank = Arc::new(Bank::new_from_genesis(
         &genesis_config,
         Arc::new(RuntimeConfig::default()),
         vec![],
         None,
-        false,
         BankTestConfig::default().accounts_db_config,
         None,
         Some(Pubkey::from([42; 32])),
@@ -6859,7 +6858,7 @@ fn test_compute_active_feature_set() {
     assert!(new_activations.contains(&test_feature));
 
     // Actually activate the pending activation
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    bank.compute_and_apply_new_feature_activations();
     let feature = feature::from_account(&bank.get_account(&test_feature).expect("get_account"))
         .expect("from_account");
     assert_eq!(feature.activated_at, Some(1));
@@ -6893,7 +6892,7 @@ fn test_reserved_account_keys() {
         &test_feature_id,
         &feature::create_account(&Feature::default(), 42),
     );
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    bank.compute_and_apply_new_feature_activations();
 
     assert_eq!(
         bank.get_reserved_account_keys().len(),
@@ -6932,16 +6931,16 @@ fn test_block_limits() {
         &feature_set::raise_block_limits_to_100m::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // apply_feature_activations for `FinishInit` will not cause the block limit to be updated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::FinishInit, true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS,
         "before activating the feature, bank should have old/default limit"
     );
 
-    // apply_feature_activations for `NewFromParent` will cause feature to be activated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    // compute_and_apply_new_feature_activations will cause feature to be activated
+    bank.compute_and_apply_new_feature_activations();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS_SIMD_0286,
@@ -6967,16 +6966,16 @@ fn test_block_limits() {
         &feature::create_account(&Feature::default(), 42),
     );
 
-    // apply_feature_activations for `FinishInit` will not cause the block limit to be updated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::FinishInit, true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_account_limit(),
         MAX_WRITABLE_ACCOUNT_UNITS,
         "before activating the feature, bank should have old/default limit"
     );
 
-    // apply_feature_activations for `NewFromParent` will cause feature to be activated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    // compute_and_apply_new_feature_activations will cause feature to be activated
+    bank.compute_and_apply_new_feature_activations();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_account_limit(),
         MAX_WRITABLE_ACCOUNT_UNITS_SIMD_0306_SECOND,
@@ -6992,16 +6991,16 @@ fn test_block_limits() {
         &feature_set::raise_account_cu_limit::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // apply_feature_activations for `FinishInit` will not cause the block limit to be updated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::FinishInit, true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_account_limit(),
         MAX_WRITABLE_ACCOUNT_UNITS,
         "before activating the feature, bank should have old/default limit"
     );
 
-    // apply_feature_activations for `NewFromParent` will cause feature to be activated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    // compute_and_apply_new_feature_activations will cause feature to be activated
+    bank.compute_and_apply_new_feature_activations();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS,
@@ -7018,16 +7017,16 @@ fn test_block_limits() {
         &feature_set::raise_block_limits_to_100m::id(),
         &feature::create_account(&Feature::default(), 42),
     );
-    // apply_feature_activations for `FinishInit` will not cause the block limit to be updated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::FinishInit, true);
+    // compute_and_apply_features_after_snapshot_restore will not cause the block limit to be updated
+    bank.compute_and_apply_features_after_snapshot_restore();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS,
         "before activating the feature, bank should have old/default limit"
     );
 
-    // apply_feature_activations for `NewFromParent` will cause feature to be activated
-    bank.apply_feature_activations(ApplyFeatureActivationsCaller::NewFromParent, true);
+    // compute_and_apply_new_feature_activations will cause feature to be activated
+    bank.compute_and_apply_new_feature_activations();
     assert_eq!(
         bank.read_cost_tracker().unwrap().get_block_limit(),
         MAX_BLOCK_UNITS_SIMD_0286,
@@ -7417,8 +7416,7 @@ fn test_invoke_non_program_account_owned_by_a_builtin(
 #[test]
 fn test_debug_bank() {
     let (genesis_config, _mint_keypair) = create_genesis_config(50000);
-    let mut bank = Bank::new_for_tests(&genesis_config);
-    bank.finish_init(false);
+    let bank = Bank::new_for_tests(&genesis_config);
     let debug = format!("{bank:#?}");
     assert!(!debug.is_empty());
 }
@@ -8245,12 +8243,11 @@ fn test_epoch_schedule_from_genesis_config() {
 
     genesis_config.epoch_schedule = EpochSchedule::custom(8192, 100, true);
 
-    let bank = Arc::new(Bank::new_with_paths(
+    let bank = Arc::new(Bank::new_from_genesis(
         &genesis_config,
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
         None,
-        false,
         ACCOUNTS_DB_CONFIG_FOR_TESTING,
         None,
         None,
@@ -8274,12 +8271,11 @@ where
         &validator_keypairs,
         vec![LAMPORTS_PER_SOL; 2],
     );
-    let bank = Arc::new(Bank::new_with_paths(
+    let bank = Arc::new(Bank::new_from_genesis(
         &genesis_config,
         Arc::<RuntimeConfig>::default(),
         Vec::new(),
         None,
-        false,
         ACCOUNTS_DB_CONFIG_FOR_TESTING,
         None,
         None,
@@ -11134,7 +11130,6 @@ fn test_squash_timing_add_assign() {
         squash_accounts_ms: 1,
         squash_accounts_cache_ms: 2,
         squash_accounts_index_ms: 3,
-        squash_accounts_store_ms: 4,
         squash_cache_ms: 5,
     };
 
@@ -11142,7 +11137,6 @@ fn test_squash_timing_add_assign() {
         squash_accounts_ms: 2,
         squash_accounts_cache_ms: 2 * 2,
         squash_accounts_index_ms: 3 * 2,
-        squash_accounts_store_ms: 4 * 2,
         squash_cache_ms: 5 * 2,
     };
 
@@ -12391,7 +12385,7 @@ fn test_apply_builtin_program_feature_transitions_for_new_epoch() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(false);
+    bank.compute_and_apply_genesis_features();
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12413,11 +12407,7 @@ fn test_apply_builtin_program_feature_transitions_for_new_epoch() {
     bank.freeze();
 
     // Simulate crossing an epoch boundary for a new bank
-    let only_apply_transitions_for_new_features = true;
-    bank.apply_builtin_program_feature_transitions(
-        only_apply_transitions_for_new_features,
-        &AHashSet::new(),
-    );
+    bank.compute_and_apply_new_feature_activations();
 }
 
 #[test]
@@ -12426,7 +12416,7 @@ fn test_startup_from_snapshot_after_precompile_transition() {
 
     let mut bank = Bank::new_for_tests(&genesis_config);
     bank.feature_set = Arc::new(FeatureSet::all_enabled());
-    bank.finish_init(false);
+    bank.compute_and_apply_genesis_features();
 
     // Overwrite precompile accounts to simulate a cluster which already added precompiles.
     for precompile in get_precompiles() {
@@ -12437,7 +12427,7 @@ fn test_startup_from_snapshot_after_precompile_transition() {
     bank.freeze();
 
     // Simulate starting up from snapshot finishing the initialization for a frozen bank
-    bank.finish_init(false);
+    bank.compute_and_apply_features_after_snapshot_restore();
 }
 
 #[test]

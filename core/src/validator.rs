@@ -1589,8 +1589,13 @@ impl Validator {
 
         let outstanding_repair_requests =
             Arc::<RwLock<repair::repair_service::OutstandingShredRepairs>>::default();
-        let cluster_slots =
-            Arc::new(crate::cluster_slots_service::cluster_slots::ClusterSlots::default());
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        let cluster_slots = Arc::new({
+            crate::cluster_slots_service::cluster_slots::ClusterSlots::new(
+                &root_bank,
+                &cluster_info,
+            )
+        });
         // This channel backing up indicates a serious problem in the voting loop
         // Capping at 1000 for now, TODO: add metrics for channel len
         let (votor_event_sender, votor_event_receiver) = bounded(1000);
@@ -2164,16 +2169,16 @@ fn post_process_restored_vote_history(
             // intentionally fail to restore vote_history; we're supposedly in a new hard fork; past
             // out-of-chain votor state doesn't make sense at all
             // what if --wait-for-supermajority again if the validator restarted?
-            let message =
-                format!("Hard fork is detected; discarding vote_history restoration result: {vote_history:?}");
+            let message = format!(
+                "Hard fork is detected; discarding vote_history restoration result: \
+                 {vote_history:?}"
+            );
             datapoint_error!("vote_history_error", ("error", message, String),);
             error!("{message}");
 
             // unconditionally relax vote_history requirement
             should_require_vote_history = false;
-            return Err(VoteHistoryError::HardFork(
-                hard_fork_restart_slot,
-            ));
+            return Err(VoteHistoryError::HardFork(hard_fork_restart_slot));
         }
 
         if let Some(warp_slot) = config.warp_slot {
@@ -2200,8 +2205,8 @@ fn post_process_restored_vote_history(
             }
             if should_require_vote_history {
                 return Err(format!(
-                    "Requested mandatory vote_history restore failed: {err}. Ensure that the vote history \
-                    storage file has been copied to the correct directory. Aborting"
+                    "Requested mandatory vote_history restore failed: {err}. Ensure that the vote \
+                     history storage file has been copied to the correct directory. Aborting"
                 ));
             }
             error!("Rebuilding an empty vote_history from root slot due to failed restore: {err}");
