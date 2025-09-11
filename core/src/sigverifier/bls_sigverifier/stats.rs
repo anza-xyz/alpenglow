@@ -12,7 +12,6 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) preprocess_count: AtomicU64,
     pub(super) preprocess_elapsed_us: AtomicU64,
     pub(super) votes_batch_count: AtomicU64,
-    pub(super) votes_batch_prep_elapsed_us: AtomicU64,
     pub(super) votes_batch_optimistic_elapsed_us: AtomicU64,
     pub(super) votes_batch_parallel_verify_count: AtomicU64,
     pub(super) votes_batch_parallel_verify_elapsed_us: AtomicU64,
@@ -40,7 +39,6 @@ impl BLSSigVerifierStats {
             preprocess_count: AtomicU64::new(0),
             preprocess_elapsed_us: AtomicU64::new(0),
             votes_batch_count: AtomicU64::new(0),
-            votes_batch_prep_elapsed_us: AtomicU64::new(0),
             votes_batch_optimistic_elapsed_us: AtomicU64::new(0),
             votes_batch_parallel_verify_count: AtomicU64::new(0),
             votes_batch_parallel_verify_elapsed_us: AtomicU64::new(0),
@@ -85,11 +83,6 @@ impl BLSSigVerifierStats {
             (
                 "votes_batch_count",
                 self.votes_batch_count.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_batch_prep_elapsed_us",
-                self.votes_batch_prep_elapsed_us.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

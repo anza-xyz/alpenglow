@@ -277,18 +277,13 @@ impl BLSSigVerifier {
         }
 
         self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
-        let mut votes_batch_prep_time = Measure::start("votes_batch_prep");
+        let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
         let (pubkeys, signatures, messages): (Vec<_>, Vec<_>, Vec<_>) = votes_to_verify
             .iter()
             .map(|v| (v.bls_pubkey, &v.vote_message.signature, v.payload_slice()))
             .multiunzip();
-        votes_batch_prep_time.stop();
-        self.stats
-            .votes_batch_prep_elapsed_us
-            .fetch_add(votes_batch_prep_time.as_us(), Ordering::Relaxed);
 
         // Optimistically verify signatures; this should be the most common case
-        let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
         if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &messages)
             .unwrap_or(false)
         {
