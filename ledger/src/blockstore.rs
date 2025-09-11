@@ -3070,97 +3070,109 @@ impl Blockstore {
             trace!("do_get_complete_block_with_entries() failed for {slot} (missing SlotMeta)");
             return Err(BlockstoreError::SlotUnavailable);
         };
-        if slot_meta.is_full() {
-            let (slot_entries, _, _) = self.get_slot_entries_with_shred_info(
-                slot,
-                /*shred_start_index:*/ 0,
-                allow_dead_slots,
-            )?;
-            if !slot_entries.is_empty() {
-                let blockhash = slot_entries
-                    .last()
-                    .map(|entry| entry.hash)
-                    .unwrap_or_else(|| panic!("Rooted slot {slot:?} must have blockhash"));
-                let mut starting_transaction_index = 0;
-                let mut entries = if populate_entries {
-                    Vec::with_capacity(slot_entries.len())
-                } else {
-                    Vec::new()
-                };
-                let slot_transaction_iterator = slot_entries
-                    .into_iter()
-                    .flat_map(|entry| {
-                        if populate_entries {
-                            entries.push(solana_transaction_status::EntrySummary {
-                                num_hashes: entry.num_hashes,
-                                hash: entry.hash,
-                                num_transactions: entry.transactions.len() as u64,
-                                starting_transaction_index,
-                            });
-                            starting_transaction_index += entry.transactions.len();
-                        }
-                        entry.transactions
-                    })
-                    .map(|transaction| {
-                        if let Err(err) = transaction.sanitize() {
-                            warn!(
-                                "Blockstore::get_block sanitize failed: {err:?}, slot: {slot:?}, \
-                                 {transaction:?}",
-                            );
-                        }
-                        transaction
-                    });
-                let parent_slot_entries = slot_meta
-                    .parent_slot
-                    .and_then(|parent_slot| {
-                        self.get_slot_entries_with_shred_info(
-                            parent_slot,
-                            /*shred_start_index:*/ 0,
-                            allow_dead_slots,
-                        )
-                        .ok()
-                        .map(|(entries, _, _)| entries)
-                    })
-                    .unwrap_or_default();
-                if parent_slot_entries.is_empty() && require_previous_blockhash {
-                    return Err(BlockstoreError::ParentEntriesUnavailable);
-                }
-                let previous_blockhash = if !parent_slot_entries.is_empty() {
-                    get_last_hash(parent_slot_entries.iter()).unwrap()
-                } else {
-                    Hash::default()
-                };
 
-                let (rewards, num_partitions) = self
-                    .rewards_cf
-                    .get_protobuf_or_bincode::<StoredExtendedRewards>(slot)?
-                    .unwrap_or_default()
-                    .into();
-
-                // The Blocktime and BlockHeight column families are updated asynchronously; they
-                // may not be written by the time the complete slot entries are available. In this
-                // case, these fields will be `None`.
-                let block_time = self.blocktime_cf.get(slot)?;
-                let block_height = self.block_height_cf.get(slot)?;
-
-                let block = VersionedConfirmedBlock {
-                    previous_blockhash: previous_blockhash.to_string(),
-                    blockhash: blockhash.to_string(),
-                    // If the slot is full it should have parent_slot populated
-                    // from shreds received.
-                    parent_slot: slot_meta.parent_slot.unwrap(),
-                    transactions: self
-                        .map_transactions_to_statuses(slot, slot_transaction_iterator)?,
-                    rewards,
-                    num_partitions,
-                    block_time,
-                    block_height,
-                };
-                return Ok(VersionedConfirmedBlockWithEntries { block, entries });
-            }
+        if !slot_meta.is_full() {
+            trace!("do_get_complete_block_with_entries() failed for {slot} (slot not full)");
+            return Err(BlockstoreError::SlotUnavailable);
         }
-        trace!("do_get_complete_block_with_entries() failed for {slot} (slot not full)");
-        Err(BlockstoreError::SlotUnavailable)
+
+        let (slot_components, _, _) = self.get_slot_entries_with_shred_info(
+            slot,
+            /*shred_start_index:*/ 0,
+            allow_dead_slots,
+        )?;
+
+        if slot_components.is_empty() {
+            trace!("do_get_complete_block_with_entries() failed for {slot} (slot not full)");
+            return Err(BlockstoreError::SlotUnavailable);
+        }
+
+        let blockhash = slot_components
+            .iter()
+            .last()
+            .map(|entry| entry.hash)
+            .unwrap_or_else(|| panic!("Rooted slot {slot:?} must have blockhash"));
+
+        let mut starting_transaction_index = 0;
+        let mut entries = if populate_entries {
+            Vec::with_capacity(slot_components.len())
+        } else {
+            Vec::new()
+        };
+
+        let slot_transaction_iterator = slot_components
+            .into_iter()
+            .flat_map(|entry| {
+                if populate_entries {
+                    entries.push(solana_transaction_status::EntrySummary {
+                        num_hashes: entry.num_hashes,
+                        hash: entry.hash,
+                        num_transactions: entry.transactions.len() as u64,
+                        starting_transaction_index,
+                    });
+                    starting_transaction_index += entry.transactions.len();
+                }
+                entry.transactions
+            })
+            .map(|transaction| {
+                if let Err(err) = transaction.sanitize() {
+                    warn!(
+                        "Blockstore::get_block sanitize failed: {err:?}, slot: {slot:?}, \
+                         {transaction:?}",
+                    );
+                }
+                transaction
+            });
+
+        let parent_slot_entries = slot_meta
+            .parent_slot
+            .and_then(|parent_slot| {
+                self.get_slot_entries_with_shred_info(
+                    parent_slot,
+                    /*shred_start_index:*/ 0,
+                    allow_dead_slots,
+                )
+                .ok()
+                .map(|(entries, _, _)| entries)
+            })
+            .unwrap_or_default();
+
+        if parent_slot_entries.is_empty() && require_previous_blockhash {
+            return Err(BlockstoreError::ParentEntriesUnavailable);
+        }
+
+        let previous_blockhash = if parent_slot_entries.is_empty() {
+            Hash::default()
+        } else {
+            get_last_hash(parent_slot_entries.iter()).unwrap()
+        };
+
+        let (rewards, num_partitions) = self
+            .rewards_cf
+            .get_protobuf_or_bincode::<StoredExtendedRewards>(slot)?
+            .unwrap_or_default()
+            .into();
+
+        // The Blocktime and BlockHeight column families are updated asynchronously; they
+        // may not be written by the time the complete slot entries are available. In this
+        // case, these fields will be `None`.
+        let block_time = self.blocktime_cf.get(slot)?;
+        let block_height = self.block_height_cf.get(slot)?;
+
+        let block = VersionedConfirmedBlock {
+            previous_blockhash: previous_blockhash.to_string(),
+            blockhash: blockhash.to_string(),
+            // If the slot is full it should have parent_slot populated
+            // from shreds received.
+            parent_slot: slot_meta.parent_slot.unwrap(),
+            transactions: self.map_transactions_to_statuses(slot, slot_transaction_iterator)?,
+            rewards,
+            num_partitions,
+            block_time,
+            block_height,
+        };
+
+        Ok(VersionedConfirmedBlockWithEntries { block, entries })
     }
 
     pub fn map_transactions_to_statuses(
@@ -3918,20 +3930,36 @@ impl Blockstore {
         self.perf_samples_cf.put_bytes(index, &bytes)
     }
 
-    /// Returns the entry vector for the slot starting with `shred_start_index`
-    pub fn get_slot_entries(&self, slot: Slot, shred_start_index: u64) -> Result<Vec<Entry>> {
-        self.get_slot_entries_with_shred_info(slot, shred_start_index, false)
+    /// Returns the component vector for the slot starting with `shred_start_index`
+    pub fn get_slot_components(
+        &self,
+        slot: Slot,
+        shred_start_index: u64,
+    ) -> Result<Vec<BlockComponent>> {
+        self.get_slot_components_with_shred_info(slot, shred_start_index, false)
             .map(|x| x.0)
     }
 
-    /// Returns the entry vector for the slot starting with `shred_start_index`, the number of
+    /// Returns the entry vector for the slot starting with `shred_start_index`
+    pub fn get_slot_entries(&self, slot: Slot, shred_start_index: u64) -> Result<Vec<Entry>> {
+        self.get_slot_components(slot, shred_start_index)
+            .map(|components| {
+                components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect()
+            })
+    }
+
+    /// Returns the components vector for the slot starting with `shred_start_index`, the number of
     /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
-    pub fn get_slot_entries_with_shred_info(
+    pub fn get_slot_components_with_shred_info(
         &self,
         slot: Slot,
         start_index: u64,
         allow_dead_slots: bool,
-    ) -> Result<(Vec<Entry>, u64, bool)> {
+    ) -> Result<(Vec<BlockComponent>, u64, bool)> {
         let (completed_ranges, slot_meta) = self.get_completed_ranges(slot, start_index)?;
 
         // Check if the slot is dead *after* fetching completed ranges to avoid a race
@@ -3950,8 +3978,28 @@ impl Blockstore {
             .map(|&Range { end, .. }| u64::from(end) - start_index)
             .unwrap_or(0);
 
-        let entries = self.get_slot_entries_in_block(slot, completed_ranges, Some(&slot_meta))?;
-        Ok((entries, num_shreds, slot_meta.is_full()))
+        let components =
+            self.get_slot_components_in_block(slot, completed_ranges, Some(&slot_meta))?;
+        Ok((components, num_shreds, slot_meta.is_full()))
+    }
+
+    /// Returns the entries vector for the slot starting with `shred_start_index`, the number of
+    /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
+    pub fn get_slot_entries_with_shred_info(
+        &self,
+        slot: Slot,
+        start_index: u64,
+        allow_dead_slots: bool,
+    ) -> Result<(Vec<Entry>, u64, bool)> {
+        self.get_slot_components_with_shred_info(slot, start_index, allow_dead_slots)
+            .map(|(components, num_shreds, is_full)| {
+                let entries = components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect();
+                (entries, num_shreds, is_full)
+            })
     }
 
     /// Gets accounts used in transactions in the slot range [starting_slot, ending_slot].
@@ -4063,12 +4111,12 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    fn get_slot_entries_in_block(
+    fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: CompletedRanges,
         slot_meta: Option<&SlotMeta>,
-    ) -> Result<Vec<Entry>> {
+    ) -> Result<Vec<BlockComponent>> {
         debug_assert!(completed_ranges
             .iter()
             .tuple_windows()
@@ -4083,7 +4131,7 @@ impl Blockstore {
         let Some((&Range { start, .. }, &Range { end, .. })) =
             completed_ranges.first().zip(completed_ranges.last())
         else {
-            return Ok(vec![]);
+            return Ok(vec![BlockComponent::default()]);
         };
         let indices = u64::from(start)..u64::from(end);
         let keys = indices.clone().map(|index| (slot, index));
@@ -4114,19 +4162,23 @@ impl Blockstore {
                     .and_then(|payload| {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
-                        BlockComponent::from_bytes(&payload)
-                            .map(|eb| eb.entries().to_vec())
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct entries: {e:?}"
-                                    )),
-                                ))
-                            })
+                        BlockComponent::from_bytes(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct block component: {e:?}"),
+                            )))
+                        })
                     })
             })
-            .flatten_ok()
             .collect()
+    }
+
+    pub fn get_components_in_data_block(
+        &self,
+        slot: Slot,
+        range: Range<u32>,
+        slot_meta: Option<&SlotMeta>,
+    ) -> Result<Vec<BlockComponent>> {
+        self.get_slot_components_in_block(slot, vec![range], slot_meta)
     }
 
     pub fn get_entries_in_data_block(
@@ -4135,7 +4187,14 @@ impl Blockstore {
         range: Range<u32>,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
-        self.get_slot_entries_in_block(slot, vec![range], slot_meta)
+        self.get_components_in_data_block(slot, range, slot_meta)
+            .map(|components| {
+                components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect()
+            })
     }
 
     /// Performs checks on the last fec set of a replayed slot, and returns the block_id.
