@@ -9,6 +9,8 @@ pub(super) const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1);
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
 #[derive(Debug)]
 pub(super) struct BLSSigVerifierStats {
+    pub(super) verify_preprocess_count: AtomicU64,
+    pub(super) verify_preprocess_elapsed_us: AtomicU64,
     pub(super) votes_batch_count: AtomicU64,
     pub(super) votes_batch_elapsed_us: AtomicU64,
     pub(super) certs_batch_count: AtomicU64,
@@ -32,6 +34,8 @@ pub(super) struct BLSSigVerifierStats {
 impl BLSSigVerifierStats {
     pub(super) fn new() -> Self {
         Self {
+            verify_preprocess_count: AtomicU64::new(0),
+            verify_preprocess_elapsed_us: AtomicU64::new(0),
             votes_batch_count: AtomicU64::new(0),
             votes_batch_elapsed_us: AtomicU64::new(0),
             certs_batch_count: AtomicU64::new(0),
@@ -62,6 +66,16 @@ impl BLSSigVerifierStats {
         }
         datapoint_info!(
             "bls_sig_verifier_timing",
+            (
+                "verify_preprocess_count",
+                self.verify_preprocess_count.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_preprocess_elapsed_us",
+                self.verify_preprocess_elapsed_us.load(Ordering::Relaxed) as i64,
+                i64
+            ),
             (
                 "votes_batch_count",
                 self.votes_batch_count.load(Ordering::Relaxed) as i64,
