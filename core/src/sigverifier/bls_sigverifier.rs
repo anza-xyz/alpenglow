@@ -165,28 +165,8 @@ impl SigVerifier for BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         rayon::join(
-            || {
-                if !votes_to_verify.is_empty() {
-                    let mut verification_votes_time = Measure::start("verification_votes");
-                    self.verify_votes(&mut votes_to_verify);
-                    verification_votes_time.stop();
-                    self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
-                    self.stats
-                        .votes_batch_elapsed_us
-                        .fetch_add(verification_votes_time.as_us(), Ordering::Relaxed);
-                }
-            },
-            || {
-                if !certs_to_verify.is_empty() {
-                    let mut verification_certs_time = Measure::start("verification_certs");
-                    self.verify_certificates(&mut certs_to_verify, &bank);
-                    verification_certs_time.stop();
-                    self.stats.certs_batch_count.fetch_add(1, Ordering::Relaxed);
-                    self.stats
-                        .certs_batch_elapsed_us
-                        .fetch_add(verification_certs_time.as_us(), Ordering::Relaxed);
-                }
-            },
+            || self.verify_votes(&mut votes_to_verify),
+            || self.verify_certificates(&mut certs_to_verify, &bank),
         );
         batches
     }
@@ -296,22 +276,34 @@ impl BLSSigVerifier {
             return;
         }
 
+        self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
+        let mut votes_batch_prep_time = Measure::start("votes_batch_prep");
         let (pubkeys, signatures, messages): (Vec<_>, Vec<_>, Vec<_>) = votes_to_verify
             .iter()
             .map(|v| (v.bls_pubkey, &v.vote_message.signature, v.payload_slice()))
             .multiunzip();
+        votes_batch_prep_time.stop();
+        self.stats
+            .votes_batch_prep_elapsed_us
+            .fetch_add(votes_batch_prep_time.as_us(), Ordering::Relaxed);
 
         // Optimistically verify signatures; this should be the most common case
+        let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
         if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &messages)
             .unwrap_or(false)
         {
             return;
         }
+        votes_batch_optimistic_time.stop();
+        self.stats
+            .votes_batch_optimistic_elapsed_us
+            .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
 
         // Fallback: If the batch fails, verify each vote signature individually in parallel
         // to find the invalid ones.
         //
         // TODO(sam): keep a record of which validator's vote failed to incur penalty
+        let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
         votes_to_verify.par_iter_mut().for_each(|vote_to_verify| {
             if !vote_to_verify
                 .bls_pubkey
@@ -327,12 +319,21 @@ impl BLSSigVerifier {
                 vote_to_verify.packet.meta_mut().set_discard(true);
             }
         });
+        votes_batch_parallel_verify_time.stop();
+        self.stats
+            .votes_batch_parallel_verify_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .votes_batch_parallel_verify_elapsed_us
+            .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
     }
 
     fn verify_certificates(&self, certs_to_verify: &mut [CertToVerify], bank: &Bank) {
         if certs_to_verify.is_empty() {
             return;
         }
+        self.stats.certs_batch_count.fetch_add(1, Ordering::Relaxed);
+        let mut certs_batch_verify_time = Measure::start("certs_batch_verify");
         certs_to_verify.par_iter_mut().for_each(|cert_to_verify| {
             if let Err(e) = self.verify_bls_certificate(cert_to_verify, bank) {
                 trace!(
@@ -345,6 +346,10 @@ impl BLSSigVerifier {
                 cert_to_verify.packet.meta_mut().set_discard(true);
             }
         });
+        certs_batch_verify_time.stop();
+        self.stats
+            .certs_batch_elapsed_us
+            .fetch_add(certs_batch_verify_time.as_us(), Ordering::Relaxed);
     }
 
     fn verify_bls_certificate(
