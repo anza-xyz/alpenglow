@@ -44,8 +44,7 @@ use {
         vote_error::VoteError,
         vote_instruction::{self, withdraw, CreateVoteAccountConfig},
         vote_state::{
-            BlockTimestamp, VoteAuthorize, VoteInit, VoteStateV3, VoteStateVersions,
-            VOTE_CREDITS_MAXIMUM_PER_SLOT,
+            BlockTimestamp, VoteAuthorize, VoteInit, VoteStateV3, VOTE_CREDITS_MAXIMUM_PER_SLOT,
         },
     },
     solana_votor_messages::{
@@ -858,6 +857,8 @@ pub fn process_create_vote_account(
 
     let fee_payer = config.signers[fee_payer];
     let nonce_authority = config.signers[nonce_authority];
+    let space = VoteStateV3::size_of() as u64;
+
     let compute_unit_limit = match blockhash_query {
         BlockhashQuery::None(_) | BlockhashQuery::FeeCalculator(_, _) => ComputeUnitLimit::Default,
         BlockhashQuery::All(_) => ComputeUnitLimit::Simulated,
@@ -904,7 +905,7 @@ pub fn process_create_vote_account(
                 commission,
             };
             let mut create_vote_account_config = CreateVoteAccountConfig {
-                space: VoteStateVersions::vote_state_size_of(true) as u64,
+                space,
                 ..CreateVoteAccountConfig::default()
             };
             if let Some(seed) = seed {
