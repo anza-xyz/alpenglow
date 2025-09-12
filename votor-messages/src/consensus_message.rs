@@ -143,17 +143,13 @@ impl Certificate {
     /// vote type (e.g., exclusively from `Notarize` or `Skip` votes). For
     /// certificates formed from a mix of two vote types, use the `to_source_votes`
     /// function.
-    pub fn to_source_vote(&self) -> Option<Vote> {
+    pub fn to_source_vote(&self) -> Vote {
         match self {
-            Certificate::Notarize(slot, hash) => Some(Vote::new_notarization_vote(*slot, *hash)),
-            Certificate::FinalizeFast(slot, hash) => {
-                Some(Vote::new_notarization_vote(*slot, *hash))
-            }
-            Certificate::Finalize(slot) => Some(Vote::new_finalization_vote(*slot)),
-            Certificate::NotarizeFallback(slot, hash) => {
-                Some(Vote::new_notarization_vote(*slot, *hash))
-            }
-            Certificate::Skip(slot) => Some(Vote::new_skip_vote(*slot)),
+            Certificate::Notarize(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
+            Certificate::FinalizeFast(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
+            Certificate::Finalize(slot) => Vote::new_finalization_vote(*slot),
+            Certificate::NotarizeFallback(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
+            Certificate::Skip(slot) => Vote::new_skip_vote(*slot),
         }
     }
 

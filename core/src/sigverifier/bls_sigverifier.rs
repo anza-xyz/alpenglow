@@ -22,11 +22,8 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
-    solana_votor_messages::{
-        consensus_message::{
-            Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
-        },
-        vote::Vote,
+    solana_votor_messages::consensus_message::{
+        CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
     },
     stats::BLSSigVerifierStats,
     std::{
@@ -381,9 +378,7 @@ impl BLSSigVerifier {
         bit_vec: &BitVec<u8, Lsb0>,
         key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
     ) -> Result<(), CertVerifyError> {
-        let original_vote = cert_to_verify.cert_message.certificate.to_source_vote() else {
-            return false;
-        };
+        let original_vote = cert_to_verify.cert_message.certificate.to_source_vote();
 
         let Ok(signed_payload) = bincode::serialize(&original_vote) else {
             return Err(CertVerifyError::SerializationFailed);
