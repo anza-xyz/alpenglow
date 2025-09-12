@@ -121,13 +121,9 @@ const DELTA_STANDSTILL: Duration = Duration::from_millis(10_000);
 /// Returns the Duration for when the `SkipTimer` should be set for for the given slot in the leader window.
 #[inline]
 pub fn skip_timeout(leader_block_index: usize) -> Duration {
-    DELTA_TIMEOUT
-        .saturating_add(
-            DELTA_BLOCK
-                .saturating_mul(leader_block_index as u32)
-                .saturating_add(DELTA_TIMEOUT),
-        )
-        .saturating_add(DELTA)
+    DELTA_TIMEOUT.saturating_add(
+        DELTA_BLOCK.saturating_mul(leader_block_index.saturating_add(1).try_into().unwrap()),
+    )
 }
 
 /// Block timeout, when we should publish the final shred for the leader block index
