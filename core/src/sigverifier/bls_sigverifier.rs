@@ -30,8 +30,8 @@ use {
     },
     stats::BLSSigVerifierStats,
     std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc},
+        collections::{HashMap, HashSet},
+        sync::{atomic::Ordering, Arc, RwLock},
     },
     thiserror::Error,
 };
@@ -85,6 +85,7 @@ pub struct BLSSigVerifier {
     message_sender: Sender<ConsensusMessage>,
     root_bank: SharableBank,
     stats: BLSSigVerifierStats,
+    verified_certs: RwLock<HashSet<Certificate>>,
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -101,7 +102,11 @@ impl SigVerifier for BLSSigVerifier {
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
 
-        let bank = self.root_bank.load();
+        let root_bank = self.root_bank.load();
+        self.verified_certs
+            .write()
+            .unwrap()
+            .retain(|cert| cert.slot() > root_bank.slot());
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -124,9 +129,16 @@ impl SigVerifier for BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
+                    // Only need votes newer than root slot
+                    if vote_message.vote.slot() <= root_bank.slot() {
+                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
                     // Missing epoch states
                     let Some(key_to_rank_map) =
-                        get_key_to_rank_map(&bank, vote_message.vote.slot())
+                        get_key_to_rank_map(&root_bank, vote_message.vote.slot())
                     else {
                         self.stats
                             .received_no_epoch_stakes
@@ -151,6 +163,24 @@ impl SigVerifier for BLSSigVerifier {
                     });
                 }
                 ConsensusMessage::Certificate(cert_message) => {
+                    // Only need certs newer than root slot
+                    if cert_message.certificate.slot() <= root_bank.slot() {
+                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
+                    if self
+                        .verified_certs
+                        .read()
+                        .unwrap()
+                        .contains(&cert_message.certificate)
+                    {
+                        self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
                     certs_to_verify.push(CertToVerify {
                         cert_message,
                         packet,
@@ -166,7 +196,7 @@ impl SigVerifier for BLSSigVerifier {
 
         rayon::join(
             || self.verify_votes(&mut votes_to_verify),
-            || self.verify_certificates(&mut certs_to_verify, &bank),
+            || self.verify_certificates(&mut certs_to_verify, &root_bank),
         );
         batches
     }
@@ -196,8 +226,8 @@ impl SigVerifier for BLSSigVerifier {
                 }
             };
 
-            let bank = self.root_bank.load();
-            let Some(rank_to_pubkey_map) = get_key_to_rank_map(&bank, slot) else {
+            let root_bank = self.root_bank.load();
+            let Some(rank_to_pubkey_map) = get_key_to_rank_map(&root_bank, slot) else {
                 error!("This should not happen because verification succeeded");
                 continue;
             };
@@ -250,6 +280,7 @@ impl BLSSigVerifier {
             verified_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
+            verified_certs: RwLock::new(HashSet::new()),
         }
     }
 
@@ -351,6 +382,15 @@ impl BLSSigVerifier {
         cert_to_verify: &CertToVerify,
         bank: &Bank,
     ) -> Result<(), CertVerifyError> {
+        if self
+            .verified_certs
+            .read()
+            .unwrap()
+            .contains(&cert_to_verify.cert_message.certificate)
+        {
+            return Ok(());
+        }
+
         let slot = cert_to_verify.cert_message.certificate.slot();
         let Some(key_to_rank_map) = get_key_to_rank_map(bank, slot) else {
             return Err(CertVerifyError::KeyToRankMapNotFound(slot));
@@ -367,12 +407,18 @@ impl BLSSigVerifier {
 
         match decoded_bitmap {
             solana_signer_store::Decoded::Base2(bit_vec) => {
-                self.verify_base2_certificate(cert_to_verify, &bit_vec, key_to_rank_map)
+                self.verify_base2_certificate(cert_to_verify, &bit_vec, key_to_rank_map)?
             }
-            solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => {
-                self.verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, key_to_rank_map)
-            }
+            solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => self
+                .verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, key_to_rank_map)?,
         }
+
+        self.verified_certs
+            .write()
+            .unwrap()
+            .insert(cert_to_verify.cert_message.certificate);
+
+        Ok(())
     }
 
     fn verify_base2_certificate(
@@ -1195,5 +1241,122 @@ mod tests {
             result_batches[0].iter().next().unwrap().meta().discard(),
             "Packet with invalid rank should be discarded"
         );
+    }
+
+    #[test]
+    fn test_verify_old_vote_and_cert() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let stakes_vec = (0..validator_keypairs.len())
+            .map(|i| 1_000 - i as u64)
+            .collect::<Vec<_>>();
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts_no_program(
+            1_000_000_000,
+            &validator_keypairs,
+            stakes_vec,
+        );
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let bank5 = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), 5);
+        let bank_forks = BankForks::new_rw_arc(bank5);
+        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let sig_verifier = BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender);
+
+        // Create a vote for slot 2, which is older than the root bank (slot 5)
+        let vote = Vote::new_skip_vote(2);
+        let vote_payload = bincode::serialize(&vote).unwrap();
+        let bls_keypair = &validator_keypairs[0].bls_keypair;
+        let signature: BLSSignature = bls_keypair.sign(&vote_payload).into();
+        let consensus_message = ConsensusMessage::Vote(VoteMessage {
+            vote,
+            signature,
+            rank: 0,
+        });
+        let mut packet = Packet::default();
+        packet.populate_packet(None, &consensus_message).unwrap();
+        let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
+        let result_batches = sig_verifier.verify_batches(packet_batches, 1);
+        assert!(
+            result_batches[0].iter().next().unwrap().meta().discard(),
+            "Packet with old vote should be discarded"
+        );
+        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
+
+        // Create a certificate for slot 3, which is older than the root bank (slot 5)
+        let cert_message = CertificateMessage {
+            certificate: Certificate::new(CertificateType::Finalize, 3, None),
+            signature: BlsSignature::default(),
+            bitmap: Vec::new(),
+        };
+        let consensus_message = ConsensusMessage::Certificate(cert_message);
+        let mut packet = Packet::default();
+        packet.populate_packet(None, &consensus_message).unwrap();
+        let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
+        let result_batches = sig_verifier.verify_batches(packet_batches, 1);
+        assert!(
+            result_batches[0].iter().next().unwrap().meta().discard(),
+            "Packet with old certificate should be discarded"
+        );
+        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_verified_certs_are_skipped() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
+
+        let num_signers = 8;
+        let slot = 10;
+        let block_hash = Hash::new_unique();
+
+        let certificate = Certificate::Notarize(slot, block_hash);
+
+        let original_vote = Vote::new_notarization_vote(slot, block_hash);
+        let signed_payload = bincode::serialize(&original_vote).unwrap();
+        let mut vote_messages: Vec<VoteMessage> = (0..num_signers)
+            .map(|i| {
+                let signature = validator_keypairs[i].bls_keypair.sign(&signed_payload);
+                VoteMessage {
+                    vote: original_vote,
+                    signature: signature.into(),
+                    rank: i as u16,
+                }
+            })
+            .collect();
+
+        let mut builder = VoteCertificateBuilder::new(certificate);
+        builder
+            .aggregate(&vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert_message = builder.build().expect("Failed to build certificate");
+        let consensus_message = ConsensusMessage::Certificate(cert_message);
+        let mut packet = Packet::default();
+        packet.populate_packet(None, &consensus_message).unwrap();
+        let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
+
+        // First verification should pass
+        let result_batches = verifier.verify_batches(packet_batches.clone(), 1);
+        assert!(!result_batches[0].iter().next().unwrap().meta().discard());
+        assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 0);
+
+        // Create a new certificate message with same certificate but 70% of the signatures
+        // This one should be discarded as the same certificate was already verified
+        vote_messages.pop();
+        let mut builder = VoteCertificateBuilder::new(certificate);
+        builder
+            .aggregate(&vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert_message = builder.build().expect("Failed to build certificate");
+        let consensus_message = ConsensusMessage::Certificate(cert_message);
+        let mut packet = Packet::default();
+        packet.populate_packet(None, &consensus_message).unwrap();
+        let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
+        let result_batches = verifier.verify_batches(packet_batches, 1);
+        assert!(result_batches[0].iter().next().unwrap().meta().discard());
+        assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 1);
     }
 }

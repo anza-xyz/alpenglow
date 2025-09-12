@@ -29,6 +29,8 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) received_discarded: AtomicU64,
     pub(super) received_malformed: AtomicU64,
     pub(super) received_no_epoch_stakes: AtomicU64,
+    pub(super) received_old: AtomicU64,
+    pub(super) received_verified: AtomicU64,
     pub(super) received_votes: AtomicU64,
     pub(super) last_stats_logged: Instant,
 }
@@ -56,6 +58,8 @@ impl BLSSigVerifierStats {
             received_discarded: AtomicU64::new(0),
             received_malformed: AtomicU64::new(0),
             received_no_epoch_stakes: AtomicU64::new(0),
+            received_old: AtomicU64::new(0),
+            received_verified: AtomicU64::new(0),
             received_votes: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
         }
@@ -152,6 +156,16 @@ impl BLSSigVerifierStats {
             (
                 "received_discarded",
                 self.received_discarded.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_old",
+                self.received_old.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_verified",
+                self.received_verified.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
