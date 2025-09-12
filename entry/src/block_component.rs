@@ -7,7 +7,7 @@
 ///
 /// Currently supported special entry types include:
 /// - `BlockFooter`: Contains metadata about block production
-/// - `ParentReadyUpdate`: Used in optimistic block packing algorithms for Alpenglow
+/// - `UpdateParent`: Used in optimistic block packing algorithms for Alpenglow
 ///
 /// Additional special entry types may be added in the future.
 ///
@@ -74,7 +74,7 @@
 /// └─────────────────────────────────────────┘
 /// ```
 ///
-/// ### ParentReadyUpdateV1 Layout
+/// ### UpdateParentV1 Layout
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Parent Slot                  (8 bytes)  │
@@ -234,7 +234,7 @@ pub enum BlockMarkerV1 {
 
 /// Version 2 block marker with extended functionality.
 ///
-/// Supports all V1 features plus ParentReadyUpdate for optimistic block packing in Alpenglow.
+/// Supports all V1 features plus UpdateParent for optimistic block packing in Alpenglow.
 ///
 /// # Serialization Format
 /// ```text
@@ -252,7 +252,7 @@ pub enum BlockMarkerV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockMarkerV2 {
     BlockFooter(VersionedBlockFooter),
-    ParentReadyUpdate(VersionedParentReadyUpdate),
+    UpdateParent(VersionedUpdateParent),
 }
 
 // ============================================================================
@@ -315,9 +315,9 @@ pub struct BlockFooterV1 {
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionedParentReadyUpdate {
-    V1(ParentReadyUpdateV1),
-    Current(ParentReadyUpdateV1),
+pub enum VersionedUpdateParent {
+    V1(UpdateParentV1),
+    Current(UpdateParentV1),
 }
 
 /// Version 1 parent ready update data.
@@ -334,7 +334,7 @@ pub enum VersionedParentReadyUpdate {
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct ParentReadyUpdateV1 {
+pub struct UpdateParentV1 {
     pub new_parent_slot: Slot,
     pub new_parent_block_id: Hash,
 }
@@ -745,7 +745,7 @@ impl BlockMarkerV2 {
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let (variant_id, data_bytes) = match self {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
-            Self::ParentReadyUpdate(update) => (1_u8, update.to_bytes()?),
+            Self::UpdateParent(update) => (1_u8, update.to_bytes()?),
         };
 
         write_variant_with_length(variant_id, &data_bytes)
@@ -759,9 +759,9 @@ impl BlockMarkerV2 {
             0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
                 payload,
             )?)),
-            1 => Ok(Self::ParentReadyUpdate(
-                VersionedParentReadyUpdate::from_bytes(payload)?,
-            )),
+            1 => Ok(Self::UpdateParent(VersionedUpdateParent::from_bytes(
+                payload,
+            )?)),
             _ => Err(BlockComponentError::UnknownVariant {
                 variant_type: "BlockMarkerV2".to_string(),
                 id: variant_id,
@@ -949,10 +949,10 @@ impl<'de> Deserialize<'de> for VersionedBlockFooter {
 }
 
 // ============================================================================
-// ParentReadyUpdate Implementation
+// UpdateParent Implementation
 // ============================================================================
 
-impl ParentReadyUpdateV1 {
+impl UpdateParentV1 {
     /// Returns the version for this struct.
     pub const fn version(&self) -> u8 {
         1
@@ -971,14 +971,14 @@ impl ParentReadyUpdateV1 {
     }
 }
 
-impl VersionedParentReadyUpdate {
+impl VersionedUpdateParent {
     /// Creates a new versioned parent ready update with V1 variant.
-    pub const fn new_v1(update: ParentReadyUpdateV1) -> Self {
+    pub const fn new_v1(update: UpdateParentV1) -> Self {
         Self::V1(update)
     }
 
     /// Creates a new versioned parent ready update with Current variant.
-    pub const fn new(update: ParentReadyUpdateV1) -> Self {
+    pub const fn new(update: UpdateParentV1) -> Self {
         Self::Current(update)
     }
 
@@ -1009,12 +1009,12 @@ impl VersionedParentReadyUpdate {
             .split_first()
             .ok_or(BlockComponentError::InsufficientData)?;
 
-        let update = ParentReadyUpdateV1::from_bytes(remaining)?;
+        let update = UpdateParentV1::from_bytes(remaining)?;
         Ok(Self::Current(update))
     }
 }
 
-impl Serialize for VersionedParentReadyUpdate {
+impl Serialize for VersionedUpdateParent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -1024,29 +1024,29 @@ impl Serialize for VersionedParentReadyUpdate {
     }
 }
 
-impl<'de> Deserialize<'de> for VersionedParentReadyUpdate {
+impl<'de> Deserialize<'de> for VersionedUpdateParent {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct VersionedParentReadyUpdateVisitor;
+        struct VersionedUpdateParentVisitor;
 
-        impl Visitor<'_> for VersionedParentReadyUpdateVisitor {
-            type Value = VersionedParentReadyUpdate;
+        impl Visitor<'_> for VersionedUpdateParentVisitor {
+            type Value = VersionedUpdateParent;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized VersionedParentReadyUpdate byte stream")
+                formatter.write_str("a serialized VersionedUpdateParent byte stream")
             }
 
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedParentReadyUpdate, E>
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedUpdateParent, E>
             where
                 E: de::Error,
             {
-                VersionedParentReadyUpdate::from_bytes(value).map_err(de::Error::custom)
+                VersionedUpdateParent::from_bytes(value).map_err(de::Error::custom)
             }
         }
 
-        deserializer.deserialize_bytes(VersionedParentReadyUpdateVisitor)
+        deserializer.deserialize_bytes(VersionedUpdateParentVisitor)
     }
 }
 
@@ -1064,17 +1064,17 @@ mod tests {
         repeat_n(create_mock_entry(), count).collect()
     }
 
-    // Helper function to create a ParentReadyUpdateV1
-    fn create_parent_ready_update() -> ParentReadyUpdateV1 {
-        ParentReadyUpdateV1 {
+    // Helper function to create a UpdateParentV1
+    fn create_parent_ready_update() -> UpdateParentV1 {
+        UpdateParentV1 {
             new_parent_slot: 42,
             new_parent_block_id: Hash::default(),
         }
     }
 
-    // Helper function to create different ParentReadyUpdateV1 instances
-    fn create_parent_ready_update_with_data(slot: u64, hash: Hash) -> ParentReadyUpdateV1 {
-        ParentReadyUpdateV1 {
+    // Helper function to create different UpdateParentV1 instances
+    fn create_parent_ready_update_with_data(slot: u64, hash: Hash) -> UpdateParentV1 {
+        UpdateParentV1 {
             new_parent_slot: slot,
             new_parent_block_id: hash,
         }
@@ -1217,27 +1217,27 @@ mod tests {
 
     #[test]
     fn test_parent_ready_update_v1_serialization() {
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 12345,
             new_parent_block_id: Hash::new_unique(),
         };
 
         let bytes = update.to_bytes().unwrap();
-        let deserialized = ParentReadyUpdateV1::from_bytes(&bytes).unwrap();
+        let deserialized = UpdateParentV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(update, deserialized);
     }
 
     #[test]
     fn test_versioned_parent_ready_update_serialization() {
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 67890,
             new_parent_block_id: Hash::new_unique(),
         };
-        let versioned = VersionedParentReadyUpdate::new(update);
+        let versioned = VersionedUpdateParent::new(update);
 
         let bytes = versioned.to_bytes().unwrap();
-        let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
 
         assert_eq!(versioned, deserialized);
     }
@@ -1272,11 +1272,11 @@ mod tests {
 
     #[test]
     fn test_block_marker_v2_parent_ready_update_serialization() {
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 24681357,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker = BlockMarkerV2::ParentReadyUpdate(VersionedParentReadyUpdate::new(update));
+        let marker = BlockMarkerV2::UpdateParent(VersionedUpdateParent::new(update));
 
         let bytes = marker.to_bytes().unwrap();
         let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
@@ -1302,12 +1302,12 @@ mod tests {
 
     #[test]
     fn test_versioned_block_marker_v2_serialization() {
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 13579246,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker = VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(
-            VersionedParentReadyUpdate::new(update),
+        let marker = VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(
+            VersionedUpdateParent::new(update),
         ));
 
         let bytes = marker.to_bytes().unwrap();
@@ -1497,35 +1497,35 @@ mod tests {
     #[test]
     fn test_parent_ready_update_v1_malformed_data() {
         // Empty data should fail bincode deserialization
-        assert!(ParentReadyUpdateV1::from_bytes(&[]).is_err());
+        assert!(UpdateParentV1::from_bytes(&[]).is_err());
 
         // Partial data should fail
-        assert!(ParentReadyUpdateV1::from_bytes(&[0u8; 4]).is_err());
-        assert!(ParentReadyUpdateV1::from_bytes(&[0u8; 20]).is_err());
-        assert!(ParentReadyUpdateV1::from_bytes(&[0u8; 39]).is_err());
+        assert!(UpdateParentV1::from_bytes(&[0u8; 4]).is_err());
+        assert!(UpdateParentV1::from_bytes(&[0u8; 20]).is_err());
+        assert!(UpdateParentV1::from_bytes(&[0u8; 39]).is_err());
 
         // Valid data should work
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 42,
             new_parent_block_id: Hash::default(),
         };
         let bytes = update.to_bytes().unwrap();
         assert_eq!(bytes.len(), 40); // 8 + 32 bytes
 
-        let deserialized = ParentReadyUpdateV1::from_bytes(&bytes).unwrap();
+        let deserialized = UpdateParentV1::from_bytes(&bytes).unwrap();
         assert_eq!(update, deserialized);
     }
 
     #[test]
     fn test_versioned_parent_ready_update_malformed_data() {
         // Empty data
-        assert!(VersionedParentReadyUpdate::from_bytes(&[]).is_err());
+        assert!(VersionedUpdateParent::from_bytes(&[]).is_err());
 
         // Only version byte
-        assert!(VersionedParentReadyUpdate::from_bytes(&[0u8]).is_err());
+        assert!(VersionedUpdateParent::from_bytes(&[0u8]).is_err());
 
         // Invalid update data after version
-        assert!(VersionedParentReadyUpdate::from_bytes(&[0u8, 1, 2, 3]).is_err());
+        assert!(VersionedUpdateParent::from_bytes(&[0u8, 1, 2, 3]).is_err());
     }
 
     #[test]
@@ -1574,13 +1574,13 @@ mod tests {
         // Valid BlockFooter variant ID and byte length but insufficient data
         assert!(BlockMarkerV2::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
 
-        // Valid ParentReadyUpdate variant ID and byte length but insufficient data
+        // Valid UpdateParent variant ID and byte length but insufficient data
         assert!(BlockMarkerV2::from_bytes(&[1u8, 10, 0, 1, 2, 3]).is_err());
 
         // Valid BlockFooter variant but invalid footer data
         assert!(BlockMarkerV2::from_bytes(&[0u8, 3, 0, 1, 2, 3]).is_err());
 
-        // Valid ParentReadyUpdate variant but invalid update data
+        // Valid UpdateParent variant but invalid update data
         assert!(BlockMarkerV2::from_bytes(&[1u8, 3, 0, 1, 2, 3]).is_err());
 
         // Byte length exceeds actual data available
@@ -1690,23 +1690,23 @@ mod tests {
     #[test]
     fn test_parent_ready_update_v1_edge_cases() {
         // Test with maximum slot value
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: u64::MAX,
             new_parent_block_id: Hash::new_unique(),
         };
 
         let bytes = update.to_bytes().unwrap();
-        let deserialized = ParentReadyUpdateV1::from_bytes(&bytes).unwrap();
+        let deserialized = UpdateParentV1::from_bytes(&bytes).unwrap();
         assert_eq!(update, deserialized);
 
         // Test with zero slot value
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 0,
             new_parent_block_id: Hash::default(),
         };
 
         let bytes = update.to_bytes().unwrap();
-        let deserialized = ParentReadyUpdateV1::from_bytes(&bytes).unwrap();
+        let deserialized = UpdateParentV1::from_bytes(&bytes).unwrap();
         assert_eq!(update, deserialized);
     }
 
@@ -1722,17 +1722,17 @@ mod tests {
         let versioned_footer = VersionedBlockFooter::new(footer);
         assert_eq!(versioned_footer.version(), 1);
 
-        let update = ParentReadyUpdateV1 {
+        let update = UpdateParentV1 {
             new_parent_slot: 456,
             new_parent_block_id: Hash::default(),
         };
         assert_eq!(update.version(), 1);
 
-        let versioned_update = VersionedParentReadyUpdate::new(update);
+        let versioned_update = VersionedUpdateParent::new(update);
         assert_eq!(versioned_update.version(), 1);
 
         let marker_v1 = BlockMarkerV1::BlockFooter(versioned_footer);
-        let marker_v2 = BlockMarkerV2::ParentReadyUpdate(versioned_update);
+        let marker_v2 = BlockMarkerV2::UpdateParent(versioned_update);
         assert_eq!(marker_v2.version(), 2);
 
         let versioned_marker_v1 = VersionedBlockMarker::new(marker_v1);
@@ -2037,8 +2037,8 @@ mod tests {
 
     #[test]
     fn test_block_component_empty_entries_with_special() {
-        let update = VersionedParentReadyUpdate::Current(create_parent_ready_update());
-        let special = VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(update));
+        let update = VersionedUpdateParent::Current(create_parent_ready_update());
+        let special = VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update));
         let batch = BlockComponent::BlockMarker(special);
 
         let bytes = batch.to_bytes().unwrap();
@@ -2059,7 +2059,7 @@ mod tests {
         assert_eq!(update, cloned_update);
 
         let debug_str = format!("{update:?}");
-        assert!(debug_str.contains("ParentReadyUpdateV1"));
+        assert!(debug_str.contains("UpdateParentV1"));
     }
 
     #[test]
@@ -2072,7 +2072,7 @@ mod tests {
         assert_eq!(update.new_parent_block_id, hash);
 
         let serialized = bincode::serialize(&update).unwrap();
-        let deserialized: ParentReadyUpdateV1 = bincode::deserialize(&serialized).unwrap();
+        let deserialized: UpdateParentV1 = bincode::deserialize(&serialized).unwrap();
         assert_eq!(update, deserialized);
     }
 
@@ -2088,20 +2088,20 @@ mod tests {
 
     #[test]
     fn test_versioned_parent_ready_update_empty_data() {
-        let result = VersionedParentReadyUpdate::from_bytes(&[]);
+        let result = VersionedUpdateParent::from_bytes(&[]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_versioned_parent_ready_update_v1_variant() {
         let original_data = create_parent_ready_update_with_data(255, Hash::new_unique());
-        let versioned_update = VersionedParentReadyUpdate::new_v1(original_data.clone());
+        let versioned_update = VersionedUpdateParent::new_v1(original_data.clone());
 
         let bytes = versioned_update.to_bytes().unwrap();
-        let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
 
         // Should become Current variant after deserialization
-        let VersionedParentReadyUpdate::Current(deser_data) = deserialized else {
+        let VersionedUpdateParent::Current(deser_data) = deserialized else {
             panic!("Expected Current variant after deserialization");
         };
         assert_eq!(original_data, deser_data);
@@ -2148,10 +2148,11 @@ mod tests {
 
     #[test]
     fn test_versioned_special_entry_with_parent_ready_update() {
-        let versioned_update = VersionedParentReadyUpdate::new(
-            create_parent_ready_update_with_data(12345, Hash::new_unique()),
-        );
-        let special_entry = BlockMarkerV2::ParentReadyUpdate(versioned_update);
+        let versioned_update = VersionedUpdateParent::new(create_parent_ready_update_with_data(
+            12345,
+            Hash::new_unique(),
+        ));
+        let special_entry = BlockMarkerV2::UpdateParent(versioned_update);
         let versioned_entry = VersionedBlockMarker::V2(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
@@ -2159,13 +2160,12 @@ mod tests {
 
         assert_eq!(versioned_entry.version(), deserialized.version());
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(update)) = deserialized
-        else {
-            panic!("Expected V2(ParentReadyUpdate) variant");
+        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
+            panic!("Expected V2(UpdateParent) variant");
         };
         assert_eq!(update.version(), 1);
 
-        let VersionedParentReadyUpdate::Current(data) = update else {
+        let VersionedUpdateParent::Current(data) = update else {
             panic!("Expected Current variant");
         };
         assert_eq!(data.new_parent_slot, 12345);
@@ -2197,8 +2197,8 @@ mod tests {
     fn test_full_block_component_with_complex_special_data() {
         let complex_hash = Hash::new_unique();
         let parent_update = create_parent_ready_update_with_data(u64::MAX, complex_hash);
-        let versioned_parent_update = VersionedParentReadyUpdate::new(parent_update);
-        let special_entry = BlockMarkerV2::ParentReadyUpdate(versioned_parent_update);
+        let versioned_parent_update = VersionedUpdateParent::new(parent_update);
+        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent_update);
         let versioned_special = VersionedBlockMarker::V2(special_entry);
 
         let batch = BlockComponent::new_block_marker(versioned_special);
@@ -2212,12 +2212,12 @@ mod tests {
         let special = deserialized.marker().unwrap();
         assert_eq!(special.version(), 2);
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(update)) = special else {
-            panic!("Expected V2(ParentReadyUpdate) variant");
+        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = special else {
+            panic!("Expected V2(UpdateParent) variant");
         };
         assert_eq!(update.version(), 1);
 
-        let VersionedParentReadyUpdate::Current(data) = update else {
+        let VersionedUpdateParent::Current(data) = update else {
             panic!("Expected Current variant");
         };
         assert_eq!(data.new_parent_slot, u64::MAX);
@@ -2243,34 +2243,33 @@ mod tests {
     #[test]
     fn test_all_variant_combinations() {
         let v1_parent = create_parent_ready_update();
-        let v1_versioned = VersionedParentReadyUpdate::new_v1(v1_parent);
-        let v2_special = BlockMarkerV2::ParentReadyUpdate(v1_versioned);
+        let v1_versioned = VersionedUpdateParent::new_v1(v1_parent);
+        let v2_special = BlockMarkerV2::UpdateParent(v1_versioned);
         let v2_versioned_special = VersionedBlockMarker::V2(v2_special);
 
         let bytes = v2_versioned_special.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
         // After deserialization, V2 variant should stay V2
-        let VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(update)) = deserialized
-        else {
+        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
             panic!("Expected V2 BlockMarker");
         };
 
-        let VersionedParentReadyUpdate::Current(_) = update else {
-            panic!("Expected inner ParentReadyUpdate to be Current");
+        let VersionedUpdateParent::Current(_) = update else {
+            panic!("Expected inner UpdateParent to be Current");
         };
     }
 
     #[test]
     fn test_boundary_values() {
         let boundary_update = create_parent_ready_update_with_data(0, Hash::default());
-        let boundary_versioned = VersionedParentReadyUpdate::new(boundary_update.clone());
+        let boundary_versioned = VersionedUpdateParent::new(boundary_update.clone());
 
         let bytes = boundary_versioned.to_bytes().unwrap();
-        let deserialized = VersionedParentReadyUpdate::from_bytes(&bytes).unwrap();
+        let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
 
         assert_eq!(deserialized.version(), 1);
-        let VersionedParentReadyUpdate::Current(data) = deserialized else {
+        let VersionedUpdateParent::Current(data) = deserialized else {
             panic!("Expected Current variant");
         };
         assert_eq!(data, boundary_update);
@@ -2279,8 +2278,8 @@ mod tests {
     #[test]
     fn test_serialization_deterministic() {
         let update = create_parent_ready_update();
-        let versioned_parent = VersionedParentReadyUpdate::new(update);
-        let special_entry = BlockMarkerV2::ParentReadyUpdate(versioned_parent);
+        let versioned_parent = VersionedUpdateParent::new(update);
+        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent);
         let versioned_special = VersionedBlockMarker::V2(special_entry);
         let batch = BlockComponent::new_block_marker(versioned_special);
 
@@ -2295,8 +2294,8 @@ mod tests {
     #[test]
     fn test_large_version_numbers() {
         let parent_update = create_parent_ready_update_with_data(u64::MAX, Hash::new_unique());
-        let versioned_parent = VersionedParentReadyUpdate::new(parent_update);
-        let special_entry = BlockMarkerV2::ParentReadyUpdate(versioned_parent);
+        let versioned_parent = VersionedUpdateParent::new(parent_update);
+        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent);
         let large_versioned = VersionedBlockMarker::V2(special_entry);
 
         let bytes = large_versioned.to_bytes().unwrap();
@@ -2304,13 +2303,12 @@ mod tests {
 
         assert_eq!(deserialized.version(), 2);
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::ParentReadyUpdate(update)) = deserialized
-        else {
-            panic!("Expected ParentReadyUpdate variant");
+        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
+            panic!("Expected UpdateParent variant");
         };
         assert_eq!(update.version(), 1);
 
-        let VersionedParentReadyUpdate::Current(data) = update else {
+        let VersionedUpdateParent::Current(data) = update else {
             panic!("Expected Current variant");
         };
         assert_eq!(data.new_parent_slot, u64::MAX);
@@ -2318,7 +2316,7 @@ mod tests {
 
     #[test]
     fn test_error_conditions_comprehensive() {
-        assert!(VersionedParentReadyUpdate::from_bytes(&[]).is_err());
+        assert!(VersionedUpdateParent::from_bytes(&[]).is_err());
         assert!(BlockMarkerV1::from_bytes(&[]).is_err());
         assert!(VersionedBlockMarker::from_bytes(&[1]).is_err());
         assert!(BlockComponent::from_bytes(&[1, 2, 3]).is_err());
@@ -2358,13 +2356,12 @@ mod tests {
         let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
         assert_eq!(marker_v2_footer, deserialized);
 
-        // Test BlockMarkerV2 with ParentReadyUpdate
-        let update = ParentReadyUpdateV1 {
+        // Test BlockMarkerV2 with UpdateParent
+        let update = UpdateParentV1 {
             new_parent_slot: 987654321,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker_v2_update =
-            BlockMarkerV2::ParentReadyUpdate(VersionedParentReadyUpdate::new(update));
+        let marker_v2_update = BlockMarkerV2::UpdateParent(VersionedUpdateParent::new(update));
         let bytes = marker_v2_update.to_bytes().unwrap();
 
         // Check that byte length is included
@@ -2423,13 +2420,13 @@ mod tests {
         let original_update = create_parent_ready_update_with_data(42, Hash::new_unique());
 
         let bytes1 = bincode::serialize(&original_update).unwrap();
-        let deser1: ParentReadyUpdateV1 = bincode::deserialize(&bytes1).unwrap();
+        let deser1: UpdateParentV1 = bincode::deserialize(&bytes1).unwrap();
 
         let bytes2 = bincode::serialize(&deser1).unwrap();
-        let deser2: ParentReadyUpdateV1 = bincode::deserialize(&bytes2).unwrap();
+        let deser2: UpdateParentV1 = bincode::deserialize(&bytes2).unwrap();
 
         let bytes3 = bincode::serialize(&deser2).unwrap();
-        let deser3: ParentReadyUpdateV1 = bincode::deserialize(&bytes3).unwrap();
+        let deser3: UpdateParentV1 = bincode::deserialize(&bytes3).unwrap();
 
         assert_eq!(original_update, deser1);
         assert_eq!(deser1, deser2);
