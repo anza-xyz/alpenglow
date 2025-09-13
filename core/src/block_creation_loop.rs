@@ -407,6 +407,9 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
             );
         }
 
+        // TODO(ksn): we should periodically be checking for new leader windows to get the skip
+        // timer from a ParentReady.
+        //
         // Wait for the voting loop to notify us
         let LeaderWindowInfo {
             start_slot,

@@ -4,7 +4,7 @@
 use {
     crate::{
         commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
-        event::{CompletedBlock, VotorEvent, VotorEventReceiver},
+        event::{CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventReceiver},
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
@@ -32,7 +32,7 @@ use {
             Arc, Condvar, Mutex,
         },
         thread::{self, Builder, JoinHandle},
-        time::Duration,
+        time::{Duration, Instant},
     },
     thiserror::Error,
 };
@@ -171,6 +171,7 @@ impl EventHandler {
                 &mut vctx,
                 &rctx,
                 &mut local_context,
+                exit.clone(),
             )?;
             event_processing_time.stop();
             local_context
@@ -231,6 +232,7 @@ impl EventHandler {
         vctx: &mut VotingContext,
         rctx: &RootContext,
         local_context: &mut LocalContext,
+        exit: Arc<AtomicBool>,
     ) -> Result<Vec<BLSOp>, EventLoopError> {
         let mut votes = vec![];
         let LocalContext {
@@ -261,6 +263,21 @@ impl EventHandler {
                         .or_default()
                         .push((block, parent_block));
                 }
+
+                // Fast leader handover
+                let next_slot = slot.saturating_add(1);
+
+                if let Some(window_info) = Self::is_fast_leader_handover_ready(
+                    rctx,
+                    vctx,
+                    my_pubkey,
+                    next_slot,
+                    parent_block,
+                    exit.clone(),
+                ) {
+                    Self::produce_window(ctx, my_pubkey, window_info, stats);
+                }
+
                 Self::check_rootable_blocks(
                     my_pubkey,
                     ctx,
@@ -365,22 +382,7 @@ impl EventHandler {
 
             // It is time to produce our leader window
             VotorEvent::ProduceWindow(window_info) => {
-                info!("{my_pubkey}: ProduceWindow {window_info:?}");
-                let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
-                if let Some(old_window_info) = l_window_info.as_ref() {
-                    stats.leader_window_replaced = stats.leader_window_replaced.saturating_add(1);
-                    error!(
-                        "{my_pubkey}: Attempting to start leader window for {}-{}, \
-                        however there is already a pending window to produce {}-{}. \
-                        Our production is lagging, discarding in favor of the newer window",
-                        window_info.start_slot,
-                        window_info.end_slot,
-                        old_window_info.start_slot,
-                        old_window_info.end_slot,
-                    );
-                }
-                *l_window_info = Some(window_info);
-                ctx.leader_window_notifier.window_notification.notify_one();
+                Self::produce_window(ctx, my_pubkey, window_info, stats);
             }
 
             // We have finalized this block consider it for rooting
@@ -425,7 +427,7 @@ impl EventHandler {
                 if let Err(e) = Self::handle_set_identity(my_pubkey, ctx, vctx) {
                     error!(
                             "Unable to load new vote history when attempting to change identity from {} \
-                             to {} in voting loop, Exiting: {}",
+                             to {} in voting loop; Exiting: {}",
                              vctx.vote_history.node_pubkey,
                              ctx.cluster_info.id(),
                              e
@@ -594,6 +596,64 @@ impl EventHandler {
         pending_blocks.remove(&slot);
 
         Ok(true)
+    }
+
+    fn is_fast_leader_handover_ready(
+        rctx: &RootContext,
+        vctx: &mut VotingContext,
+        my_pubkey: &Pubkey,
+        slot: u64,
+        parent_block: Block,
+        exit: Arc<AtomicBool>,
+    ) -> Option<LeaderWindowInfo> {
+        // Fast leader handover only applies to the first slot of a leader's window
+        if slot != first_of_consecutive_leader_slots(slot) {
+            return None;
+        }
+
+        let root_bank = vctx.root_bank.load();
+        let Some(leader_pubkey) = rctx
+            .leader_schedule_cache
+            .slot_leader_at(slot, Some(&root_bank))
+        else {
+            error!("Unable to compute the leader at slot {slot}. Something is wrong; exiting.");
+            exit.store(false, Ordering::Relaxed);
+            return None;
+        };
+
+        let window_info = LeaderWindowInfo {
+            start_slot: slot,
+            end_slot: last_of_consecutive_leader_slots(slot),
+            parent_block,
+            // TODO(ksn): the skip timer shouldn't start until ParentReady has been observed.
+            skip_timer: Instant::now(),
+        };
+
+        (&leader_pubkey == my_pubkey).then(|| window_info)
+    }
+
+    fn produce_window(
+        ctx: &SharedContext,
+        my_pubkey: &Pubkey,
+        window_info: LeaderWindowInfo,
+        stats: &mut EventHandlerStats,
+    ) {
+        info!("{my_pubkey}: ProduceWindow {window_info:?}");
+        let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
+        if let Some(old_window_info) = l_window_info.as_ref() {
+            stats.leader_window_replaced = stats.leader_window_replaced.saturating_add(1);
+            error!(
+                "{my_pubkey}: Attempting to start leader window for {}-{}, \
+                however there is already a pending window to produce {}-{}. \
+                Our production is lagging, discarding in favor of the newer window",
+                window_info.start_slot,
+                window_info.end_slot,
+                old_window_info.start_slot,
+                old_window_info.end_slot,
+            );
+        }
+        *l_window_info = Some(window_info);
+        ctx.leader_window_notifier.window_notification.notify_one();
     }
 
     /// Checks the pending blocks that have completed replay to see if they

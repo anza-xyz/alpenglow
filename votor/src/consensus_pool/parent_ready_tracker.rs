@@ -13,7 +13,7 @@
 //! a block with parent `b` in slot `s` will have their block finalized.
 
 use {
-    crate::{event::VotorEvent, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
+    crate::{event::VotorEvent, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_FALLBACK},
     solana_clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_pubkey::Pubkey,
     solana_votor_messages::consensus_message::Block,
@@ -103,7 +103,7 @@ impl ParentReadyTracker {
             self.my_pubkey
         );
         status.notar_fallbacks.push(block);
-        assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE);
+        assert!(status.notar_fallbacks.len() <= MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_FALLBACK);
 
         // Add this block as valid parent to skip connected future blocks
         for s in slot.saturating_add(1).. {

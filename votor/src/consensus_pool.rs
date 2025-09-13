@@ -12,7 +12,7 @@ use {
         },
         event::VotorEvent,
         vote_to_certificate_ids, Certificate, Stake, VoteType,
-        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_FALLBACK, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
     },
     crossbeam_channel::Sender,
     log::{error, trace},
@@ -166,7 +166,7 @@ impl ConsensusPool {
     fn new_vote_pool(vote_type: VoteType) -> VotePoolType {
         match vote_type {
             VoteType::NotarizeFallback => VotePoolType::DuplicateBlockVotePool(
-                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
+                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_FALLBACK),
             ),
             VoteType::Notarize => VotePoolType::DuplicateBlockVotePool(
                 DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
