@@ -23,7 +23,7 @@ use {
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
     solana_votor_messages::consensus_message::{
-        CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+        Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
     },
     stats::BLSSigVerifierStats,
     std::{
