@@ -34,7 +34,6 @@ use {
 };
 
 // TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
-
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
     let stakes = bank.epoch_stakes_map();
     let epoch = bank.epoch_schedule().get_epoch(slot);
@@ -385,6 +384,7 @@ impl BLSSigVerifier {
             .unwrap()
             .contains(&cert_to_verify.cert_message.certificate)
         {
+            self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
 
@@ -1305,6 +1305,7 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
         let result_batches = verifier.verify_batches(packet_batches, 1);
         assert!(result_batches[0].iter().next().unwrap().meta().discard());
+        assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 1);
     }
 }
