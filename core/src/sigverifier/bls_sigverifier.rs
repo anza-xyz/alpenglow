@@ -321,6 +321,10 @@ impl BLSSigVerifier {
             .iter()
             .map(|v| self.get_vote_payload(&v.vote_message.vote))
             .collect();
+        let distinct_messages = payloads.iter().unique().count();
+        self.stats
+            .votes_batch_distinct_messages_count
+            .fetch_add(distinct_messages as u64, Ordering::Relaxed);
         let payload_slices: Vec<&[u8]> = payloads.iter().map(|p| p.as_slice()).collect();
 
         let (pubkeys, signatures): (Vec<_>, Vec<_>) = votes_to_verify
