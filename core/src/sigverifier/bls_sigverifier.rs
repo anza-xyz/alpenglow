@@ -333,15 +333,33 @@ impl BLSSigVerifier {
             .multiunzip();
 
         // Optimistically verify signatures; this should be the most common case
-        if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &payload_slices)
-            .unwrap_or(false)
-        {
+        let verified_optimistically = if distinct_messages == 1 {
+            // if all messages are the same, use aggregate verification, which is
+            // significantly faster than distinct verification.
+
+            if let (Ok(aggregate_pubkey), Ok(aggregate_signature)) = (
+                PubkeyProjective::par_aggregate(&pubkeys),
+                SignatureProjective::par_aggregate(&signatures),
+            ) {
+                aggregate_pubkey
+                    .verify_signature(&aggregate_signature, payload_slices[0])
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &payload_slices)
+                .unwrap_or(false)
+        };
+
+        if verified_optimistically {
             votes_batch_optimistic_time.stop();
             self.stats
                 .votes_batch_optimistic_elapsed_us
                 .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
             return;
         }
+
         // Fallback: If the batch fails, verify each vote signature individually in parallel
         // to find the invalid ones.
         //
