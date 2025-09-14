@@ -98,7 +98,7 @@ pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<Certificate> {
 }
 
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
-pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
+pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_FALLBACK: usize = 3;
 
 pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: f64 = 0.4;
 pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
