@@ -69,7 +69,7 @@ pub(crate) struct EventHandlerStats {
     pub(crate) receive_event_time_us: u32,
 
     // Amount of time spent sending votes.
-    pub(crate) send_vote_time_us: u32,
+    pub(crate) send_votes_batch_time_us: u32,
 
     // Number of times we saw each event and time spent processing the event.
     received_events_count_and_timing: HashMap<StatsEvent, EventCountAndTime>,
@@ -133,7 +133,7 @@ impl EventHandlerStats {
             set_root_count: 0,
             timeout_set: 0,
             receive_event_time_us: 0,
-            send_vote_time_us: 0,
+            send_votes_batch_time_us: 0,
             received_events_count_and_timing: HashMap::new(),
             sent_votes: HashMap::new(),
             slot_tracking_map: BTreeMap::new(),
@@ -235,7 +235,7 @@ impl EventHandlerStats {
                 self.receive_event_time_us as i64,
                 i64
             ),
-            ("send_vote_time_us", self.send_vote_time_us as i64, i64),
+            ("send_votes_batch_time_us", self.send_votes_batch_time_us as i64, i64),
         );
         for (vote_type, count) in &self.sent_votes {
             datapoint_info!(
