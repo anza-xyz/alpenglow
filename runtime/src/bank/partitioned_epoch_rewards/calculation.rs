@@ -414,7 +414,6 @@ impl Bank {
             return None;
         }
 
-        let vote_state = vote_account.vote_state_view()?;
         let stake_state = stake_account.stake_state();
 
         match redeem_rewards(
@@ -427,7 +426,7 @@ impl Bank {
             new_rate_activation_epoch,
         ) {
             Ok((stake_reward, vote_rewards, stake)) => {
-                let commission = vote_state.commission();
+                let commission = vote_account.commission();
                 let stake_reward = PartitionedStakeReward {
                     stake_pubkey,
                     stake,
