@@ -92,6 +92,12 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
+                "votes_batch_distinct_messages_count",
+                self.votes_batch_distinct_messages_count
+                    .load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
                 "votes_batch_optimistic_elapsed_us",
                 self.votes_batch_optimistic_elapsed_us
                     .load(Ordering::Relaxed) as i64,
