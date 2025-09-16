@@ -177,16 +177,16 @@ impl EventHandler {
                 .stats
                 .incr_event_with_timing(stats_event, event_processing_time.as_us());
 
-            let mut send_vote_time = Measure::start("send_vote");
+            let mut send_votes_batch_time = Measure::start("send_votes_batch");
             for vote in votes {
                 local_context.stats.incr_vote(&vote);
                 vctx.bls_sender.send(vote).map_err(|_| SendError(()))?;
             }
-            send_vote_time.stop();
-            local_context.stats.send_vote_time_us = local_context
+            send_votes_batch_time.stop();
+            local_context.stats.send_votes_batch_time_us = local_context
                 .stats
-                .send_vote_time_us
-                .saturating_add(send_vote_time.as_us() as u32);
+                .send_votes_batch_time_us
+                .saturating_add(send_votes_batch_time.as_us() as u32);
             local_context.stats.maybe_report();
         }
 
