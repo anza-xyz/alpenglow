@@ -9,14 +9,13 @@ use {
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
-    itertools::Itertools,
     rayon::iter::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
         ParallelIterator,
     },
     solana_bls_signatures::{
         pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
-        signature::SignatureProjective,
+        signature::{Signature as BlsSignature, SignatureProjective},
     },
     solana_clock::Slot,
     solana_measure::measure::Measure,
@@ -317,39 +316,64 @@ impl BLSSigVerifier {
 
         self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
         let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
-        let payloads: Vec<_> = votes_to_verify
+        let payloads: Vec<Arc<Vec<u8>>> = votes_to_verify
             .iter()
             .map(|v| self.get_vote_payload(&v.vote_message.vote))
             .collect();
-        let distinct_messages = payloads.iter().unique().count();
+
+        let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+        for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
+            grouped_pubkeys
+                .entry(payload)
+                .or_default()
+                .push(v.bls_pubkey);
+        }
+
+        let distinct_messages = grouped_pubkeys.len();
         self.stats
             .votes_batch_distinct_messages_count
             .fetch_add(distinct_messages as u64, Ordering::Relaxed);
-        let payload_slices: Vec<&[u8]> = payloads.iter().map(|p| p.as_slice()).collect();
 
-        let (pubkeys, signatures): (Vec<_>, Vec<_>) = votes_to_verify
+        let distinct_data: Vec<_> = grouped_pubkeys.into_iter().collect();
+        let aggregate_pubkeys_result: Result<Vec<PubkeyProjective>, _> = distinct_data
             .iter()
-            .map(|v| (v.bls_pubkey, &v.vote_message.signature))
-            .multiunzip();
+            .map(|(_, pubkeys)| PubkeyProjective::par_aggregate(pubkeys))
+            .collect();
 
-        // Optimistically verify signatures; this should be the most common case
-        let verified_optimistically = if distinct_messages == 1 {
-            // if all messages are the same, use aggregate verification, which is
-            // significantly faster than distinct verification.
+        let verified_optimistically = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
+            let all_signatures: Vec<&BlsSignature> = votes_to_verify
+                .iter()
+                .map(|v| &v.vote_message.signature)
+                .collect();
 
-            if let (Ok(aggregate_pubkey), Ok(aggregate_signature)) = (
-                PubkeyProjective::par_aggregate(&pubkeys),
-                SignatureProjective::par_aggregate(&signatures),
-            ) {
-                aggregate_pubkey
-                    .verify_signature(&aggregate_signature, payload_slices[0])
+            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(&all_signatures) {
+                if distinct_messages == 1 {
+                    let payload_slice = distinct_data[0].0.as_slice();
+                    aggregate_pubkeys[0]
+                        .verify_signature(&aggregate_signature, payload_slice)
+                        .unwrap_or(false)
+                } else {
+                    let payload_slices: Vec<&[u8]> =
+                        distinct_data.iter().map(|(p, _)| p.as_slice()).collect();
+
+                    let aggregate_pubkeys_affine: Vec<BlsPubkey> =
+                        aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
+                    let aggregate_pubkeys_refs: Vec<&BlsPubkey> =
+                        aggregate_pubkeys_affine.iter().collect();
+
+                    SignatureProjective::par_verify_distinct_aggregated(
+                        &aggregate_pubkeys_refs,
+                        &aggregate_signature.into(),
+                        &payload_slices,
+                    )
                     .unwrap_or(false)
+                }
             } else {
                 false
             }
         } else {
-            SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &payload_slices)
-                .unwrap_or(false)
+            // Public key aggregation failed.
+            false
         };
 
         if verified_optimistically {
@@ -921,6 +945,145 @@ mod tests {
             }
         }
         assert_eq!(processed_packets, num_votes, "Did not process all packets");
+    }
+
+    #[test]
+    fn test_blssigverifier_verify_votes_two_distinct_messages() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
+
+        let num_votes_group1 = 3;
+        let num_votes_group2 = 4;
+        let num_votes = num_votes_group1 + num_votes_group2;
+        let mut packets = Vec::with_capacity(num_votes);
+
+        let vote1 = Vote::new_skip_vote(42);
+        let vote1_payload = bincode::serialize(&vote1).expect("Failed to serialize vote");
+        let vote2 = Vote::new_notarization_vote(43, Hash::new_unique());
+        let vote2_payload = bincode::serialize(&vote2).expect("Failed to serialize vote");
+
+        // Group 1 votes
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes_group1) {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+            let signature: BLSSignature = bls_keypair.sign(&vote1_payload).into();
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote: vote1,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        // Group 2 votes
+        for (i, validator_keypair) in validator_keypairs
+            .iter()
+            .enumerate()
+            .skip(num_votes_group1)
+            .take(num_votes_group2)
+        {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+            let signature: BLSSignature = bls_keypair.sign(&vote2_payload).into();
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote: vote2,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+
+        let mut processed_packets = 0;
+        for batch in result_batches {
+            for packet in batch.iter() {
+                processed_packets += 1;
+                assert!(
+                    !packet.meta().discard(),
+                    "Packet at rank {} should not be discarded",
+                    processed_packets - 1
+                );
+            }
+        }
+        assert_eq!(processed_packets, num_votes, "Did not process all packets");
+        assert_eq!(
+            verifier
+                .stats
+                .votes_batch_distinct_messages_count
+                .load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn test_blssigverifier_verify_votes_invalid_in_two_distinct_messages() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
+
+        let num_votes = 5;
+        let invalid_rank = 3; // This voter will sign vote 2 with an invalid signature.
+        let mut packets = Vec::with_capacity(num_votes);
+
+        let vote1 = Vote::new_skip_vote(42);
+        let vote1_payload = bincode::serialize(&vote1).expect("Failed to serialize vote");
+        let vote2 = Vote::new_skip_vote(43);
+        let vote2_payload = bincode::serialize(&vote2).expect("Failed to serialize vote");
+        let invalid_payload =
+            bincode::serialize(&Vote::new_skip_vote(99)).expect("Failed to serialize vote");
+
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+
+            // Split the votes: Ranks 0, 1 sign vote 1. Ranks 2, 3, 4 sign vote 2.
+            let (vote, payload) = if i < 2 {
+                (vote1, &vote1_payload)
+            } else {
+                (vote2, &vote2_payload)
+            };
+
+            let signature = if rank == invalid_rank {
+                bls_keypair.sign(&invalid_payload).into() // Invalid signature
+            } else {
+                bls_keypair.sign(payload).into()
+            };
+
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+
+        for (i, packet) in result_batches.iter().flatten().enumerate() {
+            if i as u16 == invalid_rank {
+                assert!(
+                    packet.meta().discard(),
+                    "Packet at invalid rank {i} should be discarded"
+                );
+            } else {
+                assert!(
+                    !packet.meta().discard(),
+                    "Packet at valid rank {i} should not be discarded"
+                );
+            }
+        }
     }
 
     #[test]
