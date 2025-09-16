@@ -219,11 +219,15 @@ impl ConsensusPool {
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
-                    Some(match self.vote_pools
-                        .get(&(slot, *vote_type))? {
-                            VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
-                            VotePoolType::DuplicateBlockVotePool(pool) => pool.total_stake_by_block_id(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}")),
-                        })
+                    Some(match self.vote_pools.get(&(slot, *vote_type))? {
+                        VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
+                        VotePoolType::DuplicateBlockVotePool(pool) => {
+                            pool.total_stake_by_block_id(block_id.as_ref().expect(
+                                "Duplicate block pool for {vote_type:?} expects a block id for \
+                                 certificate {cert_id:?}",
+                            ))
+                        }
+                    })
                 })
                 .sum::<Stake>();
             if accumulated_stake as f64 / (total_stake as f64) < limit {
@@ -233,8 +237,16 @@ impl ConsensusPool {
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match vote_pool {
-                        VotePoolType::SimpleVotePool(pool) => pool.add_to_certificate(&mut vote_certificate_builder),
-                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(block_id.as_ref().expect("Duplicate block pool for {vote_type:?} expects a block id for certificate {cert_id:?}"), &mut vote_certificate_builder),
+                        VotePoolType::SimpleVotePool(pool) => {
+                            pool.add_to_certificate(&mut vote_certificate_builder)
+                        }
+                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
+                            block_id.as_ref().expect(
+                                "Duplicate block pool for {vote_type:?} expects a block id for \
+                                 certificate {cert_id:?}",
+                            ),
+                            &mut vote_certificate_builder,
+                        ),
                     };
                 }
             });
@@ -614,8 +626,8 @@ impl ConsensusPool {
             for slot in begin_skip_slot..my_leader_slot {
                 if !self.skip_certified(slot) {
                     error!(
-                        "Missing skip certificate for {slot}, required for skip certificate \
-                        from {begin_skip_slot} to build {my_leader_slot}"
+                        "Missing skip certificate for {slot}, required for skip certificate from \
+                         {begin_skip_slot} to build {my_leader_slot}"
                     );
                     return false;
                 }
