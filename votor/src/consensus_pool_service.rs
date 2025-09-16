@@ -10,12 +10,12 @@ use {
             AlpenglowCommitmentType,
         },
         consensus_pool::{
-            self, parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
+            parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
         },
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_service::BLSOp,
         votor::Votor,
-        Certificate, DELTA_STANDSTILL,
+        DELTA_STANDSTILL,
     },
     crossbeam_channel::{select, Receiver, Sender, TrySendError},
     solana_clock::Slot,
@@ -58,7 +58,6 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
-    pub(crate) certificate_sender: Sender<(Certificate, CertificateMessage)>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -187,13 +186,7 @@ impl ConsensusPoolService {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
         let root_bank = ctx.root_bank.load();
-        let mut consensus_pool = consensus_pool::load_from_blockstore(
-            &my_pubkey,
-            &root_bank,
-            ctx.blockstore.as_ref(),
-            Some(ctx.certificate_sender.clone()),
-            &mut events,
-        );
+        let mut consensus_pool = ConsensusPool::new_from_root_bank(my_pubkey, &root_bank);
 
         // Wait until migration has completed
         info!("{}: Certificate pool loop initialized", &my_pubkey);

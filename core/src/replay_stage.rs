@@ -90,7 +90,7 @@ use {
         voting_utils::GenerateVoteTxResult,
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -303,7 +303,6 @@ pub struct ReplaySenders {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
-    pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
 }
@@ -620,7 +619,6 @@ impl ReplayStage {
             drop_bank_sender,
             block_metadata_notifier,
             dumped_slots_sender,
-            certificate_sender,
             votor_event_sender,
             own_vote_sender,
         } = senders;
@@ -666,7 +664,6 @@ impl ReplayStage {
             drop_bank_sender: drop_bank_sender.clone(),
             bank_notification_sender: bank_notification_sender.clone(),
             leader_window_notifier,
-            certificate_sender,
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,

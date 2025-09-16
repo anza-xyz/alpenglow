@@ -1059,11 +1059,3 @@ impl ColumnName for columns::AlternateMerkleRootMeta {
 impl TypedColumn for columns::AlternateMerkleRootMeta {
     type Type = blockstore_meta::MerkleRootMeta;
 }
-
-impl SlotColumn for columns::SlotCertificates {}
-impl ColumnName for columns::SlotCertificates {
-    const NAME: &'static str = "slot_certificates";
-}
-impl TypedColumn for columns::SlotCertificates {
-    type Type = blockstore_meta::SlotCertificates;
-}

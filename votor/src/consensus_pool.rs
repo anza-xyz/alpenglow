@@ -14,12 +14,10 @@ use {
         vote_to_certificate_ids, Certificate, Stake, VoteType,
         MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
     },
-    crossbeam_channel::Sender,
     log::{error, trace},
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_hash::Hash,
-    solana_ledger::blockstore::Blockstore,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
@@ -130,8 +128,6 @@ pub struct ConsensusPool {
     /// Highest slot that has Finalize+Notarize or FinalizeFast, for use in standstill
     /// Also add a bool to indicate whether this slot has FinalizeFast certificate
     highest_finalized_with_notarize: Option<(Slot, bool)>,
-    /// The certificate sender, if set, newly created certificates will be sent here
-    certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
     /// Stats for the certificate pool
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
@@ -139,11 +135,7 @@ pub struct ConsensusPool {
 }
 
 impl ConsensusPool {
-    pub fn new_from_root_bank(
-        my_pubkey: Pubkey,
-        bank: &Bank,
-        certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
-    ) -> Self {
+    pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
         let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
@@ -156,7 +148,6 @@ impl ConsensusPool {
             highest_notarized_fallback: None,
             highest_finalized_slot: None,
             highest_finalized_with_notarize: None,
-            certificate_sender,
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
@@ -206,7 +197,6 @@ impl ConsensusPool {
     /// For each newly constructed certificate
     /// - Insert it into `self.certificates`
     /// - Potentially update `self.highest_notarized_fallback`,
-    /// - If it is a `is_critical` certificate, send via the certificate sender
     /// - Potentially update `self.highest_finalized_slot`,
     /// - If we have a new highest finalized slot, return it
     /// - update any newly created events
@@ -249,32 +239,12 @@ impl ConsensusPool {
                 }
             });
             let new_cert = Arc::new(vote_certificate_builder.build()?);
-            self.send_and_insert_certificate(cert_id, new_cert.clone(), events)?;
+            self.insert_certificate(cert_id, new_cert.clone(), events);
             self.stats
                 .incr_cert_type(new_cert.certificate.certificate_type(), true);
             new_certificates_to_send.push(new_cert);
         }
         Ok(new_certificates_to_send)
-    }
-
-    fn send_and_insert_certificate(
-        &mut self,
-        cert_id: Certificate,
-        vote_certificate: Arc<CertificateMessage>,
-        events: &mut Vec<VotorEvent>,
-    ) -> Result<(), AddVoteError> {
-        if let Some(sender) = &self.certificate_sender {
-            if cert_id.is_critical() {
-                if let Err(e) = sender.try_send((cert_id, (*vote_certificate).clone())) {
-                    error!("Unable to send certificate {cert_id:?}: {e:?}");
-                    return Err(AddVoteError::ChannelDisconnected(
-                        "CertificateSender".to_string(),
-                    ));
-                }
-            }
-        }
-        self.insert_certificate(cert_id, vote_certificate, events);
-        Ok(())
     }
 
     fn has_conflicting_vote(
@@ -513,7 +483,7 @@ impl ConsensusPool {
             return Ok(vec![]);
         }
         let new_certificate = Arc::new(certificate_message.clone());
-        self.send_and_insert_certificate(certificate_id, new_certificate.clone(), events)?;
+        self.insert_certificate(certificate_id, new_certificate.clone(), events);
 
         self.stats
             .incr_cert_type(certificate_id.certificate_type(), false);
@@ -715,37 +685,6 @@ impl ConsensusPool {
     }
 }
 
-pub fn load_from_blockstore(
-    my_pubkey: &Pubkey,
-    root_bank: &Bank,
-    blockstore: &Blockstore,
-    certificate_sender: Option<Sender<(Certificate, CertificateMessage)>>,
-    events: &mut Vec<VotorEvent>,
-) -> ConsensusPool {
-    let root_slot = root_bank.slot();
-    let mut consensus_pool =
-        ConsensusPool::new_from_root_bank(*my_pubkey, root_bank, certificate_sender);
-    for (slot, slot_cert) in blockstore.slot_certificates_iterator(root_slot).unwrap() {
-        let certs = slot_cert
-            .notarize_fallback_certificates
-            .into_iter()
-            .map(|(block_id, cert)| {
-                let cert_id = Certificate::NotarizeFallback(slot, block_id);
-                (cert_id, cert)
-            })
-            .chain(slot_cert.skip_certificate.map(|cert| {
-                let cert_id = Certificate::Skip(slot);
-                (cert_id, cert)
-            }));
-
-        for (cert_id, cert) in certs {
-            trace!("{my_pubkey}: loading certificate {cert_id:?} from blockstore into certificate pool");
-            consensus_pool.insert_certificate(cert_id, cert.into(), events);
-        }
-    }
-    consensus_pool
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -813,7 +752,7 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank, None),
+            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank),
             bank_forks,
         )
     }
@@ -1939,7 +1878,6 @@ mod tests {
         let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
-            None,
         );
 
         let root_bank = bank_forks.read().unwrap().root_bank();

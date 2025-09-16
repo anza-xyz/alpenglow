@@ -69,7 +69,7 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
+    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
         sync::{
@@ -114,7 +114,6 @@ pub struct VotorConfig {
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
-    pub certificate_sender: Sender<(Certificate, CertificateMessage)>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
 
@@ -165,7 +164,6 @@ impl Votor {
             drop_bank_sender,
             bank_notification_sender,
             leader_window_notifier,
-            certificate_sender,
             event_sender,
             event_receiver,
             own_vote_sender,
@@ -237,7 +235,6 @@ impl Votor {
             bls_sender,
             event_sender,
             commitment_sender,
-            certificate_sender,
         };
 
         let event_handler = EventHandler::new(event_handler_context);
