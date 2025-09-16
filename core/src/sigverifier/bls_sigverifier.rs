@@ -210,7 +210,10 @@ impl SigVerifier for BLSSigVerifier {
             let message = match packet.deserialize_slice(..) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    error!("Failed to deserialize BLS message: {e}, should not happen because verification succeeded");
+                    error!(
+                        "Failed to deserialize BLS message: {e}, should not happen because \
+                         verification succeeded"
+                    );
                     continue;
                 }
             };

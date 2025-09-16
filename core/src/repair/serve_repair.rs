@@ -273,7 +273,7 @@ type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
-    frozen_abi(digest = "4n6BDVREW7eS2xD3otZD7DKYhh3PWYYfZW2QmZ74zSmg")
+    frozen_abi(digest = "4zhY22Ens7hwEGMfq6wLyb9viynpcUYrSUCYnpgAS9rC")
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RepairProtocol {
