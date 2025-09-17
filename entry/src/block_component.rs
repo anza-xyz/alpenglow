@@ -372,6 +372,38 @@ impl BlockComponent {
         Self::BlockMarker(marker)
     }
 
+    /// If this component contains entries, returns a reference to them.
+    pub fn as_entries(&self) -> Option<&[Entry]> {
+        match self {
+            Self::Entries(entries) => Some(entries),
+            Self::BlockMarker(_) => None,
+        }
+    }
+
+    /// If this component contains a special marker, returns a reference to it.
+    pub fn as_block_marker(&self) -> Option<&VersionedBlockMarker> {
+        match self {
+            Self::Entries(_) => None,
+            Self::BlockMarker(marker) => Some(marker),
+        }
+    }
+
+    /// If this component contains entries, returns them as a vector.
+    pub fn into_entries(self) -> Option<Vec<Entry>> {
+        match self {
+            Self::Entries(entries) => Some(entries),
+            Self::BlockMarker(_) => None,
+        }
+    }
+
+    /// If this component contains a special marker, returns it.
+    pub fn into_block_marker(self) -> Option<VersionedBlockMarker> {
+        match self {
+            Self::Entries(_) => None,
+            Self::BlockMarker(marker) => Some(marker),
+        }
+    }
+
     /// Returns a slice of entries in this component.
     pub fn entries(&self) -> &[Entry] {
         match self {
