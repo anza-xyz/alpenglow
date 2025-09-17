@@ -113,6 +113,10 @@ impl SigVerifier for BLSSigVerifier {
             .write()
             .unwrap()
             .retain(|cert| cert.slot() > root_bank.slot());
+        self.vote_payload_cache
+            .write()
+            .unwrap()
+            .retain(|vote, _| vote.slot() > root_bank.slot());
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
