@@ -8,6 +8,7 @@ use {
     handler::{VoteStateHandle, VoteStateHandler, VoteStateTargetVersion},
     log::*,
     solana_account::{AccountSharedData, ReadableAccount, WritableAccount},
+    solana_bls_signatures::pubkey::PubkeyCompressed as BLSPubkeyCompressed,
     solana_clock::{Clock, Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_hash::Hash,
@@ -16,7 +17,7 @@ use {
     solana_rent::Rent,
     solana_slot_hashes::SlotHash,
     solana_transaction_context::{BorrowedInstructionAccount, IndexOfAccount, InstructionContext},
-    solana_vote_interface::{error::VoteError, program::id},
+    solana_vote_interface::{authorized_voters::AuthorizedVoters, error::VoteError, program::id},
     std::{
         cmp::Ordering,
         collections::{HashSet, VecDeque},
@@ -1037,6 +1038,36 @@ pub fn create_account_with_authorized(
 
     VoteStateV3::serialize(
         &VoteStateVersions::V3(Box::new(vote_state)),
+        vote_account.data_as_mut_slice(),
+    )
+    .unwrap();
+
+    vote_account
+}
+
+pub fn create_v4_account_with_authorized(
+    node_pubkey: &Pubkey,
+    authorized_voter: &Pubkey,
+    authorized_withdrawer: &Pubkey,
+    bls_pubkey_compressed: Option<&BLSPubkeyCompressed>,
+    inflation_rewards_commission_bps: u16,
+    lamports: u64,
+) -> AccountSharedData {
+    let mut vote_account = AccountSharedData::new(lamports, VoteStateV4::size_of(), &id());
+
+    let bls_pubkey_compressed =
+        bls_pubkey_compressed.map(|b| bincode::serialize(b).unwrap().try_into().unwrap());
+    let vote_state = VoteStateV4 {
+        node_pubkey: *node_pubkey,
+        authorized_voters: AuthorizedVoters::new(0, *authorized_voter),
+        authorized_withdrawer: *authorized_withdrawer,
+        bls_pubkey_compressed,
+        inflation_rewards_commission_bps,
+        ..VoteStateV4::default()
+    };
+
+    VoteStateV4::serialize(
+        &VoteStateVersions::V4(Box::new(vote_state)),
         vote_account.data_as_mut_slice(),
     )
     .unwrap();
@@ -3534,5 +3565,26 @@ mod tests {
             is_commission_update_allowed(first_normal_slot.saturating_add(slot), &epoch_schedule),
             expected_allowed
         );
+    }
+
+    #[test]
+    fn test_create_v4_account_with_authorized() {
+        let node_pubkey = Pubkey::new_unique();
+        let authorized_voter = Pubkey::new_unique();
+        let authorized_withdrawer = Pubkey::new_unique();
+        let bls_pubkey_compressed = BLSPubkeyCompressed::default();
+        let inflation_rewards_commission_bps = 10000;
+        let lamports = 100;
+        let vote_account = create_v4_account_with_authorized(
+            &node_pubkey,
+            &authorized_voter,
+            &authorized_withdrawer,
+            Some(&bls_pubkey_compressed),
+            inflation_rewards_commission_bps,
+            lamports,
+        );
+        assert_eq!(vote_account.lamports(), lamports);
+        assert_eq!(vote_account.owner(), &id());
+        assert_eq!(vote_account.data().len(), VoteStateV4::size_of());
     }
 }

@@ -33,7 +33,7 @@ impl BLSPubkeyToRankMap {
                 if *stake > 0 {
                     account
                         .bls_pubkey()
-                        .map(|bls_pubkey| (*pubkey, *bls_pubkey, *stake))
+                        .map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
                 } else {
                     None
                 }
@@ -231,11 +231,14 @@ impl VersionedEpochStakes {
 #[cfg(test)]
 pub(crate) mod tests {
     use {
-        super::*, solana_account::AccountSharedData,
+        super::*,
+        solana_account::AccountSharedData,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_vote::vote_account::VoteAccount,
-        solana_vote_program::vote_state::create_account_with_authorized,
-        solana_votor_messages::state::VoteState as AlpenglowVoteState, std::iter,
+        solana_vote_program::vote_state::{
+            create_account_with_authorized, create_v4_account_with_authorized,
+        },
+        std::iter,
         test_case::test_case,
     };
 
@@ -260,13 +263,13 @@ pub(crate) mod tests {
                         let authorized_voter = solana_pubkey::new_rand();
                         let bls_keypair = BLSKeypair::new();
                         let account = if is_alpenglow {
-                            AlpenglowVoteState::create_account_with_authorized(
+                            create_v4_account_with_authorized(
                                 &node_id,
                                 &authorized_voter,
                                 &node_id,
+                                Some(&bls_keypair.public.try_into().unwrap()),
                                 0,
                                 100,
-                                bls_keypair.public,
                             )
                         } else {
                             create_account_with_authorized(
@@ -400,6 +403,7 @@ pub(crate) mod tests {
     #[test_case(1; "single_vote_account")]
     #[test_case(2; "multiple_vote_accounts")]
     fn test_bls_pubkey_rank_map(num_vote_accounts_per_node: usize) {
+        solana_logger::setup();
         let num_nodes = 10;
         let num_vote_accounts = num_nodes * num_vote_accounts_per_node;
 
@@ -417,12 +421,12 @@ pub(crate) mod tests {
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
         for (pubkey, (_, vote_account)) in epoch_vote_accounts {
             let index = bls_pubkey_to_rank_map
-                .get_rank(vote_account.bls_pubkey().unwrap())
+                .get_rank(&vote_account.bls_pubkey().unwrap())
                 .unwrap();
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
                 bls_pubkey_to_rank_map.get_pubkey(*index as usize),
-                Some(&(pubkey, *vote_account.bls_pubkey().unwrap()))
+                Some(&(pubkey, vote_account.bls_pubkey().unwrap()))
             );
         }
 

@@ -12,8 +12,7 @@ use {
     solana_rent::Rent,
     solana_sdk_ids::stake::id,
     solana_stake_interface::stake_flags::StakeFlags,
-    solana_vote_interface::state::VoteStateV3,
-    solana_votor_messages::state::VoteState as AlpenglowVoteState,
+    solana_vote_interface::state::{VoteStateV3, VoteStateV4},
 };
 
 // utility function, used by Stakes, tests
@@ -107,15 +106,13 @@ fn do_create_account(
 ) -> AccountSharedData {
     let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
 
-    let credits = if solana_votor_messages::check_id(vote_account.owner()) {
-        AlpenglowVoteState::deserialize(vote_account.data())
-            .expect("alpenglow_vote_state")
-            .epoch_credits()
-            .credits()
+    let credits = if let Ok(vote_state_v3) = VoteStateV3::deserialize(vote_account.data()) {
+        vote_state_v3.credits()
     } else {
-        VoteStateV3::deserialize(vote_account.data())
-            .expect("vote_state")
-            .credits()
+        match VoteStateV4::deserialize(vote_account.data(), voter_pubkey) {
+            Ok(vote_state_v4) => vote_state_v4.epoch_credits.last().map_or(0, |(_, c, _)| *c),
+            Err(e) => panic!("Invalid vote account state data: {e}"),
+        }
     };
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());

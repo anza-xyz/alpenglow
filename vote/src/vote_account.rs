@@ -6,7 +6,10 @@ use {
         ser::{Serialize, Serializer},
     },
     solana_account::{AccountSharedData, ReadableAccount},
-    solana_bls_signatures::Pubkey as BLSPubkey,
+    solana_bls_signatures::{
+        pubkey::{AsPubkey, PubkeyCompressed as BLSPubkeyCompressed},
+        Pubkey as BLSPubkey,
+    },
     solana_instruction::error::InstructionError,
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
@@ -194,14 +197,14 @@ impl VoteAccount {
         }
     }
 
-    pub fn bls_pubkey(&self) -> Option<&BLSPubkey> {
+    pub fn bls_pubkey(&self) -> Option<BLSPubkey> {
         match &self.0.vote_state_view {
-            VoteAccountState::TowerBFT(_) => None,
-            VoteAccountState::Alpenglow => Some(
-                AlpenglowVoteState::deserialize(self.0.account.data())
-                    .unwrap()
-                    .bls_pubkey(),
-            ),
+            VoteAccountState::TowerBFT(vote_state) => vote_state.bls_pubkey_compressed().map(|b| {
+                let bls_pubkey_compressed =
+                    bincode::deserialize::<BLSPubkeyCompressed>(&b).unwrap();
+                BLSPubkeyCompressed::try_as_affine(&bls_pubkey_compressed).unwrap()
+            }),
+            VoteAccountState::Alpenglow => None,
         }
     }
 

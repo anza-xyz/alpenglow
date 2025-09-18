@@ -12770,6 +12770,7 @@ dependencies = [
  "serde_derive",
  "solana-account 3.0.0",
  "solana-bincode 3.0.0",
+ "solana-bls-signatures 0.3.0",
  "solana-clock 3.0.0",
  "solana-epoch-schedule 3.0.0",
  "solana-fee-calculator 3.0.0",

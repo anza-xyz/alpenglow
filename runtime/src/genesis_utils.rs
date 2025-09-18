@@ -2,7 +2,10 @@ use {
     agave_feature_set::{FeatureSet, FEATURE_NAMES},
     log::*,
     solana_account::{Account, AccountSharedData},
-    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_bls_signatures::{
+        keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
+        Pubkey as BLSPubkey,
+    },
     solana_cluster_type::ClusterType,
     solana_feature_gate_interface::{self as feature, Feature},
     solana_fee_calculator::FeeRateGovernor,
@@ -18,9 +21,7 @@ use {
     solana_stake_program::stake_state,
     solana_system_interface::program as system_program,
     solana_vote_program::vote_state,
-    solana_votor_messages::{
-        self, consensus_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
-    },
+    solana_votor_messages::{self, consensus_message::BLS_KEYPAIR_DERIVE_SEED},
     std::{borrow::Borrow, fs::File, io::Read},
 };
 
@@ -174,13 +175,14 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if alpenglow_so_path.is_some() {
-            AlpenglowVoteState::create_account_with_authorized(
+            let bls_pubkey_compressed: BLSPubkeyCompressed = bls_pubkey.try_into().unwrap();
+            vote_state::create_v4_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
+                Some(&bls_pubkey_compressed),
                 0,
                 *stake,
-                bls_pubkey,
             )
         } else {
             vote_state::create_account(&vote_pubkey, &node_pubkey, 0, *stake)
@@ -428,13 +430,15 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     alpenglow_so_path: Option<&str>,
 ) -> GenesisConfig {
     let validator_vote_account = if alpenglow_so_path.is_some() {
-        AlpenglowVoteState::create_account_with_authorized(
+        vote_state::create_v4_account_with_authorized(
             validator_pubkey,
             validator_vote_account_pubkey,
             validator_vote_account_pubkey,
+            validator_bls_pubkey
+                .map(|b| BLSPubkeyCompressed::try_from(b).unwrap())
+                .as_ref(),
             0,
             validator_stake_lamports,
-            *validator_bls_pubkey.unwrap(),
         )
     } else {
         vote_state::create_account(

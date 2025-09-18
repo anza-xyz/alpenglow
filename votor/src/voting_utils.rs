@@ -187,7 +187,7 @@ pub fn generate_vote_tx(
                     context.identity_keypair.pubkey()
                 );
             }
-            Some(key) => *key,
+            Some(key) => key,
         };
 
         let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
