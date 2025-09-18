@@ -8,7 +8,7 @@ use {
     itertools::Itertools,
     solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
     solana_accounts_db::hardened_unpack::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
-    solana_bls_signatures::Pubkey as BLSPubkey,
+    solana_bls_signatures::{pubkey::PubkeyCompressed as BLSPubkeyCompressed, Pubkey as BLSPubkey},
     solana_clap_utils::{
         input_parsers::{
             bls_pubkeys_of, cluster_type_of, pubkey_of, pubkeys_of,
@@ -268,13 +268,15 @@ fn add_validator_accounts(
             let bls_pubkey = bls_pubkeys_iter
                 .next()
                 .expect("Missing BLS pubkey for {identity_pubkey}");
-            AlpenglowVoteState::create_account_with_authorized(
+            let bls_pubkey_compressed: BLSPubkeyCompressed =
+                BLSPubkeyCompressed::try_from(*bls_pubkey).unwrap();
+            vote_state::create_v4_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
-                commission,
+                Some(&bls_pubkey_compressed),
+                commission.into(),
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
-                *bls_pubkey,
             )
         } else {
             vote_state::create_account_with_authorized(

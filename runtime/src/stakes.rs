@@ -558,7 +558,9 @@ pub(crate) mod tests {
         super::*,
         rayon::ThreadPoolBuilder,
         solana_account::WritableAccount,
-        solana_bls_signatures::keypair::Keypair as BLSKeypair,
+        solana_bls_signatures::{
+            keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
+        },
         solana_pubkey::Pubkey,
         solana_rent::Rent,
         solana_stake_program::stake_state,
@@ -576,13 +578,15 @@ pub(crate) mod tests {
         let vote_pubkey = solana_pubkey::new_rand();
         let bls_keypair = BLSKeypair::new();
         let vote_account = if is_alpenglow {
-            AlpenglowVoteState::create_account_with_authorized(
+            let bls_pubkey_compressed: BLSPubkeyCompressed =
+                BLSPubkeyCompressed::try_from(bls_keypair.public).unwrap();
+            vote_state::create_v4_account_with_authorized(
+                &solana_pubkey::new_rand(),
                 &vote_pubkey,
                 &vote_pubkey,
-                &vote_pubkey,
+                Some(&bls_pubkey_compressed),
                 0,
                 1,
-                bls_keypair.public,
             )
         } else {
             vote_state::create_account(&vote_pubkey, &solana_pubkey::new_rand(), 0, 1)
