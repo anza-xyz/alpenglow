@@ -9,8 +9,10 @@ use {
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
-    itertools::Itertools,
-    rayon::iter::{IntoParallelRefMutIterator, ParallelIterator},
+    rayon::iter::{
+        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
+        ParallelIterator,
+    },
     solana_bls_signatures::{
         pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
         signature::{Signature as BlsSignature, SignatureProjective},
@@ -22,8 +24,11 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBank, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
-    solana_votor_messages::consensus_message::{
-        Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+    solana_votor_messages::{
+        consensus_message::{
+            Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+        },
+        vote::Vote,
     },
     stats::BLSSigVerifierStats,
     std::{
@@ -34,6 +39,10 @@ use {
 };
 
 // TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
+// TODO(sam): This logic of extracting the message payload for signature verification
+//            is brittle, but another bincode serialization would be wasteful.
+//            Revisit this to figure out the best way to handle this.
+
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
     let stakes = bank.epoch_stakes_map();
     let epoch = bank.epoch_schedule().get_epoch(slot);
@@ -82,6 +91,7 @@ pub struct BLSSigVerifier {
     root_bank: SharableBank,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
+    vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
 }
 
 impl SigVerifier for BLSSigVerifier {
@@ -103,6 +113,10 @@ impl SigVerifier for BLSSigVerifier {
             .write()
             .unwrap()
             .retain(|cert| cert.slot() > root_bank.slot());
+        self.vote_payload_cache
+            .write()
+            .unwrap()
+            .retain(|vote, _| vote.slot() > root_bank.slot());
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -280,6 +294,7 @@ impl BLSSigVerifier {
             message_sender,
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
+            vote_payload_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -308,41 +323,94 @@ impl BLSSigVerifier {
 
         self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
         let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
-        let (pubkeys, signatures, messages): (Vec<_>, Vec<_>, Vec<_>) = votes_to_verify
+        let payloads: Vec<Arc<Vec<u8>>> = votes_to_verify
             .iter()
-            .map(|v| (v.bls_pubkey, &v.vote_message.signature, v.payload_slice()))
-            .multiunzip();
+            .map(|v| self.get_vote_payload(&v.vote_message.vote))
+            .collect();
 
-        // Optimistically verify signatures; this should be the most common case
-        if SignatureProjective::par_verify_distinct(&pubkeys, &signatures, &messages)
-            .unwrap_or(false)
-        {
+        let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+        for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
+            grouped_pubkeys
+                .entry(payload)
+                .or_default()
+                .push(v.bls_pubkey);
+        }
+
+        let distinct_messages = grouped_pubkeys.len();
+        self.stats
+            .votes_batch_distinct_messages_count
+            .fetch_add(distinct_messages as u64, Ordering::Relaxed);
+
+        let distinct_data: Vec<_> = grouped_pubkeys.into_iter().collect();
+        let aggregate_pubkeys_result: Result<Vec<PubkeyProjective>, _> = distinct_data
+            .iter()
+            .map(|(_, pubkeys)| PubkeyProjective::par_aggregate(pubkeys))
+            .collect();
+
+        let verified_optimistically = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
+            let all_signatures: Vec<&BlsSignature> = votes_to_verify
+                .iter()
+                .map(|v| &v.vote_message.signature)
+                .collect();
+
+            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(&all_signatures) {
+                if distinct_messages == 1 {
+                    let payload_slice = distinct_data[0].0.as_slice();
+                    aggregate_pubkeys[0]
+                        .verify_signature(&aggregate_signature, payload_slice)
+                        .unwrap_or(false)
+                } else {
+                    let payload_slices: Vec<&[u8]> =
+                        distinct_data.iter().map(|(p, _)| p.as_slice()).collect();
+
+                    let aggregate_pubkeys_affine: Vec<BlsPubkey> =
+                        aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
+                    let aggregate_pubkeys_refs: Vec<&BlsPubkey> =
+                        aggregate_pubkeys_affine.iter().collect();
+
+                    SignatureProjective::par_verify_distinct_aggregated(
+                        &aggregate_pubkeys_refs,
+                        &aggregate_signature.into(),
+                        &payload_slices,
+                    )
+                    .unwrap_or(false)
+                }
+            } else {
+                false
+            }
+        } else {
+            // Public key aggregation failed.
+            false
+        };
+
+        if verified_optimistically {
             votes_batch_optimistic_time.stop();
             self.stats
                 .votes_batch_optimistic_elapsed_us
                 .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
             return;
         }
+
         // Fallback: If the batch fails, verify each vote signature individually in parallel
         // to find the invalid ones.
         //
         // TODO(sam): keep a record of which validator's vote failed to incur penalty
         let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
-        votes_to_verify.par_iter_mut().for_each(|vote_to_verify| {
-            if !vote_to_verify
-                .bls_pubkey
-                .verify_signature(
-                    &vote_to_verify.vote_message.signature,
-                    vote_to_verify.payload_slice(),
-                )
-                .unwrap_or(false)
-            {
-                self.stats
-                    .received_bad_signature_votes
-                    .fetch_add(1, Ordering::Relaxed);
-                vote_to_verify.packet.meta_mut().set_discard(true);
-            }
-        });
+        votes_to_verify
+            .par_iter_mut()
+            .zip(payloads.par_iter())
+            .for_each(|(vote_to_verify, payload)| {
+                if !vote_to_verify
+                    .bls_pubkey
+                    .verify_signature(&vote_to_verify.vote_message.signature, payload)
+                    .unwrap_or(false)
+                {
+                    self.stats
+                        .received_bad_signature_votes
+                        .fetch_add(1, Ordering::Relaxed);
+                    vote_to_verify.packet.meta_mut().set_discard(true);
+                }
+            });
         votes_batch_parallel_verify_time.stop();
         self.stats
             .votes_batch_parallel_verify_count
@@ -489,6 +557,24 @@ impl BLSSigVerifier {
             _ => Err(CertVerifyError::SignatureVerificationFailed),
         }
     }
+
+    fn get_vote_payload(&self, vote: &Vote) -> Arc<Vec<u8>> {
+        let read_cache = self.vote_payload_cache.read().unwrap();
+        if let Some(payload) = read_cache.get(vote) {
+            return payload.clone();
+        }
+        drop(read_cache);
+
+        // Not in cache, so get a write lock
+        let mut write_cache = self.vote_payload_cache.write().unwrap();
+        if let Some(payload) = write_cache.get(vote) {
+            return payload.clone();
+        }
+
+        let payload = Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"));
+        write_cache.insert(*vote, payload.clone());
+        payload
+    }
 }
 
 #[derive(Debug)]
@@ -496,32 +582,6 @@ struct VoteToVerify<'a> {
     vote_message: VoteMessage,
     bls_pubkey: &'a BlsPubkey,
     packet: PacketRefMut<'a>,
-}
-
-impl VoteToVerify<'_> {
-    fn payload_slice(&self) -> &[u8] {
-        // TODO(sam): This logic of extracting the message payload for signature verification
-        //            is brittle, but another bincode serialization would be wasteful.
-        //            Revisit this to figure out the best way to handle this.
-
-        // TODO(sam): It is very likely that we receive the same kind of votes in batches, so
-        //            consider caching.
-
-        // The bincode serialization of `ConsensusMessage::Vote(VoteMessage)` has the layout:
-        // [ 4-byte Enum Discriminant | Vote Payload | 96-byte Signature | 2-byte Rank ]
-        const BINCODE_ENUM_DISCRIMINANT_SIZE: usize = 4;
-
-        // Calculate the end of the `Vote Payload` by subtracting the known size of the trailing
-        // fields (Signature and Rank) from the total packet size
-        let vote_payload_end = self
-            .packet
-            .meta()
-            .size
-            .saturating_sub(std::mem::size_of::<BlsSignature>())
-            .saturating_sub(std::mem::size_of::<u16>());
-
-        &self.packet.data(..).unwrap()[BINCODE_ENUM_DISCRIMINANT_SIZE..vote_payload_end]
-    }
 }
 
 struct CertToVerify<'a> {
@@ -895,6 +955,145 @@ mod tests {
     }
 
     #[test]
+    fn test_blssigverifier_verify_votes_two_distinct_messages() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
+
+        let num_votes_group1 = 3;
+        let num_votes_group2 = 4;
+        let num_votes = num_votes_group1 + num_votes_group2;
+        let mut packets = Vec::with_capacity(num_votes);
+
+        let vote1 = Vote::new_skip_vote(42);
+        let vote1_payload = bincode::serialize(&vote1).expect("Failed to serialize vote");
+        let vote2 = Vote::new_notarization_vote(43, Hash::new_unique());
+        let vote2_payload = bincode::serialize(&vote2).expect("Failed to serialize vote");
+
+        // Group 1 votes
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes_group1) {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+            let signature: BLSSignature = bls_keypair.sign(&vote1_payload).into();
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote: vote1,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        // Group 2 votes
+        for (i, validator_keypair) in validator_keypairs
+            .iter()
+            .enumerate()
+            .skip(num_votes_group1)
+            .take(num_votes_group2)
+        {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+            let signature: BLSSignature = bls_keypair.sign(&vote2_payload).into();
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote: vote2,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+
+        let mut processed_packets = 0;
+        for batch in result_batches {
+            for packet in batch.iter() {
+                processed_packets += 1;
+                assert!(
+                    !packet.meta().discard(),
+                    "Packet at rank {} should not be discarded",
+                    processed_packets - 1
+                );
+            }
+        }
+        assert_eq!(processed_packets, num_votes, "Did not process all packets");
+        assert_eq!(
+            verifier
+                .stats
+                .votes_batch_distinct_messages_count
+                .load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn test_blssigverifier_verify_votes_invalid_in_two_distinct_messages() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
+
+        let num_votes = 5;
+        let invalid_rank = 3; // This voter will sign vote 2 with an invalid signature.
+        let mut packets = Vec::with_capacity(num_votes);
+
+        let vote1 = Vote::new_skip_vote(42);
+        let vote1_payload = bincode::serialize(&vote1).expect("Failed to serialize vote");
+        let vote2 = Vote::new_skip_vote(43);
+        let vote2_payload = bincode::serialize(&vote2).expect("Failed to serialize vote");
+        let invalid_payload =
+            bincode::serialize(&Vote::new_skip_vote(99)).expect("Failed to serialize vote");
+
+        for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
+            let rank = i as u16;
+            let bls_keypair = &validator_keypair.bls_keypair;
+
+            // Split the votes: Ranks 0, 1 sign vote 1. Ranks 2, 3, 4 sign vote 2.
+            let (vote, payload) = if i < 2 {
+                (vote1, &vote1_payload)
+            } else {
+                (vote2, &vote2_payload)
+            };
+
+            let signature = if rank == invalid_rank {
+                bls_keypair.sign(&invalid_payload).into() // Invalid signature
+            } else {
+                bls_keypair.sign(payload).into()
+            };
+
+            let consensus_message = ConsensusMessage::Vote(VoteMessage {
+                vote,
+                signature,
+                rank,
+            });
+            let mut packet = Packet::default();
+            packet.populate_packet(None, &consensus_message).unwrap();
+            packets.push(packet);
+        }
+
+        let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
+        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+
+        for (i, packet) in result_batches.iter().flatten().enumerate() {
+            if i as u16 == invalid_rank {
+                assert!(
+                    packet.meta().discard(),
+                    "Packet at invalid rank {i} should be discarded"
+                );
+            } else {
+                assert!(
+                    !packet.meta().discard(),
+                    "Packet at valid rank {i} should not be discarded"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_blssigverifier_verify_votes_one_invalid_signature() {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, _) = crossbeam_channel::unbounded();
@@ -1085,7 +1284,7 @@ mod tests {
 
         let cert_message = CertificateMessage {
             certificate,
-            signature: BlsSignature::default(), // Use a default/wrong signature
+            signature: BLSSignature::default(), // Use a default/wrong signature
             bitmap: encoded_bitmap,
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
@@ -1238,7 +1437,7 @@ mod tests {
         // Create a certificate for slot 3, which is older than the root bank (slot 5)
         let cert_message = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 3, None),
-            signature: BlsSignature::default(),
+            signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
