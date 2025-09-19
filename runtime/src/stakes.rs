@@ -564,9 +564,8 @@ pub(crate) mod tests {
         solana_pubkey::Pubkey,
         solana_rent::Rent,
         solana_stake_program::stake_state,
-        solana_vote_interface::state::{VoteStateV3, VoteStateVersions},
+        solana_vote_interface::state::{VoteStateV3, VoteStateV4, VoteStateVersions},
         solana_vote_program::vote_state,
-        solana_votor_messages::state::VoteState as AlpenglowVoteState,
         test_case::test_case,
     };
 
@@ -700,9 +699,9 @@ pub(crate) mod tests {
         stakes_cache.check_and_store(&stake11_pubkey, &stake11_account, None);
 
         let vote11_node_pubkey = if is_alpenglow {
-            *AlpenglowVoteState::deserialize(vote11_account.data())
+            VoteStateV4::deserialize(vote11_account.data(), &vote11_pubkey)
                 .unwrap()
-                .node_pubkey()
+                .node_pubkey
         } else {
             vote_state::from(&vote11_account).unwrap().node_pubkey
         };
@@ -768,9 +767,9 @@ pub(crate) mod tests {
 
         // Vote account uninitialized
         if is_alpenglow {
-            vote_account.set_data(cache_data.clone());
-            let default_vote_state = AlpenglowVoteState::default();
-            default_vote_state.serialize_into(vote_account.data_as_mut_slice());
+            let default_vote_state = VoteStateV4::default();
+            let versioned = VoteStateVersions::new_v4(default_vote_state);
+            vote_state::to(&versioned, &mut vote_account).unwrap();
         } else {
             let default_vote_state = VoteStateV3::default();
             let versioned = VoteStateVersions::new_v3(default_vote_state);
