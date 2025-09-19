@@ -270,11 +270,12 @@ fn add_validator_accounts(
                 .expect("Missing BLS pubkey for {identity_pubkey}");
             let bls_pubkey_compressed: BLSPubkeyCompressed =
                 BLSPubkeyCompressed::try_from(*bls_pubkey).unwrap();
+            let bls_pubkey_serialized = bincode::serialize(&bls_pubkey_compressed).unwrap();
             vote_state::create_v4_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
-                Some(&bls_pubkey_compressed),
+                Some(bls_pubkey_serialized.try_into().unwrap()),
                 commission.into(),
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
             )
