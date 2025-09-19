@@ -28,7 +28,6 @@ mod tests {
         solana_pubkey::Pubkey,
         solana_signer::Signer,
         solana_vote::vote_account::VoteAccount,
-        solana_votor_messages::state::VoteState as AlpenglowVoteState,
         std::{
             collections::HashMap,
             io::{BufReader, BufWriter, Cursor},
@@ -208,7 +207,7 @@ mod tests {
         // Give some real stake distribution and generate real VersionedEpochStakes, to
         // make sure bls_pubkey_to_rank_map is populated correctly after deserialize.
         let vote_account = if is_alpenglow {
-            VoteAccount::new_from_alpenglow_vote_state(&AlpenglowVoteState::default())
+            VoteAccount::new_random_alpenglow()
         } else {
             VoteAccount::new_random()
         };
