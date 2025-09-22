@@ -31,14 +31,11 @@ impl BLSPubkeyToRankMap {
             .filter_map(|(pubkey, (stake, account))| {
                 if *stake > 0 {
                     account.vote_state_view().and_then(|vote_state| {
-                        vote_state
-                            .bls_pubkey_compressed()
-                            .and_then(|bls_pubkey_compressed_bytes| {
-                                let bls_pubkey_compressed =
-                                    BLSPubkeyCompressed(bls_pubkey_compressed_bytes);
-                                BLSPubkey::try_from(bls_pubkey_compressed).ok()
-                            })
-                            .map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
+                        let bls_pubkey_compressed_bytes = vote_state.bls_pubkey_compressed()?;
+                        let bls_pubkey_compressed =
+                            BLSPubkeyCompressed(bls_pubkey_compressed_bytes);
+                        let bls_pubkey = BLSPubkey::try_from(bls_pubkey_compressed).ok()?;
+                        Some((*pubkey, bls_pubkey, *stake))
                     })
                 } else {
                     None

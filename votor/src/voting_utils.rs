@@ -158,7 +158,7 @@ pub fn generate_vote_tx(
 ) -> GenerateVoteTxResult {
     let vote_account_pubkey = context.vote_account_pubkey;
     let authorized_voter_keypair;
-    let bls_pubkey_in_vote_account: BLSPubkey;
+    let bls_pubkey_in_vote_account;
     {
         let authorized_voter_keypairs = context.authorized_voter_keypairs.read().unwrap();
         if authorized_voter_keypairs.is_empty() {

@@ -734,8 +734,8 @@ where
             VoteStateV4::deserialize(vote_account.data(), &Pubkey::default()).unwrap();
         vote_state.epoch_credits.push((0, 0, 0));
         for _ in 0..MAX_LOCKOUT_HISTORY + 42 {
-            let current_credits = vote_state.epoch_credits.last_mut().unwrap();
-            current_credits.1 += 16;
+            let (_, current_credits, _) = vote_state.epoch_credits.last_mut().unwrap();
+            *current_credits += 16;
             let versioned = VoteStateVersions::V4(Box::new(vote_state.clone()));
             vote_state::to(&versioned, &mut vote_account).unwrap();
             bank0.store_account_and_update_capitalization(&vote_id, &vote_account);
