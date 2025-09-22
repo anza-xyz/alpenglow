@@ -20,6 +20,7 @@ use {
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
     solana_system_interface::program as system_program,
+    solana_vote_interface::state::BLS_PUBLIC_KEY_COMPRESSED_SIZE,
     solana_vote_program::vote_state,
     solana_votor_messages::{self, consensus_message::BLS_KEYPAIR_DERIVE_SEED},
     std::{borrow::Borrow, fs::File, io::Read},
@@ -354,6 +355,13 @@ pub fn activate_feature(genesis_config: &mut GenesisConfig, feature_id: Pubkey) 
     );
 }
 
+pub fn bls_pubkey_to_compressed_bytes(
+    bls_pubkey: &BLSPubkey,
+) -> [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE] {
+    let key = BLSPubkeyCompressed::try_from(bls_pubkey).unwrap();
+    bincode::serialize(&key).unwrap().try_into().unwrap()
+}
+
 pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpenglow_so_path: &str) {
     // Parse out the elf
     let mut program_data_elf: Vec<u8> = vec![];
@@ -431,10 +439,7 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     alpenglow_so_path: Option<&str>,
 ) -> GenesisConfig {
     let validator_vote_account = if alpenglow_so_path.is_some() {
-        let bls_pubkey_compressed = validator_bls_pubkey.map(|b| {
-            let key = BLSPubkeyCompressed::try_from(b).unwrap();
-            bincode::serialize(&key).unwrap().try_into().unwrap()
-        });
+        let bls_pubkey_compressed = validator_bls_pubkey.map(bls_pubkey_to_compressed_bytes);
         vote_state::create_v4_account_with_authorized(
             validator_pubkey,
             validator_vote_account_pubkey,

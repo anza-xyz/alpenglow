@@ -556,11 +556,10 @@ fn refresh_vote_accounts(
 pub(crate) mod tests {
     use {
         super::*,
+        crate::genesis_utils::bls_pubkey_to_compressed_bytes,
         rayon::ThreadPoolBuilder,
         solana_account::WritableAccount,
-        solana_bls_signatures::{
-            keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
-        },
+        solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_pubkey::Pubkey,
         solana_rent::Rent,
         solana_stake_program::stake_state,
@@ -577,14 +576,12 @@ pub(crate) mod tests {
         let vote_pubkey = solana_pubkey::new_rand();
         let bls_keypair = BLSKeypair::new();
         let vote_account = if is_alpenglow {
-            let bls_pubkey_compressed: BLSPubkeyCompressed =
-                BLSPubkeyCompressed::try_from(bls_keypair.public).unwrap();
-            let bls_pubkey_serialized = bincode::serialize(&bls_pubkey_compressed).unwrap();
+            let bls_pubkey_compressed = bls_pubkey_to_compressed_bytes(&bls_keypair.public);
             vote_state::create_v4_account_with_authorized(
                 &solana_pubkey::new_rand(),
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_serialized.try_into().unwrap()),
+                Some(bls_pubkey_compressed),
                 0,
                 1,
             )

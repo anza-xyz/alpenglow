@@ -8,7 +8,7 @@ use {
     itertools::Itertools,
     solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
     solana_accounts_db::hardened_unpack::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
-    solana_bls_signatures::{pubkey::PubkeyCompressed as BLSPubkeyCompressed, Pubkey as BLSPubkey},
+    solana_bls_signatures::Pubkey as BLSPubkey,
     solana_clap_utils::{
         input_parsers::{
             bls_pubkeys_of, cluster_type_of, pubkey_of, pubkeys_of,
@@ -41,7 +41,9 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    solana_runtime::genesis_utils::include_alpenglow_bpf_program,
+    solana_runtime::genesis_utils::{
+        bls_pubkey_to_compressed_bytes, include_alpenglow_bpf_program,
+    },
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
@@ -268,14 +270,12 @@ fn add_validator_accounts(
             let bls_pubkey = bls_pubkeys_iter
                 .next()
                 .expect("Missing BLS pubkey for {identity_pubkey}");
-            let bls_pubkey_compressed: BLSPubkeyCompressed =
-                BLSPubkeyCompressed::try_from(*bls_pubkey).unwrap();
-            let bls_pubkey_serialized = bincode::serialize(&bls_pubkey_compressed).unwrap();
+            let bls_pubkey_compressed = bls_pubkey_to_compressed_bytes(bls_pubkey);
             vote_state::create_v4_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
-                Some(bls_pubkey_serialized.try_into().unwrap()),
+                Some(bls_pubkey_compressed),
                 commission.into(),
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
             )
