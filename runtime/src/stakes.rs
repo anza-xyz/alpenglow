@@ -576,12 +576,11 @@ pub(crate) mod tests {
         let vote_pubkey = solana_pubkey::new_rand();
         let bls_keypair = BLSKeypair::new();
         let vote_account = if is_alpenglow {
-            let bls_pubkey_compressed = bls_pubkey_to_compressed_bytes(&bls_keypair.public);
             vote_state::create_v4_account_with_authorized(
                 &solana_pubkey::new_rand(),
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_compressed),
+                Some(bls_pubkey_to_compressed_bytes(&bls_keypair.public)),
                 0,
                 1,
             )

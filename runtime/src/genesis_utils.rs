@@ -176,13 +176,11 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if alpenglow_so_path.is_some() {
-            let bls_pubkey_compressed: BLSPubkeyCompressed = bls_pubkey.try_into().unwrap();
-            let bls_pubkey_serialized = bincode::serialize(&bls_pubkey_compressed).unwrap();
             vote_state::create_v4_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_serialized.try_into().unwrap()),
+                Some(bls_pubkey_to_compressed_bytes(&bls_pubkey)),
                 0,
                 *stake,
             )
@@ -439,12 +437,11 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     alpenglow_so_path: Option<&str>,
 ) -> GenesisConfig {
     let validator_vote_account = if alpenglow_so_path.is_some() {
-        let bls_pubkey_compressed = validator_bls_pubkey.map(bls_pubkey_to_compressed_bytes);
         vote_state::create_v4_account_with_authorized(
             validator_pubkey,
             validator_vote_account_pubkey,
             validator_vote_account_pubkey,
-            bls_pubkey_compressed,
+            validator_bls_pubkey.map(bls_pubkey_to_compressed_bytes),
             0,
             validator_stake_lamports,
         )

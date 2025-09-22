@@ -240,6 +240,7 @@ impl VersionedEpochStakes {
 pub(crate) mod tests {
     use {
         super::*,
+        crate::genesis_utils::bls_pubkey_to_compressed_bytes,
         solana_account::AccountSharedData,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_vote::vote_account::VoteAccount,
@@ -269,20 +270,12 @@ pub(crate) mod tests {
                     node_id,
                     iter::repeat_with(|| {
                         let authorized_voter = solana_pubkey::new_rand();
-                        let bls_pubkey_compressed: BLSPubkeyCompressed =
-                            BLSKeypair::new().public.try_into().unwrap();
-                        let bls_pubkey_compressed_serialized =
-                            bincode::serialize(&bls_pubkey_compressed)
-                                .unwrap()
-                                .try_into()
-                                .unwrap();
-
                         let account = if is_alpenglow {
                             create_v4_account_with_authorized(
                                 &node_id,
                                 &authorized_voter,
                                 &node_id,
-                                Some(bls_pubkey_compressed_serialized),
+                                Some(bls_pubkey_to_compressed_bytes(&BLSKeypair::new().public)),
                                 0,
                                 100,
                             )
