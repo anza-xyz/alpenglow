@@ -239,6 +239,7 @@ impl VersionedEpochStakes {
 pub(crate) mod tests {
     use {
         super::*,
+        crate::genesis_utils::bls_pubkey_to_compressed_bytes,
         solana_account::AccountSharedData,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_vote::vote_account::VoteAccount,
