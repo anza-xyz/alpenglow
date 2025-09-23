@@ -285,7 +285,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_streamer::{
-            quic::{spawn_server, QuicServerParams, SpawnServerResult},
+            quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
             socket::SocketAddrSpace,
             streamer::StakedNodes,
         },
@@ -301,6 +301,7 @@ mod tests {
             },
         },
         test_case::test_case,
+        tokio_util::sync::CancellationToken,
     };
 
     fn create_voting_service(
@@ -400,15 +401,15 @@ mod tests {
         let SpawnServerResult {
             thread: quic_server_thread,
             ..
-        } = spawn_server(
+        } = spawn_server_with_cancel(
             "AlpenglowLocalClusterTest",
             "quic_streamer_test",
             [socket],
             &Keypair::new(),
             sender,
-            exit.clone(),
             staked_nodes,
             QuicServerParams::default_for_tests(),
+            CancellationToken::new(),
         )
         .unwrap();
         let packets = receiver.recv().unwrap();

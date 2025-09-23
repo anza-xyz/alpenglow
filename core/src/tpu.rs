@@ -49,7 +49,7 @@ use {
         vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_streamer::{
-        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
         streamer::StakedNodes,
     },
     solana_turbine::{
@@ -67,6 +67,7 @@ use {
         time::Duration,
     },
     tokio::sync::mpsc::Sender as AsyncSender,
+    tokio_util::sync::CancellationToken,
 };
 
 pub struct TpuSockets {
@@ -159,6 +160,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
+        cancel: CancellationToken,
         migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let TpuSockets {
@@ -212,15 +214,15 @@ impl Tpu {
             endpoints: _,
             thread: tpu_vote_quic_t,
             key_updater: vote_streamer_key_updater,
-        } = spawn_server(
+        } = spawn_server_with_cancel(
             "solQuicTVo",
             "quic_streamer_tpu_vote",
             tpu_vote_quic_sockets,
             keypair,
             vote_packet_sender.clone(),
-            exit.clone(),
             staked_nodes.clone(),
             vote_quic_server_config,
+            cancel.clone(),
         )
         .unwrap();
 
@@ -230,15 +232,15 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_quic_t,
                 key_updater,
-            } = spawn_server(
+            } = spawn_server_with_cancel(
                 "solQuicTpu",
                 "quic_streamer_tpu",
                 transactions_quic_sockets,
                 keypair,
                 packet_sender,
-                exit.clone(),
                 staked_nodes.clone(),
                 tpu_quic_server_config,
+                cancel.clone(),
             )
             .unwrap();
             (Some(tpu_quic_t), Some(key_updater))
@@ -252,15 +254,15 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_forwards_quic_t,
                 key_updater: forwards_key_updater,
-            } = spawn_server(
+            } = spawn_server_with_cancel(
                 "solQuicTpuFwd",
                 "quic_streamer_tpu_forwards",
                 transactions_forwards_quic_sockets,
                 keypair,
                 forwarded_packet_sender,
-                exit.clone(),
                 staked_nodes.clone(),
                 tpu_fwd_quic_server_config,
+                cancel,
             )
             .unwrap();
             (Some(tpu_forwards_quic_t), Some(forwards_key_updater))
