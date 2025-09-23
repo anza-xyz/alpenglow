@@ -48,8 +48,7 @@ use {
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
-    solana_vote_program::vote_state::{self, VoteStateV3},
-    solana_votor_messages::state::VoteState as AlpenglowVoteState,
+    solana_vote_program::vote_state::{self, VoteStateV3, VoteStateV4},
     std::{
         collections::HashMap,
         error,
@@ -276,7 +275,7 @@ fn add_validator_accounts(
                 identity_pubkey,
                 Some(bls_pubkey_to_compressed_bytes(bls_pubkey)),
                 commission.into(),
-                AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
+                rent.minimum_balance(VoteStateV4::size_of()).max(1),
             )
         } else {
             vote_state::create_account_with_authorized(
@@ -284,7 +283,7 @@ fn add_validator_accounts(
                 identity_pubkey,
                 identity_pubkey,
                 commission,
-                VoteStateV3::get_rent_exempt_reserve(rent).max(1),
+                rent.minimum_balance(VoteStateV3::size_of()).max(1),
             )
         };
 
@@ -346,7 +345,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     // vote account
     let default_bootstrap_validator_lamports = &(500 * LAMPORTS_PER_SOL)
         .max(VoteStateV3::get_rent_exempt_reserve(&rent))
-        .max(AlpenglowVoteState::get_rent_exempt_reserve(&rent))
+        .max(rent.minimum_balance(VoteStateV3::size_of()).max(1))
         .to_string();
 
     // stake account
