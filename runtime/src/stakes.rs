@@ -78,7 +78,7 @@ impl StakesCache {
         // Zero lamport accounts are not stored in accounts-db
         // and so should be removed from cache as well.
         if account.lamports() == 0 {
-            if solana_vote_program::check_id(owner) || solana_votor_messages::check_id(owner) {
+            if solana_vote_program::check_id(owner) {
                 let _old_vote_account = {
                     let mut stakes = self.0.write().unwrap();
                     stakes.remove_vote_account(pubkey)
@@ -119,39 +119,6 @@ impl StakesCache {
                     stakes.remove_vote_account(pubkey)
                 };
             };
-        } else if solana_votor_messages::check_id(owner) {
-            match VoteAccount::try_from(account.to_account_shared_data()) {
-                Ok(vote_account) => {
-                    if vote_account
-                        .alpenglow_vote_state()
-                        .unwrap()
-                        .is_initialized()
-                    {
-                        // drop the old account after releasing the lock
-                        let _old_vote_account = {
-                            let mut stakes = self.0.write().unwrap();
-                            stakes.upsert_vote_account(
-                                pubkey,
-                                vote_account,
-                                new_rate_activation_epoch,
-                            )
-                        };
-                    } else {
-                        // drop the old account after releasing the lock
-                        let _old_vote_account = {
-                            let mut stakes = self.0.write().unwrap();
-                            stakes.remove_vote_account(pubkey)
-                        };
-                    }
-                }
-                Err(_) => {
-                    // drop the old account after releasing the lock
-                    let _old_vote_account = {
-                        let mut stakes = self.0.write().unwrap();
-                        stakes.remove_vote_account(pubkey)
-                    };
-                }
-            }
         } else if solana_stake_program::check_id(owner) {
             match StakeAccount::try_from(account.to_account_shared_data()) {
                 Ok(stake_account) => {
@@ -246,19 +213,9 @@ impl Stakes<StakeAccount> {
                 let voter_pubkey = &delegation.voter_pubkey;
                 if stakes.vote_accounts.get(voter_pubkey).is_none() {
                     if let Some(account) = get_account(voter_pubkey) {
-                        let is_valid_account = if solana_votor_messages::check_id(account.owner()) {
-                            match VoteAccount::try_from(account.clone()) {
-                                Ok(vote_account) => vote_account
-                                    .alpenglow_vote_state()
-                                    .unwrap()
-                                    .is_initialized(),
-                                Err(_) => false,
-                            }
-                        } else {
-                            VoteStateVersions::is_correct_size_and_initialized(account.data())
-                                && VoteAccount::try_from(account.clone()).is_ok()
-                        };
-                        if is_valid_account {
+                        if VoteStateVersions::is_correct_size_and_initialized(account.data())
+                            && VoteAccount::try_from(account.clone()).is_ok()
+                        {
                             error!("vote account not cached: {voter_pubkey}, {account:?}");
                             return Err(Error::VoteAccountNotCached(*voter_pubkey));
                         }
@@ -562,6 +519,7 @@ pub(crate) mod tests {
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_pubkey::Pubkey,
         solana_rent::Rent,
+        solana_stake_interface as stake,
         solana_stake_program::stake_state,
         solana_vote_interface::state::{VoteStateV3, VoteStateV4, VoteStateVersions},
         solana_vote_program::vote_state,
@@ -925,7 +883,7 @@ pub(crate) mod tests {
         // not a stake account, and whacks above entry
         stakes_cache.check_and_store(
             &stake_pubkey,
-            &AccountSharedData::new(1, 0, &solana_stake_interface::program::id()),
+            &AccountSharedData::new(1, 0, &stake::program::id()),
             None,
         );
         {

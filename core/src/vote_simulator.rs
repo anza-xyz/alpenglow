@@ -111,9 +111,7 @@ impl VoteSimulator {
                     let tower_sync = if let Some(vote_account) =
                         parent_bank.get_vote_account(&keypairs.vote_keypair.pubkey())
                     {
-                        let mut vote_state = TowerVoteState::from(
-                            vote_account.vote_state_view().expect("must be TowerBFT"),
-                        );
+                        let mut vote_state = TowerVoteState::from(vote_account.vote_state_view());
                         vote_state.process_next_vote_slot(parent);
                         TowerSync::new(
                             vote_state.votes,
@@ -144,7 +142,7 @@ impl VoteSimulator {
                     let vote_account = new_bank
                         .get_vote_account(&keypairs.vote_keypair.pubkey())
                         .unwrap();
-                    let vote_state_view = vote_account.vote_state_view().unwrap();
+                    let vote_state_view = vote_account.vote_state_view();
                     assert!(vote_state_view
                         .votes_iter()
                         .any(|lockout| lockout.slot() == parent));

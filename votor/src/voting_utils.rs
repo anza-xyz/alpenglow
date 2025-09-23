@@ -46,8 +46,6 @@ pub enum GenerateVoteTxResult {
     // The following are misconfiguration errors
     // The authorized voter for the given pubkey and Epoch does not exist
     NoAuthorizedVoter(Pubkey, u64),
-    // The vote state associated with given pubkey does not exist
-    NoVoteState(Pubkey),
     // The vote account associated with given pubkey does not exist
     VoteAccountNotFound(Pubkey),
 
@@ -69,9 +67,7 @@ impl GenerateVoteTxResult {
 
     pub fn is_invalid_config(&self) -> bool {
         match self {
-            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
-                true
-            }
+            Self::NoAuthorizedVoter(_, _) | Self::VoteAccountNotFound(_) => true,
             Self::NonVoting
             | Self::HotSpare
             | Self::WaitForStartupVerification
@@ -83,9 +79,7 @@ impl GenerateVoteTxResult {
 
     pub fn is_transient_error(&self) -> bool {
         match self {
-            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
-                false
-            }
+            Self::NoAuthorizedVoter(_, _) | Self::VoteAccountNotFound(_) => false,
             Self::NonVoting
             | Self::HotSpare
             | Self::WaitForStartupVerification
@@ -172,9 +166,7 @@ pub fn generate_vote_tx(
         let Some(vote_account) = bank.get_vote_account(&vote_account_pubkey) else {
             return GenerateVoteTxResult::VoteAccountNotFound(vote_account_pubkey);
         };
-        let Some(vote_state_view) = vote_account.vote_state_view() else {
-            return GenerateVoteTxResult::NoVoteState(vote_account_pubkey);
-        };
+        let vote_state_view = vote_account.vote_state_view();
         if vote_state_view.node_pubkey() != &context.identity_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",

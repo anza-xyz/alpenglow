@@ -1171,8 +1171,7 @@ impl JsonRpcRequestProcessor {
                     }
                 }
 
-                // TODO(wen): make this work for Alpenglow
-                let vote_state_view = account.vote_state_view()?;
+                let vote_state_view = account.vote_state_view();
                 let last_vote = vote_state_view.last_voted_slot().unwrap_or(0);
                 let num_epoch_credits = vote_state_view.num_epoch_credits();
                 let epoch_credits = vote_state_view

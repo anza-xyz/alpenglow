@@ -407,26 +407,20 @@ impl Bank {
             debug!("could not find vote account {vote_pubkey} in cache");
             return None;
         };
-
-        if vote_account.owner() != &solana_vote_program::id()
-            && !solana_votor_messages::check_id(vote_account.owner())
-        {
-            return None;
-        }
-
+        let vote_state = vote_account.vote_state_view();
         let stake_state = stake_account.stake_state();
 
         match redeem_rewards(
             rewarded_epoch,
             stake_state,
-            vote_account,
+            vote_state,
             point_value,
             stake_history,
             reward_calc_tracer,
             new_rate_activation_epoch,
         ) {
             Ok((stake_reward, vote_rewards, stake)) => {
-                let commission = vote_account.commission();
+                let commission = vote_state.commission();
                 let stake_reward = PartitionedStakeReward {
                     stake_pubkey,
                     stake,
@@ -584,14 +578,13 @@ impl Bank {
                     let Some(vote_account) = cached_vote_accounts.get(&vote_pubkey) else {
                         return 0;
                     };
-                    if vote_account.owner() != &solana_vote_program
-                        && !solana_votor_messages::check_id(vote_account.owner())
-                    {
+                    if vote_account.owner() != &solana_vote_program {
                         return 0;
                     }
+
                     calculate_points(
                         stake_account.stake_state(),
-                        vote_account,
+                        vote_account.vote_state_view(),
                         stake_history,
                         new_warmup_cooldown_rate_epoch,
                     )

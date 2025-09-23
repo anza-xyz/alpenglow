@@ -30,13 +30,15 @@ impl BLSPubkeyToRankMap {
             .iter()
             .filter_map(|(pubkey, (stake, account))| {
                 if *stake > 0 {
-                    account.vote_state_view().and_then(|vote_state| {
-                        let bls_pubkey_compressed_bytes = vote_state.bls_pubkey_compressed()?;
-                        let bls_pubkey_compressed =
-                            BLSPubkeyCompressed(bls_pubkey_compressed_bytes);
-                        let bls_pubkey = BLSPubkey::try_from(bls_pubkey_compressed).ok()?;
-                        Some((*pubkey, bls_pubkey, *stake))
-                    })
+                    account
+                        .vote_state_view()
+                        .bls_pubkey_compressed()
+                        .and_then(|bls_pubkey_compressed_bytes| {
+                            let bls_pubkey_compressed =
+                                BLSPubkeyCompressed(bls_pubkey_compressed_bytes);
+                            BLSPubkey::try_from(bls_pubkey_compressed).ok()
+                        })
+                        .map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
                 } else {
                     None
                 }
@@ -203,7 +205,7 @@ impl VersionedEpochStakes {
         let epoch_authorized_voters = epoch_vote_accounts
             .iter()
             .filter_map(|(key, (stake, account))| {
-                let vote_state = account.vote_state_view()?;
+                let vote_state = account.vote_state_view();
 
                 if *stake > 0 {
                     if let Some(authorized_voter) =
@@ -237,7 +239,6 @@ impl VersionedEpochStakes {
 pub(crate) mod tests {
     use {
         super::*,
-        crate::genesis_utils::bls_pubkey_to_compressed_bytes,
         solana_account::AccountSharedData,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
         solana_vote::vote_account::VoteAccount,
@@ -425,7 +426,7 @@ pub(crate) mod tests {
         let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
         for (pubkey, (_, vote_account)) in epoch_vote_accounts {
-            let vote_state_view = vote_account.vote_state_view().unwrap();
+            let vote_state_view = vote_account.vote_state_view();
             let bls_pubkey_compressed = bincode::deserialize::<BLSPubkeyCompressed>(
                 &vote_state_view.bls_pubkey_compressed().unwrap(),
             )

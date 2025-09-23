@@ -9,7 +9,7 @@ use {
     solana_instruction::error::InstructionError,
     solana_stake_interface::{error::StakeError, stake_history::StakeHistory},
     solana_stake_program::stake_state::{Stake, StakeStateV2},
-    solana_vote::vote_account::VoteAccount,
+    solana_vote::vote_state_view::VoteStateView,
 };
 
 pub mod points;
@@ -29,7 +29,7 @@ struct CalculatedStakeRewards {
 pub fn redeem_rewards(
     rewarded_epoch: Epoch,
     stake_state: &StakeStateV2,
-    vote_account: &VoteAccount,
+    vote_state: &VoteStateView,
     point_value: &PointValue,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
@@ -48,7 +48,7 @@ pub fn redeem_rewards(
                 meta.rent_exempt_reserve,
             ));
             inflation_point_calc_tracer(&InflationPointCalculationEvent::Commission(
-                vote_account.commission(),
+                vote_state.commission(),
             ));
         }
 
@@ -57,7 +57,7 @@ pub fn redeem_rewards(
             rewarded_epoch,
             &mut stake,
             point_value,
-            vote_account,
+            vote_state,
             stake_history,
             inflation_point_calc_tracer,
             new_rate_activation_epoch,
@@ -75,7 +75,7 @@ fn redeem_stake_rewards(
     rewarded_epoch: Epoch,
     stake: &mut Stake,
     point_value: &PointValue,
-    vote_account: &VoteAccount,
+    vote_state: &VoteStateView,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
@@ -90,7 +90,7 @@ fn redeem_stake_rewards(
         rewarded_epoch,
         stake,
         point_value,
-        vote_account,
+        vote_state,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
         new_rate_activation_epoch,
@@ -122,7 +122,7 @@ fn calculate_stake_rewards(
     rewarded_epoch: Epoch,
     stake: &Stake,
     point_value: &PointValue,
-    vote_account: &VoteAccount,
+    vote_state: &VoteStateView,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
@@ -134,7 +134,7 @@ fn calculate_stake_rewards(
         mut force_credits_update_with_skipped_reward,
     } = calculate_stake_points_and_credits(
         stake,
-        vote_account,
+        vote_state,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
         new_rate_activation_epoch,
@@ -193,7 +193,7 @@ fn calculate_stake_rewards(
         return None;
     }
     let (voter_rewards, staker_rewards, is_split) =
-        commission_split(vote_account.commission(), rewards);
+        commission_split(vote_state.commission(), rewards);
     if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
         inflation_point_calc_tracer(&InflationPointCalculationEvent::SplitRewards(
             rewards,
@@ -266,12 +266,12 @@ mod tests {
     fn new_stake(
         stake: u64,
         voter_pubkey: &Pubkey,
-        credits_observed: u64,
+        vote_state: &VoteStateV3,
         activation_epoch: Epoch,
     ) -> Stake {
         Stake {
             delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
-            credits_observed,
+            credits_observed: vote_state.credits(),
         }
     }
 
@@ -281,9 +281,8 @@ mod tests {
         // assume stake.stake() is right
         // bootstrap means fully-vested stake at epoch 0
         let stake_lamports = 1;
-        let mut stake = new_stake(stake_lamports, &Pubkey::default(), 0, u64::MAX);
+        let mut stake = new_stake(stake_lamports, &Pubkey::default(), &vote_state, u64::MAX);
 
-        let vote_account = { VoteAccount::new_from_vote_state(&vote_state) };
         // this one can't collect now, credits_observed == vote_state.credits()
         assert_eq!(
             None,
@@ -294,7 +293,7 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -302,11 +301,8 @@ mod tests {
         );
 
         // put 2 credits in at epoch 0
-        let vote_account = {
-            vote_state.increment_credits(0, 1);
-            vote_state.increment_credits(0, 1);
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.increment_credits(0, 1);
+        vote_state.increment_credits(0, 1);
 
         // this one should be able to collect exactly 2
         assert_eq!(
@@ -318,7 +314,7 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -335,12 +331,9 @@ mod tests {
     #[test]
     fn test_stake_state_calculate_rewards() {
         let mut vote_state = VoteStateV3::default();
-
         // assume stake.stake() is right
         // bootstrap means fully-vested stake at epoch 0
-        let mut stake = new_stake(1, &Pubkey::default(), 0, u64::MAX);
-
-        let vote_account = VoteAccount::new_from_vote_state(&vote_state);
+        let mut stake = new_stake(1, &Pubkey::default(), &vote_state, u64::MAX);
 
         // this one can't collect now, credits_observed == vote_state.credits()
         assert_eq!(
@@ -352,7 +345,7 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -360,11 +353,8 @@ mod tests {
         );
 
         // put 2 credits in at epoch 0
-        let vote_account = {
-            vote_state.increment_credits(0, 1);
-            vote_state.increment_credits(0, 1);
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.increment_credits(0, 1);
+        vote_state.increment_credits(0, 1);
 
         // this one should be able to collect exactly 2
         assert_eq!(
@@ -380,7 +370,7 @@ mod tests {
                     rewards: 2,
                     points: 2 // all his
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -402,7 +392,7 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -410,10 +400,7 @@ mod tests {
         );
 
         // put 1 credit in epoch 1
-        let vote_account = {
-            vote_state.increment_credits(1, 1);
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.increment_credits(1, 1);
 
         stake.credits_observed = 2;
         // this one should be able to collect the one just added
@@ -430,7 +417,7 @@ mod tests {
                     rewards: 2,
                     points: 2
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -438,10 +425,7 @@ mod tests {
         );
 
         // put 1 credit in epoch 2
-        let vote_account = {
-            vote_state.increment_credits(2, 1);
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.increment_credits(2, 1);
         // this one should be able to collect 2 now
         assert_eq!(
             Some(CalculatedStakeRewards {
@@ -456,7 +440,7 @@ mod tests {
                     rewards: 2,
                     points: 2
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -481,7 +465,7 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -490,10 +474,7 @@ mod tests {
 
         // same as above, but is a really small commission out of 32 bits,
         //  verify that None comes back on small redemptions where no one gets paid
-        let vote_account = {
-            vote_state.commission = 1;
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.commission = 1;
         assert_eq!(
             None, // would be Some((0, 2 * 1 + 1 * 2, 4)),
             calculate_stake_rewards(
@@ -503,16 +484,13 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
             )
         );
-        let vote_account = {
-            vote_state.commission = 99;
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.commission = 99;
         assert_eq!(
             None, // would be Some((0, 2 * 1 + 1 * 2, 4)),
             calculate_stake_rewards(
@@ -522,7 +500,7 @@ mod tests {
                     rewards: 4,
                     points: 4
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -545,7 +523,7 @@ mod tests {
                     rewards: 0,
                     points: 4
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -568,7 +546,7 @@ mod tests {
                     rewards: 0,
                     points: 4
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -583,7 +561,7 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -602,7 +580,7 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -618,7 +596,7 @@ mod tests {
             },
             calculate_stake_points_and_credits(
                 &stake,
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None
@@ -626,10 +604,7 @@ mod tests {
         );
 
         // get rewards and credits observed when not the activation epoch
-        let vote_account = {
-            vote_state.commission = 0;
-            VoteAccount::new_from_vote_state(&vote_state)
-        };
+        vote_state.commission = 0;
         stake.credits_observed = 3;
         stake.delegation.activation_epoch = 1;
         assert_eq!(
@@ -645,7 +620,7 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state.clone()),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -669,7 +644,7 @@ mod tests {
                     rewards: 1,
                     points: 1
                 },
-                &vote_account,
+                &VoteStateView::from(vote_state),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,
@@ -682,7 +657,7 @@ mod tests {
     fn calculate_rewards_tests(stake: u64, rewards: u64, credits: u64) {
         let mut vote_state = VoteStateV3::default();
 
-        let stake = new_stake(stake, &Pubkey::default(), 0, u64::MAX);
+        let stake = new_stake(stake, &Pubkey::default(), &vote_state, u64::MAX);
 
         vote_state.increment_credits(0, credits);
 
@@ -690,7 +665,7 @@ mod tests {
             0,
             &stake,
             &PointValue { rewards, points: 1 },
-            &VoteAccount::new_from_vote_state(&vote_state),
+            &VoteStateView::from(vote_state.clone()),
             &StakeHistory::default(),
             null_tracer(),
             None,
@@ -706,7 +681,7 @@ mod tests {
         let stake = new_stake(
             10_000_000 * LAMPORTS_PER_SOL,
             &Pubkey::default(),
-            0,
+            &vote_state,
             u64::MAX,
         );
 
@@ -720,22 +695,7 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &VoteAccount::new_from_vote_state(&vote_state),
-                &StakeHistory::default(),
-                null_tracer(),
-                None,
-            )
-        );
-        assert_eq!(
-            None,
-            calculate_stake_rewards(
-                0,
-                &stake,
-                &PointValue {
-                    rewards: 1_000_000_000,
-                    points: 1
-                },
-                &VoteAccount::new_random_alpenglow(),
+                &VoteStateView::from(vote_state),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,

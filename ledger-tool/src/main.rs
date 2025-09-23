@@ -210,10 +210,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
             .map(|(_, (stake, _))| stake)
             .sum();
         for (stake, vote_account) in bank.vote_accounts().values() {
-            // TODO(wen): make this work for Alpenglow
-            let Some(vote_state_view) = vote_account.vote_state_view() else {
-                continue;
-            };
+            let vote_state_view = vote_account.vote_state_view();
             if let Some(last_vote) = vote_state_view.last_voted_slot() {
                 let entry = last_votes.entry(*vote_state_view.node_pubkey()).or_insert((
                     last_vote,
@@ -253,10 +250,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
         let mut first = true;
         loop {
             for (_, vote_account) in bank.vote_accounts().values() {
-                // TODO(wen): make this work for Alpenglow
-                let Some(vote_state_view) = vote_account.vote_state_view() else {
-                    continue;
-                };
+                let vote_state_view = vote_account.vote_state_view();
                 if let Some(last_vote) = vote_state_view.last_voted_slot() {
                     let validator_votes =
                         all_votes.entry(*vote_state_view.node_pubkey()).or_default();
@@ -948,7 +942,7 @@ fn main() {
 
     let rent = Rent::default();
     let default_bootstrap_validator_lamports = &(500 * LAMPORTS_PER_SOL)
-        .max(VoteStateV3::get_rent_exempt_reserve(&rent))
+        .max(rent.minimum_balance(VoteStateV3::size_of()))
         .to_string();
     let default_bootstrap_validator_stake_lamports = &(LAMPORTS_PER_SOL / 2)
         .max(rent.minimum_balance(StakeStateV2::size_of()))
@@ -2336,7 +2330,7 @@ fn main() {
                                 identity_pubkey,
                                 identity_pubkey,
                                 100,
-                                VoteStateV3::get_rent_exempt_reserve(&rent).max(1),
+                                rent.minimum_balance(VoteStateV3::size_of()).max(1),
                             );
 
                             bank.store_account(
