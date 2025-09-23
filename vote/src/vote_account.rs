@@ -1,3 +1,6 @@
+// The following imports are only needed for dev-context-only-utils.
+#[cfg(feature = "dev-context-only-utils")]
+use solana_vote_interface::state::{VoteStateV3, VoteStateV4, VoteStateVersions};
 use {
     crate::vote_state_view::VoteStateView,
     itertools::Itertools,
@@ -6,11 +9,15 @@ use {
         ser::{Serialize, Serializer},
     },
     solana_account::{AccountSharedData, ReadableAccount},
-    solana_bls_signatures::Pubkey as BLSPubkey,
+    solana_bls_signatures::{
+        keypair::Keypair as BLSKeypair,
+        pubkey::{AsPubkey, PubkeyCompressed as BLSPubkeyCompressed},
+        Pubkey as BLSPubkey,
+    },
     solana_instruction::error::InstructionError,
     solana_program::program_error::ProgramError,
     solana_pubkey::Pubkey,
-    solana_vote_interface::state::BlockTimestamp,
+    solana_vote_interface::{authorized_voters::AuthorizedVoters, state::BlockTimestamp},
     solana_votor_messages::state::VoteState as AlpenglowVoteState,
     std::{
         cmp::Ordering,
@@ -21,12 +28,6 @@ use {
         sync::{Arc, OnceLock},
     },
     thiserror::Error,
-};
-// The following imports are only needed for dev-context-only-utils.
-#[cfg(feature = "dev-context-only-utils")]
-use {
-    solana_account::WritableAccount,
-    solana_vote_interface::state::{VoteStateV3, VoteStateVersions},
 };
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -194,14 +195,14 @@ impl VoteAccount {
         }
     }
 
-    pub fn bls_pubkey(&self) -> Option<&BLSPubkey> {
+    pub fn bls_pubkey(&self) -> Option<BLSPubkey> {
         match &self.0.vote_state_view {
-            VoteAccountState::TowerBFT(_) => None,
-            VoteAccountState::Alpenglow => Some(
-                AlpenglowVoteState::deserialize(self.0.account.data())
-                    .unwrap()
-                    .bls_pubkey(),
-            ),
+            VoteAccountState::TowerBFT(vote_state) => vote_state.bls_pubkey_compressed().map(|b| {
+                let bls_pubkey_compressed =
+                    bincode::deserialize::<BLSPubkeyCompressed>(&b).unwrap();
+                BLSPubkeyCompressed::try_as_affine(&bls_pubkey_compressed).unwrap()
+            }),
+            VoteAccountState::Alpenglow => None,
         }
     }
 
@@ -252,13 +253,23 @@ impl VoteAccount {
     }
 
     #[cfg(feature = "dev-context-only-utils")]
-    pub fn new_from_alpenglow_vote_state(vote_state: &AlpenglowVoteState) -> VoteAccount {
-        let mut account = AccountSharedData::new(
+    pub fn new_random_alpenglow() -> VoteAccount {
+        let bls_pubkey_compressed: BLSPubkeyCompressed =
+            BLSKeypair::new().public.try_into().unwrap();
+        let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
+        let vote_state = VoteStateV4 {
+            node_pubkey: Pubkey::new_unique(),
+            authorized_voters: AuthorizedVoters::new(0, Pubkey::new_unique()),
+            authorized_withdrawer: Pubkey::new_unique(),
+            bls_pubkey_compressed: Some(bls_pubkey_compressed_buffer.try_into().unwrap()),
+            ..VoteStateV4::default()
+        };
+        let account = AccountSharedData::new_data(
             100, // lamports
-            AlpenglowVoteState::size(),
-            &solana_votor_messages::id(),
-        );
-        vote_state.serialize_into(account.data_as_mut_slice());
+            &VoteStateVersions::new_v4(vote_state),
+            &solana_sdk_ids::vote::id(), // owner
+        )
+        .unwrap();
 
         VoteAccount::try_from(account).unwrap()
     }

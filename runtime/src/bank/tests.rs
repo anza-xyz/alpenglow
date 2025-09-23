@@ -119,7 +119,7 @@ use {
         vote_instruction,
         vote_state::{
             self, create_account_with_authorized, BlockTimestamp, VoteAuthorize, VoteInit,
-            VoteStateV3, VoteStateVersions, MAX_LOCKOUT_HISTORY,
+            VoteStateV3, VoteStateV4, VoteStateVersions, MAX_LOCKOUT_HISTORY,
         },
     },
     spl_generic_token::token,
@@ -731,13 +731,20 @@ where
     // generate some rewards
     if is_alpenglow {
         let mut vote_state =
-            *solana_votor_messages::state::VoteState::deserialize(vote_account.data()).unwrap();
+            VoteStateV4::deserialize(vote_account.data(), &Pubkey::default()).unwrap();
+        vote_state.epoch_credits.push((0, 0, 0));
         for _ in 0..MAX_LOCKOUT_HISTORY + 42 {
-            let mut epoch_credits = *vote_state.epoch_credits();
-            epoch_credits.set_credits(epoch_credits.credits() + 16);
-            vote_state.set_epoch_credits(epoch_credits);
-            vote_state.serialize_into(vote_account.data_as_mut_slice());
+            let (_, current_credits, _) = vote_state.epoch_credits.last_mut().unwrap();
+            *current_credits += 16;
+            let versioned = VoteStateVersions::V4(Box::new(vote_state.clone()));
+            vote_state::to(&versioned, &mut vote_account).unwrap();
             bank0.store_account_and_update_capitalization(&vote_id, &vote_account);
+            match versioned {
+                VoteStateVersions::V4(v) => {
+                    vote_state = *v;
+                }
+                _ => panic!("Has to be of type Current"),
+            };
         }
     } else {
         let mut vote_state = Some(vote_state::from(&vote_account).unwrap());

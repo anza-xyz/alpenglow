@@ -12,8 +12,7 @@ use {
     solana_rent::Rent,
     solana_sdk_ids::stake::id,
     solana_stake_interface::stake_flags::StakeFlags,
-    solana_vote_interface::state::VoteStateV3,
-    solana_votor_messages::state::VoteState as AlpenglowVoteState,
+    solana_vote_interface::state::{VoteStateV3, VoteStateV4},
 };
 
 // utility function, used by Stakes, tests
@@ -41,12 +40,7 @@ pub fn meta_from(account: &AccountSharedData) -> Option<Meta> {
     from(account).and_then(|state: StakeStateV2| state.meta())
 }
 
-pub(crate) fn new_stake_with_credits(
-    stake: u64,
-    voter_pubkey: &Pubkey,
-    credits: u64,
-    activation_epoch: Epoch,
-) -> Stake {
+fn new_stake(stake: u64, voter_pubkey: &Pubkey, credits: u64, activation_epoch: Epoch) -> Stake {
     Stake {
         delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
         credits_observed: credits,
@@ -94,6 +88,25 @@ pub fn create_account(
         rent,
         lamports,
         Epoch::MAX,
+        false,
+    )
+}
+
+pub fn create_alpenglow_account(
+    authorized: &Pubkey,
+    voter_pubkey: &Pubkey,
+    vote_account: &AccountSharedData,
+    rent: &Rent,
+    lamports: u64,
+) -> AccountSharedData {
+    do_create_account(
+        authorized,
+        voter_pubkey,
+        vote_account,
+        rent,
+        lamports,
+        Epoch::MAX,
+        true,
     )
 }
 
@@ -104,18 +117,16 @@ fn do_create_account(
     rent: &Rent,
     lamports: u64,
     activation_epoch: Epoch,
+    is_alpenglow: bool,
 ) -> AccountSharedData {
     let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
 
-    let credits = if solana_votor_messages::check_id(vote_account.owner()) {
-        AlpenglowVoteState::deserialize(vote_account.data())
-            .expect("alpenglow_vote_state")
-            .epoch_credits()
-            .credits()
+    let credits = if is_alpenglow {
+        let vote_state_v4 = VoteStateV4::deserialize(vote_account.data(), voter_pubkey).unwrap();
+        vote_state_v4.epoch_credits.last().map_or(0, |(_, c, _)| *c)
     } else {
-        VoteStateV3::deserialize(vote_account.data())
-            .expect("vote_state")
-            .credits()
+        let vote_state = VoteStateV3::deserialize(vote_account.data()).expect("vote_state");
+        vote_state.credits()
     };
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());
@@ -127,7 +138,7 @@ fn do_create_account(
                 rent_exempt_reserve,
                 ..Meta::default()
             },
-            new_stake_with_credits(
+            new_stake(
                 lamports - rent_exempt_reserve, // underflow is an error, is basically: assert!(lamports > rent_exempt_reserve);
                 voter_pubkey,
                 credits,

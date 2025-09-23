@@ -2,7 +2,10 @@ use {
     agave_feature_set::{FeatureSet, FEATURE_NAMES},
     log::*,
     solana_account::{Account, AccountSharedData},
-    solana_bls_signatures::{keypair::Keypair as BLSKeypair, Pubkey as BLSPubkey},
+    solana_bls_signatures::{
+        keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
+        Pubkey as BLSPubkey,
+    },
     solana_cluster_type::ClusterType,
     solana_feature_gate_interface::{self as feature, Feature},
     solana_fee_calculator::FeeRateGovernor,
@@ -17,10 +20,9 @@ use {
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
     solana_system_interface::program as system_program,
+    solana_vote_interface::state::BLS_PUBLIC_KEY_COMPRESSED_SIZE,
     solana_vote_program::vote_state,
-    solana_votor_messages::{
-        self, consensus_message::BLS_KEYPAIR_DERIVE_SEED, state::VoteState as AlpenglowVoteState,
-    },
+    solana_votor_messages::{self, consensus_message::BLS_KEYPAIR_DERIVE_SEED},
     std::{borrow::Borrow, fs::File, io::Read},
 };
 
@@ -174,24 +176,34 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if alpenglow_so_path.is_some() {
-            AlpenglowVoteState::create_account_with_authorized(
+            vote_state::create_v4_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
+                Some(bls_pubkey_to_compressed_bytes(&bls_pubkey)),
                 0,
                 *stake,
-                bls_pubkey,
             )
         } else {
             vote_state::create_account(&vote_pubkey, &node_pubkey, 0, *stake)
         };
-        let stake_account = Account::from(stake_state::create_account(
-            &stake_pubkey,
-            &vote_pubkey,
-            &vote_account,
-            &genesis_config_info.genesis_config.rent,
-            *stake,
-        ));
+        let stake_account = if alpenglow_so_path.is_some() {
+            Account::from(stake_state::create_alpenglow_account(
+                &stake_pubkey,
+                &vote_pubkey,
+                &vote_account,
+                &genesis_config_info.genesis_config.rent,
+                *stake,
+            ))
+        } else {
+            Account::from(stake_state::create_account(
+                &stake_pubkey,
+                &vote_pubkey,
+                &vote_account,
+                &genesis_config_info.genesis_config.rent,
+                *stake,
+            ))
+        };
 
         let vote_account = Account::from(vote_account);
 
@@ -351,6 +363,13 @@ pub fn activate_feature(genesis_config: &mut GenesisConfig, feature_id: Pubkey) 
     );
 }
 
+pub fn bls_pubkey_to_compressed_bytes(
+    bls_pubkey: &BLSPubkey,
+) -> [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE] {
+    let key = BLSPubkeyCompressed::try_from(bls_pubkey).unwrap();
+    bincode::serialize(&key).unwrap().try_into().unwrap()
+}
+
 pub fn include_alpenglow_bpf_program(genesis_config: &mut GenesisConfig, alpenglow_so_path: &str) {
     // Parse out the elf
     let mut program_data_elf: Vec<u8> = vec![];
@@ -428,13 +447,13 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     alpenglow_so_path: Option<&str>,
 ) -> GenesisConfig {
     let validator_vote_account = if alpenglow_so_path.is_some() {
-        AlpenglowVoteState::create_account_with_authorized(
+        vote_state::create_v4_account_with_authorized(
             validator_pubkey,
             validator_vote_account_pubkey,
             validator_vote_account_pubkey,
+            validator_bls_pubkey.map(bls_pubkey_to_compressed_bytes),
             0,
             validator_stake_lamports,
-            *validator_bls_pubkey.unwrap(),
         )
     } else {
         vote_state::create_account(
@@ -445,13 +464,23 @@ pub fn create_genesis_config_with_leader_ex_no_features(
         )
     };
 
-    let validator_stake_account = stake_state::create_account(
-        validator_stake_account_pubkey,
-        validator_vote_account_pubkey,
-        &validator_vote_account,
-        &rent,
-        validator_stake_lamports,
-    );
+    let validator_stake_account = if alpenglow_so_path.is_some() {
+        stake_state::create_alpenglow_account(
+            validator_stake_account_pubkey,
+            validator_vote_account_pubkey,
+            &validator_vote_account,
+            &rent,
+            validator_stake_lamports,
+        )
+    } else {
+        stake_state::create_account(
+            validator_stake_account_pubkey,
+            validator_vote_account_pubkey,
+            &validator_vote_account,
+            &rent,
+            validator_stake_lamports,
+        )
+    };
 
     initial_accounts.push((
         *mint_pubkey,

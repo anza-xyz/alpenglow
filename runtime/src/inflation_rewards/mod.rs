@@ -260,8 +260,7 @@ mod tests {
     use {
         self::points::null_tracer, super::*, solana_native_token::LAMPORTS_PER_SOL,
         solana_pubkey::Pubkey, solana_stake_interface::state::Delegation,
-        solana_vote_program::vote_state::VoteStateV3,
-        solana_votor_messages::state::VoteState as AlpenglowVoteState, test_case::test_case,
+        solana_vote_program::vote_state::VoteStateV3, test_case::test_case,
     };
 
     fn new_stake(
@@ -701,7 +700,6 @@ mod tests {
     #[test]
     fn test_stake_state_calculate_points_with_typical_values() {
         let vote_state = VoteStateV3::default();
-        let alpenglow_vote_state = AlpenglowVoteState::default();
 
         // bootstrap means fully-vested stake at epoch 0 with
         //  10_000_000 SOL is a big but not unreasaonable stake
@@ -737,7 +735,7 @@ mod tests {
                     rewards: 1_000_000_000,
                     points: 1
                 },
-                &VoteAccount::new_from_alpenglow_vote_state(&alpenglow_vote_state),
+                &VoteAccount::new_random_alpenglow(),
                 &StakeHistory::default(),
                 null_tracer(),
                 None,

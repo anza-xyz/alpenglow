@@ -41,7 +41,9 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    solana_runtime::genesis_utils::include_alpenglow_bpf_program,
+    solana_runtime::genesis_utils::{
+        bls_pubkey_to_compressed_bytes, include_alpenglow_bpf_program,
+    },
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
@@ -268,13 +270,13 @@ fn add_validator_accounts(
             let bls_pubkey = bls_pubkeys_iter
                 .next()
                 .expect("Missing BLS pubkey for {identity_pubkey}");
-            AlpenglowVoteState::create_account_with_authorized(
+            vote_state::create_v4_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
-                commission,
+                Some(bls_pubkey_to_compressed_bytes(bls_pubkey)),
+                commission.into(),
                 AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
-                *bls_pubkey,
             )
         } else {
             vote_state::create_account_with_authorized(
