@@ -331,21 +331,6 @@ startBootstrapLeader() {
 
     deployBootstrapValidator "$ipAddress"
 
-    # TODO: once we cut a public release of alpenglow-vote, we can eliminate this block
-    # below. For now though, as we're developing alpenglow in tandem with alpenglow-vote,
-    # we auto-generate spl_alpenglow-vote.so while building alpenglow. This block here
-    # copies over this auto-generated spl_alpenglow-vote.so over to the bootstrap
-    # validator.
-    if $alpenglow; then
-      declare remoteHome
-      remoteHome=$(remoteHomeDir "$ipAddress")
-      local remoteSolanaHome="${remoteHome}/solana"
-
-      rsync -vPrc -e "ssh ${sshOptions[*]}" \
-        "$SOLANA_ROOT"/target/alpenglow-vote-so/spl_alpenglow-vote.so \
-        "$ipAddress":"$remoteSolanaHome"/ > /dev/null
-    fi
-
     ssh "${sshOptions[@]}" -n "$ipAddress" \
       "./solana/net/remote/remote-node.sh \
          $deployMethod \

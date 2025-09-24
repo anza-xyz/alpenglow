@@ -668,11 +668,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .arg(
             Arg::with_name("alpenglow")
                 .long("alpenglow")
-                .takes_value(true)
-                .help(
-                    "Path to spl-alpenglow_vote.so. When specified, we use Alpenglow consensus; \
-                     when not specified, we use POH.",
-                ),
+                .help("Whether we use Alpenglow consensus."),
         )
         .get_matches();
 
@@ -803,7 +799,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let commission = value_t_or_exit!(matches, "vote_commission_percentage", u8);
     let rent = genesis_config.rent.clone();
 
-    let alpenglow_so_path = matches.value_of("alpenglow");
+    let is_alpenglow = matches.is_present("alpenglow");
 
     add_validator_accounts(
         &mut genesis_config,
@@ -814,7 +810,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         commission,
         &rent,
         bootstrap_stake_authorized_pubkey.as_ref(),
-        alpenglow_so_path.is_some(),
+        is_alpenglow,
     )?;
 
     if let Some(creation_time) = unix_timestamp_from_rfc3339_datetime(&matches, "creation_time") {
@@ -830,7 +826,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
 
-    if alpenglow_so_path.is_some() {
+    if is_alpenglow {
         solana_runtime::genesis_utils::activate_all_features_alpenglow(&mut genesis_config);
     } else {
         solana_runtime::genesis_utils::activate_all_features(&mut genesis_config);
@@ -851,13 +847,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     if let Some(files) = matches.values_of("validator_accounts_file") {
         for file in files {
-            load_validator_accounts(
-                file,
-                commission,
-                &rent,
-                &mut genesis_config,
-                alpenglow_so_path.is_some(),
-            )?;
+            load_validator_accounts(file, commission, &rent, &mut genesis_config, is_alpenglow)?;
         }
     }
 
