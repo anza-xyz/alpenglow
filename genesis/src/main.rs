@@ -41,9 +41,7 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    solana_runtime::genesis_utils::{
-        bls_pubkey_to_compressed_bytes, include_alpenglow_bpf_program,
-    },
+    solana_runtime::genesis_utils::bls_pubkey_to_compressed_bytes,
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
@@ -908,10 +906,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 }),
             );
         }
-    }
-
-    if let Some(alpenglow_so_path) = alpenglow_so_path {
-        include_alpenglow_bpf_program(&mut genesis_config, alpenglow_so_path);
     }
 
     if let Some(values) = matches.values_of("upgradeable_program") {
