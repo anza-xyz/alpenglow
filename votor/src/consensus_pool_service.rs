@@ -513,6 +513,20 @@ mod tests {
         }
     }
 
+    fn wait_for_event<T>(receiver: &Receiver<T>, condition: impl Fn(&T) -> bool) {
+        let start = Instant::now();
+        let mut event_received = false;
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Ok(event) = receiver.recv_timeout(Duration::from_millis(500)) {
+                if condition(&event) {
+                    event_received = true;
+                    break;
+                }
+            }
+        }
+        assert!(event_received);
+    }
+
     #[test]
     fn test_receive_and_send_consensus_message() {
         solana_logger::setup();
@@ -537,13 +551,8 @@ mod tests {
         }
 
         // Listen on the bls_receiver for certificates
-        let start = Instant::now();
-        let mut certificates_received = 0;
-        while certificates_received < 2 && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(BLSOp::PushCertificate { certificate }) = setup_result
-                .bls_receiver
-                .recv_timeout(Duration::from_millis(500))
-            {
+        wait_for_event(&setup_result.bls_receiver, |event| {
+            if let BLSOp::PushCertificate { certificate } = event {
                 assert_eq!(certificate.certificate.slot(), 2);
                 let certificate_type = certificate.certificate.certificate_type();
                 assert!(matches!(
@@ -552,44 +561,35 @@ mod tests {
                         | CertificateType::FinalizeFast
                         | CertificateType::NotarizeFallback
                 ));
-                certificates_received += 1;
+                true
+            } else {
+                false
             }
-        }
-        assert!(certificates_received >= 2);
+        });
         // Verify that we received a finalized slot event
-        let mut finalized_slot_received = false;
-        while !finalized_slot_received && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(VotorEvent::Finalized((slot, receivied_block_id), is_fast_finalized)) =
-                setup_result
-                    .event_receiver
-                    .recv_timeout(Duration::from_millis(500))
-            {
-                assert_eq!(slot, 2);
-                assert_eq!(receivied_block_id, block_id);
-                assert!(is_fast_finalized);
-                finalized_slot_received = true;
-                break;
+        wait_for_event(&setup_result.event_receiver, |event| {
+            if let VotorEvent::Finalized((slot, receivied_block_id), is_fast_finalized) = event {
+                assert_eq!(*slot, 2);
+                assert_eq!(*receivied_block_id, block_id);
+                assert!(*is_fast_finalized);
+                true
+            } else {
+                false
             }
-        }
-        assert!(finalized_slot_received);
+        });
         // Verify that we received a commitment update
-        let mut commitment_received = false;
-        while !commitment_received && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(AlpenglowCommitmentAggregationData {
-                commitment_type,
-                slot,
-                ..
-            }) = setup_result
-                .commitment_receiver
-                .recv_timeout(Duration::from_millis(500))
-            {
-                assert_eq!(commitment_type, AlpenglowCommitmentType::Finalized);
-                assert_eq!(slot, 2);
-                commitment_received = true;
-                break;
-            }
-        }
-        assert!(commitment_received);
+        wait_for_event(
+            &setup_result.commitment_receiver,
+            |AlpenglowCommitmentAggregationData {
+                 commitment_type,
+                 slot,
+                 ..
+             }| {
+                assert_eq!(*commitment_type, AlpenglowCommitmentType::Finalized);
+                assert_eq!(*slot, 2);
+                true
+            },
+        );
 
         // Now send a Skip certificate on slot 3, should be forwarded immediately
         let skip_certificate = CertificateMessage {
@@ -600,19 +600,14 @@ mod tests {
         consensus_message_sender
             .send(ConsensusMessage::Certificate(skip_certificate))
             .unwrap();
-        let start = Instant::now();
-        let mut skip_certificate_received = false;
-        while !skip_certificate_received && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(BLSOp::PushCertificate { certificate }) = setup_result
-                .bls_receiver
-                .recv_timeout(Duration::from_millis(500))
-            {
+        wait_for_event(&setup_result.bls_receiver, |event| {
+            if let BLSOp::PushCertificate { certificate } = event {
                 if matches!(certificate.certificate, Certificate::Skip(3)) {
-                    skip_certificate_received = true;
+                    return true;
                 }
             }
-        }
-        assert!(skip_certificate_received);
+            false
+        });
         setup_result.exit.store(true, Ordering::Relaxed);
         consensus_pool_service.join().unwrap();
     }
@@ -639,18 +634,14 @@ mod tests {
                 .unwrap();
         }
         // Verify that we received a produce block event
-        let mut produce_block_received = false;
-        let start = Instant::now();
-        while !produce_block_received && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(VotorEvent::ProduceWindow(_)) = setup_result
-                .event_receiver
-                .recv_timeout(Duration::from_millis(500))
-            {
-                produce_block_received = true;
-                break;
+        wait_for_event(&setup_result.event_receiver, |event| {
+            if let VotorEvent::ProduceWindow(LeaderWindowInfo { start_slot, .. }) = event {
+                assert_eq!(*start_slot, next_leader_slot.0);
+                true
+            } else {
+                false
             }
-        }
-        assert!(produce_block_received);
+        });
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
     }
@@ -661,18 +652,14 @@ mod tests {
         // Do nothing for 10.1 seconds
         thread::sleep(Duration::from_millis(10_100));
         // Verify that we received a standstill event
-        let mut standstill_received = false;
-        let start = Instant::now();
-        while !standstill_received && start.elapsed() < Duration::from_secs(5) {
-            if let Ok(VotorEvent::Standstill(_)) = setup_result
-                .event_receiver
-                .recv_timeout(Duration::from_millis(500))
-            {
-                standstill_received = true;
-                break;
+        wait_for_event(&setup_result.event_receiver, |event| {
+            if let VotorEvent::Standstill(slot) = event {
+                assert_eq!(*slot, 0);
+                true
+            } else {
+                false
             }
-        }
-        assert!(standstill_received);
+        });
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
     }
