@@ -64,3 +64,44 @@ impl TimerManager {
         self.handle.join().unwrap();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {super::*, crate::event::VotorEvent, crossbeam_channel::unbounded, std::time::Duration};
+
+    #[test]
+    fn test_timer_manager() {
+        let (event_sender, event_receiver) = unbounded();
+        let exit = Arc::new(AtomicBool::new(false));
+        let timer_manager = TimerManager::new(event_sender, exit.clone());
+        let slot = 52;
+        let start = Instant::now();
+        timer_manager.set_timeouts(slot);
+        // Should see two timeouts at DELTA_BLOCK and DELTA_TIMEOUT
+        let mut timeouts_received = 0;
+        while timeouts_received < 2 && Instant::now().duration_since(start) < Duration::from_secs(1)
+        {
+            if let Ok(event) = event_receiver.recv_timeout(Duration::from_millis(200)) {
+                match event {
+                    VotorEvent::Timeout(s) => {
+                        assert_eq!(s, slot);
+                        assert!(Instant::now().duration_since(start) >= DELTA_BLOCK);
+                        timeouts_received += 1;
+                    }
+                    VotorEvent::TimeoutCrashedLeader(s) => {
+                        assert_eq!(s, slot);
+                        assert!(Instant::now().duration_since(start) >= DELTA_TIMEOUT);
+                        timeouts_received += 1;
+                    }
+                    _ => panic!("Unexpected event: {event:?}"),
+                }
+            }
+        }
+        assert!(
+            timeouts_received == 2,
+            "Did not receive all expected timeouts"
+        );
+        exit.store(true, Ordering::Relaxed);
+        timer_manager.join();
+    }
+}
