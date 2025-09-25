@@ -25,7 +25,7 @@ use {
 
 const BENCH_SLOT: u64 = 70;
 // TODO(sam): use a small number for now to emulate the current test cluster
-const NUM_VALIDATORS: usize = 100;
+const NUM_VALIDATORS: usize = 50;
 
 struct BenchEnvironment {
     verifier: BLSSigVerifier,
