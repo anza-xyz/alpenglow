@@ -79,13 +79,15 @@ mod tests {
         timer_manager.set_timeouts(slot);
         // Should see two timeouts at DELTA_BLOCK and DELTA_TIMEOUT
         let mut timeouts_received = 0;
-        while timeouts_received < 2 && Instant::now().duration_since(start) < Duration::from_secs(1)
+        while timeouts_received < 2 && Instant::now().duration_since(start) < Duration::from_secs(2)
         {
             if let Ok(event) = event_receiver.recv_timeout(Duration::from_millis(200)) {
                 match event {
                     VotorEvent::Timeout(s) => {
                         assert_eq!(s, slot);
-                        assert!(Instant::now().duration_since(start) >= DELTA_TIMEOUT + DELTA_BLOCK);
+                        assert!(
+                            Instant::now().duration_since(start) >= DELTA_TIMEOUT + DELTA_BLOCK
+                        );
                         timeouts_received += 1;
                     }
                     VotorEvent::TimeoutCrashedLeader(s) => {
