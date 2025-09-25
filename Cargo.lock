@@ -11863,6 +11863,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-net-utils",
+ "solana-perf",
  "solana-pubkey",
  "solana-rpc",
  "solana-runtime",
