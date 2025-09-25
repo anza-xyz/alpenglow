@@ -653,8 +653,12 @@ mod tests {
         thread::sleep(Duration::from_millis(10_100));
         // Verify that we received a standstill event
         wait_for_event(&setup_result.event_receiver, |event| {
-            assert!(matches!(event, VotorEvent::Standstill(0)));
-            true
+            if let VotorEvent::Standstill(slot) = event {
+                assert_eq!(*slot, 0);
+                true
+            } else {
+                false
+            }
         });
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
