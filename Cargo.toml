@@ -190,9 +190,6 @@ agave-verified-packet-receiver = { path = "verified-packet-receiver", version = 
 agave-votor = { path = "votor", version = "=3.1.0" }
 agave-xdp = { path = "xdp", version = "=3.1.0" }
 ahash = "0.8.11"
-alpenglow-vote = { git = "https://github.com/solana-program/alpenglow-vote.git", rev = "cdae90a", features = [
-    "serde",
-] }
 anyhow = "1.0.99"
 aquamarine = "0.6.0"
 arbitrary = "1.4.2"
