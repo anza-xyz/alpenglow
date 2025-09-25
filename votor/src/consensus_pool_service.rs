@@ -441,7 +441,7 @@ mod tests {
         std::sync::{Arc, Mutex},
     };
 
-    struct SetupResult {
+    struct ConsensusPoolServiceTestComponents {
         consensus_pool_service: ConsensusPoolService,
         consensus_message_sender: Sender<ConsensusMessage>,
         bls_receiver: Receiver<BLSOp>,
@@ -453,7 +453,7 @@ mod tests {
         root_bank: SharableBank,
     }
 
-    fn setup() -> SetupResult {
+    fn setup() -> ConsensusPoolServiceTestComponents {
         let (consensus_message_sender, consensus_message_receiver) = crossbeam_channel::unbounded();
         let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
         let (event_sender, event_receiver) = crossbeam_channel::unbounded();
@@ -500,7 +500,7 @@ mod tests {
             event_sender,
             commitment_sender,
         };
-        SetupResult {
+        ConsensusPoolServiceTestComponents {
             consensus_pool_service: ConsensusPoolService::new(ctx),
             consensus_message_sender,
             bls_receiver,
@@ -653,12 +653,8 @@ mod tests {
         thread::sleep(Duration::from_millis(10_100));
         // Verify that we received a standstill event
         wait_for_event(&setup_result.event_receiver, |event| {
-            if let VotorEvent::Standstill(slot) = event {
-                assert_eq!(*slot, 0);
-                true
-            } else {
-                false
-            }
+            assert!(matches!(event, VotorEvent::Standstill(0)));
+            true
         });
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
