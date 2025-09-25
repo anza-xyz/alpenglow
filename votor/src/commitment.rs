@@ -10,6 +10,7 @@ pub enum AlpenglowCommitmentError {
     ChannelDisconnected,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum AlpenglowCommitmentType {
     /// Our node has voted notarize for the slot
     Notarize,
