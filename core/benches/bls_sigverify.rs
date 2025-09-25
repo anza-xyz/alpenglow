@@ -206,6 +206,7 @@ fn bench_votes(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes");
 
     // Benchmark Scenario 1: Two votes in one batch
+    // (about 20% of the non-zero votes in the test-cluster consist of a single vote)
     group.throughput(Throughput::Elements(2));
     group.bench_function("dynamic/two_votes_batch", |b| {
         b.iter_batched(
@@ -216,6 +217,7 @@ fn bench_votes(c: &mut Criterion) {
     });
 
     // Benchmark Scenario 2: Single vote in one batch
+    // (about 80% of the non-zero votes in the test-cluster consist of a single vote)
     group.throughput(Throughput::Elements(1));
     group.bench_function("dynamic/single_vote_batch", |b| {
         b.iter_batched(
