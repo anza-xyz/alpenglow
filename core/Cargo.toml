@@ -231,6 +231,7 @@ name = "ed25519_sigverify"
 
 [[bench]]
 name = "bls_sigverify"
+harness = false
 
 [[bench]]
 name = "receive_and_buffer"
