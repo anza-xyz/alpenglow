@@ -85,7 +85,7 @@ mod tests {
                 match event {
                     VotorEvent::Timeout(s) => {
                         assert_eq!(s, slot);
-                        assert!(Instant::now().duration_since(start) >= DELTA_BLOCK);
+                        assert!(Instant::now().duration_since(start) >= DELTA_TIMEOUT + DELTA_BLOCK);
                         timeouts_received += 1;
                     }
                     VotorEvent::TimeoutCrashedLeader(s) => {
