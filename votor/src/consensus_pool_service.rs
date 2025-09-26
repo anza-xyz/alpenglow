@@ -528,46 +528,60 @@ mod tests {
         assert!(event_received);
     }
 
+    fn test_send_and_receive<T>(
+        consensus_message_sender: &Sender<ConsensusMessage>,
+        messages_to_send: Vec<ConsensusMessage>,
+        receiver: &Receiver<T>,
+        condition: impl Fn(&T) -> bool,
+    ) {
+        for message in messages_to_send {
+            consensus_message_sender.send(message).unwrap();
+        }
+        wait_for_event(receiver, condition);
+    }
+
     #[test]
     fn test_receive_and_send_consensus_message() {
         solana_logger::setup();
         let setup_result = setup();
-        let consensus_message_sender = setup_result.consensus_message_sender;
-        let consensus_pool_service = setup_result.consensus_pool_service;
 
         // validator 0 to 7 send Notarize on slot 2
         let block_id = Hash::new_unique();
         let target_slot = 2;
         let notarize_vote = Vote::new_notarization_vote(target_slot, block_id);
-        for my_rank in 0..8 {
-            let vote_keypair = &setup_result.validator_keypairs[my_rank].vote_keypair;
-            let bls_keypair =
-                BLSKeypair::derive_from_signer(vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-            let vote_serialized = bincode::serialize(&notarize_vote).unwrap();
-            let consensus_message = ConsensusMessage::Vote(VoteMessage {
-                vote: notarize_vote,
-                signature: bls_keypair.sign(&vote_serialized).into(),
-                rank: my_rank as u16,
-            });
-            consensus_message_sender.send(consensus_message).unwrap();
-        }
-
-        // Listen on the bls_receiver for certificates
-        wait_for_event(&setup_result.bls_receiver, |event| {
-            if let BLSOp::PushCertificate { certificate } = event {
-                assert_eq!(certificate.certificate.slot(), target_slot);
-                let certificate_type = certificate.certificate.certificate_type();
-                assert!(matches!(
-                    certificate_type,
-                    CertificateType::Notarize
-                        | CertificateType::FinalizeFast
-                        | CertificateType::NotarizeFallback
-                ));
-                true
-            } else {
-                false
-            }
-        });
+        let messages_to_send = (0..8)
+            .map(|my_rank| {
+                let vote_keypair = &setup_result.validator_keypairs[my_rank].vote_keypair;
+                let bls_keypair =
+                    BLSKeypair::derive_from_signer(vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+                let vote_serialized = bincode::serialize(&notarize_vote).unwrap();
+                ConsensusMessage::Vote(VoteMessage {
+                    vote: notarize_vote,
+                    signature: bls_keypair.sign(&vote_serialized).into(),
+                    rank: my_rank as u16,
+                })
+            })
+            .collect();
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            messages_to_send,
+            &setup_result.bls_receiver,
+            |event| {
+                if let BLSOp::PushCertificate { certificate } = event {
+                    assert_eq!(certificate.certificate.slot(), target_slot);
+                    let certificate_type = certificate.certificate.certificate_type();
+                    assert!(matches!(
+                        certificate_type,
+                        CertificateType::Notarize
+                            | CertificateType::FinalizeFast
+                            | CertificateType::NotarizeFallback
+                    ));
+                    true
+                } else {
+                    false
+                }
+            },
+        );
         // Verify that we received a finalized slot event
         wait_for_event(&setup_result.event_receiver, |event| {
             if let VotorEvent::Finalized((slot, receivied_block_id), is_fast_finalized) = event {
@@ -600,20 +614,20 @@ mod tests {
             signature: BLSSignature::default(),
             bitmap: vec![],
         };
-        consensus_message_sender
-            .send(ConsensusMessage::Certificate(skip_certificate))
-            .unwrap();
-        wait_for_event(&setup_result.bls_receiver, |event| {
-            if let BLSOp::PushCertificate { certificate } = event {
-                if matches!(certificate.certificate, Certificate::Skip(slot) if slot == target_slot)
-                {
-                    return true;
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            vec![ConsensusMessage::Certificate(skip_certificate)],
+            &setup_result.bls_receiver,
+            |event| {
+                if let BLSOp::PushCertificate { certificate } = event {
+                    matches!(certificate.certificate, Certificate::Skip(slot) if slot == target_slot)
+                } else {
+                    false
                 }
-            }
-            false
-        });
+            },
+        );
         setup_result.exit.store(true, Ordering::Relaxed);
-        consensus_pool_service.join().unwrap();
+        setup_result.consensus_pool_service.join().unwrap();
     }
 
     #[test]
@@ -626,26 +640,29 @@ mod tests {
             .next_leader_slot(&my_pubkey, 0, &setup_result.root_bank.load(), None, 1000000)
             .expect("Should find a leader slot");
         // Send skip certificates for all slots up to the next leader slot
-        for slot in 1..next_leader_slot.0 {
-            let skip_certificate = CertificateMessage {
-                certificate: Certificate::Skip(slot),
-                signature: BLSSignature::default(),
-                bitmap: vec![],
-            };
-            setup_result
-                .consensus_message_sender
-                .send(ConsensusMessage::Certificate(skip_certificate))
-                .unwrap();
-        }
-        // Verify that we received a produce block event
-        wait_for_event(&setup_result.event_receiver, |event| {
-            if let VotorEvent::ProduceWindow(LeaderWindowInfo { start_slot, .. }) = event {
-                assert_eq!(*start_slot, next_leader_slot.0);
-                true
-            } else {
-                false
-            }
-        });
+        let messages_to_send = (1..next_leader_slot.0)
+            .map(|slot| {
+                let skip_certificate = CertificateMessage {
+                    certificate: Certificate::Skip(slot),
+                    signature: BLSSignature::default(),
+                    bitmap: vec![],
+                };
+                ConsensusMessage::Certificate(skip_certificate)
+            })
+            .collect();
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            messages_to_send,
+            &setup_result.event_receiver,
+            |event| {
+                if let VotorEvent::ProduceWindow(LeaderWindowInfo { start_slot, .. }) = event {
+                    assert_eq!(*start_slot, next_leader_slot.0);
+                    true
+                } else {
+                    false
+                }
+            },
+        );
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
     }
