@@ -243,7 +243,7 @@ EOF
 
       if $alpenglow; then
         echo "Consensus method: Alpenglow"
-        args+=(--alpenglow "$HOME"/solana/spl_alpenglow-vote.so)
+        args+=(--alpenglow)
       else
         echo "Consensus method: POH"
       fi

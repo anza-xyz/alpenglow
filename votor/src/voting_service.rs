@@ -265,8 +265,7 @@ mod tests {
             bank::Bank,
             bank_forks::BankForks,
             genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts_no_program,
-                ValidatorVoteKeypairs,
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
             },
         },
         solana_signer::Signer,
@@ -299,7 +298,7 @@ mod tests {
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
-        let genesis = create_genesis_config_with_alpenglow_vote_accounts_no_program(
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
             vec![100; validator_keypairs.len()],

@@ -21,7 +21,6 @@ path = "src/main.rs"
 
 [dependencies]
 agave-feature-set = { workspace = true }
-alpenglow-vote = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 clap = { workspace = true }

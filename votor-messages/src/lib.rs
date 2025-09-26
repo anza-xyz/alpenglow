@@ -2,10 +2,7 @@
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![deny(missing_docs)]
 
-pub mod accounting;
 pub mod consensus_message;
-pub mod instruction;
-pub mod state;
 pub mod vote;
 
 #[cfg_attr(feature = "frozen-abi", macro_use)]

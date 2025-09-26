@@ -8,7 +8,10 @@ use {
     },
     crossbeam_channel::{SendError, Sender},
     parking_lot::RwLock as PlRwLock,
-    solana_bls_signatures::{keypair::Keypair as BLSKeypair, BlsError, Pubkey as BLSPubkey},
+    solana_bls_signatures::{
+        keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed, BlsError,
+        Pubkey as BLSPubkey,
+    },
     solana_clock::Slot,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
@@ -45,8 +48,6 @@ pub enum GenerateVoteTxResult {
     // The following are misconfiguration errors
     // The authorized voter for the given pubkey and Epoch does not exist
     NoAuthorizedVoter(Pubkey, u64),
-    // The vote state associated with given pubkey does not exist
-    NoVoteState(Pubkey),
     // The vote account associated with given pubkey does not exist
     VoteAccountNotFound(Pubkey),
 
@@ -68,9 +69,7 @@ impl GenerateVoteTxResult {
 
     pub fn is_invalid_config(&self) -> bool {
         match self {
-            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
-                true
-            }
+            Self::NoAuthorizedVoter(_, _) | Self::VoteAccountNotFound(_) => true,
             Self::NonVoting
             | Self::HotSpare
             | Self::WaitForStartupVerification
@@ -82,9 +81,7 @@ impl GenerateVoteTxResult {
 
     pub fn is_transient_error(&self) -> bool {
         match self {
-            Self::NoAuthorizedVoter(_, _) | Self::NoVoteState(_) | Self::VoteAccountNotFound(_) => {
-                false
-            }
+            Self::NoAuthorizedVoter(_, _) | Self::VoteAccountNotFound(_) => false,
             Self::NonVoting
             | Self::HotSpare
             | Self::WaitForStartupVerification
@@ -172,34 +169,41 @@ pub fn generate_vote_tx(
         let Some(vote_account) = bank.get_vote_account(&vote_account_pubkey) else {
             return GenerateVoteTxResult::VoteAccountNotFound(vote_account_pubkey);
         };
-        let Some(vote_state) = vote_account.alpenglow_vote_state() else {
-            return GenerateVoteTxResult::NoVoteState(vote_account_pubkey);
-        };
-        if *vote_state.node_pubkey() != context.identity_keypair.pubkey() {
+        let vote_state_view = vote_account.vote_state_view();
+        if vote_state_view.node_pubkey() != &context.identity_keypair.pubkey() {
             info!(
                 "Vote account node_pubkey mismatch: {} (expected: {}).  Unable to vote",
-                vote_state.node_pubkey(),
+                vote_state_view.node_pubkey(),
                 context.identity_keypair.pubkey()
             );
             return GenerateVoteTxResult::HotSpare;
         }
-        bls_pubkey_in_vote_account = match vote_account.bls_pubkey() {
+        let bls_pubkey_serialized = match vote_state_view.bls_pubkey_compressed() {
             None => {
                 panic!(
                     "No BLS pubkey in vote account {}",
                     context.identity_keypair.pubkey()
                 );
             }
-            Some(key) => *key,
+            Some(key) => key,
         };
-
-        let Some(authorized_voter_pubkey) = vote_state.get_authorized_voter(bank.epoch()) else {
+        bls_pubkey_in_vote_account =
+            (bincode::deserialize::<BLSPubkeyCompressed>(&bls_pubkey_serialized).unwrap())
+                .try_into()
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "Failed to decompress BLS pubkey in vote account {}",
+                        context.identity_keypair.pubkey()
+                    );
+                });
+        let Some(authorized_voter_pubkey) = vote_state_view.get_authorized_voter(bank.epoch())
+        else {
             return GenerateVoteTxResult::NoAuthorizedVoter(vote_account_pubkey, bank.epoch());
         };
 
         let Some(keypair) = authorized_voter_keypairs
             .iter()
-            .find(|keypair| keypair.pubkey() == authorized_voter_pubkey)
+            .find(|keypair| &keypair.pubkey() == authorized_voter_pubkey)
         else {
             warn!(
                 "The authorized keypair {authorized_voter_pubkey} for vote account \

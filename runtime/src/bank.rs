@@ -33,7 +33,6 @@
 //! It offers a high-level API that signs transactions
 //! on behalf of the caller, and a low-level API for when they have
 //! already been signed and verified.
-
 use {
     crate::{
         account_saver::collect_accounts_to_store,
@@ -2414,7 +2413,8 @@ impl Bank {
         let slots_per_epoch = self.epoch_schedule().slots_per_epoch;
         let vote_accounts = self.vote_accounts();
         let recent_timestamps = vote_accounts.iter().filter_map(|(pubkey, (_, account))| {
-            let last_timestamp = account.last_timestamp();
+            let vote_state = account.vote_state_view();
+            let last_timestamp = vote_state.last_timestamp();
             let slot_delta = self.slot().checked_sub(last_timestamp.slot)?;
             (slot_delta <= slots_per_epoch)
                 .then_some((*pubkey, (last_timestamp.slot, last_timestamp.timestamp)))

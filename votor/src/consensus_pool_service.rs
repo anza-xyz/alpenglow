@@ -412,3 +412,315 @@ impl ConsensusPoolService {
         self.t_ingest.join()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crossbeam_channel::Sender,
+        solana_bls_signatures::{
+            keypair::Keypair as BLSKeypair, signature::Signature as BLSSignature,
+        },
+        solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+        solana_hash::Hash,
+        solana_ledger::get_tmp_ledger_path_auto_delete,
+        solana_runtime::{
+            bank_forks::BankForks,
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            },
+        },
+        solana_signer::Signer,
+        solana_streamer::socket::SocketAddrSpace,
+        solana_votor_messages::{
+            consensus_message::{
+                Certificate, CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+            },
+            vote::Vote,
+        },
+        std::sync::{Arc, Mutex},
+        test_case::test_case,
+    };
+
+    struct ConsensusPoolServiceTestComponents {
+        consensus_pool_service: ConsensusPoolService,
+        consensus_message_sender: Sender<ConsensusMessage>,
+        bls_receiver: Receiver<BLSOp>,
+        event_receiver: Receiver<VotorEvent>,
+        commitment_receiver: Receiver<AlpenglowCommitmentAggregationData>,
+        validator_keypairs: Vec<ValidatorVoteKeypairs>,
+        exit: Arc<AtomicBool>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
+        root_bank: SharableBank,
+    }
+
+    fn setup() -> ConsensusPoolServiceTestComponents {
+        let (consensus_message_sender, consensus_message_receiver) = crossbeam_channel::unbounded();
+        let (bls_sender, bls_receiver) = crossbeam_channel::unbounded();
+        let (event_sender, event_receiver) = crossbeam_channel::unbounded();
+        let (commitment_sender, commitment_receiver) = crossbeam_channel::unbounded();
+        // Create 10 node validatorvotekeypairs vec
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        // Make stake monotonic decreasing so rank is deterministic
+        let stake = (0..validator_keypairs.len())
+            .rev()
+            .map(|i| ((i.saturating_add(5).saturating_mul(100)) as u64))
+            .collect::<Vec<_>>();
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            stake,
+        );
+        let my_keypair = validator_keypairs[0].node_keypair.insecure_clone();
+        let contact_info = ContactInfo::new_localhost(&my_keypair.pubkey(), 0);
+        let cluster_info = ClusterInfo::new(
+            contact_info,
+            Arc::new(my_keypair),
+            SocketAddrSpace::Unspecified,
+        );
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let bank_forks = BankForks::new_rw_arc(bank0);
+
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let exit = Arc::new(AtomicBool::new(false));
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&root_bank.load()));
+        let ctx = ConsensusPoolContext {
+            exit: exit.clone(),
+            start: Arc::new((Mutex::new(true), Condvar::new())),
+            cluster_info: Arc::new(cluster_info),
+            my_vote_pubkey: Pubkey::new_unique(),
+            blockstore: Arc::new(blockstore),
+            root_bank: root_bank.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            consensus_message_receiver,
+            bls_sender,
+            event_sender,
+            commitment_sender,
+        };
+        ConsensusPoolServiceTestComponents {
+            consensus_pool_service: ConsensusPoolService::new(ctx),
+            consensus_message_sender,
+            bls_receiver,
+            event_receiver,
+            commitment_receiver,
+            validator_keypairs,
+            exit,
+            leader_schedule_cache,
+            root_bank,
+        }
+    }
+
+    fn wait_for_event<T>(receiver: &Receiver<T>, condition: impl Fn(&T) -> bool) {
+        let start = Instant::now();
+        let mut event_received = false;
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Ok(event) = receiver.recv_timeout(Duration::from_millis(500)) {
+                if condition(&event) {
+                    event_received = true;
+                    break;
+                }
+            }
+        }
+        assert!(event_received);
+    }
+
+    fn test_send_and_receive<T>(
+        consensus_message_sender: &Sender<ConsensusMessage>,
+        messages_to_send: Vec<ConsensusMessage>,
+        receiver: &Receiver<T>,
+        condition: impl Fn(&T) -> bool,
+    ) {
+        for message in messages_to_send {
+            consensus_message_sender.send(message).unwrap();
+        }
+        wait_for_event(receiver, condition);
+    }
+
+    #[test]
+    fn test_receive_and_send_consensus_message() {
+        solana_logger::setup();
+        let setup_result = setup();
+
+        // validator 0 to 7 send Notarize on slot 2
+        let block_id = Hash::new_unique();
+        let target_slot = 2;
+        let notarize_vote = Vote::new_notarization_vote(target_slot, block_id);
+        let messages_to_send = (0..8)
+            .map(|my_rank| {
+                let vote_keypair = &setup_result.validator_keypairs[my_rank].vote_keypair;
+                let bls_keypair =
+                    BLSKeypair::derive_from_signer(vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+                let vote_serialized = bincode::serialize(&notarize_vote).unwrap();
+                ConsensusMessage::Vote(VoteMessage {
+                    vote: notarize_vote,
+                    signature: bls_keypair.sign(&vote_serialized).into(),
+                    rank: my_rank as u16,
+                })
+            })
+            .collect();
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            messages_to_send,
+            &setup_result.bls_receiver,
+            |event| {
+                if let BLSOp::PushCertificate { certificate } = event {
+                    assert_eq!(certificate.certificate.slot(), target_slot);
+                    let certificate_type = certificate.certificate.certificate_type();
+                    assert!(matches!(
+                        certificate_type,
+                        CertificateType::Notarize
+                            | CertificateType::FinalizeFast
+                            | CertificateType::NotarizeFallback
+                    ));
+                    true
+                } else {
+                    false
+                }
+            },
+        );
+        // Verify that we received a finalized slot event
+        wait_for_event(&setup_result.event_receiver, |event| {
+            if let VotorEvent::Finalized((slot, receivied_block_id), is_fast_finalized) = event {
+                assert_eq!(*slot, target_slot);
+                assert_eq!(*receivied_block_id, block_id);
+                assert!(*is_fast_finalized);
+                true
+            } else {
+                false
+            }
+        });
+        // Verify that we received a commitment update
+        wait_for_event(
+            &setup_result.commitment_receiver,
+            |AlpenglowCommitmentAggregationData {
+                 commitment_type,
+                 slot,
+                 ..
+             }| {
+                assert_eq!(*commitment_type, AlpenglowCommitmentType::Finalized);
+                assert_eq!(*slot, target_slot);
+                true
+            },
+        );
+
+        // Now send a Skip certificate on slot 3, should be forwarded immediately
+        let target_slot = 3;
+        let skip_certificate = CertificateMessage {
+            certificate: Certificate::Skip(target_slot),
+            signature: BLSSignature::default(),
+            bitmap: vec![],
+        };
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            vec![ConsensusMessage::Certificate(skip_certificate)],
+            &setup_result.bls_receiver,
+            |event| {
+                if let BLSOp::PushCertificate { certificate } = event {
+                    matches!(certificate.certificate, Certificate::Skip(slot) if slot == target_slot)
+                } else {
+                    false
+                }
+            },
+        );
+        setup_result.exit.store(true, Ordering::Relaxed);
+        setup_result.consensus_pool_service.join().unwrap();
+    }
+
+    #[test]
+    fn test_send_produce_block_event() {
+        let setup_result = setup();
+        // Find when is the next leader slot for me (validator 0)
+        let my_pubkey = setup_result.validator_keypairs[0].node_keypair.pubkey();
+        let next_leader_slot = setup_result
+            .leader_schedule_cache
+            .next_leader_slot(&my_pubkey, 0, &setup_result.root_bank.load(), None, 1000000)
+            .expect("Should find a leader slot");
+        // Send skip certificates for all slots up to the next leader slot
+        let messages_to_send = (1..next_leader_slot.0)
+            .map(|slot| {
+                let skip_certificate = CertificateMessage {
+                    certificate: Certificate::Skip(slot),
+                    signature: BLSSignature::default(),
+                    bitmap: vec![],
+                };
+                ConsensusMessage::Certificate(skip_certificate)
+            })
+            .collect();
+        test_send_and_receive(
+            &setup_result.consensus_message_sender,
+            messages_to_send,
+            &setup_result.event_receiver,
+            |event| {
+                if let VotorEvent::ProduceWindow(LeaderWindowInfo { start_slot, .. }) = event {
+                    assert_eq!(*start_slot, next_leader_slot.0);
+                    true
+                } else {
+                    false
+                }
+            },
+        );
+        setup_result.exit.store(true, Ordering::Relaxed);
+        setup_result.consensus_pool_service.join().unwrap();
+    }
+
+    #[test]
+    fn test_send_standstill() {
+        let setup_result = setup();
+        // Do nothing for a little more than DELTA_STANDSTILL
+        thread::sleep(DELTA_STANDSTILL + Duration::from_millis(100));
+        // Verify that we received a standstill event
+        wait_for_event(
+            &setup_result.event_receiver,
+            |event| matches!(event, VotorEvent::Standstill(slot) if *slot == 0),
+        );
+        setup_result.exit.store(true, Ordering::Relaxed);
+        setup_result.consensus_pool_service.join().unwrap();
+    }
+
+    #[test_case("consensus_message_receiver")]
+    #[test_case("bls_receiver")]
+    #[test_case("votor_event_receiver")]
+    #[test_case("commitment_receiver")]
+    fn test_channel_disconnection(channel_name: &str) {
+        let setup_result = setup();
+        // A lot of the receiver needs a finalize certificate to trigger an exit
+        if channel_name != "consensus_message_receiver" {
+            let finalize_certificate = CertificateMessage {
+                certificate: Certificate::FinalizeFast(2, Hash::new_unique()),
+                signature: BLSSignature::default(),
+                bitmap: vec![],
+            };
+            setup_result
+                .consensus_message_sender
+                .send(ConsensusMessage::Certificate(finalize_certificate))
+                .unwrap();
+        }
+        match channel_name {
+            "consensus_message_receiver" => {
+                drop(setup_result.consensus_message_sender);
+            }
+            "bls_receiver" => {
+                drop(setup_result.bls_receiver);
+            }
+            "votor_event_receiver" => {
+                drop(setup_result.event_receiver);
+            }
+            "commitment_receiver" => {
+                drop(setup_result.commitment_receiver);
+            }
+            _ => panic!("Unknown channel name"),
+        }
+        // Verify that the consensus pool service exits within 5 seconds
+        let start = Instant::now();
+        while !setup_result.exit.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(setup_result.exit.load(Ordering::Relaxed));
+        setup_result.consensus_pool_service.join().unwrap();
+    }
+}

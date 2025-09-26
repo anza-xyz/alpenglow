@@ -8,7 +8,7 @@ use {
         stake_history::StakeHistory,
         state::{Delegation, Stake, StakeStateV2},
     },
-    solana_vote::vote_account::VoteAccount,
+    solana_vote::vote_state_view::VoteStateView,
     std::cmp::Ordering,
 };
 
@@ -66,14 +66,14 @@ impl From<SkippedReason> for InflationPointCalculationEvent {
 
 pub fn calculate_points(
     stake_state: &StakeStateV2,
-    vote_account: &VoteAccount,
+    vote_state: &VoteStateView,
     stake_history: &StakeHistory,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> Result<u128, InstructionError> {
     if let StakeStateV2::Stake(_meta, stake, _stake_flags) = stake_state {
         Ok(calculate_stake_points(
             stake,
-            vote_account,
+            vote_state,
             stake_history,
             null_tracer(),
             new_rate_activation_epoch,
@@ -85,14 +85,14 @@ pub fn calculate_points(
 
 fn calculate_stake_points(
     stake: &Stake,
-    vote_account: &VoteAccount,
+    vote_state: &VoteStateView,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> u128 {
     calculate_stake_points_and_credits(
         stake,
-        vote_account,
+        vote_state,
         stake_history,
         inflation_point_calc_tracer,
         new_rate_activation_epoch,
@@ -100,18 +100,18 @@ fn calculate_stake_points(
     .points
 }
 
-/// for a given stake and vote_account, calculate how many
+/// for a given stake and vote_state, calculate how many
 ///   points were earned (credits * stake) and new value
 ///   for credits_observed were the points paid
 pub(crate) fn calculate_stake_points_and_credits(
     stake: &Stake,
-    new_vote_account: &VoteAccount,
+    new_vote_state: &VoteStateView,
     stake_history: &StakeHistory,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
     new_rate_activation_epoch: Option<Epoch>,
 ) -> CalculatedStakePoints {
     let credits_in_stake = stake.credits_observed;
-    let credits_in_vote = new_vote_account.credits();
+    let credits_in_vote = new_vote_state.credits();
     // if there is no newer credits since observed, return no point
     match credits_in_vote.cmp(&credits_in_stake) {
         Ordering::Less => {
@@ -159,7 +159,8 @@ pub(crate) fn calculate_stake_points_and_credits(
     let mut points = 0;
     let mut new_credits_observed = credits_in_stake;
 
-    for (epoch, final_epoch_credits, initial_epoch_credits) in new_vote_account.epoch_credits() {
+    for epoch_credits_item in new_vote_state.epoch_credits_iter() {
+        let (epoch, final_epoch_credits, initial_epoch_credits) = epoch_credits_item.into();
         let stake_amount = u128::from(stake.delegation.stake(
             epoch,
             stake_history,
@@ -215,12 +216,12 @@ mod tests {
     fn new_stake(
         stake: u64,
         voter_pubkey: &Pubkey,
-        credits_observed: u64,
+        vote_state: &VoteStateV3,
         activation_epoch: Epoch,
     ) -> Stake {
         Stake {
             delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
-            credits_observed,
+            credits_observed: vote_state.credits(),
         }
     }
 
@@ -233,7 +234,7 @@ mod tests {
         let stake = new_stake(
             10_000_000 * LAMPORTS_PER_SOL,
             &Pubkey::default(),
-            vote_state.credits(),
+            &vote_state,
             u64::MAX,
         );
 
@@ -249,7 +250,7 @@ mod tests {
             u128::from(stake.delegation.stake) * epoch_slots,
             calculate_stake_points(
                 &stake,
-                &VoteAccount::new_from_vote_state(&vote_state),
+                &VoteStateView::from(vote_state),
                 &StakeHistory::default(),
                 null_tracer(),
                 None

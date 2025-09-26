@@ -41,13 +41,12 @@ use {
     solana_rent::Rent,
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
-    solana_runtime::genesis_utils::include_alpenglow_bpf_program,
+    solana_runtime::genesis_utils::bls_pubkey_to_compressed_bytes,
     solana_sdk_ids::system_program,
     solana_signer::Signer,
     solana_stake_interface::state::StakeStateV2,
     solana_stake_program::stake_state,
-    solana_vote_program::vote_state::{self, VoteStateV3},
-    solana_votor_messages::state::VoteState as AlpenglowVoteState,
+    solana_vote_program::vote_state::{self, VoteStateV3, VoteStateV4},
     std::{
         collections::HashMap,
         error,
@@ -268,13 +267,13 @@ fn add_validator_accounts(
             let bls_pubkey = bls_pubkeys_iter
                 .next()
                 .expect("Missing BLS pubkey for {identity_pubkey}");
-            AlpenglowVoteState::create_account_with_authorized(
+            vote_state::create_v4_account_with_authorized(
                 identity_pubkey,
                 identity_pubkey,
                 identity_pubkey,
-                commission,
-                AlpenglowVoteState::get_rent_exempt_reserve(rent).max(1),
-                *bls_pubkey,
+                Some(bls_pubkey_to_compressed_bytes(bls_pubkey)),
+                commission.into(),
+                rent.minimum_balance(VoteStateV4::size_of()).max(1),
             )
         } else {
             vote_state::create_account_with_authorized(
@@ -282,20 +281,33 @@ fn add_validator_accounts(
                 identity_pubkey,
                 identity_pubkey,
                 commission,
-                VoteStateV3::get_rent_exempt_reserve(rent).max(1),
+                rent.minimum_balance(VoteStateV3::size_of()).max(1),
             )
         };
 
-        genesis_config.add_account(
-            *stake_pubkey,
-            stake_state::create_account(
-                authorized_pubkey.unwrap_or(identity_pubkey),
-                vote_pubkey,
-                &vote_account,
-                rent,
-                stake_lamports,
-            ),
-        );
+        if is_alpenglow {
+            genesis_config.add_account(
+                *stake_pubkey,
+                stake_state::create_alpenglow_account(
+                    authorized_pubkey.unwrap_or(identity_pubkey),
+                    vote_pubkey,
+                    &vote_account,
+                    rent,
+                    stake_lamports,
+                ),
+            );
+        } else {
+            genesis_config.add_account(
+                *stake_pubkey,
+                stake_state::create_account(
+                    authorized_pubkey.unwrap_or(identity_pubkey),
+                    vote_pubkey,
+                    &vote_account,
+                    rent,
+                    stake_lamports,
+                ),
+            );
+        }
         genesis_config.add_account(*vote_pubkey, vote_account);
     }
     Ok(())
@@ -344,7 +356,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     // vote account
     let default_bootstrap_validator_lamports = &(500 * LAMPORTS_PER_SOL)
         .max(VoteStateV3::get_rent_exempt_reserve(&rent))
-        .max(AlpenglowVoteState::get_rent_exempt_reserve(&rent))
+        .max(rent.minimum_balance(VoteStateV3::size_of()).max(1))
         .to_string();
 
     // stake account
@@ -656,11 +668,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .arg(
             Arg::with_name("alpenglow")
                 .long("alpenglow")
-                .takes_value(true)
-                .help(
-                    "Path to spl-alpenglow_vote.so. When specified, we use Alpenglow consensus; \
-                     when not specified, we use POH.",
-                ),
+                .help("Whether we use Alpenglow consensus."),
         )
         .get_matches();
 
@@ -791,7 +799,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let commission = value_t_or_exit!(matches, "vote_commission_percentage", u8);
     let rent = genesis_config.rent.clone();
 
-    let alpenglow_so_path = matches.value_of("alpenglow");
+    let is_alpenglow = matches.is_present("alpenglow");
 
     add_validator_accounts(
         &mut genesis_config,
@@ -802,7 +810,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         commission,
         &rent,
         bootstrap_stake_authorized_pubkey.as_ref(),
-        alpenglow_so_path.is_some(),
+        is_alpenglow,
     )?;
 
     if let Some(creation_time) = unix_timestamp_from_rfc3339_datetime(&matches, "creation_time") {
@@ -818,7 +826,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
 
-    if alpenglow_so_path.is_some() {
+    if is_alpenglow {
         solana_runtime::genesis_utils::activate_all_features_alpenglow(&mut genesis_config);
     } else {
         solana_runtime::genesis_utils::activate_all_features(&mut genesis_config);
@@ -839,13 +847,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     if let Some(files) = matches.values_of("validator_accounts_file") {
         for file in files {
-            load_validator_accounts(
-                file,
-                commission,
-                &rent,
-                &mut genesis_config,
-                alpenglow_so_path.is_some(),
-            )?;
+            load_validator_accounts(file, commission, &rent, &mut genesis_config, is_alpenglow)?;
         }
     }
 
@@ -894,10 +896,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 }),
             );
         }
-    }
-
-    if let Some(alpenglow_so_path) = alpenglow_so_path {
-        include_alpenglow_bpf_program(&mut genesis_config, alpenglow_so_path);
     }
 
     if let Some(values) = matches.values_of("upgradeable_program") {

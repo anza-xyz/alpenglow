@@ -47,7 +47,6 @@ agave-feature-set = { workspace = true }
 agave-transaction-view = { workspace = true }
 agave-verified-packet-receiver = { workspace = true }
 ahash = { workspace = true }
-alpenglow-vote = { workspace = true, features = ["serde"] }
 anyhow = { workspace = true }
 arrayvec = { workspace = true }
 assert_matches = { workspace = true }
@@ -233,6 +232,7 @@ name = "ed25519_sigverify"
 
 [[bench]]
 name = "bls_sigverify"
+harness = false
 
 [[bench]]
 name = "receive_and_buffer"
