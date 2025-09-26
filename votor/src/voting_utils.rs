@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_vote_message() {
+    fn test_generate_own_vote_message() {
         let (own_vote_sender, own_vote_receiver) = crossbeam_channel::unbounded();
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
@@ -429,8 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrong_vote_account() {
-        solana_logger::setup();
+    fn test_wait_to_vote_slot() {
         let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
@@ -452,6 +451,18 @@ mod tests {
         assert!(generate_vote_message(vote, false, &mut voting_context)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_non_voting_node() {
+        let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
+        // Create 10 node validatorvotekeypairs vec
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new(Keypair::new(), Keypair::new(), Keypair::new()))
+            .collect::<Vec<_>>();
+        let my_index = 0;
+        let mut voting_context =
+            setup_voting_context_and_bank_forks(own_vote_sender, &validator_keypairs, my_index);
 
         // Empty authorized voter keypairs to simulate non voting node
         voting_context.authorized_voter_keypairs = Arc::new(std::sync::RwLock::new(vec![]));
@@ -468,6 +479,18 @@ mod tests {
         assert!(generate_vote_message(vote, false, &mut voting_context)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_wrong_identity_keypair() {
+        let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
+        // Create 10 node validatorvotekeypairs vec
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new(Keypair::new(), Keypair::new(), Keypair::new()))
+            .collect::<Vec<_>>();
+        let my_index = 0;
+        let mut voting_context =
+            setup_voting_context_and_bank_forks(own_vote_sender, &validator_keypairs, my_index);
 
         // Wrong identity keypair
         voting_context.identity_keypair = Arc::new(Keypair::new());
@@ -482,6 +505,18 @@ mod tests {
         assert!(generate_vote_message(vote, true, &mut voting_context)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_wrong_vote_account_pubkey() {
+        let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
+        // Create 10 node validatorvotekeypairs vec
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new(Keypair::new(), Keypair::new(), Keypair::new()))
+            .collect::<Vec<_>>();
+        let my_index = 0;
+        let mut voting_context =
+            setup_voting_context_and_bank_forks(own_vote_sender, &validator_keypairs, my_index);
 
         // Wrong vote account pubkey
         voting_context.vote_account_pubkey = Pubkey::new_unique();
@@ -538,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_staked_validator() {
+    fn test_zero_staked_validator_fails_voting() {
         solana_logger::setup();
         let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
         // Create 10 node validatorvotekeypairs vec
