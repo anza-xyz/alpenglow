@@ -27,6 +27,7 @@ use {
         consensus_message::{
             Block, Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -122,9 +123,22 @@ pub struct ConsensusPool {
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
     pub(crate) consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    /// Stores details about the genesis vote during the migration
+    migration_status: Option<Arc<MigrationStatus>>,
 }
 
 impl ConsensusPool {
+    pub fn new_from_root_bank_pre_migration(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
+        let mut pool = Self::new_from_root_bank(my_pubkey, bank, consensus_metrics);
+        pool.migration_status = Some(migration_status);
+        pool
+    }
+
     pub fn new_from_root_bank(
         my_pubkey: Pubkey,
         bank: &Bank,
@@ -145,6 +159,7 @@ impl ConsensusPool {
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
             consensus_metrics,
+            migration_status: None,
         }
     }
 
@@ -295,7 +310,7 @@ impl ConsensusPool {
         events: &mut Vec<VotorEvent>,
     ) {
         trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_id);
-        self.completed_certificates.insert(cert_id, cert);
+        self.completed_certificates.insert(cert_id, cert.clone());
         match cert_id {
             Certificate::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
@@ -344,6 +359,11 @@ impl ConsensusPool {
                     .is_none_or(|(s, _)| s <= slot)
                 {
                     self.highest_finalized_with_notarize = Some((slot, true));
+                }
+            }
+            Certificate::Genesis(_slot, _hash) => {
+                if let Some(ref migration_status) = self.migration_status {
+                    migration_status.set_genesis_certificate(&self.my_pubkey, cert);
                 }
             }
         }
@@ -628,6 +648,7 @@ impl ConsensusPool {
                 | Certificate::FinalizeFast(s, _)
                 | Certificate::Notarize(s, _)
                 | Certificate::NotarizeFallback(s, _)
+                | Certificate::Genesis(s, _)
                 | Certificate::Skip(s) => s >= &root_slot,
             });
         self.vote_pools = self.vote_pools.split_off(&(root_slot, VoteType::Finalize));
@@ -788,6 +809,7 @@ mod tests {
             Vote::Skip(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
             Vote::SkipFallback(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
             Vote::Finalize(vote) => assert_eq!(pool.highest_finalized_slot(), vote.slot()),
+            Vote::Genesis(_genesis_vote) => (),
         }
     }
 
@@ -1081,6 +1103,7 @@ mod tests {
             Vote::NotarizeFallback(_) => |pool: &ConsensusPool| pool.highest_notarized_slot(),
             Vote::Skip(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
             Vote::SkipFallback(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
+            Vote::Genesis(_genesis_vote) => |_pool: &ConsensusPool| 0,
         };
         let bank = bank_forks.read().unwrap().root_bank();
         assert!(pool
@@ -1805,6 +1828,7 @@ mod tests {
             VoteType::Skip => Vote::new_skip_vote(slot),
             VoteType::SkipFallback => Vote::new_skip_fallback_vote(slot),
             VoteType::Finalize => Vote::new_finalization_vote(slot),
+            VoteType::Genesis => Vote::new_genesis_vote(slot, Hash::default()),
         }
     }
 

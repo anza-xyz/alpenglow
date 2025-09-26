@@ -1,6 +1,6 @@
 //! The entrypoint into votor the module responsible for voting, rooting, and notifying
 //! the core to create a new block.
-//!
+//! ```text
 //!                                Votor
 //!   ┌────────────────────────────────────────────────────────────────────────────┐
 //!   │                                                                            │
@@ -39,7 +39,7 @@
 //!   │                          │                    │     │                    │ │
 //!   │                          └────────────────────┘     └────────────────────┘ │
 //!   └────────────────────────────────────────────────────────────────────────────┘
-//!
+//! ```
 use {
     crate::{
         commitment::CommitmentAggregationData,
@@ -70,7 +70,7 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashMap,
         sync::{
@@ -107,6 +107,7 @@ pub struct VotorConfig {
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    pub migration_status: Arc<MigrationStatus>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -138,6 +139,8 @@ pub struct Votor {
     // will fix once we finish the strategy
     #[allow(dead_code)]
     start: Arc<(Mutex<bool>, Condvar)>,
+    #[allow(dead_code)]
+    migration_status: Arc<MigrationStatus>,
 
     event_handler: EventHandler,
     consensus_pool_service: ConsensusPoolService,
@@ -159,6 +162,7 @@ impl Votor {
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
+            migration_status,
             snapshot_controller,
             bls_sender,
             commitment_sender,
@@ -166,8 +170,8 @@ impl Votor {
             bank_notification_sender,
             leader_window_notifier,
             event_sender,
-            event_receiver,
             own_vote_sender,
+            event_receiver,
             consensus_message_receiver: bls_receiver,
         } = config;
 
@@ -236,6 +240,7 @@ impl Votor {
             blockstore,
             sharable_banks,
             leader_schedule_cache,
+            migration_status: migration_status.clone(),
             consensus_message_receiver: bls_receiver,
             bls_sender,
             event_sender,
@@ -248,13 +253,14 @@ impl Votor {
 
         Self {
             start,
+            migration_status,
             event_handler,
             consensus_pool_service,
             timer_manager,
         }
     }
 
-    pub fn start_migration(&self) {
+    pub fn start(&self) {
         // TODO: evaluate once we have actual migration logic
         let (lock, cvar) = &*self.start;
         let mut started = lock.lock().unwrap();

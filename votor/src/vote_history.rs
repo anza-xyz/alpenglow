@@ -47,7 +47,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "H9oKKcWpebSTPtnXG6Aetwb7434CrW21pxnrrusYVEPy")
+    frozen_abi(digest = "9h5xLzJWKtwn1wLAaGbDUsSVJawLdNfi7jVzcFBP86S6")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct VoteHistory {
@@ -211,6 +211,14 @@ impl VoteHistory {
                 assert!(!self.its_over(vote.slot()));
                 self.skipped.insert(vote.slot());
                 self.voted_skip_fallback.insert(vote.slot());
+            }
+            Vote::Genesis(vote) => {
+                // Genesis votes are only used during migration
+                assert!(self.voted.insert(vote.slot()));
+                assert!(self
+                    .voted_notar
+                    .insert(vote.slot(), *vote.block_id())
+                    .is_none());
             }
         }
         self.votes_cast.entry(vote.slot()).or_default().push(vote);
