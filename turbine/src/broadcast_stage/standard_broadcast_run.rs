@@ -7,7 +7,9 @@ use {
     },
     crate::cluster_nodes::ClusterNodesCache,
     crossbeam_channel::Sender,
-    solana_entry::entry::Entry,
+    solana_entry::block_component::{
+        BlockComponent, BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
+    },
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{
@@ -15,8 +17,13 @@ use {
         MAX_DATA_SHREDS_PER_SLOT,
     },
     solana_time_utils::AtomicInterval,
+    solana_version::version,
     solana_votor::event::VotorEventSender,
-    std::{borrow::Cow, sync::RwLock},
+    std::{
+        borrow::Cow,
+        sync::RwLock,
+        time::{SystemTime, UNIX_EPOCH},
+    },
     tokio::sync::mpsc::Sender as AsyncSender,
 };
 
@@ -111,38 +118,39 @@ impl StandardBroadcastRun {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn entries_to_shreds(
+    fn block_component_to_shreds(
         &mut self,
         keypair: &Keypair,
-        entries: &[Entry],
+        component: &BlockComponent,
         reference_tick: u8,
         is_slot_end: bool,
         process_stats: &mut ProcessShredsStats,
         max_data_shreds_per_slot: u32,
         max_code_shreds_per_slot: u32,
     ) -> std::result::Result<Vec<Shred>, BroadcastError> {
-        let shreds: Vec<_> =
-            Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
-                .unwrap()
-                .make_merkle_shreds_from_entries(
-                    keypair,
-                    entries,
-                    is_slot_end,
-                    Some(self.chained_merkle_root),
-                    self.next_shred_index,
-                    self.next_code_index,
-                    &self.reed_solomon_cache,
-                    process_stats,
-                )
-                .inspect(|shred| {
-                    process_stats.record_shred(shred);
-                    let next_index = match shred.shred_type() {
-                        ShredType::Code => &mut self.next_code_index,
-                        ShredType::Data => &mut self.next_shred_index,
-                    };
-                    *next_index = (*next_index).max(shred.index() + 1);
-                })
-                .collect();
+        let shreds_iter = Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
+            .unwrap()
+            .make_merkle_shreds_from_component(
+                keypair,
+                component,
+                is_slot_end,
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                process_stats,
+            );
+
+        let shreds: Vec<_> = shreds_iter
+            .inspect(|shred| {
+                process_stats.record_shred(shred);
+                let next_index = match shred.shred_type() {
+                    ShredType::Code => &mut self.next_code_index,
+                    ShredType::Data => &mut self.next_shred_index,
+                };
+                *next_index = (*next_index).max(shred.index() + 1);
+            })
+            .collect();
         if let Some(shred) = shreds.iter().max_by_key(|shred| shred.fec_set_index()) {
             self.chained_merkle_root = shred.merkle_root().unwrap();
         }
@@ -188,6 +196,24 @@ impl StandardBroadcastRun {
         );
         let _ = self.record(&brecv, blockstore);
         Ok(())
+    }
+
+    fn create_block_footer(&self) -> BlockComponent {
+        let block_producer_time_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        let footer = BlockFooterV1 {
+            block_producer_time_nanos,
+            block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        };
+
+        let footer = VersionedBlockFooter::Current(footer);
+        let footer = BlockMarkerV1::BlockFooter(footer);
+        let footer = VersionedBlockMarker::Current(footer);
+
+        BlockComponent::BlockMarker(footer)
     }
 
     fn process_receive_results(
@@ -272,17 +298,36 @@ impl StandardBroadcastRun {
         let reference_tick = last_tick_height
             .saturating_add(bank.ticks_per_slot())
             .saturating_sub(bank.max_tick_height());
-        let shreds = self
-            .entries_to_shreds(
+
+        let mut shreds = self
+            .block_component_to_shreds(
                 keypair,
-                &receive_results.entries,
+                &BlockComponent::Entries(receive_results.entries),
                 reference_tick as u8,
-                is_last_in_slot,
+                false,
                 process_stats,
                 MAX_DATA_SHREDS_PER_SLOT as u32,
                 MAX_CODE_SHREDS_PER_SLOT as u32,
             )
             .unwrap();
+
+        if is_last_in_slot {
+            let footer = self.create_block_footer();
+            let mut footer_shreds = self
+                .block_component_to_shreds(
+                    keypair,
+                    &footer,
+                    reference_tick as u8,
+                    true,
+                    process_stats,
+                    MAX_DATA_SHREDS_PER_SLOT as u32,
+                    MAX_CODE_SHREDS_PER_SLOT as u32,
+                )
+                .unwrap();
+
+            shreds.append(&mut footer_shreds);
+        }
+
         // Insert the first data shred synchronously so that blockstore stores
         // that the leader started this block. This must be done before the
         // blocks are sent out over the wire, so that the slots we have already
@@ -841,9 +886,9 @@ mod test {
         let mut stats = ProcessShredsStats::default();
 
         let (data, coding) = bs
-            .entries_to_shreds(
+            .block_component_to_shreds(
                 &keypair,
-                &entries[0..entries.len() - 2],
+                &BlockComponent::Entries(entries[0..entries.len() - 2].to_vec()),
                 0,
                 false,
                 &mut stats,
@@ -857,7 +902,15 @@ mod test {
         assert!(!data.is_empty());
         assert!(!coding.is_empty());
 
-        let r = bs.entries_to_shreds(&keypair, &entries, 0, false, &mut stats, 10, 10);
+        let r = bs.block_component_to_shreds(
+            &keypair,
+            &BlockComponent::Entries(entries),
+            0,
+            false,
+            &mut stats,
+            10,
+            10,
+        );
         info!("{r:?}");
         assert_matches!(r, Err(BroadcastError::TooManyShreds));
     }
