@@ -673,14 +673,10 @@ mod tests {
         // Do nothing for a little more than DELTA_STANDSTILL
         thread::sleep(DELTA_STANDSTILL + Duration::from_millis(100));
         // Verify that we received a standstill event
-        wait_for_event(&setup_result.event_receiver, |event| {
-            if let VotorEvent::Standstill(slot) = event {
-                assert_eq!(*slot, 0);
-                true
-            } else {
-                false
-            }
-        });
+        wait_for_event(
+            &setup_result.event_receiver,
+            |event| matches!(event, VotorEvent::Standstill(slot) if *slot == 0),
+        );
         setup_result.exit.store(true, Ordering::Relaxed);
         setup_result.consensus_pool_service.join().unwrap();
     }
