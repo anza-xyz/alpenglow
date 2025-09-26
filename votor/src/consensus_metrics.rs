@@ -88,8 +88,8 @@ pub enum RecordBlockHashError {
     SlotNotFound,
 }
 
-/// Tracks various Alpenglow related metrics.
-pub struct AgMetrics {
+/// Tracks various Consensus related metrics.
+pub struct ConsensusMetrics {
     /// Used to track this node's view of how the other nodes on the network are voting.
     node_metrics: BTreeMap<Pubkey, NodeVoteMetrics>,
     /// Used to track when this node received blocks from different leaders in the network.
@@ -103,7 +103,7 @@ pub struct AgMetrics {
     current_epoch: Epoch,
 }
 
-impl AgMetrics {
+impl ConsensusMetrics {
     pub fn new(epoch: Epoch) -> Self {
         Self {
             node_metrics: BTreeMap::default(),

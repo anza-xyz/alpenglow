@@ -1,7 +1,7 @@
 use {
     crate::{
-        alpenglow_metrics::AgMetrics,
         commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
+        consensus_metrics::ConsensusMetrics,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
         voting_service::BLSOp,
@@ -124,7 +124,7 @@ pub struct VotingContext {
     pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
     pub root_bank: SharableBank,
-    pub ag_metrics: Arc<PlRwLock<AgMetrics>>,
+    pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
 }
 
 pub fn get_bls_keypair(
@@ -287,7 +287,7 @@ fn insert_vote_and_create_bls_message(
         SavedVoteHistory::new(&context.vote_history, &context.identity_keypair)?;
 
     match context
-        .ag_metrics
+        .consensus_metrics
         .write()
         .record_vote(context.vote_account_pubkey, &vote)
     {

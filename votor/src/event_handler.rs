@@ -245,7 +245,7 @@ impl EventHandler {
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
                 {
-                    let mut metrics_guard = vctx.ag_metrics.write();
+                    let mut metrics_guard = vctx.consensus_metrics.write();
                     match metrics_guard.record_block_hash_seen(*bank.collector_id(), slot) {
                         Ok(()) => (),
                         Err(err) => {

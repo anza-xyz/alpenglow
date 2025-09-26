@@ -6,7 +6,7 @@ mod stats;
 mod timers;
 
 use {
-    crate::{alpenglow_metrics::AgMetrics, event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
+    crate::{consensus_metrics::ConsensusMetrics, event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
     crossbeam_channel::Sender,
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
@@ -32,13 +32,13 @@ impl TimerManager {
     pub(crate) fn new(
         event_sender: Sender<VotorEvent>,
         exit: Arc<AtomicBool>,
-        ag_metrics: Arc<PlRwLock<AgMetrics>>,
+        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
     ) -> Self {
         let timers = Arc::new(PlRwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
             event_sender,
-            ag_metrics,
+            consensus_metrics,
         )));
         let handle = {
             let timers = Arc::clone(&timers);
@@ -78,8 +78,8 @@ mod tests {
     fn test_timer_manager() {
         let (event_sender, event_receiver) = unbounded();
         let exit = Arc::new(AtomicBool::new(false));
-        let ag_metrics = Arc::new(PlRwLock::new(AgMetrics::new(0)));
-        let timer_manager = TimerManager::new(event_sender, exit.clone(), ag_metrics);
+        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let timer_manager = TimerManager::new(event_sender, exit.clone(), consensus_metrics);
         let slot = 52;
         let start = Instant::now();
         timer_manager.set_timeouts(slot);
