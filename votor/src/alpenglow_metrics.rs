@@ -57,7 +57,10 @@ impl NodeVoteMetrics {
         let elapsed = match elapsed.try_into() {
             Ok(e) => e,
             Err(err) => {
-                warn!("recording duration {elapsed} for vote {vote:?}: conversion to u64 failed with {err}");
+                warn!(
+                    "recording duration {elapsed} for vote {vote:?}: conversion to u64 failed \
+                     with {err}"
+                );
                 return;
             }
         };
@@ -142,7 +145,10 @@ impl AgMetrics {
         let elapsed = match elapsed.try_into() {
             Ok(e) => e,
             Err(err) => {
-                warn!("recording duration {elapsed} for block hash for slot {slot}: conversion to u64 failed with {err}");
+                warn!(
+                    "recording duration {elapsed} for block hash for slot {slot}: conversion to \
+                     u64 failed with {err}"
+                );
                 return Ok(());
             }
         };
@@ -154,7 +160,8 @@ impl AgMetrics {
             Ok(()) => (),
             Err(err) => {
                 warn!(
-                    "recording duration {elapsed} for block hash for slot {slot}: recording failed with {err}"
+                    "recording duration {elapsed} for block hash for slot {slot}: recording \
+                     failed with {err}"
                 );
             }
         }
