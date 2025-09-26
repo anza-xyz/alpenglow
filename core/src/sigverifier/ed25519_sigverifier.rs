@@ -10,11 +10,18 @@ pub use solana_perf::sigverify::{
 use {
     crate::{
         banking_trace::BankingPacketSender,
-        sigverify_stage::{SigVerifier, SigVerifyServiceError},
+        sigverify_stage::{
+            SigVerifier, SigVerifyServiceError, SigVerifyStage, VerifyPacketBatchesStats,
+        },
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
     crossbeam_channel::Sender,
-    solana_perf::{cuda_runtime::PinnedVec, packet::PacketBatch, recycler::Recycler, sigverify},
+    solana_perf::{
+        cuda_runtime::PinnedVec,
+        packet::PacketBatch,
+        recycler::Recycler,
+        sigverify::{self, count_valid_packets},
+    },
 };
 
 pub struct TransactionSigVerifier {
@@ -52,6 +59,7 @@ impl TransactionSigVerifier {
 
 impl SigVerifier for TransactionSigVerifier {
     type SendType = BankingPacketBatch;
+    type VerifiedOutput = Vec<PacketBatch>;
 
     fn send_packets(
         &mut self,
@@ -73,7 +81,7 @@ impl SigVerifier for TransactionSigVerifier {
         &self,
         mut batches: Vec<PacketBatch>,
         valid_packets: usize,
-    ) -> Vec<PacketBatch> {
+    ) -> (Vec<PacketBatch>, VerifyPacketBatchesStats) {
         sigverify::ed25519_verify(
             &mut batches,
             &self.recycler,
@@ -81,6 +89,16 @@ impl SigVerifier for TransactionSigVerifier {
             self.reject_non_vote,
             valid_packets,
         );
-        batches
+        let num_valid_packets = count_valid_packets(&batches);
+        let (shrink_time_us, num_shrinks, batches) = SigVerifyStage::maybe_shrink_batches(batches);
+
+        (
+            batches,
+            VerifyPacketBatchesStats {
+                num_valid_packets,
+                num_shrinks,
+                shrink_time_us,
+            },
+        )
     }
 }
