@@ -19,33 +19,25 @@ fn build_histogram() -> Histogram {
         .unwrap()
 }
 
-/// Tracks metrics for a single [`Vote`]
-#[derive(Debug, Clone)]
-struct Metric {
-    histogram: Histogram,
-}
-
 /// Tracks all [`Vote`] metrics for a given node.
 #[derive(Debug)]
 struct NodeVoteMetrics {
-    notar: Metric,
-    notar_fallback: Metric,
-    skip: Metric,
-    skip_fallback: Metric,
-    final_: Metric,
+    notar: Histogram,
+    notar_fallback: Histogram,
+    skip: Histogram,
+    skip_fallback: Histogram,
+    final_: Histogram,
 }
 
 impl Default for NodeVoteMetrics {
     fn default() -> Self {
-        let metric = Metric {
-            histogram: build_histogram(),
-        };
+        let histogram = build_histogram();
         Self {
-            notar: metric.clone(),
-            notar_fallback: metric.clone(),
-            skip: metric.clone(),
-            skip_fallback: metric.clone(),
-            final_: metric,
+            notar: histogram.clone(),
+            notar_fallback: histogram.clone(),
+            skip: histogram.clone(),
+            skip_fallback: histogram.clone(),
+            final_: histogram,
         }
     }
 }
@@ -65,11 +57,11 @@ impl NodeVoteMetrics {
             }
         };
         let res = match vote {
-            Vote::Notarize(_) => self.notar.histogram.increment(elapsed),
-            Vote::NotarizeFallback(_) => self.notar_fallback.histogram.increment(elapsed),
-            Vote::Skip(_) => self.skip.histogram.increment(elapsed),
-            Vote::SkipFallback(_) => self.skip_fallback.histogram.increment(elapsed),
-            Vote::Finalize(_) => self.final_.histogram.increment(elapsed),
+            Vote::Notarize(_) => self.notar.increment(elapsed),
+            Vote::NotarizeFallback(_) => self.notar_fallback.increment(elapsed),
+            Vote::Skip(_) => self.skip.increment(elapsed),
+            Vote::SkipFallback(_) => self.skip_fallback.increment(elapsed),
+            Vote::Finalize(_) => self.final_.increment(elapsed),
         };
         match res {
             Ok(()) => (),
