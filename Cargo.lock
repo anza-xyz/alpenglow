@@ -8011,6 +8011,7 @@ dependencies = [
  "min-max-heap",
  "num_cpus",
  "num_enum",
+ "parking_lot 0.12.3",
  "prio-graph",
  "qualifier_attr",
  "quinn",

@@ -74,6 +74,7 @@ lru = { workspace = true }
 min-max-heap = { workspace = true }
 num_cpus = { workspace = true }
 num_enum = { workspace = true }
+parking_lot = { workspace = true }
 prio-graph = { workspace = true }
 qualifier_attr = { workspace = true }
 quinn = { workspace = true }
