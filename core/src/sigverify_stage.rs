@@ -57,10 +57,23 @@ pub struct SigVerifyStage {
     thread_hdl: JoinHandle<()>,
 }
 
+#[derive(Debug, Default)]
+pub struct VerifyPacketBatchesStats {
+    pub num_valid_packets: usize,
+    pub num_shrinks: usize,
+    pub shrink_time_us: u64,
+}
+
 pub trait SigVerifier {
     type SendType: std::fmt::Debug;
-    fn verify_batches(&self, batches: Vec<PacketBatch>, valid_packets: usize) -> Vec<PacketBatch>;
-    fn send_packets(&mut self, packet_batches: Vec<PacketBatch>) -> Result<(), Self::SendType>;
+    type VerifiedOutput: Send;
+    fn verify_batches(
+        &self,
+        batches: Vec<PacketBatch>,
+        valid_packets: usize,
+    ) -> (Self::VerifiedOutput, VerifyPacketBatchesStats);
+    fn send_packets(&mut self, verified_output: Self::VerifiedOutput)
+        -> Result<(), Self::SendType>;
 }
 
 #[derive(Default, Clone)]
@@ -219,16 +232,27 @@ impl SigVerifierStats {
 
 impl SigVerifier for DisabledSigVerifier {
     type SendType = ();
+    type VerifiedOutput = Vec<PacketBatch>;
     fn verify_batches(
         &self,
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
-    ) -> Vec<PacketBatch> {
+    ) -> (Vec<PacketBatch>, VerifyPacketBatchesStats) {
         ed25519_verify_disabled(&mut batches);
-        batches
+        let num_valid_packets = count_valid_packets(&batches);
+        (
+            batches,
+            VerifyPacketBatchesStats {
+                num_valid_packets,
+                ..VerifyPacketBatchesStats::default()
+            },
+        )
     }
 
-    fn send_packets(&mut self, _packet_batches: Vec<PacketBatch>) -> Result<(), Self::SendType> {
+    fn send_packets(
+        &mut self,
+        _verified_output: Self::VerifiedOutput,
+    ) -> Result<(), Self::SendType> {
         Ok(())
     }
 }
@@ -333,14 +357,11 @@ impl SigVerifyStage {
         let (pre_shrink_time_us, pre_shrink_total, batches) = Self::maybe_shrink_batches(batches);
 
         let mut verify_time = Measure::start("sigverify_batch_time");
-        let batches = verifier.verify_batches(batches, num_packets_to_verify);
-        let num_valid_packets = count_valid_packets(&batches);
+        let (verified_output, verify_stats) =
+            verifier.verify_batches(batches, num_packets_to_verify);
         verify_time.stop();
 
-        // Post-shrink packet batches if many packets are discarded from sigverify
-        let (post_shrink_time_us, post_shrink_total, batches) = Self::maybe_shrink_batches(batches);
-
-        verifier.send_packets(batches)?;
+        verifier.send_packets(verified_output)?;
 
         debug!(
             "@{:?} verifier: done. batches: {} total verify time: {:?} verified: {} v/s {}",
@@ -372,15 +393,15 @@ impl SigVerifyStage {
         stats.total_batches += batches_len;
         stats.total_packets += num_packets;
         stats.total_dedup += discard_or_dedup_fail;
-        stats.total_valid_packets += num_valid_packets;
+        stats.total_valid_packets += verify_stats.num_valid_packets;
         stats.total_discard_random_time_us += discard_random_time.as_us() as usize;
         stats.total_discard_random += num_discarded_randomly;
         stats.total_excess_fail += excess_fail;
-        stats.total_shrinks += pre_shrink_total + post_shrink_total;
+        stats.total_shrinks += pre_shrink_total + verify_stats.num_shrinks;
         stats.total_dedup_time_us += dedup_time.as_us() as usize;
         stats.total_discard_time_us += discard_time.as_us() as usize;
         stats.total_verify_time_us += verify_time.as_us() as usize;
-        stats.total_shrink_time_us += (pre_shrink_time_us + post_shrink_time_us) as usize;
+        stats.total_shrink_time_us += (pre_shrink_time_us + verify_stats.shrink_time_us) as usize;
 
         Ok(())
     }
