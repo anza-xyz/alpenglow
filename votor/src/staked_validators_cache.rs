@@ -227,25 +227,25 @@ mod tests {
     use {
         super::StakedValidatorsCache,
         crate::voting_service::AlpenglowPortOverride,
-        solana_account::AccountSharedData,
-        solana_clock::{Clock, Slot},
-        solana_genesis_config::GenesisConfig,
+        rand::Rng,
         solana_gossip::{
             cluster_info::ClusterInfo, contact_info::ContactInfo, crds::GossipRoute,
             crds_data::CrdsData, crds_value::CrdsValue, node::Node,
         },
         solana_keypair::Keypair,
-        solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
         solana_pubkey::Pubkey,
-        solana_runtime::{bank::Bank, bank_forks::BankForks, epoch_stakes::VersionedEpochStakes},
+        solana_runtime::{
+            bank::Bank,
+            bank_forks::BankForks,
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            },
+        },
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_time_utils::timestamp,
-        solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
-        solana_vote_program::vote_state::{VoteInit, VoteStateV3, VoteStateVersions},
         std::{
             collections::HashMap,
-            iter::{repeat, repeat_with},
             net::{Ipv4Addr, SocketAddr},
             sync::{Arc, RwLock},
             time::{Duration, Instant},
@@ -253,183 +253,119 @@ mod tests {
         test_case::test_case,
     };
 
-    fn new_rand_vote_account<R: rand::Rng>(
-        rng: &mut R,
-        node_pubkey: Option<Pubkey>,
-    ) -> (AccountSharedData, VoteStateV3) {
-        let vote_init = VoteInit {
-            node_pubkey: node_pubkey.unwrap_or_else(Pubkey::new_unique),
-            authorized_voter: Pubkey::new_unique(),
-            authorized_withdrawer: Pubkey::new_unique(),
-            commission: rng.gen(),
-        };
-        let clock = Clock {
-            slot: rng.gen(),
-            epoch_start_timestamp: rng.gen(),
-            epoch: rng.gen(),
-            leader_schedule_epoch: rng.gen(),
-            unix_timestamp: rng.gen(),
-        };
-        let vote_state = VoteStateV3::new(&vote_init, &clock);
-        let account = AccountSharedData::new_data(
-            rng.gen(), // lamports
-            &VoteStateVersions::new_v3(vote_state.clone()),
-            &solana_sdk_ids::vote::id(), // owner
-        )
-        .unwrap();
-        (account, vote_state)
-    }
+    fn update_cluster_info(
+        cluster_info: &mut ClusterInfo,
+        node_keypair_map: HashMap<Pubkey, Keypair>,
+    ) {
+        // Update cluster info
+        {
+            let node_contact_info = node_keypair_map
+                .keys()
+                .enumerate()
+                .map(|(node_ix, pubkey)| {
+                    let mut contact_info = ContactInfo::new(*pubkey, 0_u64, 0_u16);
 
-    fn new_rand_vote_accounts<R: rand::Rng>(
-        rng: &mut R,
-        num_nodes: usize,
-        num_zero_stake_nodes: usize,
-    ) -> impl Iterator<Item = (Keypair, Keypair, /*stake:*/ u64, VoteAccount)> + '_ {
-        let node_keypairs: Vec<_> = repeat_with(Keypair::new).take(num_nodes).collect();
+                    assert!(contact_info
+                        .set_alpenglow((
+                            Ipv4Addr::LOCALHOST,
+                            8080_u16.saturating_add(node_ix as u16)
+                        ))
+                        .is_ok());
 
-        repeat(0..num_nodes).flatten().map(move |node_ix| {
-            let node_keypair = node_keypairs[node_ix].insecure_clone();
-            let vote_account_keypair = Keypair::new();
+                    contact_info
+                });
 
-            let (account, _) = new_rand_vote_account(rng, Some(node_keypair.pubkey()));
-            let stake = if node_ix < num_zero_stake_nodes {
-                0
-            } else {
-                rng.gen_range(1..997)
-            };
-            let vote_account = VoteAccount::try_from(account).unwrap();
-            (vote_account_keypair, node_keypair, stake, vote_account)
-        })
-    }
+            for contact_info in node_contact_info {
+                let node_pubkey = *contact_info.pubkey();
 
-    struct StakedValidatorsCacheHarness {
-        bank: Bank,
-        cluster_info: ClusterInfo,
-    }
+                let entry = CrdsValue::new(
+                    CrdsData::ContactInfo(contact_info),
+                    &node_keypair_map[&node_pubkey],
+                );
 
-    impl StakedValidatorsCacheHarness {
-        pub fn new(genesis_config: &GenesisConfig, keypair: Keypair) -> Self {
-            let bank = Bank::new_for_tests(genesis_config);
+                assert_eq!(node_pubkey, entry.label().pubkey());
 
-            let cluster_info = ClusterInfo::new(
-                Node::new_localhost_with_pubkey(&keypair.pubkey()).info,
-                Arc::new(keypair),
-                SocketAddrSpace::Unspecified,
-            );
+                {
+                    let mut gossip_crds = cluster_info.gossip.crds.write().unwrap();
 
-            Self { bank, cluster_info }
-        }
-
-        pub fn with_vote_accounts(
-            mut self,
-            slot: Slot,
-            node_keypair_map: HashMap<Pubkey, Keypair>,
-            vote_accounts: VoteAccountsHashMap,
-        ) -> Self {
-            // Update cluster info
-            {
-                let node_contact_info =
-                    node_keypair_map
-                        .keys()
-                        .enumerate()
-                        .map(|(node_ix, pubkey)| {
-                            let mut contact_info = ContactInfo::new(*pubkey, 0_u64, 0_u16);
-
-                            assert!(contact_info
-                                .set_alpenglow((
-                                    Ipv4Addr::LOCALHOST,
-                                    8080_u16.saturating_add(node_ix as u16)
-                                ))
-                                .is_ok());
-
-                            contact_info
-                        });
-
-                for contact_info in node_contact_info {
-                    let node_pubkey = *contact_info.pubkey();
-
-                    let entry = CrdsValue::new(
-                        CrdsData::ContactInfo(contact_info),
-                        &node_keypair_map[&node_pubkey],
-                    );
-
-                    assert_eq!(node_pubkey, entry.label().pubkey());
-
-                    {
-                        let mut gossip_crds = self.cluster_info.gossip.crds.write().unwrap();
-
-                        gossip_crds
-                            .insert(entry, timestamp(), GossipRoute::LocalMessage)
-                            .unwrap();
-                    }
+                    gossip_crds
+                        .insert(entry, timestamp(), GossipRoute::LocalMessage)
+                        .unwrap();
                 }
             }
-
-            // Update bank
-            let epoch_num = self.bank.epoch_schedule().get_epoch(slot);
-            let epoch_stakes = VersionedEpochStakes::new_for_tests(vote_accounts, epoch_num);
-
-            self.bank.set_epoch_stakes_for_test(epoch_num, epoch_stakes);
-
-            self
-        }
-
-        pub fn bank_forks(self) -> (Arc<RwLock<BankForks>>, ClusterInfo) {
-            let bank_forks = self.bank.wrap_with_bank_forks_for_tests().1;
-            (bank_forks, self.cluster_info)
         }
     }
 
-    /// Create a number of nodes; each node will have one or more vote accounts. Each vote account
+    /// Create a number of nodes; each node will have exactly one vote account. Each vote account
     /// will have random stake in [1, 997), with the exception of the first few vote accounts
     /// having exactly 0 stake.
-    fn build_epoch_stakes(
+    fn create_bank_forks_and_cluster_info(
         num_nodes: usize,
-        num_zero_stake_vote_accounts: usize,
-        num_vote_accounts: usize,
-    ) -> (HashMap<Pubkey, Keypair>, VoteAccountsHashMap) {
+        num_zero_stake_nodes: usize,
+        base_slot: u64,
+    ) -> (Arc<RwLock<BankForks>>, ClusterInfo, Vec<Pubkey>) {
         let mut rng = rand::thread_rng();
+        let validator_keypairs = (0..num_nodes)
+            .map(|_| ValidatorVoteKeypairs::new(Keypair::new(), Keypair::new(), Keypair::new()))
+            .collect::<Vec<ValidatorVoteKeypairs>>();
 
-        let vote_accounts: Vec<_> =
-            new_rand_vote_accounts(&mut rng, num_nodes, num_zero_stake_vote_accounts)
-                .take(num_vote_accounts)
-                .collect();
+        let my_keypair = validator_keypairs
+            .last()
+            .unwrap()
+            .node_keypair
+            .insecure_clone();
 
-        let node_keypair_map: HashMap<Pubkey, Keypair> = vote_accounts
+        let node_keypair_map: HashMap<Pubkey, Keypair> = validator_keypairs
             .iter()
-            .map(|(_, node_keypair, _, _)| (node_keypair.pubkey(), node_keypair.insecure_clone()))
+            .map(|v| (v.node_keypair.pubkey(), v.node_keypair.insecure_clone()))
             .collect();
-
-        let vahm = vote_accounts
-            .into_iter()
-            .map(|(vote_keypair, _, stake, vote_account)| {
-                (vote_keypair.pubkey(), (stake, vote_account))
+        let stakes: Vec<u64> = (0..num_nodes)
+            .map(|node_ix| {
+                if node_ix < num_zero_stake_nodes {
+                    0
+                } else {
+                    rng.gen_range(1..997)
+                }
             })
             .collect();
 
-        (node_keypair_map, vahm)
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            stakes,
+        );
+
+        let mut bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let base_slot_epoch = bank0.epoch_schedule().get_epoch(base_slot);
+        bank0.set_epoch_stakes_for_test(base_slot_epoch, bank0.epoch_stakes(0).unwrap().clone());
+        let bank_forks = BankForks::new_rw_arc(bank0);
+
+        let mut cluster_info = ClusterInfo::new(
+            Node::new_localhost_with_pubkey(&my_keypair.pubkey()).info,
+            Arc::new(my_keypair),
+            SocketAddrSpace::Unspecified,
+        );
+        update_cluster_info(&mut cluster_info, node_keypair_map);
+        (
+            bank_forks,
+            cluster_info,
+            validator_keypairs
+                .iter()
+                .map(|v| v.node_keypair.pubkey())
+                .collect::<Vec<Pubkey>>(),
+        )
     }
 
-    #[test_case(1_usize, 0_usize, 10_usize)]
-    #[test_case(10_usize, 2_usize, 10_usize)]
-    #[test_case(50_usize, 7_usize, 60_usize)]
+    #[test_case(1_usize, 0_usize)]
+    #[test_case(10_usize, 2_usize)]
+    #[test_case(50_usize, 7_usize)]
     fn test_detect_only_staked_nodes_and_refresh_after_ttl(
         num_nodes: usize,
         num_zero_stake_nodes: usize,
-        num_vote_accounts: usize,
     ) {
         let slot_num = 325_000_000_u64;
-        let genesis_lamports = 123_u64;
-        // Create our harness
-        let (keypair_map, vahm) =
-            build_epoch_stakes(num_nodes, num_zero_stake_nodes, num_vote_accounts);
-
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
-
-        let (bank_forks, cluster_info) =
-            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(slot_num, keypair_map, vahm)
-                .bank_forks();
+        let (bank_forks, cluster_info, _) =
+            create_bank_forks_and_cluster_info(num_nodes, num_zero_stake_nodes, slot_num);
 
         // Create our staked validators cache
         let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
@@ -503,16 +439,8 @@ mod tests {
 
     #[test]
     fn test_cache_eviction() {
-        // Create our harness
-        let (keypair_map, vahm) = build_epoch_stakes(50, 7, 60);
-
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(123);
-
         let base_slot = 325_000_000_000;
-        let (bank_forks, cluster_info) =
-            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(base_slot, keypair_map, vahm)
-                .bank_forks();
+        let (bank_forks, cluster_info, _) = create_bank_forks_and_cluster_info(50, 7, base_slot);
 
         // Create our staked validators cache
         let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
@@ -575,19 +503,9 @@ mod tests {
         let slot_num = 325_000_000_u64;
         let num_nodes = 10_usize;
         let num_zero_stake_nodes = 2_usize;
-        let num_vote_accounts = 10_usize;
-        let genesis_lamports = 123_u64;
 
-        // Create our harness
-        let (keypair_map, vahm) =
-            build_epoch_stakes(num_nodes, num_zero_stake_nodes, num_vote_accounts);
-
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
-
-        let (bank_forks, cluster_info) =
-            StakedValidatorsCacheHarness::new(&genesis_config, Keypair::new())
-                .with_vote_accounts(slot_num, keypair_map, vahm)
-                .bank_forks();
+        let (bank_forks, cluster_info, _) =
+            create_bank_forks_and_cluster_info(num_nodes, num_zero_stake_nodes, slot_num);
 
         // Create our staked validators cache
         let mut svc = StakedValidatorsCache::new(bank_forks, Duration::from_secs(5), 5, true, None);
@@ -608,21 +526,11 @@ mod tests {
     #[test_case(10_usize)]
     fn test_exclude_self_from_cache(num_nodes: usize) {
         let slot_num = 325_000_000_u64;
-        let num_vote_accounts = 10_usize;
-        let genesis_lamports = 123_u64;
 
-        // Create our harness
-        let (keypair_map, vahm) = build_epoch_stakes(num_nodes, 0, num_vote_accounts);
+        let (bank_forks, cluster_info, _) =
+            create_bank_forks_and_cluster_info(num_nodes, 0, slot_num);
 
-        // Fetch some keypair from the keypair map
-        let keypair = keypair_map.values().next().unwrap().insecure_clone();
-
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(genesis_lamports);
-
-        let (bank_forks, cluster_info) =
-            StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
-                .with_vote_accounts(slot_num, keypair_map, vahm)
-                .bank_forks();
+        let keypair = cluster_info.keypair().insecure_clone();
 
         let my_socket_addr = cluster_info
             .lookup_contact_info(&keypair.pubkey(), |node| node.alpenglow().unwrap())
@@ -650,18 +558,12 @@ mod tests {
 
     #[test]
     fn test_alpenglow_port_override() {
-        let (keypair_map, vahm) = build_epoch_stakes(3, 0, 3);
-        let pubkey_b = *keypair_map.keys().nth(1).unwrap();
-        let keypair = keypair_map.values().next().unwrap().insecure_clone();
+        solana_logger::setup();
+        let (bank_forks, cluster_info, node_pubkeys) = create_bank_forks_and_cluster_info(3, 0, 1);
+        let pubkey_b = node_pubkeys[1];
 
         let alpenglow_port_override = AlpenglowPortOverride::default();
         let blackhole_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(100);
-
-        let (bank_forks, cluster_info) =
-            StakedValidatorsCacheHarness::new(&genesis_config, keypair.insecure_clone())
-                .with_vote_accounts(0, keypair_map, vahm)
-                .bank_forks();
 
         // Create our staked validators cache - set include_self to false
         let mut svc = StakedValidatorsCache::new(
