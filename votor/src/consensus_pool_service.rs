@@ -439,6 +439,7 @@ mod tests {
             vote::Vote,
         },
         std::sync::{Arc, Mutex},
+        test_case::test_case,
     };
 
     struct ConsensusPoolServiceTestComponents {
@@ -536,7 +537,8 @@ mod tests {
 
         // validator 0 to 7 send Notarize on slot 2
         let block_id = Hash::new_unique();
-        let notarize_vote = Vote::new_notarization_vote(2, block_id);
+        let target_slot = 2;
+        let notarize_vote = Vote::new_notarization_vote(target_slot, block_id);
         for my_rank in 0..8 {
             let vote_keypair = &setup_result.validator_keypairs[my_rank].vote_keypair;
             let bls_keypair =
@@ -553,7 +555,7 @@ mod tests {
         // Listen on the bls_receiver for certificates
         wait_for_event(&setup_result.bls_receiver, |event| {
             if let BLSOp::PushCertificate { certificate } = event {
-                assert_eq!(certificate.certificate.slot(), 2);
+                assert_eq!(certificate.certificate.slot(), target_slot);
                 let certificate_type = certificate.certificate.certificate_type();
                 assert!(matches!(
                     certificate_type,
@@ -569,7 +571,7 @@ mod tests {
         // Verify that we received a finalized slot event
         wait_for_event(&setup_result.event_receiver, |event| {
             if let VotorEvent::Finalized((slot, receivied_block_id), is_fast_finalized) = event {
-                assert_eq!(*slot, 2);
+                assert_eq!(*slot, target_slot);
                 assert_eq!(*receivied_block_id, block_id);
                 assert!(*is_fast_finalized);
                 true
@@ -586,14 +588,15 @@ mod tests {
                  ..
              }| {
                 assert_eq!(*commitment_type, AlpenglowCommitmentType::Finalized);
-                assert_eq!(*slot, 2);
+                assert_eq!(*slot, target_slot);
                 true
             },
         );
 
         // Now send a Skip certificate on slot 3, should be forwarded immediately
+        let target_slot = 3;
         let skip_certificate = CertificateMessage {
-            certificate: Certificate::Skip(3),
+            certificate: Certificate::Skip(target_slot),
             signature: BLSSignature::default(),
             bitmap: vec![],
         };
@@ -602,7 +605,8 @@ mod tests {
             .unwrap();
         wait_for_event(&setup_result.bls_receiver, |event| {
             if let BLSOp::PushCertificate { certificate } = event {
-                if matches!(certificate.certificate, Certificate::Skip(3)) {
+                if matches!(certificate.certificate, Certificate::Skip(slot) if slot == target_slot)
+                {
                     return true;
                 }
             }
@@ -613,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn test_produce_block_event() {
+    fn test_send_produce_block_event() {
         let setup_result = setup();
         // Find when is the next leader slot for me (validator 0)
         let my_pubkey = setup_result.validator_keypairs[0].node_keypair.pubkey();
@@ -647,10 +651,10 @@ mod tests {
     }
 
     #[test]
-    fn test_standstill() {
+    fn test_send_standstill() {
         let setup_result = setup();
-        // Do nothing for 10.1 seconds
-        thread::sleep(Duration::from_millis(10_100));
+        // Do nothing for a little more than DELTA_STANDSTILL
+        thread::sleep(DELTA_STANDSTILL + Duration::from_millis(100));
         // Verify that we received a standstill event
         wait_for_event(&setup_result.event_receiver, |event| {
             if let VotorEvent::Standstill(slot) = event {
@@ -664,10 +668,39 @@ mod tests {
         setup_result.consensus_pool_service.join().unwrap();
     }
 
-    #[test]
-    fn test_channel_disconnection() {
+    #[test_case("consensus_message_receiver")]
+    #[test_case("bls_receiver")]
+    #[test_case("votor_event_receiver")]
+    #[test_case("commitment_receiver")]
+    fn test_channel_disconnection(channel_name: &str) {
         let setup_result = setup();
-        drop(setup_result.consensus_message_sender);
+        // A lot of the receiver needs a finalize certificate to trigger an exit
+        if channel_name != "consensus_message_receiver" {
+            let finalize_certificate = CertificateMessage {
+                certificate: Certificate::FinalizeFast(2, Hash::new_unique()),
+                signature: BLSSignature::default(),
+                bitmap: vec![],
+            };
+            setup_result
+                .consensus_message_sender
+                .send(ConsensusMessage::Certificate(finalize_certificate))
+                .unwrap();
+        }
+        match channel_name {
+            "consensus_message_receiver" => {
+                drop(setup_result.consensus_message_sender);
+            }
+            "bls_receiver" => {
+                drop(setup_result.bls_receiver);
+            }
+            "votor_event_receiver" => {
+                drop(setup_result.event_receiver);
+            }
+            "commitment_receiver" => {
+                drop(setup_result.commitment_receiver);
+            }
+            _ => panic!("Unknown channel name"),
+        }
         // Verify that the consensus pool service exits within 5 seconds
         let start = Instant::now();
         while !setup_result.exit.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5)
