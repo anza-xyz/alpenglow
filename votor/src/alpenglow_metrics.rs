@@ -9,10 +9,19 @@ use {
     },
 };
 
+/// Returns a [`Histogram`] configured for the use cases for this module.
+///
+/// Keeps the default precision and reduces the max value to 10s to get finer grained resolution.
+fn build_histogram() -> Histogram {
+    Histogram::configure()
+        .max_value(10_000_000)
+        .build()
+        .unwrap()
+}
+
 /// Tracks metrics for a single [`Vote`]
 #[derive(Debug, Clone)]
 struct Metric {
-    count: u64,
     histogram: Histogram,
 }
 
@@ -28,10 +37,8 @@ struct NodeVoteMetrics {
 
 impl Default for NodeVoteMetrics {
     fn default() -> Self {
-        let histogram = Histogram::new(7, 20).unwrap();
         let metric = Metric {
-            count: 0,
-            histogram,
+            histogram: build_histogram(),
         };
         Self {
             notar: metric.clone(),
@@ -46,41 +53,27 @@ impl Default for NodeVoteMetrics {
 impl NodeVoteMetrics {
     /// Records metrics for when `vote` was received after `elapsed` time has passed since the start of the slot.
     fn record_vote(&mut self, vote: &Vote, elapsed: Duration) {
-        match vote {
-            Vote::Notarize(_) => {
-                self.notar
-                    .histogram
-                    .increment(elapsed.as_micros() as u64)
-                    .unwrap();
-                self.notar.count = self.notar.count.saturating_add(1);
+        let elapsed = elapsed.as_micros();
+        let elapsed = match elapsed.try_into() {
+            Ok(e) => e,
+            Err(err) => {
+                warn!("recording duration {elapsed} for vote {vote:?}: conversion to u64 failed with {err}");
+                return;
             }
-            Vote::NotarizeFallback(_) => {
-                self.notar_fallback
-                    .histogram
-                    .increment(elapsed.as_micros() as u64)
-                    .unwrap();
-                self.notar_fallback.count = self.notar_fallback.count.saturating_add(1);
-            }
-            Vote::Skip(_) => {
-                self.skip
-                    .histogram
-                    .increment(elapsed.as_micros() as u64)
-                    .unwrap();
-                self.skip.count = self.skip.count.saturating_add(1);
-            }
-            Vote::SkipFallback(_) => {
-                self.skip_fallback
-                    .histogram
-                    .increment(elapsed.as_micros() as u64)
-                    .unwrap();
-                self.skip_fallback.count = self.skip_fallback.count.saturating_add(1);
-            }
-            Vote::Finalize(_) => {
-                self.final_
-                    .histogram
-                    .increment(elapsed.as_micros() as u64)
-                    .unwrap();
-                self.final_.count = self.final_.count.saturating_add(1);
+        };
+        let res = match vote {
+            Vote::Notarize(_) => self.notar.histogram.increment(elapsed),
+            Vote::NotarizeFallback(_) => self.notar_fallback.histogram.increment(elapsed),
+            Vote::Skip(_) => self.skip.histogram.increment(elapsed),
+            Vote::SkipFallback(_) => self.skip_fallback.histogram.increment(elapsed),
+            Vote::Finalize(_) => self.final_.histogram.increment(elapsed),
+        };
+        match res {
+            Ok(()) => (),
+            Err(err) => {
+                warn!(
+                    "recording duration {elapsed} for vote {vote:?}: recording failed with {err}"
+                );
             }
         }
     }
@@ -107,6 +100,9 @@ pub struct AgMetrics {
     /// Used to track when this node received blocks from different leaders in the network.
     leader_metrics: BTreeMap<Pubkey, Histogram>,
     /// Tracks when individual slots began.
+    ///
+    /// Relies on [`TimerManager`] to notify of start of slots.
+    /// The manager uses parent ready event and timeouts as per the Alpenglow protocol to determine start of slots.
     start_of_slot: BTreeMap<Slot, Instant>,
     /// Tracks the current epoch, used for end of epoch reporting.
     current_epoch: Epoch,
@@ -142,12 +138,26 @@ impl AgMetrics {
         let Some(start) = self.start_of_slot.get(&slot) else {
             return Err(RecordBlockHashError::SlotNotFound);
         };
-        let elapsed = start.elapsed();
+        let elapsed = start.elapsed().as_micros();
+        let elapsed = match elapsed.try_into() {
+            Ok(e) => e,
+            Err(err) => {
+                warn!("recording duration {elapsed} for block hash for slot {slot}: conversion to u64 failed with {err}");
+                return Ok(());
+            }
+        };
         let histogram = self
             .leader_metrics
             .entry(leader)
-            .or_insert(Histogram::new(7, 20).unwrap());
-        histogram.increment(elapsed.as_micros() as u64).unwrap();
+            .or_insert_with(build_histogram);
+        match histogram.increment(elapsed) {
+            Ok(()) => (),
+            Err(err) => {
+                warn!(
+                    "recording duration {elapsed} for block hash for slot {slot}: recording failed with {err}"
+                );
+            }
+        }
         Ok(())
     }
 
