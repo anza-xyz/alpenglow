@@ -478,6 +478,44 @@ impl BlockComponent {
             (false, false) => Err(BlockComponentError::MixedData),
         }
     }
+
+    /// Infers whether the data represents a BlockComponent with entries.
+    ///
+    /// Examines the first 8 bytes as a little-endian u64 entry count.
+    /// Returns `Some(true)` if count > 0, `Some(false)` if count == 0,
+    /// or `None` if data is too short.
+    pub fn infer_is_entries(data: &[u8]) -> Option<bool> {
+        if data.len() >= 8 {
+            let first_8_bytes = &data[0..8];
+            let value = u64::from_le_bytes(first_8_bytes.try_into().unwrap());
+            Some(value != 0)
+        } else {
+            None
+        }
+    }
+
+    /// Infers whether the data represents a BlockComponent with a block marker.
+    ///
+    /// Returns the inverse of `infer_is_entries()`.
+    pub fn infer_is_block_marker(data: &[u8]) -> Option<bool> {
+        BlockComponent::infer_is_entries(data).map(|is_entries| !is_entries)
+    }
+
+    /// Returns a reference to the entries vector if this component contains entries.
+    pub fn as_entries(&self) -> Option<&Vec<Entry>> {
+        match self {
+            Self::Entries(entries) => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// Returns a reference to the versioned block marker if this component contains a marker.
+    pub fn as_versioned_block_marker(&self) -> Option<&VersionedBlockMarker> {
+        match self {
+            Self::BlockMarker(marker) => Some(marker),
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for BlockComponent {
