@@ -1346,6 +1346,7 @@ mod tests {
 
         // Simulate a crashed leader for slot 4
         send_timeout_crashed_leader_event(&test_context, 4);
+        sleep(TEST_SHORT_TIMEOUT);
 
         // Since we don't have any shred for block 4, we should vote skip for 4-7
         check_for_vote(&test_context, &Vote::new_skip_vote(4));
