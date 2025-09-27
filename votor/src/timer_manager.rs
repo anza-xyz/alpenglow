@@ -63,6 +63,11 @@ impl TimerManager {
     pub(crate) fn join(self) {
         self.handle.join().unwrap();
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_timeout_set(&self, slot: Slot) -> bool {
+        self.timers.read().is_timeout_set(slot)
+    }
 }
 
 #[cfg(test)]

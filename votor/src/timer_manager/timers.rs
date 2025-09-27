@@ -171,6 +171,11 @@ impl Timers {
     pub(super) fn stats(&self) -> TimerManagerStats {
         self.stats.clone()
     }
+
+    #[cfg(test)]
+    pub(super) fn is_timeout_set(&self, slot: Slot) -> bool {
+        self.timers.contains_key(&slot)
+    }
 }
 
 #[cfg(test)]
