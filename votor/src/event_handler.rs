@@ -796,13 +796,14 @@ mod tests {
         super::*,
         crate::{
             commitment::AlpenglowCommitmentAggregationData,
+            consensus_metrics::ConsensusMetrics,
             event::{LeaderWindowInfo, VotorEventSender},
             vote_history_storage::FileVoteHistoryStorage,
             voting_service::BLSOp,
             votor::LeaderWindowNotifier,
         },
         crossbeam_channel::{unbounded, Receiver, RecvTimeoutError},
-        parking_lot::RwLock as PLRwLock,
+        parking_lot::RwLock as PlRwLock,
         solana_bls_signatures::{
             keypair::Keypair as BLSKeypair, signature::Signature as BLSSignature,
         },
@@ -842,7 +843,7 @@ mod tests {
         own_vote_receiver: Receiver<ConsensusMessage>,
         bank_forks: Arc<RwLock<BankForks>>,
         my_bls_keypair: BLSKeypair,
-        timer_manager: Arc<PLRwLock<TimerManager>>,
+        timer_manager: Arc<PlRwLock<TimerManager>>,
         leader_window_notifier: Arc<LeaderWindowNotifier>,
         drop_bank_receiver: Receiver<Vec<BankWithScheduler>>,
         cluster_info: Arc<ClusterInfo>,
@@ -856,9 +857,11 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let start = Arc::new((Mutex::new(true), Condvar::new()));
         let (event_sender, event_receiver) = unbounded();
-        let timer_manager = Arc::new(PLRwLock::new(TimerManager::new(
+        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
+            consensus_metrics.clone(),
         )));
 
         // Create 10 node validatorvotekeypairs vec
@@ -918,6 +921,7 @@ mod tests {
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted: false,
             own_vote_sender,
+            consensus_metrics,
         };
 
         let root_context = RootContext {
