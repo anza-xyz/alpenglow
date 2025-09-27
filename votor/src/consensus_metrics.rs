@@ -169,7 +169,7 @@ impl ConsensusMetrics {
     fn end_of_epoch_reporting(&mut self) {
         // TODO: currently, just clearing the stats and not actually reporting
         self.node_metrics.clear();
-        self.node_metrics.clear();
+        self.leader_metrics.clear();
         self.start_of_slot.clear();
     }
 
