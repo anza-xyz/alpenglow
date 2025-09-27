@@ -527,15 +527,8 @@ impl EventHandler {
         if *my_pubkey != new_pubkey || vctx.vote_history.node_pubkey != new_pubkey {
             let my_old_pubkey = vctx.vote_history.node_pubkey;
             *my_pubkey = new_pubkey;
-            if let Ok(vote_history) =
-                VoteHistory::restore(ctx.vote_history_storage.as_ref(), my_pubkey)
-            {
-                warn!("Loaded vote history for {my_pubkey}: {vote_history:?}");
-                vctx.vote_history = vote_history;
-            } else {
-                warn!("No vote history found for {my_pubkey}, starting fresh");
-                vctx.vote_history = VoteHistory::new(*my_pubkey, vctx.root_bank.load().slot());
-            }
+            // The vote history file for the new identity must exist for set-identity to succeed
+            vctx.vote_history = VoteHistory::restore(ctx.vote_history_storage.as_ref(), my_pubkey)?;
             vctx.identity_keypair = new_identity.clone();
             warn!("set-identity: from {my_old_pubkey} to {my_pubkey}");
         }
@@ -606,9 +599,6 @@ impl EventHandler {
             voting_context,
         )? {
             votes.push(bls_op);
-        } else {
-            // We may be hot spare so don't do anything else and just return
-            return Ok(false);
         }
         alpenglow_update_commitment_cache(
             AlpenglowCommitmentType::Notarize,
@@ -798,7 +788,10 @@ mod tests {
             commitment::AlpenglowCommitmentAggregationData,
             consensus_metrics::ConsensusMetrics,
             event::{LeaderWindowInfo, VotorEventSender},
-            vote_history_storage::FileVoteHistoryStorage,
+            vote_history_storage::{
+                FileVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
+                VoteHistoryStorage,
+            },
             voting_service::BLSOp,
             votor::LeaderWindowNotifier,
         },
@@ -828,6 +821,8 @@ mod tests {
         },
         std::{
             collections::HashMap,
+            fs::remove_file,
+            path::PathBuf,
             sync::{Arc, RwLock},
             thread::sleep,
             time::Instant,
@@ -960,7 +955,7 @@ mod tests {
         }
     }
 
-    const TEST_SHORT_TIMEOUT: Duration = Duration::from_millis(100);
+    const TEST_SHORT_TIMEOUT: Duration = Duration::from_millis(5);
 
     fn send_parent_ready_event(
         test_context: &EventHandlerTestContext,
@@ -1179,6 +1174,29 @@ mod tests {
             .timer_manager
             .read()
             .is_timeout_set(expected_slot));
+    }
+
+    fn crate_vote_history_storage_and_switch_identity(
+        test_context: &EventHandlerTestContext,
+        new_identity: &Keypair,
+    ) -> PathBuf {
+        let file_vote_history_storage = FileVoteHistoryStorage::default();
+        let saved_vote_history =
+            SavedVoteHistory::new(&VoteHistory::new(new_identity.pubkey(), 0), &new_identity)
+                .unwrap();
+        assert!(file_vote_history_storage
+            .store(&SavedVoteHistoryVersions::from(saved_vote_history),)
+            .is_ok());
+        test_context
+            .cluster_info
+            .set_keypair(Arc::new(new_identity.insecure_clone()));
+        sleep(TEST_SHORT_TIMEOUT);
+        test_context
+            .event_sender
+            .send(VotorEvent::SetIdentity)
+            .unwrap();
+        sleep(TEST_SHORT_TIMEOUT);
+        file_vote_history_storage.filename(&new_identity.pubkey())
     }
 
     #[test]
@@ -1588,31 +1606,34 @@ mod tests {
         let test_context = setup();
         let old_identity = test_context.cluster_info.keypair().insecure_clone();
         let new_identity = Keypair::new();
-        test_context
-            .cluster_info
-            .set_keypair(Arc::new(new_identity.insecure_clone()));
-        sleep(TEST_SHORT_TIMEOUT);
-        test_context
-            .event_sender
-            .send(VotorEvent::SetIdentity)
-            .unwrap();
+        let mut files_to_remove = vec![];
+
+        // Before set identity we need to manually create the vote history storage file for new identity
+        files_to_remove.push(crate_vote_history_storage_and_switch_identity(
+            &test_context,
+            &new_identity,
+        ));
 
         // Should not send any votes because we set to a different identity
         let root_bank = test_context.bank_forks.read().unwrap().root_bank();
         let _ = create_block_and_send_block_event(&test_context, 1, root_bank.clone());
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
-        check_no_vote_or_commitment(&test_context);
+        // There should be no votes but we should see commitments for hot spares
+        assert_eq!(
+            test_context
+                .bls_receiver
+                .recv_timeout(TEST_SHORT_TIMEOUT)
+                .err(),
+            Some(RecvTimeoutError::Timeout)
+        );
+        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
 
         // Now set back to original identity
-        test_context
-            .cluster_info
-            .set_keypair(Arc::new(old_identity));
-        test_context
-            .event_sender
-            .send(VotorEvent::SetIdentity)
-            .unwrap();
-        sleep(TEST_SHORT_TIMEOUT);
+        files_to_remove.push(crate_vote_history_storage_and_switch_identity(
+            &test_context,
+            &old_identity,
+        ));
 
         // We should now be able to vote again
         let slot = 4;
@@ -1627,5 +1648,9 @@ mod tests {
 
         test_context.exit.store(true, Ordering::Relaxed);
         test_context.event_handler.join().unwrap();
+
+        for file in files_to_remove {
+            let _ = remove_file(file);
+        }
     }
 }
