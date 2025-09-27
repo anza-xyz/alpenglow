@@ -1,6 +1,7 @@
 use {
     histogram::Histogram,
     solana_clock::{Epoch, Slot},
+    solana_metrics::{datapoint::DataPoint, submit},
     solana_pubkey::Pubkey,
     solana_votor_messages::vote::Vote,
     std::{
@@ -167,7 +168,90 @@ impl ConsensusMetrics {
 
     /// Performs end of epoch reporting and reset all the statistics for the subsequent epoch.
     fn end_of_epoch_reporting(&mut self) {
-        // TODO: currently, just clearing the stats and not actually reporting
+        for (addr, metrics) in &self.node_metrics {
+            let addr = addr.to_string();
+            let mut datapoint = DataPoint::new("votor_consensus_metrics");
+            datapoint.add_tag("address", &addr);
+
+            datapoint.add_field_u64("notar_vote_count", metrics.notar.entries());
+            if let Ok(v) = metrics.notar.mean() {
+                datapoint.add_field_u64("notar_vote_mean", v);
+            }
+            if let Some(v) = metrics.notar.stddev() {
+                datapoint.add_field_u64("notar_vote_stddev", v);
+            }
+            if let Ok(v) = metrics.notar.maximum() {
+                datapoint.add_field_u64("notar_vote_maximum", v);
+            }
+
+            datapoint.add_field_u64(
+                "notar_fallback_vote_count",
+                metrics.notar_fallback.entries(),
+            );
+            if let Ok(v) = metrics.notar_fallback.mean() {
+                datapoint.add_field_u64("notar_fallback_vote_mean", v);
+            }
+            if let Some(v) = metrics.notar_fallback.stddev() {
+                datapoint.add_field_u64("notar_fallback_vote_stddev", v);
+            }
+            if let Ok(v) = metrics.notar_fallback.maximum() {
+                datapoint.add_field_u64("notar_fallback_vote_maximum", v);
+            }
+
+            datapoint.add_field_u64("skip_vote_count", metrics.skip.entries());
+            if let Ok(v) = metrics.skip.mean() {
+                datapoint.add_field_u64("skip_vote_mean", v);
+            }
+            if let Some(v) = metrics.skip.stddev() {
+                datapoint.add_field_u64("skip_vote_stddev", v);
+            }
+            if let Ok(v) = metrics.skip.maximum() {
+                datapoint.add_field_u64("skip_vote_maximum", v);
+            }
+
+            datapoint.add_field_u64("skip_fallback_vote_count", metrics.skip_fallback.entries());
+            if let Ok(v) = metrics.skip_fallback.mean() {
+                datapoint.add_field_u64("skip_fallback_vote_mean", v);
+            }
+            if let Some(v) = metrics.skip_fallback.stddev() {
+                datapoint.add_field_u64("skip_fallback_vote_stddev", v);
+            }
+            if let Ok(v) = metrics.skip_fallback.maximum() {
+                datapoint.add_field_u64("skip_fallback_vote_maximum", v);
+            }
+
+            datapoint.add_field_u64("finalize_vote_count", metrics.final_.entries());
+            if let Ok(v) = metrics.final_.mean() {
+                datapoint.add_field_u64("finalize_vote_mean", v);
+            }
+            if let Some(v) = metrics.final_.stddev() {
+                datapoint.add_field_u64("finalize_vote_stddev", v);
+            }
+            if let Ok(v) = metrics.final_.maximum() {
+                datapoint.add_field_u64("finalize_vote_maximum", v);
+            }
+
+            submit(datapoint, log::Level::Info);
+        }
+
+        for (addr, histogram) in &self.leader_metrics {
+            let addr = addr.to_string();
+            let mut datapoint = DataPoint::new("votor_consensus_metrics");
+            datapoint.add_tag("address", &addr);
+
+            datapoint.add_field_u64("blocks_seen_count", histogram.entries());
+            if let Ok(v) = histogram.mean() {
+                datapoint.add_field_u64("blocks_seen_mean", v);
+            }
+            if let Some(v) = histogram.stddev() {
+                datapoint.add_field_u64("blocks_seen_stddev", v);
+            }
+            if let Ok(v) = histogram.maximum() {
+                datapoint.add_field_u64("blocks_seen_maximum", v);
+            }
+            submit(datapoint, log::Level::Info);
+        }
+
         self.node_metrics.clear();
         self.leader_metrics.clear();
         self.start_of_slot.clear();
