@@ -6,9 +6,9 @@ mod stats;
 mod timers;
 
 use {
-    crate::{event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
+    crate::{consensus_metrics::ConsensusMetrics, event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
     crossbeam_channel::Sender,
-    parking_lot::RwLock,
+    parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     std::{
         sync::{
@@ -24,16 +24,21 @@ use {
 /// A manager of timer states.  Uses a background thread to trigger next ready
 /// timers and send events.
 pub(crate) struct TimerManager {
-    timers: Arc<RwLock<Timers>>,
+    timers: Arc<PlRwLock<Timers>>,
     handle: JoinHandle<()>,
 }
 
 impl TimerManager {
-    pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
-        let timers = Arc::new(RwLock::new(Timers::new(
+    pub(crate) fn new(
+        event_sender: Sender<VotorEvent>,
+        exit: Arc<AtomicBool>,
+        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    ) -> Self {
+        let timers = Arc::new(PlRwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
             event_sender,
+            consensus_metrics,
         )));
         let handle = {
             let timers = Arc::clone(&timers);
@@ -78,7 +83,8 @@ mod tests {
     fn test_timer_manager() {
         let (event_sender, event_receiver) = unbounded();
         let exit = Arc::new(AtomicBool::new(false));
-        let timer_manager = TimerManager::new(event_sender, exit.clone());
+        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let timer_manager = TimerManager::new(event_sender, exit.clone(), consensus_metrics);
         let slot = 52;
         let start = Instant::now();
         timer_manager.set_timeouts(slot);
