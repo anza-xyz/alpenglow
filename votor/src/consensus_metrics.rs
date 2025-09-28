@@ -1,6 +1,7 @@
 use {
     histogram::Histogram,
     solana_clock::{Epoch, Slot},
+    solana_metrics::datapoint_info,
     solana_pubkey::Pubkey,
     solana_votor_messages::vote::Vote,
     std::{
@@ -167,7 +168,48 @@ impl ConsensusMetrics {
 
     /// Performs end of epoch reporting and reset all the statistics for the subsequent epoch.
     fn end_of_epoch_reporting(&mut self) {
-        // TODO: currently, just clearing the stats and not actually reporting
+        for (addr, metrics) in &self.node_metrics {
+            let addr = addr.to_string();
+            datapoint_info!("votor_consensus_metrics",
+                "address" => addr,
+                ("notar_vote_count", metrics.notar.entries(), i64),
+                ("notar_vote_mean", metrics.notar.mean().ok(), Option<i64>),
+                ("notar_vote_stddev", metrics.notar.stddev(), Option<i64>),
+                ("notar_vote_maximum", metrics.notar.maximum().ok(), Option<i64>),
+
+                ("notar_fallback_vote_count", metrics.notar_fallback.entries(), i64),
+                ("notar_fallback_vote_mean", metrics.notar_fallback.mean().ok(), Option<i64>),
+                ("notar_fallback_vote_stddev", metrics.notar_fallback.stddev(), Option<i64>),
+                ("notar_fallback_vote_maximum", metrics.notar_fallback.maximum().ok(), Option<i64>),
+
+                ("skip_vote_count", metrics.skip.entries(), i64),
+                ("skip_vote_mean", metrics.skip.mean().ok(), Option<i64>),
+                ("skip_vote_stddev", metrics.skip.stddev(), Option<i64>),
+                ("skip_vote_maximum", metrics.skip.maximum().ok(), Option<i64>),
+
+                ("skip_fallback_vote_count", metrics.skip_fallback.entries(), i64),
+                ("skip_fallback_vote_mean", metrics.skip_fallback.mean().ok(), Option<i64>),
+                ("skip_fallback_vote_stddev", metrics.skip_fallback.stddev(), Option<i64>),
+                ("skip_fallback_vote_maximum", metrics.skip_fallback.maximum().ok(), Option<i64>),
+
+                ("finalize_vote_count", metrics.final_.entries(), i64),
+                ("finalize_vote_mean", metrics.final_.mean().ok(), Option<i64>),
+                ("finalize_vote_stddev", metrics.final_.stddev(), Option<i64>),
+                ("finalize_vote_maximum", metrics.final_.maximum().ok(), Option<i64>),
+            );
+        }
+
+        for (addr, histogram) in &self.leader_metrics {
+            let addr = addr.to_string();
+            datapoint_info!("votor_consensus_metrics",
+                "address" => addr,
+                ("blocks_seen_vote_count", histogram.entries(), i64),
+                ("blocks_seen_vote_mean", histogram.mean().ok(), Option<i64>),
+                ("blocks_seen_vote_stddev", histogram.stddev(), Option<i64>),
+                ("blocks_seen_vote_maximum", histogram.maximum().ok(), Option<i64>),
+            );
+        }
+
         self.node_metrics.clear();
         self.leader_metrics.clear();
         self.start_of_slot.clear();
