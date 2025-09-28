@@ -773,3 +773,219 @@ impl EventHandler {
         self.t_event_handler.join()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::{
+            vote_history::VoteHistory,
+            vote_history_storage::NullVoteHistoryStorage,
+            votor::{LeaderWindowNotifier, SharedContext},
+        },
+        crossbeam_channel::unbounded,
+        solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+        solana_keypair::Keypair,
+        solana_ledger::blockstore::Blockstore,
+        solana_ledger::leader_schedule_cache::LeaderScheduleCache,
+        solana_runtime::{
+            bank::Bank, bank_forks::BankForks, genesis_utils::create_genesis_config_with_leader,
+        },
+        solana_signer::Signer,
+        std::sync::Arc,
+        tempfile::tempdir,
+    };
+
+    fn setup_test_env() -> (
+        SharedContext,
+        VotingContext,
+        RootContext,
+        Arc<RwLock<TimerManager>>,
+        LocalContext,
+        Arc<LeaderWindowNotifier>,
+        crossbeam_channel::Receiver<crate::commitment::AlpenglowCommitmentAggregationData>,
+    ) {
+        // Minimal bank/bank_forks/root context
+        let validator = Keypair::new();
+        let genesis = create_genesis_config_with_leader(1_000_000_000, &validator.pubkey(), 1_000)
+            .genesis_config;
+        let bank0 = Bank::new_for_tests(&genesis);
+
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(&bank0));
+        let bank_forks = BankForks::new_rw_arc(bank0);
+
+        // Minimal blockstore backed by a temp dir
+        let ledger_dir = tempdir().unwrap();
+        let blockstore = Arc::new(Blockstore::open(ledger_dir.path()).unwrap());
+
+        // Minimal cluster info
+        let keypair = Arc::new(Keypair::new());
+        let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            keypair.clone(),
+            solana_streamer::socket::SocketAddrSpace::Unspecified,
+        ));
+
+        // Shared context
+        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
+        let shared_context = SharedContext {
+            blockstore,
+            bank_forks: bank_forks.clone(),
+            cluster_info: cluster_info.clone(),
+            rpc_subscriptions: None,
+            leader_window_notifier: leader_window_notifier.clone(),
+            vote_history_storage: Arc::new(NullVoteHistoryStorage::default()),
+        };
+
+        // Channels needed by VotingContext
+        let (bls_sender, _bls_receiver) = unbounded::<BLSOp>();
+        let (own_vote_sender, _own_vote_receiver) =
+            unbounded::<solana_votor_messages::consensus_message::ConsensusMessage>();
+        let (commitment_sender, commitment_receiver) =
+            unbounded::<crate::commitment::AlpenglowCommitmentAggregationData>();
+        let authorized_voter_keypairs =
+            Arc::new(std::sync::RwLock::new(Vec::<Arc<Keypair>>::new()));
+
+        // Voting context with empty vote history and root bank
+        let my_pubkey = cluster_info.keypair().pubkey();
+        let vote_history = VoteHistory::new(my_pubkey, 0);
+        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
+        let voting_context = VotingContext {
+            vote_history,
+            vote_account_pubkey: Pubkey::default(),
+            identity_keypair: cluster_info.keypair().clone(),
+            authorized_voter_keypairs,
+            derived_bls_keypairs: std::collections::HashMap::new(),
+            has_new_vote_been_rooted: true,
+            own_vote_sender,
+            bls_sender: bls_sender.clone(),
+            commitment_sender,
+            wait_to_vote_slot: None,
+            root_bank,
+        };
+
+        // Root context
+        let (drop_bank_sender, _drop_bank_receiver) =
+            unbounded::<Vec<solana_runtime::installed_scheduler_pool::BankWithScheduler>>();
+        let root_context = RootContext {
+            leader_schedule_cache,
+            snapshot_controller: None,
+            bank_notification_sender: None,
+            drop_bank_sender,
+        };
+
+        // Timer manager
+        let (event_tx, _event_rx) = unbounded::<VotorEvent>();
+        let exit = Arc::new(AtomicBool::new(false));
+        let timer_manager = Arc::new(RwLock::new(TimerManager::new(event_tx, exit)));
+
+        // Local context
+        let local_context = LocalContext {
+            my_pubkey,
+            pending_blocks: PendingBlocks::default(),
+            finalized_blocks: BTreeSet::default(),
+            received_shred: BTreeSet::default(),
+            stats: EventHandlerStats::new(),
+        };
+
+        (
+            shared_context,
+            voting_context,
+            root_context,
+            timer_manager,
+            local_context,
+            leader_window_notifier,
+            commitment_receiver,
+        )
+    }
+
+    #[test]
+    fn test_first_shred() {
+        let (
+            shared_context,
+            mut voting_context,
+            root_context,
+            timer_manager,
+            mut local_context,
+            _hpn,
+            _commitment_receiver,
+        ) = setup_test_env();
+
+        let slot = 5;
+
+        let votes = EventHandler::handle_event(
+            VotorEvent::FirstShred(slot),
+            &timer_manager,
+            &shared_context,
+            &mut voting_context,
+            &root_context,
+            &mut local_context,
+        )
+        .unwrap();
+
+        assert!(votes.is_empty(), "FirstShred should not produce votes");
+        assert!(
+            local_context.received_shred.contains(&slot),
+            "FirstShred should be received"
+        );
+    }
+
+    #[test]
+    fn test_parent_ready_updates() {
+        let (
+            shared_context,
+            mut voting_context,
+            root_context,
+            timer_manager,
+            mut local_context,
+            leader_window_notifier,
+            _commitment_receiver,
+        ) = setup_test_env();
+
+        let slot1 = 10;
+        let parent_block1 = (9, solana_hash::Hash::new_unique());
+
+        // Handle via handle_event with VotorEvent::ParentReady
+        let votes = EventHandler::handle_event(
+            VotorEvent::ParentReady {
+                slot: slot1,
+                parent_block: parent_block1,
+            },
+            &timer_manager,
+            &shared_context,
+            &mut voting_context,
+            &root_context,
+            &mut local_context,
+        )
+        .unwrap();
+
+        assert!(votes.is_empty());
+        assert!(voting_context
+            .vote_history
+            .is_parent_ready(slot1, &parent_block1));
+        let highest_parent_ready1 = *leader_window_notifier.highest_parent_ready.read().unwrap();
+        assert_eq!(highest_parent_ready1.0, slot1);
+        assert_eq!(highest_parent_ready1.1, parent_block1);
+
+        // Higher slot should bump highest_parent_ready
+        let slot2 = 11;
+        let parent_block2 = (10, solana_hash::Hash::new_unique());
+        let _ = EventHandler::handle_event(
+            VotorEvent::ParentReady {
+                slot: slot2,
+                parent_block: parent_block2,
+            },
+            &timer_manager,
+            &shared_context,
+            &mut voting_context,
+            &root_context,
+            &mut local_context,
+        )
+        .unwrap();
+        let highest_parent_ready2 = *leader_window_notifier.highest_parent_ready.read().unwrap();
+        assert_eq!(highest_parent_ready2.0, slot2);
+        assert_eq!(highest_parent_ready2.1, parent_block2);
+    }
+}
+
