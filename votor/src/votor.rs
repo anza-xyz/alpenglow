@@ -296,3 +296,113 @@ impl Votor {
         self.event_handler.join()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::{vote_history_storage::FileVoteHistoryStorage, votor::LeaderWindowNotifier},
+        crossbeam_channel::unbounded,
+        solana_bls_signatures::Signature as BLSSignature,
+        solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+        solana_keypair::Keypair,
+        solana_ledger::{
+            blockstore::Blockstore, blockstore_options::BlockstoreOptions, get_tmp_ledger_path,
+            leader_schedule_cache::LeaderScheduleCache,
+        },
+        solana_runtime::{
+            bank::Bank,
+            bank_forks::BankForks,
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            },
+        },
+        solana_signer::Signer,
+        solana_streamer::socket::SocketAddrSpace,
+        solana_votor_messages::consensus_message::{Certificate, ConsensusMessage},
+        std::{sync::Arc, thread, time::Duration},
+    };
+
+    #[test]
+    fn test_start_migration_and_exit() {
+        solana_logger::setup();
+        let blockstore = Arc::new(
+            Blockstore::open_with_options(
+                &get_tmp_ledger_path!(),
+                BlockstoreOptions::default_for_tests(),
+            )
+            .unwrap(),
+        );
+        // Create 10 node validatorvotekeypairs vec
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new(Keypair::new(), Keypair::new(), Keypair::new()))
+            .collect::<Vec<_>>();
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            vec![100; validator_keypairs.len()],
+        );
+        let my_index = 0;
+        let my_node_keypair = validator_keypairs[my_index].node_keypair.insecure_clone();
+        let my_vote_keypair = validator_keypairs[my_index].vote_keypair.insecure_clone();
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let bank_forks = BankForks::new_rw_arc(bank0);
+        let contact_info = ContactInfo::new_localhost(&my_node_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(my_node_keypair.insecure_clone()),
+            SocketAddrSpace::Unspecified,
+        ));
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
+        let exit = Arc::new(AtomicBool::new(false));
+        let (bls_sender, bls_receiver) = unbounded();
+        let (commitment_sender, _commitment_receiver) = unbounded();
+        let (drop_bank_sender, _drop_bank_receiver) = unbounded();
+        let (event_sender, event_receiver) = unbounded();
+        let (own_vote_sender, _own_vote_receiver) = unbounded();
+        let (consensus_message_sender, consensus_message_receiver) = unbounded();
+        let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);
+        let vote_history_storage = Arc::new(FileVoteHistoryStorage::default());
+        let votor = Votor::new(VotorConfig {
+            exit: exit.clone(),
+            vote_account: my_vote_keypair.pubkey(),
+            wait_to_vote_slot: None,
+            wait_for_vote_to_start_leader: false,
+            vote_history,
+            vote_history_storage,
+            authorized_voter_keypairs: Arc::new(RwLock::new(vec![Arc::new(my_vote_keypair)])),
+            blockstore,
+            bank_forks,
+            cluster_info,
+            leader_schedule_cache,
+            rpc_subscriptions: None,
+            snapshot_controller: None,
+            bls_sender,
+            commitment_sender,
+            drop_bank_sender,
+            bank_notification_sender: None,
+            leader_window_notifier: Arc::new(LeaderWindowNotifier::default()),
+            event_sender,
+            event_receiver,
+            own_vote_sender,
+            consensus_message_receiver,
+        });
+
+        // Give some time to ensure the thread is waiting
+        votor.start_migration();
+        // Send a FastFinalize cert for slot 0 to ensure bls_receiver gets something.
+        consensus_message_sender
+            .send(ConsensusMessage::new_certificate(
+                Certificate::FinalizeFast(0, Hash::default()),
+                vec![],
+                BLSSignature::default(),
+            ))
+            .unwrap();
+        thread::sleep(Duration::from_secs(6));
+        assert!(!bls_receiver.is_empty());
+        exit.store(true, Ordering::Relaxed);
+        votor.join().unwrap();
+    }
+}
