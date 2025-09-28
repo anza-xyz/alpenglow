@@ -1,4 +1,4 @@
-//! Alpenglow Consensus messages.
+//! Alpenglow vote message types
 #![cfg_attr(feature = "frozen-abi", feature(min_specialization))]
 #![deny(missing_docs)]
 
