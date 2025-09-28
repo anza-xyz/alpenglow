@@ -827,6 +827,7 @@ mod tests {
             thread::sleep,
             time::Instant,
         },
+        test_case::test_case,
     };
 
     struct EventHandlerTestContext {
@@ -1653,5 +1654,44 @@ mod tests {
         for file in files_to_remove {
             let _ = remove_file(file);
         }
+    }
+
+    #[test_case("bls_receiver")]
+    #[test_case("commitment_receiver")]
+    #[test_case("own_vote_receiver")]
+    fn test_channel_disconnection(channel_name: &str) {
+        solana_logger::setup();
+        let mut setup_result = setup();
+        match channel_name {
+            "bls_receiver" => {
+                let bls_receiver = setup_result.bls_receiver.clone();
+                setup_result.bls_receiver = unbounded().1;
+                drop(bls_receiver);
+            }
+            "commitment_receiver" => {
+                let commitment_receiver = setup_result.commitment_receiver.clone();
+                setup_result.commitment_receiver = unbounded().1;
+                drop(commitment_receiver);
+            }
+            "own_vote_receiver" => {
+                let own_vote_receiver = setup_result.own_vote_receiver.clone();
+                setup_result.own_vote_receiver = unbounded().1;
+                drop(own_vote_receiver);
+            }
+            _ => panic!("Unknown channel name"),
+        }
+        // We normally need some event hitting all the senders to trigger exit
+        let root_bank = setup_result.bank_forks.read().unwrap().root_bank();
+        let _ = create_block_and_send_block_event(&setup_result, 1, root_bank);
+        send_parent_ready_event(&setup_result, 1, (0, Hash::default()));
+        sleep(TEST_SHORT_TIMEOUT);
+        // Verify that the event_handler exits within 5 seconds
+        let start = Instant::now();
+        while !setup_result.exit.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(TEST_SHORT_TIMEOUT);
+        }
+        assert!(setup_result.exit.load(Ordering::Relaxed));
+        setup_result.event_handler.join().unwrap();
     }
 }
