@@ -388,6 +388,7 @@ mod tests {
             commitment_sender: unbounded().0,
             wait_to_vote_slot: None,
             root_bank,
+            consensus_metrics: Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
         }
     }
 
