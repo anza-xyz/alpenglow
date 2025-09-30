@@ -1294,7 +1294,7 @@ mod tests {
 
         let cert_message = CertificateMessage {
             certificate,
-            signature: Signature::default(), // Use a default/wrong signature
+            signature: BLSSignature::default(), // Use a default/wrong signature
             bitmap: encoded_bitmap,
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
@@ -1325,7 +1325,7 @@ mod tests {
             let rank = i as u16;
             let bls_keypair =
                 derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
-            let signature: Signature = bls_keypair.sign(&vote_payload).into();
+            let signature: BLSSignature = bls_keypair.sign(&vote_payload).into();
             let consensus_message = ConsensusMessage::Vote(VoteMessage {
                 vote,
                 signature,
@@ -1454,7 +1454,7 @@ mod tests {
         // Create a certificate for slot 3, which is older than the root bank (slot 5)
         let cert_message = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 3, None),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
