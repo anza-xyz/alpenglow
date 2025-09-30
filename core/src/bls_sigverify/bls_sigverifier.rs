@@ -595,14 +595,15 @@ mod tests {
     use {
         super::*,
         crossbeam_channel::Receiver,
-        solana_bls_signatures::{keypair::Keypair as BLSKeypair, Signature},
+        solana_bls_signatures::Signature as BLSSignature,
         solana_hash::Hash,
         solana_perf::packet::{Packet, PinnedPacketBatch},
         solana_runtime::{
             bank::Bank,
             bank_forks::BankForks,
             genesis_utils::{
-                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+                create_genesis_config_with_alpenglow_vote_accounts,
+                derive_bls_keypair_from_signer_with_default_seed, ValidatorVoteKeypairs,
             },
         },
         solana_signer::Signer,
@@ -611,7 +612,6 @@ mod tests {
         solana_votor_messages::{
             consensus_message::{
                 Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
-                BLS_KEYPAIR_DERIVE_SEED,
             },
             vote::Vote,
         },
@@ -697,12 +697,12 @@ mod tests {
         let messages = vec![
             ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
-                signature: Signature::default(),
+                signature: BLSSignature::default(),
                 rank: vote_rank as u16,
             }),
             ConsensusMessage::Certificate(CertificateMessage {
                 certificate,
-                signature: Signature::default(),
+                signature: BLSSignature::default(),
                 bitmap,
             }),
         ];
@@ -719,7 +719,7 @@ mod tests {
         let vote_rank: usize = 3;
         let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_vote(6, Hash::new_unique()),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: vote_rank as u16,
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
@@ -737,7 +737,7 @@ mod tests {
         let vote_rank: usize = 9;
         let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique()),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: vote_rank as u16,
         })];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
@@ -777,7 +777,7 @@ mod tests {
         // Send a packet with no epoch stakes
         let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5_000_000_000),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
@@ -798,7 +798,7 @@ mod tests {
         // Send a packet with invalid rank
         let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: 1000, // Invalid rank
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
@@ -826,12 +826,12 @@ mod tests {
         let messages = vec![
             ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_finalization_vote(5),
-                signature: Signature::default(),
+                signature: BLSSignature::default(),
                 rank: 0,
             }),
             ConsensusMessage::Vote(VoteMessage {
                 vote: Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
-                signature: Signature::default(),
+                signature: BLSSignature::default(),
                 rank: 2,
             }),
         ];
@@ -852,7 +852,7 @@ mod tests {
         drop(receiver);
         let messages = vec![ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: 0,
         })];
         test_bls_message_transmission(&mut verifier, None, &messages, false);
@@ -865,7 +865,7 @@ mod tests {
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
         let message = ConsensusMessage::Vote(VoteMessage {
             vote: Vote::new_finalization_vote(5),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             rank: 0,
         });
         let mut packet = Packet::default();
@@ -919,11 +919,8 @@ mod tests {
 
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
 
             // Sign the payload with the BLS keypair.
             let signature: Signature = bls_keypair.sign(&vote_payload).into();
@@ -978,11 +975,8 @@ mod tests {
         // Group 1 votes
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes_group1) {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
             let signature: Signature = bls_keypair.sign(&vote1_payload).into();
             let consensus_message = ConsensusMessage::Vote(VoteMessage {
                 vote: vote1,
@@ -1002,11 +996,8 @@ mod tests {
             .take(num_votes_group2)
         {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
             let signature: Signature = bls_keypair.sign(&vote2_payload).into();
             let consensus_message = ConsensusMessage::Vote(VoteMessage {
                 vote: vote2,
@@ -1062,11 +1053,8 @@ mod tests {
 
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
 
             // Split the votes: Ranks 0, 1 sign vote 1. Ranks 2, 3, 4 sign vote 2.
             let (vote, payload) = if i < 2 {
@@ -1127,11 +1115,8 @@ mod tests {
 
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
 
             // Generate a signature. If it's the invalid rank, sign the wrong payload.
             let signature = if rank == invalid_rank {
@@ -1209,11 +1194,9 @@ mod tests {
         let signed_payload = bincode::serialize(&original_vote).unwrap();
         let vote_messages: Vec<VoteMessage> = (0..num_signers)
             .map(|i| {
-                let bls_keypair = BLSKeypair::derive_from_signer(
+                let bls_keypair = derive_bls_keypair_from_signer_with_default_seed(
                     &validator_keypairs[i].vote_keypair,
-                    BLS_KEYPAIR_DERIVE_SEED,
-                )
-                .unwrap();
+                );
                 let signature = bls_keypair.sign(&signed_payload);
                 VoteMessage {
                     vote: original_vote,
@@ -1255,11 +1238,8 @@ mod tests {
         let mut all_vote_messages = Vec::new();
         // Ranks 0-3 (4 validators) sign the Notarize payload.
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(4) {
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
             let signature = bls_keypair.sign(&notarize_payload);
             all_vote_messages.push(VoteMessage {
                 vote: notarize_vote,
@@ -1269,11 +1249,8 @@ mod tests {
         }
         // Ranks 4-6 (3 validators) sign the NotarizeFallback payload.
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(7).skip(4) {
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
             let signature = bls_keypair.sign(&notarize_fallback_payload);
             all_vote_messages.push(VoteMessage {
                 vote: notarize_fallback_vote,
@@ -1317,7 +1294,7 @@ mod tests {
 
         let cert_message = CertificateMessage {
             certificate,
-            signature: Signature::default(), // Use a default/wrong signature
+            signature: BLSSignature::default(), // Use a default/wrong signature
             bitmap: encoded_bitmap,
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
@@ -1346,11 +1323,8 @@ mod tests {
         let vote_payload = bincode::serialize(&vote).unwrap();
         for (i, validator_keypair) in validator_keypairs.iter().enumerate().take(num_votes) {
             let rank = i as u16;
-            let bls_keypair = BLSKeypair::derive_from_signer(
-                &validator_keypair.vote_keypair,
-                BLS_KEYPAIR_DERIVE_SEED,
-            )
-            .unwrap();
+            let bls_keypair =
+                derive_bls_keypair_from_signer_with_default_seed(&validator_keypair.vote_keypair);
             let signature: Signature = bls_keypair.sign(&vote_payload).into();
             let consensus_message = ConsensusMessage::Vote(VoteMessage {
                 vote,
@@ -1369,11 +1343,9 @@ mod tests {
 
         let cert_vote_messages: Vec<VoteMessage> = (0..num_cert_signers)
             .map(|i| {
-                let bls_keypair = BLSKeypair::derive_from_signer(
+                let bls_keypair = derive_bls_keypair_from_signer_with_default_seed(
                     &validator_keypairs[i].vote_keypair,
-                    BLS_KEYPAIR_DERIVE_SEED,
-                )
-                .unwrap();
+                );
                 let signature = bls_keypair.sign(&cert_payload);
                 VoteMessage {
                     vote: cert_original_vote,
@@ -1415,11 +1387,8 @@ mod tests {
         let invalid_rank = 999;
         let vote = Vote::new_skip_vote(42);
         let vote_payload = bincode::serialize(&vote).unwrap();
-        let bls_keypair = BLSKeypair::derive_from_signer(
-            &validator_keypairs[0].vote_keypair,
-            BLS_KEYPAIR_DERIVE_SEED,
-        )
-        .unwrap();
+        let bls_keypair =
+            derive_bls_keypair_from_signer_with_default_seed(&validator_keypairs[0].vote_keypair);
         let signature: Signature = bls_keypair.sign(&vote_payload).into();
 
         let consensus_message = ConsensusMessage::Vote(VoteMessage {
@@ -1464,11 +1433,8 @@ mod tests {
         // Create a vote for slot 2, which is older than the root bank (slot 5)
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();
-        let bls_keypair = BLSKeypair::derive_from_signer(
-            &validator_keypairs[0].vote_keypair,
-            BLS_KEYPAIR_DERIVE_SEED,
-        )
-        .unwrap();
+        let bls_keypair =
+            derive_bls_keypair_from_signer_with_default_seed(&validator_keypairs[0].vote_keypair);
         let signature: Signature = bls_keypair.sign(&vote_payload).into();
         let consensus_message = ConsensusMessage::Vote(VoteMessage {
             vote,
@@ -1488,7 +1454,7 @@ mod tests {
         // Create a certificate for slot 3, which is older than the root bank (slot 5)
         let cert_message = CertificateMessage {
             certificate: Certificate::new(CertificateType::Finalize, 3, None),
-            signature: Signature::default(),
+            signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
         let consensus_message = ConsensusMessage::Certificate(cert_message);
@@ -1520,11 +1486,9 @@ mod tests {
         let signed_payload = bincode::serialize(&original_vote).unwrap();
         let mut vote_messages: Vec<VoteMessage> = (0..num_signers)
             .map(|i| {
-                let bls_keypair = BLSKeypair::derive_from_signer(
+                let bls_keypair = derive_bls_keypair_from_signer_with_default_seed(
                     &validator_keypairs[i].vote_keypair,
-                    BLS_KEYPAIR_DERIVE_SEED,
-                )
-                .unwrap();
+                );
                 let signature = bls_keypair.sign(&signed_payload);
                 VoteMessage {
                     vote: original_vote,

@@ -12,12 +12,13 @@ use {
         bank::Bank,
         bank_forks::BankForks,
         genesis_utils::{
-            create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            create_genesis_config_with_alpenglow_vote_accounts,
+            derive_bls_keypair_from_signer_with_default_seed, ValidatorVoteKeypairs,
         },
     },
     solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+        consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
     },
     std::sync::Arc,
@@ -58,9 +59,7 @@ fn setup_environment() -> BenchEnvironment {
     let bls_keypairs = Arc::new(
         validator_keypairs
             .iter()
-            .map(|v| {
-                BLSKeypair::derive_from_signer(&v.vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap()
-            })
+            .map(|v| derive_bls_keypair_from_signer_with_default_seed(&v.vote_keypair))
             .collect(),
     );
 
