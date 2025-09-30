@@ -123,7 +123,7 @@ impl ConsensusMetrics {
     /// Records a `vote` from the node with `id`.
     pub fn record_vote(&mut self, id: Pubkey, vote: &Vote) -> Result<(), RecordVoteError> {
         let Some(start) = self.start_of_slot.get(&vote.slot()) else {
-            self.metrics_recording_failed += 1;
+            self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
             return Err(RecordVoteError::SlotNotFound);
         };
         let node = self.node_metrics.entry(id).or_default();
@@ -139,7 +139,7 @@ impl ConsensusMetrics {
         slot: Slot,
     ) -> Result<(), RecordBlockHashError> {
         let Some(start) = self.start_of_slot.get(&slot) else {
-            self.metrics_recording_failed += 1;
+            self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
             return Err(RecordBlockHashError::SlotNotFound);
         };
         let elapsed = start.elapsed().as_micros();
