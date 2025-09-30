@@ -40,10 +40,7 @@ use {
     solana_transaction::Transaction,
     solana_transaction_error::TransportError,
     solana_validator_exit::Exit,
-    solana_vote::{
-        vote_parser::ParsedVoteTransaction,
-        vote_transaction::{self},
-    },
+    solana_vote::vote_transaction::{self, VoteTransaction},
     solana_vote_program::vote_state::TowerSync,
     solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
@@ -708,10 +705,10 @@ impl GossipVoter {
 pub fn start_gossip_voter(
     gossip_addr: &SocketAddr,
     node_keypair: &Keypair,
-    vote_filter: impl Fn((CrdsValueLabel, Transaction)) -> Option<(ParsedVoteTransaction, Transaction)>
+    vote_filter: impl Fn((CrdsValueLabel, Transaction)) -> Option<(VoteTransaction, Transaction)>
         + std::marker::Send
         + 'static,
-    mut process_vote_tx: impl FnMut(Slot, &Transaction, &ParsedVoteTransaction, &ClusterInfo)
+    mut process_vote_tx: impl FnMut(Slot, &Transaction, &VoteTransaction, &ClusterInfo)
         + std::marker::Send
         + 'static,
     sleep_ms: u64,
@@ -739,7 +736,7 @@ pub fn start_gossip_voter(
     }
 
     let mut latest_voted_slot = 0;
-    let mut refreshable_votes: VecDeque<(Transaction, ParsedVoteTransaction)> = VecDeque::new();
+    let mut refreshable_votes: VecDeque<(Transaction, VoteTransaction)> = VecDeque::new();
     let mut latest_push_attempt = Instant::now();
 
     let t_voter = {
