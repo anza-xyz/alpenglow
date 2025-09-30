@@ -3,7 +3,7 @@
 use {
     criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput},
     crossbeam_channel::unbounded,
-    solana_bls_signatures::signature::Signature as BlsSignature,
+    solana_bls_signatures::{keypair::Keypair as BLSKeypair, signature::Signature as BlsSignature},
     solana_core::{sigverifier::bls_sigverifier::BLSSigVerifier, sigverify_stage::SigVerifier},
     solana_hash::Hash,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
@@ -17,7 +17,7 @@ use {
     },
     solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage, VoteMessage},
+        consensus_message::{Certificate, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
         vote::Vote,
     },
     std::sync::Arc,
@@ -29,7 +29,7 @@ const NUM_VALIDATORS: usize = 50;
 
 struct BenchEnvironment {
     verifier: BLSSigVerifier,
-    validator_keypairs: Arc<Vec<ValidatorVoteKeypairs>>,
+    bls_keypairs: Arc<Vec<BLSKeypair>>,
 }
 
 fn setup_environment() -> BenchEnvironment {
@@ -55,10 +55,18 @@ fn setup_environment() -> BenchEnvironment {
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
     let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
+    let bls_keypairs = Arc::new(
+        validator_keypairs
+            .iter()
+            .map(|v| {
+                BLSKeypair::derive_from_signer(&v.vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap()
+            })
+            .collect(),
+    );
 
     BenchEnvironment {
         verifier,
-        validator_keypairs,
+        bls_keypairs,
     }
 }
 
@@ -76,7 +84,7 @@ fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
 
     let vote_messages: Vec<VoteMessage> = (0..num_signers)
         .map(|i| {
-            let signature = env.validator_keypairs[i].bls_keypair.sign(&payload);
+            let signature = env.bls_keypairs[i].sign(&payload);
             VoteMessage {
                 vote: original_vote,
                 signature: signature.into(),
@@ -107,7 +115,7 @@ fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
 
     // Signers for Vote 1
     for i in 0..split1 {
-        let signature = env.validator_keypairs[i].bls_keypair.sign(&payload1);
+        let signature = env.bls_keypairs[i].sign(&payload1);
         all_vote_messages.push(VoteMessage {
             vote: vote1,
             signature: signature.into(),
@@ -116,7 +124,7 @@ fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
     }
     // Signers for Vote 2
     for i in split1..split2 {
-        let signature = env.validator_keypairs[i].bls_keypair.sign(&payload2);
+        let signature = env.bls_keypairs[i].sign(&payload2);
         all_vote_messages.push(VoteMessage {
             vote: vote2,
             signature: signature.into(),
@@ -137,8 +145,7 @@ fn generate_two_votes_batch(env: &BenchEnvironment) -> Vec<PacketBatch> {
     let payload = bincode::serialize(&vote).unwrap();
 
     // Vote 1 (Signed by Rank 0)
-    let kp1 = &env.validator_keypairs[0].bls_keypair;
-    let sig1: BlsSignature = kp1.sign(&payload).into();
+    let sig1: BlsSignature = env.bls_keypairs[0].sign(&payload).into();
     let msg1 = ConsensusMessage::Vote(VoteMessage {
         vote,
         signature: sig1,
@@ -146,8 +153,7 @@ fn generate_two_votes_batch(env: &BenchEnvironment) -> Vec<PacketBatch> {
     });
 
     // Vote 2 (Signed by Rank 1)
-    let kp2 = &env.validator_keypairs[1].bls_keypair;
-    let sig2: BlsSignature = kp2.sign(&payload).into();
+    let sig2: BlsSignature = env.bls_keypairs[1].sign(&payload).into();
     let msg2 = ConsensusMessage::Vote(VoteMessage {
         vote,
         signature: sig2,
@@ -165,8 +171,7 @@ fn generate_single_vote_batch(env: &BenchEnvironment) -> Vec<PacketBatch> {
     let payload = bincode::serialize(&vote).unwrap();
 
     // Vote 1 (Signed by Rank 0)
-    let kp = &env.validator_keypairs[0].bls_keypair;
-    let sig: BlsSignature = kp.sign(&payload).into();
+    let sig: BlsSignature = env.bls_keypairs[0].sign(&payload).into();
     let msg = ConsensusMessage::Vote(VoteMessage {
         vote,
         signature: sig,

@@ -21,7 +21,7 @@ use {
     solana_system_interface::program as system_program,
     solana_vote_interface::state::BLS_PUBLIC_KEY_COMPRESSED_SIZE,
     solana_vote_program::vote_state,
-    solana_votor_messages::{self, consensus_message::BLS_KEYPAIR_DERIVE_SEED},
+    solana_votor_messages::consensus_message::BLS_KEYPAIR_DERIVE_SEED,
     std::borrow::Borrow,
 };
 
@@ -56,18 +56,14 @@ pub struct ValidatorVoteKeypairs {
     pub node_keypair: Keypair,
     pub vote_keypair: Keypair,
     pub stake_keypair: Keypair,
-    pub bls_keypair: BLSKeypair,
 }
 
 impl ValidatorVoteKeypairs {
     pub fn new(node_keypair: Keypair, vote_keypair: Keypair, stake_keypair: Keypair) -> Self {
-        let bls_keypair =
-            BLSKeypair::derive_from_signer(&vote_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
         Self {
             node_keypair,
             vote_keypair,
             stake_keypair,
-            bls_keypair,
         }
     }
 
@@ -76,7 +72,6 @@ impl ValidatorVoteKeypairs {
             node_keypair: Keypair::new(),
             vote_keypair: Keypair::new(),
             stake_keypair: Keypair::new(),
-            bls_keypair: BLSKeypair::new(),
         }
     }
 }
@@ -142,20 +137,29 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
     let voting_keypair = voting_keypairs[0].borrow().vote_keypair.insecure_clone();
 
     let validator_pubkey = voting_keypairs[0].borrow().node_keypair.pubkey();
+    let validator_bls_pubkey = if is_alpenglow {
+        let bls_keypair = BLSKeypair::derive_from_signer(
+            &voting_keypairs[0].borrow().vote_keypair,
+            BLS_KEYPAIR_DERIVE_SEED,
+        )
+        .unwrap();
+        Some(bls_pubkey_to_compressed_bytes(&bls_keypair.public))
+    } else {
+        None
+    };
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
         &mint_keypair.pubkey(),
         &validator_pubkey,
         &voting_keypairs[0].borrow().vote_keypair.pubkey(),
         &voting_keypairs[0].borrow().stake_keypair.pubkey(),
-        Some(&voting_keypairs[0].borrow().bls_keypair.public),
+        validator_bls_pubkey,
         stakes[0],
         VALIDATOR_LAMPORTS,
         FeeRateGovernor::new(0, 0), // most tests can't handle transaction fees
         Rent::free(),               // most tests don't expect rent
         cluster_type,
         vec![],
-        is_alpenglow,
     );
 
     let mut genesis_config_info = GenesisConfigInfo {
@@ -169,16 +173,21 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         let node_pubkey = validator_voting_keypairs.borrow().node_keypair.pubkey();
         let vote_pubkey = validator_voting_keypairs.borrow().vote_keypair.pubkey();
         let stake_pubkey = validator_voting_keypairs.borrow().stake_keypair.pubkey();
-        let bls_pubkey = validator_voting_keypairs.borrow().bls_keypair.public;
 
         // Create accounts
         let node_account = Account::new(VALIDATOR_LAMPORTS, 0, &system_program::id());
         let vote_account = if is_alpenglow {
+            let bls_keypair = BLSKeypair::derive_from_signer(
+                &validator_voting_keypairs.borrow().vote_keypair,
+                BLS_KEYPAIR_DERIVE_SEED,
+            )
+            .unwrap();
+            let bls_pubkey_compressed = bls_pubkey_to_compressed_bytes(&bls_keypair.public);
             vote_state::create_v4_account_with_authorized(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_to_compressed_bytes(&bls_pubkey)),
+                Some(bls_pubkey_compressed),
                 0,
                 *stake,
             )
@@ -233,29 +242,6 @@ pub fn create_genesis_config_with_leader(
         mint_lamports,
         validator_pubkey,
         validator_stake_lamports,
-        false,
-    )
-}
-
-#[cfg(feature = "dev-context-only-utils")]
-pub fn create_genesis_config_with_leader_enable_alpenglow(
-    mint_lamports: u64,
-    validator_pubkey: &Pubkey,
-    validator_stake_lamports: u64,
-) -> GenesisConfigInfo {
-    // Use deterministic keypair so we don't get confused by randomness in tests
-    let mint_keypair = Keypair::from_seed(&[
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-        25, 26, 27, 28, 29, 30, 31,
-    ])
-    .unwrap();
-
-    create_genesis_config_with_leader_with_mint_keypair(
-        mint_keypair,
-        mint_lamports,
-        validator_pubkey,
-        validator_stake_lamports,
-        true,
     )
 }
 
@@ -264,7 +250,6 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     mint_lamports: u64,
     validator_pubkey: &Pubkey,
     validator_stake_lamports: u64,
-    is_alpenglow: bool,
 ) -> GenesisConfigInfo {
     // Use deterministic keypair so we don't get confused by randomness in tests
     let voting_keypair = Keypair::from_seed(&[
@@ -273,23 +258,19 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
     ])
     .unwrap();
 
-    let bls_keypair =
-        BLSKeypair::derive_from_signer(&voting_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-    let bls_pubkey: BLSPubkey = bls_keypair.public;
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
         &mint_keypair.pubkey(),
         validator_pubkey,
         &voting_keypair.pubkey(),
         &Pubkey::new_unique(),
-        Some(&bls_pubkey),
+        None,
         validator_stake_lamports,
         VALIDATOR_LAMPORTS,
         FeeRateGovernor::new(0, 0), // most tests can't handle transaction fees
         Rent::free(),               // most tests don't expect rent
         ClusterType::Development,
         vec![],
-        is_alpenglow,
     );
 
     GenesisConfigInfo {
@@ -308,7 +289,7 @@ pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
     do_activate_all_features::<false>(genesis_config);
 }
 
-pub fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
+fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive() {
         if IS_ALPENGLOW || *feature_id != agave_feature_set::alpenglow::id() {
@@ -360,21 +341,21 @@ pub fn create_genesis_config_with_leader_ex_no_features(
     validator_pubkey: &Pubkey,
     validator_vote_account_pubkey: &Pubkey,
     validator_stake_account_pubkey: &Pubkey,
-    validator_bls_pubkey: Option<&BLSPubkey>,
+    validator_bls_pubkey: Option<[u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]>,
     validator_stake_lamports: u64,
     validator_lamports: u64,
     fee_rate_governor: FeeRateGovernor,
     rent: Rent,
     cluster_type: ClusterType,
     mut initial_accounts: Vec<(Pubkey, AccountSharedData)>,
-    is_alpenglow: bool,
 ) -> GenesisConfig {
-    let validator_vote_account = if is_alpenglow {
+    let is_alpenglow = validator_bls_pubkey.is_some();
+    let validator_vote_account = if let Some(bls_pubkey_compressed) = validator_bls_pubkey {
         vote_state::create_v4_account_with_authorized(
             validator_pubkey,
             validator_vote_account_pubkey,
             validator_vote_account_pubkey,
-            validator_bls_pubkey.map(bls_pubkey_to_compressed_bytes),
+            Some(bls_pubkey_compressed),
             0,
             validator_stake_lamports,
         )
@@ -452,14 +433,13 @@ pub fn create_genesis_config_with_leader_ex(
     validator_pubkey: &Pubkey,
     validator_vote_account_pubkey: &Pubkey,
     validator_stake_account_pubkey: &Pubkey,
-    validator_bls_pubkey: Option<&BLSPubkey>,
+    validator_bls_pubkey: Option<[u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE]>,
     validator_stake_lamports: u64,
     validator_lamports: u64,
     fee_rate_governor: FeeRateGovernor,
     rent: Rent,
     cluster_type: ClusterType,
     initial_accounts: Vec<(Pubkey, AccountSharedData)>,
-    is_alpenglow: bool,
 ) -> GenesisConfig {
     let mut genesis_config = create_genesis_config_with_leader_ex_no_features(
         mint_lamports,
@@ -474,15 +454,10 @@ pub fn create_genesis_config_with_leader_ex(
         rent,
         cluster_type,
         initial_accounts,
-        is_alpenglow,
     );
 
     if genesis_config.cluster_type == ClusterType::Development {
-        if is_alpenglow {
-            activate_all_features_alpenglow(&mut genesis_config);
-        } else {
-            activate_all_features(&mut genesis_config);
-        }
+        activate_all_features(&mut genesis_config);
     }
 
     genesis_config
