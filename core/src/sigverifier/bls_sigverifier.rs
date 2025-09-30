@@ -5,7 +5,7 @@ mod stats;
 use {
     crate::{
         cluster_info_vote_listener::VerifiedVoteSender,
-        sigverify_stage::{SigVerifier, SigVerifyServiceError},
+        sigverify_stage::{SigVerifyServiceError, VoteSigVerifier, VoteSigVerifierStats},
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
@@ -38,7 +38,6 @@ use {
     thiserror::Error,
 };
 
-// TODO(sam): We deserialize the packets twice: in `verify_batches` and `send_packets`.
 // TODO(sam): This logic of extracting the message payload for signature verification
 //            is brittle, but another bincode serialization would be wasteful.
 //            Revisit this to figure out the best way to handle this.
@@ -94,19 +93,21 @@ pub struct BLSSigVerifier {
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
 }
 
-impl SigVerifier for BLSSigVerifier {
+impl VoteSigVerifier for BLSSigVerifier {
     type SendType = ConsensusMessage;
+    type VerifiedOutput = Vec<ConsensusMessage>;
 
     fn verify_batches(
         &self,
         mut batches: Vec<PacketBatch>,
         _valid_packets: usize,
-    ) -> Vec<PacketBatch> {
+    ) -> (Vec<ConsensusMessage>, VoteSigVerifierStats) {
         let mut preprocess_time = Measure::start("preprocess");
         // TODO(sam): ideally we want to avoid heap allocation, but let's use
         //            `Vec` for now for clarity and then optimize for the final version
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
+        let mut verified_messages = Vec::new();
 
         let root_bank = self.sharable_banks.root();
         self.verified_certs
@@ -117,6 +118,7 @@ impl SigVerifier for BLSSigVerifier {
             .write()
             .unwrap()
             .retain(|vote, _| vote.slot() > root_bank.slot());
+
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -208,30 +210,34 @@ impl SigVerifier for BLSSigVerifier {
             || self.verify_votes(&mut votes_to_verify),
             || self.verify_certificates(&mut certs_to_verify, &root_bank),
         );
-        batches
+
+        verified_messages.extend(
+            votes_to_verify
+                .into_iter()
+                .filter(|v| !v.packet.meta().discard())
+                .map(|v| ConsensusMessage::Vote(v.vote_message)),
+        );
+        verified_messages.extend(
+            certs_to_verify
+                .into_iter()
+                .filter(|c| !c.packet.meta().discard())
+                .map(|c| ConsensusMessage::Certificate(c.cert_message)),
+        );
+
+        let stats = VoteSigVerifierStats {
+            num_valid_packets: verified_messages.len(),
+            ..VoteSigVerifierStats::default()
+        };
+
+        (verified_messages, stats)
     }
 
     fn send_packets(
         &mut self,
-        packet_batches: Vec<PacketBatch>,
+        verified_output: Self::VerifiedOutput,
     ) -> Result<(), SigVerifyServiceError<Self::SendType>> {
         let mut verified_votes = HashMap::new();
-        for packet in packet_batches.iter().flatten() {
-            if packet.meta().discard() {
-                continue;
-            }
-
-            let message = match packet.deserialize_slice(..) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    error!(
-                        "Failed to deserialize BLS message: {e}, should not happen because \
-                         verification succeeded"
-                    );
-                    continue;
-                }
-            };
-
+        for message in verified_output {
             let slot = match &message {
                 ConsensusMessage::Vote(vote_message) => vote_message.vote.slot(),
                 ConsensusMessage::Certificate(certificate_message) => {
@@ -643,6 +649,40 @@ mod tests {
         )
     }
 
+    fn create_signed_vote_message(
+        validator_keypairs: &[ValidatorVoteKeypairs],
+        vote: Vote,
+        rank: usize,
+    ) -> VoteMessage {
+        let bls_keypair = &validator_keypairs[rank].bls_keypair;
+        let payload = bincode::serialize(&vote).expect("Failed to serialize vote");
+        let signature: BLSSignature = bls_keypair.sign(&payload).into();
+        VoteMessage {
+            vote,
+            signature,
+            rank: rank as u16,
+        }
+    }
+
+    fn create_signed_certificate_message(
+        validator_keypairs: &[ValidatorVoteKeypairs],
+        certificate: Certificate,
+        ranks: &[usize],
+    ) -> CertificateMessage {
+        let mut builder = VoteCertificateBuilder::new(certificate);
+        // Assumes Base2 encoding (single vote type) for simplicity in this helper.
+        let vote = certificate.to_source_vote();
+        let vote_messages: Vec<VoteMessage> = ranks
+            .iter()
+            .map(|&rank| create_signed_vote_message(validator_keypairs, vote, rank))
+            .collect();
+
+        builder
+            .aggregate(&vote_messages)
+            .expect("Failed to aggregate votes");
+        builder.build().expect("Failed to build certificate")
+    }
+
     fn test_bls_message_transmission(
         verifier: &mut BLSSigVerifier,
         receiver: Option<&Receiver<ConsensusMessage>>,
@@ -660,11 +700,15 @@ mod tests {
             })
             .collect::<Vec<Packet>>();
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        verifier.verify_batches(packet_batches.clone(), 0);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches.clone(), 0);
+        let expected_messages: Vec<_> = messages
+            .iter()
+            .filter(|msg| verified_output.contains(msg))
+            .collect();
         if expect_send_packets_ok {
-            assert!(verifier.send_packets(packet_batches).is_ok());
+            assert!(verifier.send_packets(verified_output).is_ok());
             if let Some(receiver) = receiver {
-                for msg in messages {
+                for msg in expected_messages {
                     match receiver.recv_timeout(Duration::from_secs(1)) {
                         Ok(received_msg) => assert_eq!(received_msg, *msg),
                         Err(e) => warn!("Failed to receive BLS message: {e}"),
@@ -672,7 +716,10 @@ mod tests {
                 }
             }
         } else {
-            assert!(verifier.send_packets(packet_batches).is_err());
+            if verified_output.is_empty() {
+                panic!("Test expected send_packets to fail, but verified_output is empty.");
+            }
+            assert!(verifier.send_packets(verified_output).is_err());
         }
     }
 
@@ -685,26 +732,24 @@ mod tests {
         let (validator_keypairs, mut verifier) =
             create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
 
-        // TODO(wen): this is just a fake map, when we add verification we should use real map
-        let mut bitmap = vec![0; 5];
-        bitmap[1] = 255;
-        bitmap[4] = 10;
         let vote_rank: usize = 2;
 
         let certificate = Certificate::new(CertificateType::Finalize, 4, None);
 
+        let vote_message = create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_finalization_vote(5),
+            vote_rank,
+        );
+
+        let cert_message =
+            create_signed_certificate_message(&validator_keypairs, certificate, &[vote_rank]);
+
         let messages = vec![
-            ConsensusMessage::Vote(VoteMessage {
-                vote: Vote::new_finalization_vote(5),
-                signature: Signature::default(),
-                rank: vote_rank as u16,
-            }),
-            ConsensusMessage::Certificate(CertificateMessage {
-                certificate,
-                signature: Signature::default(),
-                bitmap,
-            }),
+            ConsensusMessage::Vote(vote_message),
+            ConsensusMessage::Certificate(cert_message),
         ];
+
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
@@ -716,11 +761,12 @@ mod tests {
         );
 
         let vote_rank: usize = 3;
-        let messages = vec![ConsensusMessage::Vote(VoteMessage {
-            vote: Vote::new_notarization_vote(6, Hash::new_unique()),
-            signature: Signature::default(),
-            rank: vote_rank as u16,
-        })];
+        let vote_message = create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_notarization_vote(6, Hash::new_unique()),
+            vote_rank,
+        );
+        let messages = vec![ConsensusMessage::Vote(vote_message)];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 3);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3);
@@ -734,11 +780,12 @@ mod tests {
         // Pretend 10 seconds have passed, make sure stats are reset
         verifier.stats.last_stats_logged = Instant::now() - STATS_INTERVAL_DURATION;
         let vote_rank: usize = 9;
-        let messages = vec![ConsensusMessage::Vote(VoteMessage {
-            vote: Vote::new_notarization_fallback_vote(7, Hash::new_unique()),
-            signature: Signature::default(),
-            rank: vote_rank as u16,
-        })];
+        let vote_message = create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_notarization_fallback_vote(7, Hash::new_unique()),
+            vote_rank,
+        );
+        let messages = vec![ConsensusMessage::Vote(vote_message)];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
         // Since we just logged all stats (including the packet just sent), stats should be reset
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
@@ -755,7 +802,8 @@ mod tests {
     fn test_blssigverifier_verify_malformed() {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+        let (validator_keypairs, mut verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
 
         let packets = vec![Packet::default()];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
@@ -774,11 +822,12 @@ mod tests {
         assert!(receiver.is_empty());
 
         // Send a packet with no epoch stakes
-        let messages = vec![ConsensusMessage::Vote(VoteMessage {
-            vote: Vote::new_finalization_vote(5_000_000_000),
-            signature: Signature::default(),
-            rank: 0,
-        })];
+        let vote_message = create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_finalization_vote(5_000_000_000),
+            0,
+        );
+        let messages = vec![ConsensusMessage::Vote(vote_message)];
         test_bls_message_transmission(&mut verifier, None, &messages, true);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
@@ -803,7 +852,7 @@ mod tests {
         test_bls_message_transmission(&mut verifier, None, &messages, true);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3);
-        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 2);
+        assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
         assert_eq!(
             verifier
                 .stats
@@ -811,6 +860,7 @@ mod tests {
                 .load(Ordering::Relaxed),
             1
         );
+        assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
 
         // Expect no messages since the packet was malformed
         assert!(receiver.is_empty());
@@ -821,23 +871,26 @@ mod tests {
         solana_logger::setup();
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
-        let messages = vec![
-            ConsensusMessage::Vote(VoteMessage {
-                vote: Vote::new_finalization_vote(5),
-                signature: Signature::default(),
-                rank: 0,
-            }),
-            ConsensusMessage::Vote(VoteMessage {
-                vote: Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
-                signature: Signature::default(),
-                rank: 2,
-            }),
-        ];
+        let (validator_keypairs, mut verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+
+        let msg1 = ConsensusMessage::Vote(create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_finalization_vote(5),
+            0,
+        ));
+        let msg2 = ConsensusMessage::Vote(create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
+            2,
+        ));
+
+        let messages = vec![msg1, msg2];
         test_bls_message_transmission(&mut verifier, Some(&receiver), &messages, true);
 
         // We failed to send the second message because the channel is full.
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.stats.sent_failed.load(Ordering::Relaxed), 1);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 0);
     }
@@ -846,14 +899,16 @@ mod tests {
     fn test_blssigverifier_send_packets_receiver_closed() {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+        let (validator_keypairs, mut verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
         // Close the receiver, should get panic on next send
         drop(receiver);
-        let messages = vec![ConsensusMessage::Vote(VoteMessage {
-            vote: Vote::new_finalization_vote(5),
-            signature: Signature::default(),
-            rank: 0,
-        })];
+        let msg = ConsensusMessage::Vote(create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_finalization_vote(5),
+            0,
+        ));
+        let messages = vec![msg];
         test_bls_message_transmission(&mut verifier, None, &messages, false);
     }
 
@@ -861,12 +916,13 @@ mod tests {
     fn test_blssigverifier_send_discarded_packets() {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
-        let message = ConsensusMessage::Vote(VoteMessage {
-            vote: Vote::new_finalization_vote(5),
-            signature: Signature::default(),
-            rank: 0,
-        });
+        let (validator_keypairs, mut verifier) =
+            create_keypairs_and_bls_sig_verifier(verified_vote_sender, sender);
+        let message = ConsensusMessage::Vote(create_signed_vote_message(
+            &validator_keypairs,
+            Vote::new_finalization_vote(5),
+            0,
+        ));
         let mut packet = Packet::default();
         packet
             .populate_packet(None, &message)
@@ -874,8 +930,9 @@ mod tests {
         packet.meta_mut().set_discard(true);
         let packets = vec![packet];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let packet_batches = verifier.verify_batches(packet_batches, 0);
-        assert!(verifier.send_packets(packet_batches).is_ok());
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 0);
+        assert!(verified_output.is_empty());
+        assert!(verifier.send_packets(verified_output).is_ok());
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.stats.sent_failed.load(Ordering::Relaxed), 0);
         assert_eq!(
@@ -937,20 +994,13 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, num_votes);
 
-        let mut processed_packets = 0;
-        for batch in result_batches {
-            for packet in batch.iter() {
-                processed_packets += 1;
-                assert!(
-                    !packet.meta().discard(),
-                    "Packet at rank {} should not be discarded",
-                    processed_packets - 1
-                );
-            }
-        }
-        assert_eq!(processed_packets, num_votes, "Did not process all packets");
+        assert_eq!(
+            verified_output.len(),
+            num_votes,
+            "Did not process all packets"
+        );
     }
 
     #[test]
@@ -1006,20 +1056,13 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, num_votes);
 
-        let mut processed_packets = 0;
-        for batch in result_batches {
-            for packet in batch.iter() {
-                processed_packets += 1;
-                assert!(
-                    !packet.meta().discard(),
-                    "Packet at rank {} should not be discarded",
-                    processed_packets - 1
-                );
-            }
-        }
-        assert_eq!(processed_packets, num_votes, "Did not process all packets");
+        assert_eq!(
+            verified_output.len(),
+            num_votes,
+            "Did not process all packets"
+        );
         assert_eq!(
             verifier
                 .stats
@@ -1075,21 +1118,16 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, num_votes);
 
-        for (i, packet) in result_batches.iter().flatten().enumerate() {
-            if i as u16 == invalid_rank {
-                assert!(
-                    packet.meta().discard(),
-                    "Packet at invalid rank {i} should be discarded"
-                );
+        assert_eq!(verified_output.len(), num_votes - 1);
+        assert!(!verified_output.iter().any(|msg| {
+            if let ConsensusMessage::Vote(vm) = msg {
+                vm.vote == vote2 && vm.rank == invalid_rank
             } else {
-                assert!(
-                    !packet.meta().discard(),
-                    "Packet at valid rank {i} should not be discarded"
-                );
+                false
             }
-        }
+        }));
     }
 
     #[test]
@@ -1133,26 +1171,13 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let result_batches = verifier.verify_batches(packet_batches, num_votes);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, num_votes);
 
-        let mut processed_packets = 0;
-        for batch in result_batches {
-            for (i, packet) in batch.iter().enumerate() {
-                processed_packets += 1;
-                if i as u16 == invalid_rank {
-                    assert!(
-                        packet.meta().discard(),
-                        "Packet at invalid rank {i} should be discarded",
-                    );
-                } else {
-                    assert!(
-                        !packet.meta().discard(),
-                        "Packet at valid rank {i} should not be discarded",
-                    );
-                }
-            }
-        }
-        assert_eq!(processed_packets, num_votes, "Did not process all packets");
+        assert_eq!(
+            verified_output.len(),
+            num_votes - 1,
+            "Did not process all packets"
+        );
     }
 
     #[test]
@@ -1163,10 +1188,10 @@ mod tests {
             create_keypairs_and_bls_sig_verifier(verified_vote_sender, message_sender);
 
         let packet_batches: Vec<PacketBatch> = vec![];
-        let result_batches = verifier.verify_batches(packet_batches, 0);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 0);
 
         assert!(
-            result_batches.is_empty(),
+            verified_output.is_empty(),
             "Result should be an empty vec for empty input"
         );
     }
@@ -1207,8 +1232,8 @@ mod tests {
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
 
-        let result_batches = verifier.verify_batches(packet_batches, 1);
-        assert!(!result_batches[0].iter().next().unwrap().meta().discard());
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 1);
+        assert_eq!(verified_output.len(), 1);
     }
 
     #[test]
@@ -1259,8 +1284,8 @@ mod tests {
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
 
-        let result_batches = verifier.verify_batches(packet_batches, 1);
-        assert!(!result_batches[0].iter().next().unwrap().meta().discard());
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 1);
+        assert_eq!(verified_output.len(), 1);
     }
 
     #[test]
@@ -1291,9 +1316,9 @@ mod tests {
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
 
-        let result_batches = verifier.verify_batches(packet_batches, 1);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 1);
         assert!(
-            result_batches[0].iter().next().unwrap().meta().discard(),
+            verified_output.is_empty(),
             "Packet with invalid certificate signature should be discarded"
         );
     }
@@ -1352,14 +1377,13 @@ mod tests {
         packet.populate_packet(None, &consensus_message).unwrap();
         packets.push(packet);
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        let result_batches = verifier.verify_batches(packet_batches, num_votes + 1);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, num_votes + 1);
 
-        for packet in result_batches.iter().flatten() {
-            assert!(
-                !packet.meta().discard(),
-                "No packets should be discarded in a mixed valid batch"
-            );
-        }
+        assert_eq!(
+            verified_output.len(),
+            num_votes + 1,
+            "No packets should be discarded in a mixed valid batch"
+        );
     }
 
     #[test]
@@ -1384,10 +1408,10 @@ mod tests {
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
-        let result_batches = verifier.verify_batches(packet_batches, 1);
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 1);
 
         assert!(
-            result_batches[0].iter().next().unwrap().meta().discard(),
+            verified_output.is_empty(),
             "Packet with invalid rank should be discarded"
         );
     }
@@ -1427,26 +1451,26 @@ mod tests {
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
-        let result_batches = sig_verifier.verify_batches(packet_batches, 1);
+        let (verified_output, _stats) = sig_verifier.verify_batches(packet_batches, 1);
         assert!(
-            result_batches[0].iter().next().unwrap().meta().discard(),
+            verified_output.is_empty(),
             "Packet with old vote should be discarded"
         );
         assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
 
         // Create a certificate for slot 3, which is older than the root bank (slot 5)
-        let cert_message = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Finalize, 3, None),
-            signature: BLSSignature::default(),
-            bitmap: Vec::new(),
-        };
+        let cert_message = create_signed_certificate_message(
+            &validator_keypairs,
+            Certificate::new(CertificateType::Finalize, 3, None),
+            &[0], // Signer rank 0
+        );
         let consensus_message = ConsensusMessage::Certificate(cert_message);
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
-        let result_batches = sig_verifier.verify_batches(packet_batches, 1);
+        let (verified_output, _stats) = sig_verifier.verify_batches(packet_batches, 1);
         assert!(
-            result_batches[0].iter().next().unwrap().meta().discard(),
+            verified_output.is_empty(),
             "Packet with old certificate should be discarded"
         );
         assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
@@ -1489,8 +1513,8 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
 
         // First verification should pass
-        let result_batches = verifier.verify_batches(packet_batches.clone(), 1);
-        assert!(!result_batches[0].iter().next().unwrap().meta().discard());
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches.clone(), 1);
+        assert_eq!(verified_output.len(), 1);
         assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 0);
 
         // Create a new certificate message with same certificate but 70% of the signatures
@@ -1505,8 +1529,8 @@ mod tests {
         let mut packet = Packet::default();
         packet.populate_packet(None, &consensus_message).unwrap();
         let packet_batches = vec![PinnedPacketBatch::new(vec![packet]).into()];
-        let result_batches = verifier.verify_batches(packet_batches, 1);
-        assert!(result_batches[0].iter().next().unwrap().meta().discard());
+        let (verified_output, _stats) = verifier.verify_batches(packet_batches, 1);
+        assert!(verified_output.is_empty());
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 1);
     }

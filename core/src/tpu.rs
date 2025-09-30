@@ -343,7 +343,7 @@ impl Tpu {
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
             );
-            SigVerifyStage::new(
+            SigVerifyStage::new_vote_sigverify(
                 bls_packet_receiver,
                 verifier,
                 "solSigVerAlpenglow",

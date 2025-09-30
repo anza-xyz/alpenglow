@@ -233,18 +233,8 @@ impl SigVerifier for DisabledSigVerifier {
     }
 }
 
+// Static Functions
 impl SigVerifyStage {
-    pub fn new<T: SigVerifier + 'static + Send>(
-        packet_receiver: Receiver<PacketBatch>,
-        verifier: T,
-        thread_name: &'static str,
-        metrics_name: &'static str,
-    ) -> Self {
-        let thread_hdl =
-            Self::verifier_service(packet_receiver, verifier, thread_name, metrics_name);
-        Self { thread_hdl }
-    }
-
     pub fn discard_excess_packets(batches: &mut [PacketBatch], mut max_packets: usize) {
         // Group packets by their incoming IP address.
         let mut addrs = batches
@@ -288,6 +278,24 @@ impl SigVerifyStage {
         let shrink_total = pre_packet_batches_len.saturating_sub(post_packet_batches_len);
         shrink_time.stop();
         (shrink_time.as_us(), shrink_total, packet_batches)
+    }
+
+    pub fn join(self) -> thread::Result<()> {
+        self.thread_hdl.join()
+    }
+}
+
+// General Transaction SigVerify
+impl SigVerifyStage {
+    pub fn new<T: SigVerifier + 'static + Send>(
+        packet_receiver: Receiver<PacketBatch>,
+        verifier: T,
+        thread_name: &'static str,
+        metrics_name: &'static str,
+    ) -> Self {
+        let thread_hdl =
+            Self::verifier_service(packet_receiver, verifier, thread_name, metrics_name);
+        Self { thread_hdl }
     }
 
     fn verifier<const K: usize, T: SigVerifier>(
@@ -430,9 +438,177 @@ impl SigVerifyStage {
             })
             .unwrap()
     }
+}
+#[derive(Debug, Default)]
+pub struct VoteSigVerifierStats {
+    pub num_valid_packets: usize,
+    pub num_shrinks: usize,
+    pub shrink_time_us: u64,
+}
 
-    pub fn join(self) -> thread::Result<()> {
-        self.thread_hdl.join()
+pub trait VoteSigVerifier {
+    type SendType: std::fmt::Debug;
+    type VerifiedOutput: Send;
+
+    fn verify_batches(
+        &self,
+        batches: Vec<PacketBatch>,
+        valid_packets: usize,
+    ) -> (Self::VerifiedOutput, VoteSigVerifierStats);
+
+    fn send_packets(&mut self, verified_output: Self::VerifiedOutput)
+        -> Result<(), Self::SendType>;
+}
+
+// Vote SigVerify
+impl SigVerifyStage {
+    pub fn new_vote_sigverify<T: VoteSigVerifier + 'static + Send>(
+        packet_receiver: Receiver<PacketBatch>,
+        verifier: T,
+        thread_name: &'static str,
+        metrics_name: &'static str,
+    ) -> Self {
+        let thread_hdl =
+            Self::vote_verifier_service(packet_receiver, verifier, thread_name, metrics_name);
+        Self { thread_hdl }
+    }
+
+    fn vote_verifier<const K: usize, T: VoteSigVerifier>(
+        deduper: &Deduper<K, [u8]>,
+        recvr: &Receiver<PacketBatch>,
+        verifier: &mut T,
+        stats: &mut SigVerifierStats,
+    ) -> Result<(), T::SendType> {
+        let (mut batches, num_packets, recv_duration) = streamer::recv_packet_batches(recvr)?;
+
+        let batches_len = batches.len();
+        debug!(
+            "@{:?} verifier: verifying: {}",
+            timing::timestamp(),
+            num_packets,
+        );
+
+        let mut discard_random_time = Measure::start("sigverify_discard_random_time");
+        let non_discarded_packets = solana_perf::discard::discard_batches_randomly(
+            &mut batches,
+            MAX_DEDUP_BATCH,
+            num_packets,
+        );
+        let num_discarded_randomly = num_packets.saturating_sub(non_discarded_packets);
+        discard_random_time.stop();
+
+        let mut dedup_time = Measure::start("sigverify_dedup_time");
+        let discard_or_dedup_fail =
+            deduper::dedup_packets_and_count_discards(deduper, &mut batches) as usize;
+        dedup_time.stop();
+        let num_unique = non_discarded_packets.saturating_sub(discard_or_dedup_fail);
+
+        let mut discard_time = Measure::start("sigverify_discard_time");
+        let mut num_packets_to_verify = num_unique;
+        if num_unique > MAX_SIGVERIFY_BATCH {
+            Self::discard_excess_packets(&mut batches, MAX_SIGVERIFY_BATCH);
+            num_packets_to_verify = MAX_SIGVERIFY_BATCH;
+        }
+        let excess_fail = num_unique.saturating_sub(MAX_SIGVERIFY_BATCH);
+        discard_time.stop();
+
+        // Pre-shrink packet batches if many packets are discarded from dedup / discard
+        let (pre_shrink_time_us, pre_shrink_total, batches) = Self::maybe_shrink_batches(batches);
+
+        let mut verify_time = Measure::start("sigverify_batch_time");
+        let (verified_output, verify_stats) =
+            verifier.verify_batches(batches, num_packets_to_verify);
+        verify_time.stop();
+
+        verifier.send_packets(verified_output)?;
+
+        debug!(
+            "@{:?} verifier: done. batches: {} total verify time: {:?} verified: {} v/s {}",
+            timing::timestamp(),
+            batches_len,
+            verify_time.as_ms(),
+            num_packets,
+            (num_packets as f32 / verify_time.as_s())
+        );
+
+        stats
+            .recv_batches_us_hist
+            .increment(recv_duration.as_micros() as u64)
+            .unwrap();
+        stats
+            .verify_batches_pp_us_hist
+            .increment(verify_time.as_us() / (num_packets as u64))
+            .unwrap();
+        stats
+            .discard_packets_pp_us_hist
+            .increment(discard_time.as_us() / (num_packets as u64))
+            .unwrap();
+        stats
+            .dedup_packets_pp_us_hist
+            .increment(dedup_time.as_us() / (num_packets as u64))
+            .unwrap();
+        stats.batches_hist.increment(batches_len as u64).unwrap();
+        stats.packets_hist.increment(num_packets as u64).unwrap();
+        stats.total_batches += batches_len;
+        stats.total_packets += num_packets;
+        stats.total_dedup += discard_or_dedup_fail;
+        stats.total_valid_packets += verify_stats.num_valid_packets;
+        stats.total_discard_random_time_us += discard_random_time.as_us() as usize;
+        stats.total_discard_random += num_discarded_randomly;
+        stats.total_excess_fail += excess_fail;
+        stats.total_shrinks += pre_shrink_total + verify_stats.num_shrinks;
+        stats.total_dedup_time_us += dedup_time.as_us() as usize;
+        stats.total_discard_time_us += discard_time.as_us() as usize;
+        stats.total_verify_time_us += verify_time.as_us() as usize;
+        stats.total_shrink_time_us += (pre_shrink_time_us + verify_stats.shrink_time_us) as usize;
+
+        Ok(())
+    }
+
+    fn vote_verifier_service<T: VoteSigVerifier + 'static + Send>(
+        packet_receiver: Receiver<PacketBatch>,
+        mut verifier: T,
+        thread_name: &'static str,
+        metrics_name: &'static str,
+    ) -> JoinHandle<()> {
+        let mut stats = SigVerifierStats::default();
+        let mut last_print = Instant::now();
+        const MAX_DEDUPER_AGE: Duration = Duration::from_secs(2);
+        const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
+        const DEDUPER_NUM_BITS: u64 = 63_999_979;
+        Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                let mut rng = rand::thread_rng();
+                let mut deduper = Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS);
+                loop {
+                    if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, MAX_DEDUPER_AGE) {
+                        stats.num_deduper_saturations += 1;
+                    }
+                    if let Err(e) =
+                        Self::vote_verifier(&deduper, &packet_receiver, &mut verifier, &mut stats)
+                    {
+                        match e {
+                            SigVerifyServiceError::Streamer(StreamerError::RecvTimeout(
+                                RecvTimeoutError::Disconnected,
+                            )) => break,
+                            SigVerifyServiceError::Streamer(StreamerError::RecvTimeout(
+                                RecvTimeoutError::Timeout,
+                            )) => (),
+                            SigVerifyServiceError::Send(_) | SigVerifyServiceError::TrySend(_) => {
+                                break;
+                            }
+                            _ => error!("{e:?}"),
+                        }
+                    }
+                    if last_print.elapsed().as_secs() > 2 {
+                        stats.maybe_report(metrics_name);
+                        stats = SigVerifierStats::default();
+                        last_print = Instant::now();
+                    }
+                }
+            })
+            .unwrap()
     }
 }
 
