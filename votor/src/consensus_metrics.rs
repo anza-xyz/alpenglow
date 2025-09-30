@@ -170,43 +170,43 @@ impl ConsensusMetrics {
     fn end_of_epoch_reporting(&mut self) {
         for (addr, metrics) in &self.node_metrics {
             let addr = addr.to_string();
-            datapoint_info!("votor_consensus_metrics",
+            datapoint_info!("consensus_vote_metrics",
                 "address" => addr,
-                ("notar_vote_count", metrics.notar.entries(), i64),
-                ("notar_vote_mean", metrics.notar.mean().ok(), Option<i64>),
-                ("notar_vote_stddev", metrics.notar.stddev(), Option<i64>),
-                ("notar_vote_maximum", metrics.notar.maximum().ok(), Option<i64>),
+                ("notar_vote_us_count", metrics.notar.entries(), i64),
+                ("notar_vote_us_mean", metrics.notar.mean().ok(), Option<i64>),
+                ("notar_vote_us_stddev", metrics.notar.stddev(), Option<i64>),
+                ("notar_vote_us_maximum", metrics.notar.maximum().ok(), Option<i64>),
 
-                ("notar_fallback_vote_count", metrics.notar_fallback.entries(), i64),
-                ("notar_fallback_vote_mean", metrics.notar_fallback.mean().ok(), Option<i64>),
-                ("notar_fallback_vote_stddev", metrics.notar_fallback.stddev(), Option<i64>),
-                ("notar_fallback_vote_maximum", metrics.notar_fallback.maximum().ok(), Option<i64>),
+                ("notar_fallback_vote_us_count", metrics.notar_fallback.entries(), i64),
+                ("notar_fallback_vote_us_mean", metrics.notar_fallback.mean().ok(), Option<i64>),
+                ("notar_fallback_vote_us_stddev", metrics.notar_fallback.stddev(), Option<i64>),
+                ("notar_fallback_vote_us_maximum", metrics.notar_fallback.maximum().ok(), Option<i64>),
 
-                ("skip_vote_count", metrics.skip.entries(), i64),
-                ("skip_vote_mean", metrics.skip.mean().ok(), Option<i64>),
-                ("skip_vote_stddev", metrics.skip.stddev(), Option<i64>),
-                ("skip_vote_maximum", metrics.skip.maximum().ok(), Option<i64>),
+                ("skip_vote_us_count", metrics.skip.entries(), i64),
+                ("skip_vote_us_mean", metrics.skip.mean().ok(), Option<i64>),
+                ("skip_vote_us_stddev", metrics.skip.stddev(), Option<i64>),
+                ("skip_vote_us_maximum", metrics.skip.maximum().ok(), Option<i64>),
 
-                ("skip_fallback_vote_count", metrics.skip_fallback.entries(), i64),
-                ("skip_fallback_vote_mean", metrics.skip_fallback.mean().ok(), Option<i64>),
-                ("skip_fallback_vote_stddev", metrics.skip_fallback.stddev(), Option<i64>),
-                ("skip_fallback_vote_maximum", metrics.skip_fallback.maximum().ok(), Option<i64>),
+                ("skip_fallback_vote_us_count", metrics.skip_fallback.entries(), i64),
+                ("skip_fallback_vote_us_mean", metrics.skip_fallback.mean().ok(), Option<i64>),
+                ("skip_fallback_vote_us_stddev", metrics.skip_fallback.stddev(), Option<i64>),
+                ("skip_fallback_vote_us_maximum", metrics.skip_fallback.maximum().ok(), Option<i64>),
 
-                ("finalize_vote_count", metrics.final_.entries(), i64),
-                ("finalize_vote_mean", metrics.final_.mean().ok(), Option<i64>),
-                ("finalize_vote_stddev", metrics.final_.stddev(), Option<i64>),
-                ("finalize_vote_maximum", metrics.final_.maximum().ok(), Option<i64>),
+                ("finalize_vote_us_count", metrics.final_.entries(), i64),
+                ("finalize_vote_us_mean", metrics.final_.mean().ok(), Option<i64>),
+                ("finalize_vote_us_stddev", metrics.final_.stddev(), Option<i64>),
+                ("finalize_vote_us_maximum", metrics.final_.maximum().ok(), Option<i64>),
             );
         }
 
         for (addr, histogram) in &self.leader_metrics {
             let addr = addr.to_string();
-            datapoint_info!("votor_consensus_metrics",
+            datapoint_info!("consensus_block_hash_seen_metrics",
                 "address" => addr,
-                ("blocks_seen_vote_count", histogram.entries(), i64),
-                ("blocks_seen_vote_mean", histogram.mean().ok(), Option<i64>),
-                ("blocks_seen_vote_stddev", histogram.stddev(), Option<i64>),
-                ("blocks_seen_vote_maximum", histogram.maximum().ok(), Option<i64>),
+                ("block_hash_seen_us_count", histogram.entries(), i64),
+                ("block_hash_seen_us_mean", histogram.mean().ok(), Option<i64>),
+                ("block_hash_seen_us_stddev", histogram.stddev(), Option<i64>),
+                ("block_hash_seen_us_maximum", histogram.maximum().ok(), Option<i64>),
             );
         }
 
