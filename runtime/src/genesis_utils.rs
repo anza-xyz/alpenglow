@@ -457,7 +457,12 @@ pub fn create_genesis_config_with_leader_ex(
     );
 
     if genesis_config.cluster_type == ClusterType::Development {
-        activate_all_features(&mut genesis_config);
+        let is_alpenglow = validator_bls_pubkey.is_some();
+        if is_alpenglow {
+            activate_all_features_alpenglow(&mut genesis_config);
+        } else {
+            activate_all_features(&mut genesis_config);
+        }
     }
 
     genesis_config
