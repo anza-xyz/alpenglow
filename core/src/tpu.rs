@@ -9,9 +9,7 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
-        bls_sigverifier::{
-            bls_sigverifier::BLSSigVerifier, bls_sigverify_stage::BLSSigVerifyStage,
-        },
+        bls_sigverify::{bls_sigverifier::BLSSigVerifier, bls_sigverify_stage::BLSSigVerifyStage},
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
             VerifiedVoteSender, VoteTracker,

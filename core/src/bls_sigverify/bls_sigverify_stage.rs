@@ -1,5 +1,5 @@
 use {
-    crate::bls_sigverifier::{bls_sigverifier::BLSSigVerifier, stats::BLSPacketStats},
+    crate::bls_sigverify::{bls_sigverifier::BLSSigVerifier, stats::BLSPacketStats},
     core::time::Duration,
     crossbeam_channel::{Receiver, RecvTimeoutError, SendError, TrySendError},
     itertools::Itertools,
@@ -34,13 +34,31 @@ const BLS_MAX_DISCARDED_PACKET_RATE: f64 = 0.10;
 #[derive(Error, Debug)]
 pub enum BLSSigVerifyServiceError<SendType> {
     #[error("send packets batch error")]
-    Send(#[from] SendError<SendType>),
+    Send(Box<SendError<SendType>>),
 
     #[error("try_send packet errror")]
-    TrySend(#[from] TrySendError<SendType>),
+    TrySend(Box<TrySendError<SendType>>),
 
     #[error("streamer error")]
-    Streamer(#[from] StreamerError),
+    Streamer(Box<StreamerError>),
+}
+
+impl<SendType> From<SendError<SendType>> for BLSSigVerifyServiceError<SendType> {
+    fn from(e: SendError<SendType>) -> Self {
+        Self::Send(Box::new(e))
+    }
+}
+
+impl<SendType> From<TrySendError<SendType>> for BLSSigVerifyServiceError<SendType> {
+    fn from(e: TrySendError<SendType>) -> Self {
+        Self::TrySend(Box::new(e))
+    }
+}
+
+impl<SendType> From<StreamerError> for BLSSigVerifyServiceError<SendType> {
+    fn from(e: StreamerError) -> Self {
+        Self::Streamer(Box::new(e))
+    }
 }
 
 type Result<T, SendType> = std::result::Result<T, BLSSigVerifyServiceError<SendType>>;
@@ -218,17 +236,19 @@ impl BLSSigVerifyStage {
                         Self::verifier(&deduper, &packet_receiver, &mut verifier, &mut stats)
                     {
                         match e {
-                            BLSSigVerifyServiceError::Streamer(StreamerError::RecvTimeout(
-                                RecvTimeoutError::Disconnected,
-                            )) => break,
-                            BLSSigVerifyServiceError::Streamer(StreamerError::RecvTimeout(
-                                RecvTimeoutError::Timeout,
-                            )) => (),
+                            BLSSigVerifyServiceError::Streamer(streamer_error_box) => {
+                                match *streamer_error_box {
+                                    StreamerError::RecvTimeout(RecvTimeoutError::Disconnected) => {
+                                        break
+                                    }
+                                    StreamerError::RecvTimeout(RecvTimeoutError::Timeout) => (),
+                                    _ => error!("{:?}", streamer_error_box),
+                                }
+                            }
                             BLSSigVerifyServiceError::Send(_)
                             | BLSSigVerifyServiceError::TrySend(_) => {
                                 break;
                             }
-                            _ => error!("{e:?}"),
                         }
                     }
                     if last_print.elapsed().as_secs() > 2 {

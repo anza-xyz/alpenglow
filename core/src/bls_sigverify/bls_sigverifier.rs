@@ -3,7 +3,7 @@
 
 use {
     crate::{
-        bls_sigverifier::{
+        bls_sigverify::{
             bls_sigverify_stage::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
@@ -610,7 +610,7 @@ struct CertToVerify {
 mod tests {
     use {
         super::*,
-        crate::bls_sigverifier::stats::STATS_INTERVAL_DURATION,
+        crate::bls_sigverify::stats::STATS_INTERVAL_DURATION,
         crossbeam_channel::Receiver,
         solana_bls_signatures::{Signature, Signature as BLSSignature},
         solana_hash::Hash,
