@@ -335,7 +335,8 @@ impl EventHandler {
             VotorEvent::Timeout(slot) => {
                 info!("{my_pubkey}: Timeout {slot}");
                 if slot != last_of_consecutive_leader_slots(slot) {
-                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
+                    vctx.consensus_metrics
+                        .record_start_of_slot(slot.saturating_add(1));
                 }
                 if vctx.vote_history.voted(slot) {
                     return Ok(votes);
@@ -403,7 +404,8 @@ impl EventHandler {
                 info!("{my_pubkey}: Finalized {block:?} fast: {is_fast_finalization}");
                 let (slot, _) = block;
                 if slot != last_of_consecutive_leader_slots(slot) {
-                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
+                    vctx.consensus_metrics
+                        .record_start_of_slot(slot.saturating_add(1));
                 }
                 finalized_blocks.insert(block);
                 Self::check_rootable_blocks(
