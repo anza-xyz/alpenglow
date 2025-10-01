@@ -9,16 +9,17 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
+        bls_sigverifier::{
+            bls_sigverifier::BLSSigVerifier, bls_sigverify_stage::BLSSigVerifyStage,
+        },
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
             VerifiedVoteSender, VoteTracker,
         },
+        ed25519_sigverifier::TransactionSigVerifier,
         fetch_stage::FetchStage,
         forwarding_stage::{
             spawn_forwarding_stage, ForwardAddressGetter, SpawnForwardingStageResult,
-        },
-        sigverifier::{
-            bls_sigverifier::BLSSigVerifier, ed25519_sigverifier::TransactionSigVerifier,
         },
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
@@ -107,7 +108,7 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sig_verifier: SigVerifier,
     vote_sigverify_stage: SigVerifyStage,
-    alpenglow_sigverify_stage: SigVerifyStage,
+    alpenglow_sigverify_stage: BLSSigVerifyStage,
     banking_stage: Arc<RwLock<Option<BankingStage>>>,
     forwarding_stage: JoinHandle<()>,
     cluster_info_vote_listener: ClusterInfoVoteListener,
@@ -343,7 +344,7 @@ impl Tpu {
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
             );
-            SigVerifyStage::new_vote_sigverify(
+            BLSSigVerifyStage::new(
                 bls_packet_receiver,
                 verifier,
                 "solSigVerAlpenglow",

@@ -2,10 +2,10 @@ use {
     crate::{
         banking_trace::BankingPacketSender,
         consensus::vote_stake_tracker::VoteStakeTracker,
+        ed25519_sigverifier::ed25519_verify_cpu,
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
         result::{Error, Result},
-        sigverifier::ed25519_sigverifier::ed25519_verify_cpu,
     },
     agave_banking_stage_ingress_types::BankingPacketBatch,
     crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Select, Sender},

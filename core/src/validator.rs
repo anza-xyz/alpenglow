@@ -14,6 +14,7 @@ use {
             tower_storage::{NullTowerStorage, TowerStorage},
             ExternalRootSource, Tower,
         },
+        ed25519_sigverifier,
         repair::{
             self,
             quic_endpoint::{RepairQuicAsyncSenders, RepairQuicSenders, RepairQuicSockets},
@@ -21,7 +22,6 @@ use {
             serve_repair_service::ServeRepairService,
         },
         sample_performance_service::SamplePerformanceService,
-        sigverifier::ed25519_sigverifier,
         snapshot_packager_service::SnapshotPackagerService,
         stats_reporter_service::StatsReporterService,
         system_monitor_service::{
