@@ -966,7 +966,7 @@ mod tests {
         }
     }
 
-    const TEST_SHORT_TIMEOUT: Duration = Duration::from_millis(5);
+    const TEST_SHORT_TIMEOUT: Duration = Duration::from_millis(100);
 
     fn send_parent_ready_event(
         test_context: &EventHandlerTestContext,
@@ -1168,16 +1168,22 @@ mod tests {
     }
 
     fn check_parent_ready_slot(test_context: &EventHandlerTestContext, expected: (Slot, Block)) {
-        assert_eq!(
-            *test_context
+        let started = Instant::now();
+        while started.elapsed() < TEST_SHORT_TIMEOUT {
+            if *test_context
                 .leader_window_notifier
                 .highest_parent_ready
                 .read()
-                .unwrap(),
-            expected
-        );
-        let slot = expected.0;
-        check_timeout_set(test_context, slot);
+                .unwrap()
+                == expected
+            {
+                let slot = expected.0;
+                check_timeout_set(test_context, slot);
+                return;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        panic!("Parent ready slot not set to expected {expected:?}");
     }
 
     fn check_timeout_set(test_context: &EventHandlerTestContext, expected_slot: Slot) {
@@ -1187,7 +1193,7 @@ mod tests {
             .is_timeout_set(expected_slot));
     }
 
-    fn crate_vote_history_storage_and_switch_identity(
+    fn create_vote_history_storage_and_switch_identity(
         test_context: &EventHandlerTestContext,
         new_identity: &Keypair,
     ) -> PathBuf {
@@ -1201,11 +1207,11 @@ mod tests {
         test_context
             .cluster_info
             .set_keypair(Arc::new(new_identity.insecure_clone()));
-        sleep(TEST_SHORT_TIMEOUT);
         test_context
             .event_sender
             .send(VotorEvent::SetIdentity)
             .unwrap();
+        // Sleep to make sure SetIdentity event is processed
         sleep(TEST_SHORT_TIMEOUT);
         file_vote_history_storage.filename(&new_identity.pubkey())
     }
@@ -1221,7 +1227,6 @@ mod tests {
         let slot = 1;
         let parent_slot = 0;
         send_parent_ready_event(&test_context, slot, (parent_slot, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (slot, (parent_slot, Hash::default())));
         let root_bank = test_context
             .bank_forks
@@ -1266,7 +1271,6 @@ mod tests {
 
         // Send parent ready for slot 4 should trigger Notarize vote for slot 4
         send_parent_ready_event(&test_context, slot, (2, block_id_2));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (slot, (2, block_id_2)));
         check_for_vote(
             &test_context,
@@ -1295,7 +1299,6 @@ mod tests {
 
         // Add parent ready for 0 to trigger notar vote for 1
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, CommitmentType::Notarize, 1);
@@ -1367,7 +1370,6 @@ mod tests {
 
         // Simulate a crashed leader for slot 4
         send_timeout_crashed_leader_event(&test_context, 4);
-        sleep(TEST_SHORT_TIMEOUT);
 
         // Since we don't have any shred for block 4, we should vote skip for 4-7
         check_for_vote(&test_context, &Vote::new_skip_vote(4));
@@ -1397,7 +1399,6 @@ mod tests {
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1_old = bank_1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(
             &test_context,
@@ -1449,7 +1450,6 @@ mod tests {
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank_1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, CommitmentType::Notarize, 1);
@@ -1535,7 +1535,6 @@ mod tests {
         let block_id_1 = bank1.block_id().unwrap();
 
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, CommitmentType::Notarize, 1);
@@ -1575,7 +1574,6 @@ mod tests {
         let block_id_5 = bank5.block_id().unwrap();
 
         send_finalized_event(&test_context, (5, block_id_5), true);
-        sleep(TEST_SHORT_TIMEOUT);
         // We should now have parent ready for slot 5
         check_parent_ready_slot(&test_context, (5, (4, block_id_4)));
 
@@ -1584,9 +1582,7 @@ mod tests {
         let bank9 = create_block_only(&test_context, 9, bank5.clone());
         let block_id_9 = bank9.block_id().unwrap();
         send_finalized_event(&test_context, (9, block_id_9), true);
-        sleep(TEST_SHORT_TIMEOUT);
         send_block_event(&test_context, 9, bank9.clone());
-        sleep(TEST_SHORT_TIMEOUT);
 
         // We should now have parent ready for slot 9
         check_parent_ready_slot(&test_context, (9, (5, block_id_5)));
@@ -1610,9 +1606,7 @@ mod tests {
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
-        sleep(TEST_SHORT_TIMEOUT);
         send_timeout_event(&test_context, 2);
         check_for_vote(&test_context, &Vote::new_skip_vote(2));
         check_for_vote(&test_context, &Vote::new_skip_vote(3));
@@ -1622,7 +1616,6 @@ mod tests {
             .event_sender
             .send(VotorEvent::Standstill(0))
             .unwrap();
-        sleep(TEST_SHORT_TIMEOUT);
         check_for_votes(
             &test_context,
             &[
@@ -1637,7 +1630,6 @@ mod tests {
             .event_sender
             .send(VotorEvent::Standstill(1))
             .unwrap();
-        sleep(TEST_SHORT_TIMEOUT);
         check_for_votes(
             &test_context,
             &[Vote::new_skip_vote(2), Vote::new_skip_vote(3)],
@@ -1656,7 +1648,7 @@ mod tests {
         let mut files_to_remove = vec![];
 
         // Before set identity we need to manually create the vote history storage file for new identity
-        files_to_remove.push(crate_vote_history_storage_and_switch_identity(
+        files_to_remove.push(create_vote_history_storage_and_switch_identity(
             &test_context,
             &new_identity,
         ));
@@ -1670,7 +1662,6 @@ mod tests {
             .root();
         let _ = create_block_and_send_block_event(&test_context, 1, root_bank.clone());
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         // There should be no votes but we should see commitments for hot spares
         assert_eq!(
             test_context
@@ -1682,7 +1673,7 @@ mod tests {
         check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Now set back to original identity
-        files_to_remove.push(crate_vote_history_storage_and_switch_identity(
+        files_to_remove.push(create_vote_history_storage_and_switch_identity(
             &test_context,
             &old_identity,
         ));
@@ -1734,12 +1725,11 @@ mod tests {
         let root_bank = setup_result.bank_forks.read().unwrap().root_bank();
         let _ = create_block_and_send_block_event(&setup_result, 1, root_bank);
         send_parent_ready_event(&setup_result, 1, (0, Hash::default()));
-        sleep(TEST_SHORT_TIMEOUT);
         // Verify that the event_handler exits within 5 seconds
         let start = Instant::now();
         while !setup_result.exit.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5)
         {
-            thread::sleep(TEST_SHORT_TIMEOUT);
+            sleep(TEST_SHORT_TIMEOUT);
         }
         assert!(setup_result.exit.load(Ordering::Relaxed));
         setup_result.event_handler.join().unwrap();
