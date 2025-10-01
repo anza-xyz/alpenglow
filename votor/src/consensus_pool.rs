@@ -1,8 +1,11 @@
 use {
     crate::{
-        certificate_limits_and_vote_types,
         commitment::CommitmentError,
-        conflicting_types,
+        common::{
+            certificate_limits_and_vote_types, conflicting_types, vote_to_certificate_ids, Stake,
+            VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+        },
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
@@ -11,8 +14,6 @@ use {
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
         },
         event::VotorEvent,
-        vote_to_certificate_ids, Certificate, Stake, VoteType,
-        MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
     },
     log::{error, trace},
     solana_clock::{Epoch, Slot},
@@ -22,7 +23,7 @@ use {
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
         consensus_message::{
-            Block, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
+            Block, Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
         vote::Vote,
     },
@@ -39,18 +40,6 @@ mod slot_stake_counters;
 mod stats;
 pub mod vote_certificate_builder;
 mod vote_pool;
-
-impl VoteType {
-    pub fn get_type(vote: &Vote) -> VoteType {
-        match vote {
-            Vote::Notarize(_) => VoteType::Notarize,
-            Vote::NotarizeFallback(_) => VoteType::NotarizeFallback,
-            Vote::Skip(_) => VoteType::Skip,
-            Vote::SkipFallback(_) => VoteType::SkipFallback,
-            Vote::Finalize(_) => VoteType::Finalize,
-        }
-    }
-}
 
 pub type PoolId = (Slot, VoteType);
 

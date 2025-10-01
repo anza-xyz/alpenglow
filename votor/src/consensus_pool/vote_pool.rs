@@ -1,5 +1,5 @@
 use {
-    crate::{consensus_pool::vote_certificate_builder::VoteCertificateBuilder, Stake},
+    crate::{common::Stake, consensus_pool::vote_certificate_builder::VoteCertificateBuilder},
     solana_hash::Hash,
     solana_pubkey::Pubkey,
     solana_votor_messages::consensus_message::VoteMessage,

@@ -6,7 +6,10 @@ mod stats;
 mod timers;
 
 use {
-    crate::{event::VotorEvent, DELTA_BLOCK, DELTA_TIMEOUT},
+    crate::{
+        common::{DELTA_BLOCK, DELTA_TIMEOUT},
+        event::VotorEvent,
+    },
     crossbeam_channel::Sender,
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,

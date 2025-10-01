@@ -1,5 +1,5 @@
 use {
-    crate::{certificate_limits_and_vote_types, VoteType},
+    crate::common::{certificate_limits_and_vote_types, VoteType},
     bitvec::prelude::*,
     itertools::Itertools,
     solana_bls_signatures::{BlsError, SignatureProjective},

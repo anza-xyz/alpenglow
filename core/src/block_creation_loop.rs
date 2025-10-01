@@ -24,7 +24,7 @@ use {
         bank_forks::BankForks,
     },
     solana_time_utils::timestamp,
-    solana_votor::{block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
+    solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},

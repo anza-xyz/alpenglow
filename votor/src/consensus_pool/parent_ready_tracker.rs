@@ -13,7 +13,7 @@
 //! a block with parent `b` in slot `s` will have their block finalized.
 
 use {
-    crate::{event::VotorEvent, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE},
+    crate::{common::MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, event::VotorEvent},
     solana_clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_pubkey::Pubkey,
     solana_votor_messages::consensus_message::Block,

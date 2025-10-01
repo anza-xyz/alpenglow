@@ -1,5 +1,5 @@
 use {
-    crate::VoteType,
+    crate::common::VoteType,
     solana_metrics::datapoint_info,
     solana_votor_messages::consensus_message::CertificateType,
     std::time::{Duration, Instant},
