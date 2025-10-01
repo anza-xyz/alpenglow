@@ -2939,12 +2939,10 @@ fn test_oc_bad_signatures() {
         |(_label, leader_vote_tx)| {
             let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                 .map(|(_, vote, ..)| vote)
-                .unwrap()
-                .as_tower_transaction()
                 .unwrap();
             // Filter out empty votes
             if !vote.is_empty() {
-                Some((vote.into(), leader_vote_tx))
+                Some((vote, leader_vote_tx))
             } else {
                 None
             }
@@ -2955,7 +2953,6 @@ fn test_oc_bad_signatures() {
             let num_votes_simulated = num_votes_simulated.clone();
             move |vote_slot, leader_vote_tx, parsed_vote, _cluster_info| {
                 info!("received vote for {vote_slot}");
-                let parsed_vote = parsed_vote.as_tower_transaction_ref().unwrap();
                 let vote_hash = parsed_vote.hash();
                 info!("Simulating vote from our node on slot {vote_slot}, hash {vote_hash}");
 
@@ -4137,12 +4134,10 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
             if label.pubkey() == bad_leader_id {
                 let vote = vote_parser::parse_vote_transaction(&leader_vote_tx)
                     .map(|(_, vote, ..)| vote)
-                    .unwrap()
-                    .as_tower_transaction()
                     .unwrap();
                 // Filter out empty votes
                 if !vote.is_empty() {
-                    Some((vote.into(), leader_vote_tx))
+                    Some((vote, leader_vote_tx))
                 } else {
                     None
                 }
@@ -4165,7 +4160,6 @@ fn run_duplicate_shreds_broadcast_leader(vote_on_duplicate: bool) {
                 for slot in duplicate_slot_receiver.try_iter() {
                     duplicate_slots.push(slot);
                 }
-                let parsed_vote = parsed_vote.as_tower_transaction_ref().unwrap();
                 let vote_hash = parsed_vote.hash();
                 if vote_on_duplicate || !duplicate_slots.contains(&latest_vote_slot) {
                     info!(

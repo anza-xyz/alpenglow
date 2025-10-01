@@ -42,7 +42,7 @@
 //!
 use {
     crate::{
-        commitment::AlpenglowCommitmentAggregationData,
+        commitment::CommitmentAggregationData,
         consensus_metrics::ConsensusMetrics,
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
@@ -111,7 +111,7 @@ pub struct VotorConfig {
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub bls_sender: Sender<BLSOp>,
-    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub commitment_sender: Sender<CommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,

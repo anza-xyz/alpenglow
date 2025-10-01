@@ -3,7 +3,7 @@
 
 use {
     crate::{
-        commitment::{alpenglow_update_commitment_cache, AlpenglowCommitmentType},
+        commitment::{update_commitment_cache, CommitmentType},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
@@ -283,11 +283,11 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
-                if let Some((ready_slot, parent_block)) =
+                if let Some(parent_block) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
                     Self::handle_parent_ready_event(
-                        ready_slot,
+                        slot,
                         parent_block,
                         vctx,
                         ctx,
@@ -409,12 +409,12 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
-                if let Some((slot, block)) =
+                if let Some(parent_block) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
                     Self::handle_parent_ready_event(
-                        slot,
-                        block,
+                        block.0,
+                        parent_block,
                         vctx,
                         ctx,
                         local_context,
@@ -469,12 +469,14 @@ impl EventHandler {
     /// all later slots. So B and C together can keep finalizing the blocks and unstuck the
     /// cluster. If we get a finalization cert for later slots of the window and we have the
     /// block replayed, trace back to the first slot of the window and emit parent ready.
+    ///
+    /// Returns [`Some(Block)`] of the parent if the parent ready for the `finalized_block` should be added.
     fn add_missing_parent_ready(
         finalized_block: Block,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         local_context: &mut LocalContext,
-    ) -> Option<(Slot, Block)> {
+    ) -> Option<Block> {
         let (slot, block_id) = finalized_block;
         let first_slot_of_window = first_of_consecutive_leader_slots(slot);
         if first_slot_of_window == slot || first_slot_of_window == 0 {
@@ -511,7 +513,7 @@ impl EventHandler {
              {parent_block_id}",
             local_context.my_pubkey
         );
-        Some((slot, (parent_slot, parent_block_id)))
+        Some((parent_slot, parent_block_id))
     }
 
     fn handle_set_identity(
@@ -600,8 +602,8 @@ impl EventHandler {
         )? {
             votes.push(bls_op);
         }
-        alpenglow_update_commitment_cache(
-            AlpenglowCommitmentType::Notarize,
+        update_commitment_cache(
+            CommitmentType::Notarize,
             slot,
             &voting_context.commitment_sender,
         )?;
@@ -785,7 +787,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            commitment::AlpenglowCommitmentAggregationData,
+            commitment::CommitmentAggregationData,
             consensus_metrics::ConsensusMetrics,
             event::{LeaderWindowInfo, VotorEventSender},
             vote_history_storage::{
@@ -835,7 +837,7 @@ mod tests {
         event_sender: VotorEventSender,
         event_handler: EventHandler,
         bls_receiver: Receiver<BLSOp>,
-        commitment_receiver: Receiver<AlpenglowCommitmentAggregationData>,
+        commitment_receiver: Receiver<CommitmentAggregationData>,
         own_vote_receiver: Receiver<ConsensusMessage>,
         bank_forks: Arc<RwLock<BankForks>>,
         my_bls_keypair: BLSKeypair,
@@ -1129,7 +1131,7 @@ mod tests {
 
     fn check_for_commitment(
         test_context: &EventHandlerTestContext,
-        expected_type: AlpenglowCommitmentType,
+        expected_type: CommitmentType,
         expected_slot: Slot,
     ) {
         let commitment = test_context
@@ -1227,7 +1229,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_1),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, slot);
+        check_for_commitment(&test_context, CommitmentType::Notarize, slot);
 
         // Add block event for 1 again will not trigger another Notarize or commitment
         send_block_event(&test_context, 1, bank1.clone());
@@ -1242,7 +1244,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_2),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, slot);
+        check_for_commitment(&test_context, CommitmentType::Notarize, slot);
 
         // Slot 3 somehow links to block 1, should not trigger Notarize vote because it has a wrong parent (not 2)
         let _ = create_block_and_send_block_event(&test_context, 3, bank1.clone());
@@ -1262,7 +1264,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_4),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, slot);
+        check_for_commitment(&test_context, CommitmentType::Notarize, slot);
 
         test_context.exit.store(true, Ordering::Relaxed);
         test_context.event_handler.join().unwrap();
@@ -1288,7 +1290,7 @@ mod tests {
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Send block notarized event should trigger Finalize vote
         send_block_notarized_event(&test_context, (1, block_id_1));
@@ -1298,7 +1300,7 @@ mod tests {
         let block_id_2 = bank2.block_id().unwrap();
         // Both Notarize and Finalize votes should trigger for 2
         check_for_vote(&test_context, &Vote::new_notarization_vote(2, block_id_2));
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 2);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 2);
         send_block_notarized_event(&test_context, (2, block_id_2));
         check_for_vote(&test_context, &Vote::new_finalization_vote(2));
 
@@ -1320,7 +1322,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_3),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, slot);
+        check_for_commitment(&test_context, CommitmentType::Notarize, slot);
         // Check there is a Finalize vote for 3
         check_for_vote(&test_context, &Vote::new_finalization_vote(slot));
 
@@ -1393,7 +1395,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(1, block_id_1_old),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Now we got safe_to_notar event for slot 1 and a different block id
         let block_id_1_1 = Hash::new_unique();
@@ -1442,7 +1444,7 @@ mod tests {
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Now we got safe_to_skip event for slot 1
         send_safe_to_skip_event(&test_context, 1);
@@ -1528,7 +1530,7 @@ mod tests {
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Now we got finalized event for slot 1
         send_finalized_event(&test_context, (1, block_id_1), true);
@@ -1669,7 +1671,7 @@ mod tests {
                 .err(),
             Some(RecvTimeoutError::Timeout)
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
+        check_for_commitment(&test_context, CommitmentType::Notarize, 1);
 
         // Now set back to original identity
         files_to_remove.push(crate_vote_history_storage_and_switch_identity(
@@ -1686,7 +1688,7 @@ mod tests {
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_4),
         );
-        check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, slot);
+        check_for_commitment(&test_context, CommitmentType::Notarize, slot);
 
         test_context.exit.store(true, Ordering::Relaxed);
         test_context.event_handler.join().unwrap();

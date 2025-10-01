@@ -1,6 +1,6 @@
 use {
     crate::{
-        commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentError},
+        commitment::{CommitmentAggregationData, CommitmentError},
         consensus_metrics::ConsensusMetrics,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{SavedVoteHistory, SavedVoteHistoryVersions},
@@ -104,7 +104,7 @@ pub enum VoteError {
     ConsensusPoolError(#[from] SendError<()>),
 
     #[error("Commitment sender error {0}")]
-    CommitmentSenderError(#[from] AlpenglowCommitmentError),
+    CommitmentSenderError(#[from] CommitmentError),
 
     #[error("Saved vote history error {0}")]
     SavedVoteHistoryError(#[from] VoteHistoryError),
@@ -121,7 +121,7 @@ pub struct VotingContext {
     pub has_new_vote_been_rooted: bool,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub bls_sender: Sender<BLSOp>,
-    pub commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub commitment_sender: Sender<CommitmentAggregationData>,
     pub wait_to_vote_slot: Option<u64>,
     pub sharable_banks: SharableBanks,
     pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,

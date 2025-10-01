@@ -10,7 +10,10 @@ use {
         bank::Bank,
         commitment::{BlockCommitment, BlockCommitmentCache, CommitmentSlots, VOTE_THRESHOLD_SIZE},
     },
-    solana_votor::commitment::{AlpenglowCommitmentAggregationData, AlpenglowCommitmentType},
+    solana_votor::commitment::{
+        CommitmentAggregationData as AlpenglowCommitmentAggregationData,
+        CommitmentType as AlpenglowCommitmentType,
+    },
     std::{
         cmp::max,
         collections::HashMap,

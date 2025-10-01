@@ -5,10 +5,7 @@ mod stats;
 
 use {
     crate::{
-        commitment::{
-            alpenglow_update_commitment_cache, AlpenglowCommitmentAggregationData,
-            AlpenglowCommitmentType,
-        },
+        commitment::{update_commitment_cache, CommitmentAggregationData, CommitmentType},
         consensus_pool::{
             parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
         },
@@ -57,7 +54,7 @@ pub(crate) struct ConsensusPoolContext {
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
-    pub(crate) commitment_sender: Sender<AlpenglowCommitmentAggregationData>,
+    pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -300,7 +297,7 @@ impl ConsensusPoolService {
         message: &ConsensusMessage,
         consensus_pool: &mut ConsensusPool,
         votor_events: &mut Vec<VotorEvent>,
-        commitment_sender: &Sender<AlpenglowCommitmentAggregationData>,
+        commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(Option<Slot>, Vec<Arc<CertificateMessage>>), AddVoteError> {
         let (new_finalized_slot, new_certificates_to_send) = consensus_pool.add_message(
             root_bank.epoch_schedule(),
@@ -314,8 +311,8 @@ impl ConsensusPoolService {
             return Ok((None, new_certificates_to_send));
         };
         trace!("{my_pubkey}: new finalization certificate for {new_finalized_slot}");
-        alpenglow_update_commitment_cache(
-            AlpenglowCommitmentType::Finalized,
+        update_commitment_cache(
+            CommitmentType::Finalized,
             new_finalized_slot,
             commitment_sender,
         )?;
@@ -446,7 +443,7 @@ mod tests {
         consensus_message_sender: Sender<ConsensusMessage>,
         bls_receiver: Receiver<BLSOp>,
         event_receiver: Receiver<VotorEvent>,
-        commitment_receiver: Receiver<AlpenglowCommitmentAggregationData>,
+        commitment_receiver: Receiver<CommitmentAggregationData>,
         validator_keypairs: Vec<ValidatorVoteKeypairs>,
         exit: Arc<AtomicBool>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
@@ -596,12 +593,12 @@ mod tests {
         // Verify that we received a commitment update
         wait_for_event(
             &setup_result.commitment_receiver,
-            |AlpenglowCommitmentAggregationData {
+            |CommitmentAggregationData {
                  commitment_type,
                  slot,
                  ..
              }| {
-                assert_eq!(*commitment_type, AlpenglowCommitmentType::Finalized);
+                assert_eq!(*commitment_type, CommitmentType::Finalized);
                 assert_eq!(*slot, target_slot);
                 true
             },
