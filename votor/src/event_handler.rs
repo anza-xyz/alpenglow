@@ -283,11 +283,11 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
-                if let Some((ready_slot, parent_block)) =
+                if let Some(parent_block) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
                     Self::handle_parent_ready_event(
-                        ready_slot,
+                        slot,
                         parent_block,
                         vctx,
                         ctx,
@@ -409,12 +409,12 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
-                if let Some((slot, block)) =
+                if let Some(parent_block) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
                     Self::handle_parent_ready_event(
-                        slot,
-                        block,
+                        block.0,
+                        parent_block,
                         vctx,
                         ctx,
                         local_context,
@@ -469,12 +469,14 @@ impl EventHandler {
     /// all later slots. So B and C together can keep finalizing the blocks and unstuck the
     /// cluster. If we get a finalization cert for later slots of the window and we have the
     /// block replayed, trace back to the first slot of the window and emit parent ready.
+    ///
+    /// Returns [`Some(Block)`] of the parent if the parent ready for the `finalized_block` should be added.
     fn add_missing_parent_ready(
         finalized_block: Block,
         ctx: &SharedContext,
         vctx: &mut VotingContext,
         local_context: &mut LocalContext,
-    ) -> Option<(Slot, Block)> {
+    ) -> Option<Block> {
         let (slot, block_id) = finalized_block;
         let first_slot_of_window = first_of_consecutive_leader_slots(slot);
         if first_slot_of_window == slot || first_slot_of_window == 0 {
@@ -511,7 +513,7 @@ impl EventHandler {
              {parent_block_id}",
             local_context.my_pubkey
         );
-        Some((slot, (parent_slot, parent_block_id)))
+        Some((parent_slot, parent_block_id))
     }
 
     fn handle_set_identity(
