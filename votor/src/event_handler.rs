@@ -244,18 +244,19 @@ impl EventHandler {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
-                {
-                    let mut metrics_guard = vctx.consensus_metrics.write();
-                    match metrics_guard.record_block_hash_seen(*bank.collector_id(), slot) {
-                        Ok(()) => (),
-                        Err(err) => {
-                            error!(
-                                "{my_pubkey}: recording block on slot {slot} failed with {err:?}"
-                            );
-                        }
-                    }
-                    metrics_guard.maybe_new_epoch(bank.epoch());
+                if slot != last_of_consecutive_leader_slots(slot) {
+                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
                 }
+                match vctx
+                    .consensus_metrics
+                    .record_block_hash_seen(*bank.collector_id(), slot)
+                {
+                    Ok(()) => (),
+                    Err(err) => {
+                        error!("{my_pubkey}: recording block on slot {slot} failed with {err:?}");
+                    }
+                }
+                vctx.consensus_metrics.maybe_new_epoch(bank.epoch());
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
                 if Self::try_notar(
@@ -312,6 +313,7 @@ impl EventHandler {
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
+                vctx.consensus_metrics.record_start_of_slot(slot);
                 Self::handle_parent_ready_event(
                     slot,
                     parent_block,
@@ -334,6 +336,9 @@ impl EventHandler {
             // Skip timer for the slot has fired
             VotorEvent::Timeout(slot) => {
                 info!("{my_pubkey}: Timeout {slot}");
+                if slot != last_of_consecutive_leader_slots(slot) {
+                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
+                }
                 if vctx.vote_history.voted(slot) {
                     return Ok(votes);
                 }
@@ -398,6 +403,10 @@ impl EventHandler {
             // We have finalized this block consider it for rooting
             VotorEvent::Finalized(block, is_fast_finalization) => {
                 info!("{my_pubkey}: Finalized {block:?} fast: {is_fast_finalization}");
+                let (slot, _) = block;
+                if slot != last_of_consecutive_leader_slots(slot) {
+                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
+                }
                 finalized_blocks.insert(block);
                 Self::check_rootable_blocks(
                     my_pubkey,
@@ -853,11 +862,10 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let start = Arc::new((Mutex::new(true), Condvar::new()));
         let (event_sender, event_receiver) = unbounded();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let consensus_metrics = ConsensusMetrics::new(0);
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
-            consensus_metrics.clone(),
         )));
 
         // Create 10 node validatorvotekeypairs vec
