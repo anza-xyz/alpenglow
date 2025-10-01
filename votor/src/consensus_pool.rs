@@ -1,7 +1,7 @@
 use {
     crate::{
         certificate_limits_and_vote_types,
-        commitment::AlpenglowCommitmentError,
+        commitment::CommitmentError,
         conflicting_types,
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
@@ -81,8 +81,8 @@ pub enum AddVoteError {
     InvalidRank(u16),
 }
 
-impl From<AlpenglowCommitmentError> for AddVoteError {
-    fn from(_: AlpenglowCommitmentError) -> Self {
+impl From<CommitmentError> for AddVoteError {
+    fn from(_: CommitmentError) -> Self {
         AddVoteError::ChannelDisconnected("CommitmentSender".to_string())
     }
 }
