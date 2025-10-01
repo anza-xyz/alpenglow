@@ -244,9 +244,7 @@ impl EventHandler {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
-                if slot != last_of_consecutive_leader_slots(slot) {
-                    vctx.consensus_metrics.record_start_of_slot(slot + 1);
-                }
+                vctx.consensus_metrics.record_start_of_slot(slot);
                 match vctx
                     .consensus_metrics
                     .record_block_hash_seen(*bank.collector_id(), slot)
