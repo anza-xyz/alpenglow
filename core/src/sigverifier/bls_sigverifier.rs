@@ -204,6 +204,9 @@ impl SigVerifier for BLSSigVerifier {
             .preprocess_elapsed_us
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
+        info!("VOTES_TO_VERIFY: {votes_to_verify:?}");
+        info!("CERTS_TO_VERIFY: {certs_to_verify:?}");
+
         rayon::join(
             || self.verify_votes(&mut votes_to_verify),
             || self.verify_certificates(&mut certs_to_verify, &root_bank),
@@ -584,6 +587,7 @@ struct VoteToVerify<'a> {
     packet: PacketRefMut<'a>,
 }
 
+#[derive(Debug)]
 struct CertToVerify<'a> {
     cert_message: CertificateMessage,
     packet: PacketRefMut<'a>,
