@@ -4584,7 +4584,7 @@ impl ReplayStage {
                     slot_status_notifier,
                     options,
                 );
-                blockstore_processor::set_alpenglow_ticks(&child_bank);
+                blockstore_processor::set_alpenglow_ticks(&child_bank, migration_status);
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(
                     progress,

@@ -60,6 +60,7 @@ use {
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,
     solana_vote::vote_account::VoteAccountsHashMap,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         borrow::Cow,
         collections::{HashMap, HashSet},
@@ -1828,7 +1829,7 @@ fn process_next_slots(
                     .unwrap(),
                 *next_slot,
             );
-            set_alpenglow_ticks(&next_bank);
+            set_alpenglow_ticks(&next_bank, migration_status);
             trace!(
                 "New bank for slot {}, parent slot is {}",
                 next_slot,
@@ -1845,67 +1846,22 @@ fn process_next_slots(
 
 /// Set alpenglow bank tick height.
 ///
-/// For alpenglow banks this tick height is `max_tick_height` - 1, for a bank on the epoch boundary
-/// of feature activation, we need ticks_per_slot for each slot between the parent and epoch boundary
-/// and one extra tick for the alpenglow bank
-pub fn set_alpenglow_ticks(bank: &Bank) {
-    let Some(first_alpenglow_slot) = bank
-        .feature_set
-        .activated_slot(&agave_feature_set::alpenglow::id())
-    else {
+/// For alpenglow banks the bank tick height is `max_tick_height` - 1, as only the Alpentick
+/// (fake tick to signal bank completion) will be present.
+///
+/// For PoH banks this is 0.
+pub fn set_alpenglow_ticks(bank: &Bank, migration_status: &MigrationStatus) {
+    if !migration_status.should_have_alpenglow_ticks(bank.slot()) {
+        // PoH Bank do not adjust ticks
         return;
-    };
-
-    let Some(alpenglow_ticks) = calculate_alpenglow_ticks(
-        bank.slot(),
-        first_alpenglow_slot,
-        bank.parent_slot(),
-        bank.ticks_per_slot(),
-    ) else {
-        return;
-    };
+    }
 
     info!(
         "Alpenglow: Setting tick height for slot {} to {}",
         bank.slot(),
-        bank.max_tick_height() - alpenglow_ticks
+        bank.max_tick_height() - 1
     );
-    bank.set_tick_height(bank.max_tick_height() - alpenglow_ticks);
-}
-
-/// Calculates how many ticks are needed for a block at `slot` with parent `parent_slot`
-///
-/// If both `parent_slot` and `slot` are greater than or equal to `first_alpenglow_slot`, then
-/// only 1 tick is needed. This tick has no hashing guarantees, it is simply used as a signal
-/// for the end of the block.
-///
-/// If both `parent_slot` and `slot` are less than `first_alpenglow_slot`, we need the
-/// appropriate amount of PoH ticks, indicated by a None return value.
-///
-/// If `parent_slot` is less than `first_alpenglow_slot` and `slot` is greater than or equal
-/// to `first_alpenglow_slot` (A block that "straddles" the activation epoch boundary) then:
-///
-/// 1. All slots between `parent_slot` and `first_alpenglow_slot` need to have `ticks_per_slot` ticks
-/// 2. One extra tick for the actual alpenglow slot
-/// 3. There are no ticks for any skipped alpenglow slots
-fn calculate_alpenglow_ticks(
-    slot: Slot,
-    first_alpenglow_slot: Slot,
-    parent_slot: Slot,
-    ticks_per_slot: u64,
-) -> Option<u64> {
-    // Slots before alpenglow shouldn't have alpenglow ticks
-    if slot < first_alpenglow_slot {
-        return None;
-    }
-
-    let alpenglow_ticks = if parent_slot < first_alpenglow_slot && slot >= first_alpenglow_slot {
-        (first_alpenglow_slot - parent_slot - 1) * ticks_per_slot + 1
-    } else {
-        1
-    };
-
-    Some(alpenglow_ticks)
+    bank.set_tick_height(bank.max_tick_height() - 1);
 }
 
 /// Starting with the root slot corresponding to `start_slot_meta`, iteratively
@@ -5471,61 +5427,5 @@ pub mod tests {
         );
         // Adding another None will noop (even though the block is already full)
         assert!(check_block_cost_limits(&bank, &tx_costs[0..1]).is_ok());
-    }
-
-    #[test]
-    fn test_calculate_alpenglow_ticks() {
-        let first_alpenglow_slot = 10;
-        let ticks_per_slot = 2;
-
-        // Slots before alpenglow don't have alpenglow ticks
-        let slot = 9;
-        let parent_slot = 8;
-        assert!(
-            calculate_alpenglow_ticks(slot, first_alpenglow_slot, parent_slot, ticks_per_slot)
-                .is_none()
-        );
-
-        // First alpenglow slot should only have 1 tick
-        let slot = first_alpenglow_slot;
-        let parent_slot = first_alpenglow_slot - 1;
-        assert_eq!(
-            calculate_alpenglow_ticks(slot, first_alpenglow_slot, parent_slot, ticks_per_slot)
-                .unwrap(),
-            1
-        );
-
-        // First alpenglow slot with skipped non-alpenglow slots
-        // need to have `ticks_per_slot` ticks per skipped slot and
-        // then one additional tick for the first alpenglow slot
-        let slot = first_alpenglow_slot;
-        let num_skipped_slots = 3;
-        let parent_slot = first_alpenglow_slot - num_skipped_slots - 1;
-        assert_eq!(
-            calculate_alpenglow_ticks(slot, first_alpenglow_slot, parent_slot, ticks_per_slot)
-                .unwrap(),
-            num_skipped_slots * ticks_per_slot + 1
-        );
-
-        // Skipped alpenglow slots don't need any additional ticks
-        let slot = first_alpenglow_slot + 2;
-        let parent_slot = first_alpenglow_slot;
-        assert_eq!(
-            calculate_alpenglow_ticks(slot, first_alpenglow_slot, parent_slot, ticks_per_slot)
-                .unwrap(),
-            1
-        );
-
-        // Skipped alpenglow slots along skipped non-alpenglow slots
-        // need to have `ticks_per_slot` ticks per skipped non-alpenglow
-        // slot only and then one additional tick for the alpenglow slot
-        let slot = first_alpenglow_slot + 2;
-        let num_skipped_non_alpenglow_slots = 4;
-        let parent_slot = first_alpenglow_slot - num_skipped_non_alpenglow_slots - 1;
-        assert_eq!(
-            calculate_alpenglow_ticks(slot, first_alpenglow_slot, parent_slot, ticks_per_slot)
-                .unwrap(),
-            num_skipped_non_alpenglow_slots * ticks_per_slot + 1
-        );
     }
 }

@@ -217,6 +217,12 @@ impl MigrationPhase {
         self.should_publish_epoch_slots(slot)
     }
 
+    /// Should this block only have an alpentick (1 tick at the end of the block)?
+    fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool {
+        // Same as votor events, all other blocks are expected to have normal PoH ticks
+        self.should_send_votor_event(slot)
+    }
+
     /// Check if we are in the full alpenglow epoch
     fn is_full_alpenglow_epoch(&self) -> bool {
         matches!(self, MigrationPhase::FullAlpenglowEpoch { .. })
@@ -349,6 +355,7 @@ impl MigrationStatus {
     dispatch!(pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_send_votor_event(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
     dispatch!(pub fn is_ready_to_enable(&self) -> bool);
