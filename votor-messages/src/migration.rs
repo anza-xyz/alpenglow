@@ -297,6 +297,7 @@ impl MigrationStatus {
     ///
     /// If the certificate matches our view of the genesis block, enable alpenglow
     pub fn set_genesis_certificate(&self, cert: Arc<CertificateMessage>) {
+        let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
         match cert.certificate {
             Certificate::Finalize(_)
             | Certificate::FinalizeFast(_, _)
@@ -306,7 +307,6 @@ impl MigrationStatus {
                 unreachable!("Programmer error adding invalid genesis certificate")
             }
             Certificate::Genesis(slot, block_id) => {
-                let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
                 genesis_tracker_w.genesis_certificate = Some((*cert).clone());
                 let Some(genesis) = genesis_tracker_w.genesis_block.and_then(|gb| gb.to_block())
                 else {

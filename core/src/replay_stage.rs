@@ -836,6 +836,7 @@ impl ReplayStage {
                     &slot_status_notifier,
                     &mut progress,
                     &mut replay_timing,
+                    migration_status.as_ref(),
                 );
                 generate_new_bank_forks_time.stop();
 
@@ -4389,7 +4390,11 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         progress: &mut ProgressMap,
         replay_timing: &mut ReplayLoopTiming,
+        migration_status: &MigrationStatus,
     ) {
+        let genesis_slot = migration_status.genesis_slot();
+        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
+
         // Find the next slot that chains to the old slot
         let mut generate_new_bank_forks_read_lock =
             Measure::start("generate_new_bank_forks_read_lock");
@@ -4436,6 +4441,13 @@ impl ReplayStage {
                     parent_slot,
                     forks.root()
                 );
+                // Migration period banks are VoM
+                let options = NewBankOptions {
+                    vote_only_bank: child_slot >= migration_slot && genesis_slot.is_none(),
+                };
+                if options.vote_only_bank {
+                    info!("Replaying block in slot {child_slot} in VoM");
+                }
                 let child_bank = Self::new_bank_from_parent_with_notify(
                     parent_bank.clone(),
                     child_slot,
@@ -4443,7 +4455,7 @@ impl ReplayStage {
                     &leader,
                     rpc_subscriptions,
                     slot_status_notifier,
-                    NewBankOptions::default(),
+                    options,
                 );
                 blockstore_processor::set_alpenglow_ticks(&child_bank);
                 let empty: Vec<Pubkey> = vec![];
@@ -4463,7 +4475,6 @@ impl ReplayStage {
         let mut generate_new_bank_forks_write_lock =
             Measure::start("generate_new_bank_forks_write_lock");
 
-        // TODO(ksn): should we have this if-statement check?
         if !new_banks.is_empty() {
             let mut forks = bank_forks.write().unwrap();
             let root = forks.root();
@@ -4835,6 +4846,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert!(bank_forks
             .read()
@@ -4859,6 +4871,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert!(bank_forks
             .read()
@@ -6762,6 +6775,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![3]);
 
@@ -6792,6 +6806,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![5]);
 
@@ -6823,6 +6838,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![6]);
 
@@ -6853,6 +6869,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);
     }
