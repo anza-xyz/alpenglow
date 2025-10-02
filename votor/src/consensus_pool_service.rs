@@ -7,6 +7,7 @@ use {
     crate::{
         commitment::{update_commitment_cache, CommitmentAggregationData, CommitmentType},
         common::DELTA_STANDSTILL,
+        consensus_metrics::ConsensusMetrics,
         consensus_pool::{
             parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
         },
@@ -15,6 +16,7 @@ use {
         votor::Votor,
     },
     crossbeam_channel::{select, Receiver, Sender, TrySendError},
+    parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
@@ -55,6 +57,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
+    pub(crate) consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -183,7 +186,8 @@ impl ConsensusPoolService {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
         let root_bank = ctx.sharable_banks.root();
-        let mut consensus_pool = ConsensusPool::new_from_root_bank(my_pubkey, &root_bank);
+        let mut consensus_pool =
+            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.consensus_metrics.clone());
 
         // Wait until migration has completed
         info!("{}: Certificate pool loop initialized", &my_pubkey);
@@ -497,6 +501,7 @@ mod tests {
             bls_sender,
             event_sender,
             commitment_sender,
+            consensus_metrics: Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
         };
         ConsensusPoolServiceTestComponents {
             consensus_pool_service: ConsensusPoolService::new(ctx),

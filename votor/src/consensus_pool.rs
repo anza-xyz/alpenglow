@@ -6,6 +6,7 @@ use {
             VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
             MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
+        consensus_metrics::ConsensusMetrics,
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
@@ -16,6 +17,7 @@ use {
         event::VotorEvent,
     },
     log::{error, trace},
+    parking_lot::RwLock as PlRwLock,
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_hash::Hash,
@@ -119,10 +121,15 @@ pub struct ConsensusPool {
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
+    pub(crate) consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
 }
 
 impl ConsensusPool {
-    pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
+    pub fn new_from_root_bank(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
         let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
@@ -137,6 +144,7 @@ impl ConsensusPool {
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
+            consensus_metrics,
         }
     }
 
@@ -401,6 +409,17 @@ impl ConsensusPool {
             validator_stake, 0,
             "Validator stake is zero for pubkey: {validator_vote_key}"
         );
+
+        match self
+            .consensus_metrics
+            .write()
+            .record_vote(validator_vote_key, vote)
+        {
+            Ok(()) => (),
+            Err(err) => {
+                error!("recording vote on slot {vote_slot} failed with {err:?}");
+            }
+        }
 
         self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
         if vote_slot < root_slot {
@@ -726,7 +745,11 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank),
+            ConsensusPool::new_from_root_bank(
+                Pubkey::new_unique(),
+                &root_bank,
+                Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
+            ),
             bank_forks,
         )
     }
@@ -1852,6 +1875,7 @@ mod tests {
         let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
+            Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
         );
 
         let root_bank = bank_forks.read().unwrap().root_bank();

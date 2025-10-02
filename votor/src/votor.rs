@@ -188,7 +188,9 @@ impl Votor {
             vote_history_storage,
         };
 
-        let consensus_metrics = ConsensusMetrics::new(sharable_banks.root().epoch());
+        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(
+            sharable_banks.root().epoch(),
+        )));
         let voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -201,7 +203,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             sharable_banks: sharable_banks.clone(),
-            consensus_metrics,
+            consensus_metrics: consensus_metrics.clone(),
         };
 
         let root_context = RootContext {
@@ -238,6 +240,7 @@ impl Votor {
             bls_sender,
             event_sender,
             commitment_sender,
+            consensus_metrics,
         };
 
         let event_handler = EventHandler::new(event_handler_context);
