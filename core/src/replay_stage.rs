@@ -2284,8 +2284,9 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         banking_tracer: &BankingTracer,
-        _migration_status: &MigrationStatus,
+        migration_status: &MigrationStatus,
     ) -> bool {
+        assert!(!migration_status.is_alpenglow_enabled());
         let parent_slot = parent_bank.slot();
         if !Self::check_propagation_for_start_leader(my_leader_slot, parent_slot, progress_map) {
             let latest_unconfirmed_leader_slot = progress_map
@@ -2324,8 +2325,12 @@ impl ReplayStage {
         datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
         info!("new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}");
 
+        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
         let root_distance = my_leader_slot - root_slot;
-        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
+        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY
+            || my_leader_slot >= migration_slot
+        {
+            info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
             datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
             true
         } else {
