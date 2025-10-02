@@ -91,11 +91,11 @@ impl ConsensusPoolService {
         if new_finalized_slot.is_some() {
             // Reset standstill timer
             *standstill_timer = Instant::now();
-            ConsensusPoolServiceStats::incr_u16(&mut stats.new_finalized_slot);
+            stats.new_finalized_slot += 1;
         }
         let bank = sharable_banks.root();
         consensus_pool.prune_old_state(bank.slot());
-        ConsensusPoolServiceStats::incr_u64(&mut stats.prune_old_state_called);
+        stats.prune_old_state_called += 1;
         // Send new certificates to peers
         Self::send_certificates(bls_sender, new_certificates_to_send, stats)
     }
@@ -112,7 +112,7 @@ impl ConsensusPoolService {
                 certificate: certificate.clone(),
             }) {
                 Ok(_) => {
-                    ConsensusPoolServiceStats::incr_u16(&mut stats.certificates_sent);
+                    stats.certificates_sent += 1;
                 }
                 Err(TrySendError::Disconnected(_)) => {
                     return Err(AddVoteError::ChannelDisconnected(
@@ -120,8 +120,7 @@ impl ConsensusPoolService {
                     ));
                 }
                 Err(TrySendError::Full(_)) => {
-                    let dropped = certificates_to_send.len().saturating_sub(i) as u16;
-                    stats.certificates_dropped = stats.certificates_dropped.saturating_add(dropped);
+                    stats.certificates_dropped += certificates_to_send.len().saturating_sub(i);
                     return Err(AddVoteError::VotingServiceQueueFull);
                 }
             }
@@ -140,10 +139,10 @@ impl ConsensusPoolService {
     ) -> Result<(), AddVoteError> {
         match message {
             ConsensusMessage::Certificate(_) => {
-                ConsensusPoolServiceStats::incr_u32(&mut stats.received_certificates);
+                stats.received_certificates += 1;
             }
             ConsensusMessage::Vote(_) => {
-                ConsensusPoolServiceStats::incr_u32(&mut stats.received_votes);
+                stats.received_votes += 1;
             }
         }
         let root_bank = ctx.sharable_banks.root();
@@ -281,7 +280,7 @@ impl ConsensusPoolService {
                     Err(e) => {
                         // This is a non critical error, a duplicate vote for example
                         trace!("{}: unable to push vote into pool {}", &my_pubkey, e);
-                        ConsensusPoolServiceStats::incr_u32(&mut stats.add_message_failed);
+                        stats.add_message_failed += 1;
                     }
                 }
             }
@@ -385,7 +384,7 @@ impl ConsensusPoolService {
                     "{my_pubkey}: Leader slot {start_slot} has already been certified, skipping \
                      production of {start_slot}-{end_slot}"
                 );
-                ConsensusPoolServiceStats::incr_u16(&mut stats.parent_ready_missed_window);
+                stats.parent_ready_missed_window += 1;
             }
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
@@ -403,7 +402,7 @@ impl ConsensusPoolService {
                     // TODO: we can just remove this
                     skip_timer: Instant::now(),
                 }));
-                ConsensusPoolServiceStats::incr_u16(&mut stats.parent_ready_produce_window);
+                stats.parent_ready_produce_window += 1;
             }
         }
     }
