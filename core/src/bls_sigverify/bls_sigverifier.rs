@@ -1381,8 +1381,9 @@ mod tests {
 
         bank_forks.write().unwrap().set_root(5, None, None).unwrap();
 
-        let root_bank = bank_forks.read().unwrap().sharable_root_bank();
-        let mut sig_verifier = BLSSigVerifier::new(root_bank, verified_vote_sender, message_sender);
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let mut sig_verifier =
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender);
 
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();
