@@ -2269,8 +2269,9 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         banking_tracer: &BankingTracer,
-        _migration_status: &MigrationStatus,
+        migration_status: &MigrationStatus,
     ) -> bool {
+        assert!(!migration_status.is_alpenglow_enabled());
         let parent_slot = parent_bank.slot();
         if !Self::check_propagation_for_start_leader(my_leader_slot, parent_slot, progress_map) {
             let latest_unconfirmed_leader_slot = progress_map
@@ -2309,14 +2310,15 @@ impl ReplayStage {
         datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
         info!("new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}");
 
+        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
         let root_distance = my_leader_slot - root_slot;
-        // TODO: check migration status for VOM
-        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
-            datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
-            true
-        } else {
-            false
-        };
+        let vote_only_bank =
+            if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY || my_leader_slot > migration_slot {
+                datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
+                true
+            } else {
+                false
+            };
 
         let tpu_bank = Self::new_bank_from_parent_with_notify(
             parent_bank.clone(),
@@ -2364,6 +2366,9 @@ impl ReplayStage {
         has_new_vote_been_rooted: bool,
         migration_status: &MigrationStatus,
     ) -> Option<Slot> {
+        // See `generate_new_bank_forks`, we lock the migration while populating a bank
+        let _genesis_guard = migration_status.lock_guard();
+
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
         let (parent_slot, maybe_my_leader_slot) = {
