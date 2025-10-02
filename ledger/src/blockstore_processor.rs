@@ -1839,7 +1839,9 @@ fn process_next_slots(
 
 /// Set alpenglow bank tick height.
 ///
-/// For alpenglow banks this tick height is `max_tick_height` - 1, for a bank on the epoch boundary
+/// For alpenglow banks this tick height is `max_tick_height` - 1, as only the Alpentick 
+/// (fake tick to signal bank completion) will be present.
+/// For 
 /// of feature activation, we need ticks_per_slot for each slot between the parent and epoch boundary
 /// and one extra tick for the alpenglow bank
 pub fn set_alpenglow_ticks(bank: &Bank) {
