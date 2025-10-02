@@ -4,7 +4,7 @@ use {
     criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput},
     crossbeam_channel::unbounded,
     solana_bls_signatures::signature::Signature as BlsSignature,
-    solana_core::{sigverifier::bls_sigverifier::BLSSigVerifier, sigverify_stage::SigVerifier},
+    solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
     solana_hash::Hash,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
@@ -20,7 +20,7 @@ use {
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
     },
-    std::sync::Arc,
+    std::{cell::RefCell, sync::Arc},
 };
 
 const BENCH_SLOT: u64 = 70;
@@ -28,7 +28,7 @@ const BENCH_SLOT: u64 = 70;
 const NUM_VALIDATORS: usize = 50;
 
 struct BenchEnvironment {
-    verifier: BLSSigVerifier,
+    verifier: RefCell<BLSSigVerifier>,
     validator_keypairs: Arc<Vec<ValidatorVoteKeypairs>>,
 }
 
@@ -57,7 +57,7 @@ fn setup_environment() -> BenchEnvironment {
     let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
 
     BenchEnvironment {
-        verifier,
+        verifier: RefCell::new(verifier),
         validator_keypairs,
     }
 }
@@ -211,7 +211,7 @@ fn bench_votes(c: &mut Criterion) {
     group.bench_function("dynamic/two_votes_batch", |b| {
         b.iter_batched(
             || generate_two_votes_batch(&env),
-            |batches| env.verifier.verify_batches(batches, 2),
+            |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
     });
@@ -222,7 +222,7 @@ fn bench_votes(c: &mut Criterion) {
     group.bench_function("dynamic/single_vote_batch", |b| {
         b.iter_batched(
             || generate_single_vote_batch(&env),
-            |batches| env.verifier.verify_batches(batches, 1),
+            |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
     });
@@ -240,7 +240,7 @@ fn bench_certificates(c: &mut Criterion) {
     group.bench_function("dynamic/single_cert_batch_base2", |b| {
         b.iter_batched(
             || generate_single_cert_batch(&env),
-            |batches| env.verifier.verify_batches(batches, 1),
+            |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
     });
@@ -250,7 +250,7 @@ fn bench_certificates(c: &mut Criterion) {
     group.bench_function("dynamic/two_certs_batch_base2_base3", |b| {
         b.iter_batched(
             || generate_two_certs_batch(&env),
-            |batches| env.verifier.verify_batches(batches, 2),
+            |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
     });

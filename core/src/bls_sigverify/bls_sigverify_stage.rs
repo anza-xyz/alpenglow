@@ -242,7 +242,7 @@ impl BLSSigVerifyStage {
                                         break
                                     }
                                     StreamerError::RecvTimeout(RecvTimeoutError::Timeout) => (),
-                                    _ => error!("{:?}", streamer_error_box),
+                                    _ => error!("{streamer_error_box}"),
                                 }
                             }
                             BLSSigVerifyServiceError::Send(_)

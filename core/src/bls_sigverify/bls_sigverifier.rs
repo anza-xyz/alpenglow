@@ -93,7 +93,7 @@ pub struct BLSSigVerifier {
 }
 
 impl BLSSigVerifier {
-    pub(crate) fn verify_and_send_batches(
+    pub fn verify_and_send_batches(
         &mut self,
         mut batches: Vec<PacketBatch>,
     ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
