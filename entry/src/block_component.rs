@@ -380,6 +380,14 @@ impl BlockComponent {
         }
     }
 
+    /// Consumes this component and returns the entries if it's an entry batch.
+    pub fn into_entries(self) -> Option<Vec<Entry>> {
+        match self {
+            Self::Entries(entries) => Some(entries),
+            Self::BlockMarker(_) => None,
+        }
+    }
+
     /// Returns the special marker if present.
     pub const fn marker(&self) -> Option<&VersionedBlockMarker> {
         match self {
@@ -476,6 +484,34 @@ impl BlockComponent {
             // marker data.
             (false, true) => Ok(Self::Entries(entries)),
             (false, false) => Err(BlockComponentError::MixedData),
+        }
+    }
+
+    /// Check if data looks like an entry batch (non-zero entry count).
+    pub fn infer_is_entries(data: &[u8]) -> Option<bool> {
+        data.get(..8)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(|bytes| u64::from_le_bytes(bytes) != 0)
+    }
+
+    /// Check if data looks like a block marker (zero entry count).
+    pub fn infer_is_block_marker(data: &[u8]) -> Option<bool> {
+        Self::infer_is_entries(data).map(|is_entries| !is_entries)
+    }
+
+    /// Get entries if this is an entry batch.
+    pub fn as_entries(&self) -> Option<&Vec<Entry>> {
+        match self {
+            Self::Entries(entries) => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// Get marker if this is a block marker.
+    pub fn as_versioned_block_marker(&self) -> Option<&VersionedBlockMarker> {
+        match self {
+            Self::BlockMarker(marker) => Some(marker),
+            _ => None,
         }
     }
 }
