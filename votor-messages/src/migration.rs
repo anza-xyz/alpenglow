@@ -31,7 +31,7 @@ use {
     spl_pod::solana_pubkey::Pubkey,
     std::sync::{
         atomic::{AtomicBool, AtomicU64 as AtomicSlot, Ordering},
-        Arc, RwLock,
+        Arc, RwLock, RwLockReadGuard,
     },
 };
 
@@ -183,7 +183,6 @@ impl MigrationStatus {
         } else {
             warn!("{my_pubkey} Setting genesis block {genesis:?}");
         }
-        drop(genesis_tracker_w);
 
         if !self.is_alpenglow_enabled() && self.is_genesis_certified() {
             self.enable_alpenglow(my_pubkey);
@@ -195,6 +194,7 @@ impl MigrationStatus {
     ///
     /// If the certificate matches our view of the genesis block, enable alpenglow
     pub fn set_genesis_certificate(&self, my_pubkey: &Pubkey, cert: Arc<CertificateMessage>) {
+        let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
         match cert.certificate {
             Certificate::Finalize(_)
             | Certificate::FinalizeFast(_, _)
@@ -204,7 +204,6 @@ impl MigrationStatus {
                 unreachable!("Programmer error adding invalid genesis certificate")
             }
             Certificate::Genesis(slot, block_id) => {
-                let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
                 genesis_tracker_w.genesis_certificate = Some((*cert).clone());
                 let Some(genesis) = genesis_tracker_w.genesis_block else {
                     return;
@@ -231,5 +230,10 @@ impl MigrationStatus {
         if !self.is_alpenglow_enabled() && self.is_genesis_certified() {
             self.enable_alpenglow(my_pubkey);
         }
+    }
+
+    /// Lock to prevent genesis information from being set and alpenglow from being enabled
+    pub fn lock_guard(&self) -> RwLockReadGuard<'_, GenesisVoteTracker> {
+        self.genesis_vote_tracker.read().unwrap()
     }
 }
