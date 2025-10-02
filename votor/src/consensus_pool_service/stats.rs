@@ -1,5 +1,5 @@
 use {
-    solana_metrics::create_datapoint,
+    solana_metrics::datapoint_info,
     std::{
         num::Saturating,
         time::{Duration, Instant},
@@ -54,8 +54,8 @@ impl ConsensusPoolServiceStats {
             prune_old_state_called: Saturating(prune_old_state_called),
             ..
         } = self;
-        let datapoint = create_datapoint!(
-            @point "consensus_pool_service",
+        datapoint_info!(
+            "consensus_pool_service",
             ("add_message_failed", add_message_failed, i64),
             ("certificates_sent", certificates_sent, i64),
             ("certificates_dropped", certificates_dropped, i64),
@@ -72,10 +72,9 @@ impl ConsensusPoolServiceStats {
             ),
             ("received_votes", received_votes, i64),
             ("received_certificates", received_certificates, i64),
-            ("standstill", standstill, i64),
+            ("standstill", standstill, bool),
             ("prune_old_state_called", prune_old_state_called, i64),
         );
-        solana_metrics::submit(datapoint, log::Level::Info);
     }
 
     pub fn maybe_report(&mut self) {
