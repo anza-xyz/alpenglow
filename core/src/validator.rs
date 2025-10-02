@@ -147,6 +147,7 @@ use {
         voting_service::VotingServiceOverride,
         votor::LeaderWindowNotifier,
     },
+    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -967,7 +968,7 @@ impl Validator {
                 hfb.feature_set
                     .activated_slot(&agave_feature_set::alpenglow::id())
             });
-            let is_alpenglow_enabled = highest_frozen_bank
+            let _is_alpenglow_enabled = highest_frozen_bank
                 .zip(first_alpenglow_slot)
                 .is_some_and(|(hfs, fas)| hfs.slot() >= fas);
             PohRecorder::new_with_clear_signal(
@@ -982,7 +983,6 @@ impl Validator {
                 &leader_schedule_cache,
                 &genesis_config.poh_config,
                 exit.clone(),
-                is_alpenglow_enabled,
             )
         };
         if transaction_status_sender.is_some() {
@@ -1417,6 +1417,7 @@ impl Validator {
         let wait_for_vote_to_start_leader =
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
+        let migration_status = Arc::new(MigrationStatus::default());
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
         let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
         let block_creation_loop_config = BlockCreationLoopConfig {
@@ -1446,6 +1447,7 @@ impl Validator {
             config.poh_hashes_per_batch,
             record_receiver,
             poh_service_message_receiver,
+            migration_status.clone(),
             block_creation_loop,
         );
         assert_eq!(
@@ -1692,6 +1694,7 @@ impl Validator {
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
+            migration_status.clone(),
         )
         .map_err(ValidatorError::Other)?;
 

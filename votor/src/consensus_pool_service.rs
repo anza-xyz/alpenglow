@@ -25,7 +25,10 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
-    solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
+    solana_votor_messages::{
+        consensus_message::{CertificateMessage, ConsensusMessage},
+        migration::MigrationStatus,
+    },
     stats::ConsensusPoolServiceStats,
     std::{
         sync::{
@@ -47,6 +50,8 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) blockstore: Arc<Blockstore>,
     pub(crate) sharable_banks: SharableBanks,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
+
+    pub(crate) migration_status: Arc<MigrationStatus>,
 
     // TODO: for now we ingest our own votes into the certificate pool
     // just like regular votes. However do we need to convert
@@ -185,8 +190,17 @@ impl ConsensusPoolService {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
         let root_bank = ctx.sharable_banks.root();
-        let mut consensus_pool =
-            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.consensus_metrics.clone());
+
+        let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
+            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.consensus_metrics.clone())
+        } else {
+            ConsensusPool::new_from_root_bank_pre_migration(
+                my_pubkey,
+                &root_bank,
+                ctx.consensus_metrics.clone(),
+                ctx.migration_status.clone(),
+            )
+        };
 
         // Wait until migration has completed
         info!("{}: Certificate pool loop initialized", &my_pubkey);
@@ -496,6 +510,7 @@ mod tests {
             blockstore: Arc::new(blockstore),
             sharable_banks: sharable_banks.clone(),
             leader_schedule_cache: leader_schedule_cache.clone(),
+            migration_status: Arc::new(MigrationStatus::default()),
             consensus_message_receiver,
             bls_sender,
             event_sender,
