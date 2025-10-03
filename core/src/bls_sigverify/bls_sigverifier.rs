@@ -1375,11 +1375,21 @@ mod tests {
             &validator_keypairs,
             stakes_vec,
         );
-        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
-        let bank5 = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), 5);
-        let bank_forks = BankForks::new_rw_arc(bank5);
 
-        bank_forks.write().unwrap().set_root(5, None, None).unwrap();
+        let bank_forks = {
+            let current_slot = 100;
+            let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+            let current_bank =
+                Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), current_slot);
+            let bank_forks = BankForks::new_rw_arc(current_bank);
+
+            bank_forks
+                .write()
+                .unwrap()
+                .set_root(current_slot, None, None)
+                .unwrap();
+            bank_forks
+        };
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let mut sig_verifier =
@@ -1425,7 +1435,7 @@ mod tests {
         );
         assert_eq!(
             sig_verifier.stats.received_old_cert.load(Ordering::Relaxed),
-            2
+            1
         );
     }
 
