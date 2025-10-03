@@ -136,7 +136,7 @@ impl BLSSigVerifier {
             match message {
                 ConsensusMessage::Vote(vote_message) => {
                     // Only need votes newer than root slot
-                    if vote_message.vote.slot() + 8 < root_bank.slot() {
+                    if vote_message.vote.slot().saturating_add(8) < root_bank.slot() {
                         self.stats.received_old_vote.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;

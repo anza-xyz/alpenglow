@@ -422,7 +422,7 @@ impl ConsensusPool {
         }
 
         self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
-        if vote_slot + 8 < root_slot {
+        if vote_slot.saturating_add(8) < root_slot {
             self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
