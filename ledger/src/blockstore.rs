@@ -2,8 +2,10 @@
 //! Proof of History ledger as well as iterative read, append write, and random
 //! access read to a persistent file-based ledger.
 
+use crate::shred::ShredFlags;
 #[cfg(feature = "dev-context-only-utils")]
 use trees::{Tree, TreeWalk};
+
 use {
     crate::{
         ancestor_iterator::AncestorIterator,
@@ -274,6 +276,8 @@ pub struct Blockstore {
     alt_index_cf: LedgerColumn<cf::AlternateIndex>,
     alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
     alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
+    #[allow(dead_code)]
+    block_footer_meta_cf: LedgerColumn<cf::BlockFooterMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
     max_root: AtomicU64,
@@ -428,6 +432,7 @@ impl Blockstore {
         let alt_index_cf = db.column();
         let alt_data_shred_cf = db.column();
         let alt_merkle_root_meta_cf = db.column();
+        let block_footer_meta_cf = db.column();
 
         // Get max root or 0 if it doesn't exist
         let max_root = roots_cf
@@ -468,6 +473,7 @@ impl Blockstore {
             alt_index_cf,
             alt_data_shred_cf,
             alt_merkle_root_meta_cf,
+            block_footer_meta_cf,
 
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
@@ -1896,6 +1902,150 @@ impl Blockstore {
         None
     }
 
+    #[allow(dead_code)]
+    fn check_for_block_component_in_single_shred(
+        &self,
+        current_shred: &Shred,
+        slot: Slot,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+    ) -> Result<Option<BlockComponent>> {
+        // TODO(ksn): rather than reading and writing from the column directly, prefer to use an in
+        // memory map and commit it at the end of the shred batch.
+        //
+        // If UpdateParentMeta already exists, mark the slot as dead and return early
+        if let Ok(Some(_)) = self.block_footer_meta_cf.get((slot, location)) {
+            self.set_dead_slot(slot)?;
+            return Ok(None);
+        }
+
+        let current_index = current_shred.index();
+        let fec_set_index = current_shred.fec_set_index();
+        let data_complete = current_shred.data_complete();
+
+        // Determine which shred to check for UpdateParent and which FEC set it belongs to
+        //
+        // NOTE: this only works when SIMD-0317 and SIMD-0366 have been activated!
+        let (shred_bytes, _) = if data_complete {
+            // Case (a): Current shred has DATA_COMPLETE=true (end of FEC set)
+            // Check the 0th shred in the NEXT FEC set for UpdateParent
+            let next_fec_set_index = fec_set_index + DATA_SHREDS_PER_FEC_BLOCK as u32;
+            let shred_id = ShredId::new(slot, next_fec_set_index, ShredType::Data);
+
+            match self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
+            {
+                Some(payload) => (Some(payload), next_fec_set_index),
+                None => (None, next_fec_set_index),
+            }
+        } else if current_index == 0 {
+            // Case (b): Current shred is the zero'th shred in the block; in theory, it could
+            // contain a BlockMarker (e.g., an UpdateParent marker).
+            (Some(Cow::Borrowed(current_shred.payload())), fec_set_index)
+        } else if current_index % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 {
+            // Case (c): Current shred has DATA_COMPLETE=false
+            // Check if the PREVIOUS shred had DATA_COMPLETE=true
+            let prev_shred_index = current_index - 1;
+            let shred_id = ShredId::new(slot, prev_shred_index, ShredType::Data);
+
+            match self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location)
+            {
+                Some(prev_payload) => {
+                    // Use get_flags to check DATA_COMPLETE without full deserialization
+                    if let Ok(flags) = shred::wire::get_flags(&prev_payload) {
+                        if flags.contains(ShredFlags::DATA_COMPLETE_SHRED) {
+                            // Previous shred was end of FEC set, current might have UpdateParent
+                            (Some(Cow::Borrowed(current_shred.payload())), fec_set_index)
+                        } else {
+                            (None, fec_set_index)
+                        }
+                    } else {
+                        (None, fec_set_index)
+                    }
+                }
+                _ => (None, fec_set_index),
+            }
+        } else {
+            (None, fec_set_index)
+        };
+
+        // Process the shred bytes if we have them
+        let Some(shred_bytes) = shred_bytes else {
+            return Ok(None);
+        };
+
+        // Get the data bytes
+        let Ok(data) = shred::wire::get_data(&shred_bytes) else {
+            return Ok(None);
+        };
+
+        // If this isn't a block marker, then return
+        if !BlockComponent::infer_is_block_marker(data).unwrap_or(false) {
+            return Ok(None);
+        }
+
+        // Parse BlockComponents from the data bytes
+        let Ok(components) = BlockComponent::from_bytes(data) else {
+            return Ok(None);
+        };
+
+        // At most a single BlockComponent goes into a shred, since BlockComponents are aligned to
+        // FEC set boundaries.
+        if components.len() > 1 {
+            return Err(BlockstoreError::InvalidShredData(Box::new(
+                bincode::ErrorKind::Custom(
+                    "Found > 1 BlockComponents in a single shred.".to_string(),
+                ),
+            )));
+        }
+
+        Ok(components.into_iter().next())
+    }
+
+    #[allow(dead_code)]
+    fn check_for_block_producer_time(
+        &self,
+        current_shred: &Shred,
+        slot: Slot,
+        location: BlockLocation,
+        write_batch: &mut WriteBatch,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+    ) -> Result<()> {
+        let Some(component) = self.check_for_block_component_in_single_shred(
+            current_shred,
+            slot,
+            location,
+            just_inserted_shreds,
+        )?
+        else {
+            return Ok(());
+        };
+
+        // Try to parse BlockFooter from the data bytes
+        let Some(block_producer_time_nanos) = component
+            .as_versioned_block_marker()
+            .and_then(|marker| marker.as_block_footer())
+            .and_then(|x| x.block_producer_time_nanos())
+        else {
+            return Ok(());
+        };
+
+        // First time seeing this BlockFooter
+        let block_footer_meta = BlockFooterMeta {
+            block_producer_time_nanos,
+        };
+
+        println!("received block FOOTER :: {:?}", block_footer_meta);
+
+        // Store the BlockFooter metadata
+        let _ = self.block_footer_meta_cf.put_in_batch(
+            write_batch,
+            (slot, location),
+            &block_footer_meta,
+        )?;
+
+        Ok(())
+    }
+
     /// Create an entry to the specified `write_batch` that performs shred
     /// insertion and associated metadata update.  The function also updates
     /// its in-memory copy of the associated metadata.
@@ -1945,6 +2095,15 @@ impl Blockstore {
             write_batch,
             newly_completed_data_sets,
         } = shred_insertion_tracker;
+
+        // Check for block footer metadata
+        // self.check_for_block_producer_time(
+        //     &shred,
+        //     slot,
+        //     location,
+        //     write_batch,
+        //     just_inserted_shreds,
+        // )?;
 
         let index_meta_working_set_entry =
             self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
@@ -4061,18 +4220,18 @@ impl Blockstore {
             .collect()
     }
 
-    /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
+    /// Fetch the BlockComponents corresponding to all of the shred indices in `completed_ranges`
     /// This function takes advantage of the fact that `completed_ranges` are both
     /// contiguous and in sorted order. To clarify, suppose completed_ranges is as follows:
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    fn get_slot_entries_in_block(
+    fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: CompletedRanges,
         slot_meta: Option<&SlotMeta>,
-    ) -> Result<Vec<Entry>> {
+    ) -> Result<Vec<BlockComponent>> {
         debug_assert!(completed_ranges
             .iter()
             .tuple_windows()
@@ -4102,7 +4261,8 @@ impl Blockstore {
                         BlockstoreError::MissingShred(slot, index)
                     })
                 });
-        completed_ranges
+
+        Ok(completed_ranges
             .into_iter()
             .map(|Range { start, end }| end - start)
             .map(|num_shreds| {
@@ -4118,19 +4278,35 @@ impl Blockstore {
                     .and_then(|payload| {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
-                        BlockComponent::from_bytes(&payload)
-                            .map(|eb| eb.entries().to_vec())
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct entries: {e:?}"
-                                    )),
-                                ))
-                            })
+                        BlockComponent::from_bytes(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct components: {e:?}"),
+                            )))
+                        })
                     })
             })
-            .flatten_ok()
-            .collect()
+            .filter_map(Result::ok)
+            .flatten()
+            .collect_vec())
+    }
+
+    /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
+    /// This function takes advantage of the fact that `completed_ranges` are both
+    /// contiguous and in sorted order. To clarify, suppose completed_ranges is as follows:
+    ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
+    /// Then, the following statements are true:
+    ///   s_i < e_i == s_i+1 < e_i+1
+    fn get_slot_entries_in_block(
+        &self,
+        slot: Slot,
+        completed_ranges: CompletedRanges,
+        slot_meta: Option<&SlotMeta>,
+    ) -> Result<Vec<Entry>> {
+        Ok(self
+            .get_slot_components_in_block(slot, completed_ranges, slot_meta)?
+            .into_iter()
+            .flat_map(|component| component.entries().to_vec())
+            .collect_vec())
     }
 
     pub fn get_entries_in_data_block(

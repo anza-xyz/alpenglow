@@ -6,7 +6,7 @@ use {
     rayon::ThreadPool,
     reed_solomon_erasure::{galois_8::ReedSolomon, Error::TooFewDataShards},
     solana_clock::Slot,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_rayon_threadlimit::get_thread_count,
@@ -64,6 +64,36 @@ impl Shredder {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn make_merkle_shreds_from_component(
+        &self,
+        keypair: &Keypair,
+        component: &BlockComponent,
+        is_last_in_slot: bool,
+        chained_merkle_root: Option<Hash>,
+        next_shred_index: u32,
+        next_code_index: u32,
+        reed_solomon_cache: &ReedSolomonCache,
+        stats: &mut ProcessShredsStats,
+    ) -> impl Iterator<Item = Shred> {
+        let now = Instant::now();
+        let data = component.to_bytes().unwrap();
+        stats.serialize_elapsed += now.elapsed().as_micros() as u64;
+
+        Self::make_shreds_from_data_slice(
+            self,
+            keypair,
+            &data,
+            is_last_in_slot,
+            chained_merkle_root,
+            next_shred_index,
+            next_code_index,
+            reed_solomon_cache,
+            stats,
+        )
+        .unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn make_merkle_shreds_from_entries(
         &self,
         keypair: &Keypair,
@@ -78,6 +108,7 @@ impl Shredder {
         let now = Instant::now();
         let entries = bincode::serialize(entries).unwrap();
         stats.serialize_elapsed += now.elapsed().as_micros() as u64;
+
         Self::make_shreds_from_data_slice(
             self,
             keypair,

@@ -80,7 +80,7 @@ pub(super) fn get_shred_variant(shred: &[u8]) -> Result<ShredVariant, Error> {
 }
 
 #[inline]
-pub(super) fn get_shred_type(shred: &[u8]) -> Result<ShredType, Error> {
+pub(crate) fn get_shred_type(shred: &[u8]) -> Result<ShredType, Error> {
     get_shred_variant(shred).map(ShredType::from)
 }
 
@@ -136,7 +136,7 @@ pub fn get_flags(shred: &[u8]) -> Result<ShredFlags, Error> {
 // Returns DataShredHeader.size for data shreds.
 // The caller should verify first that the shred is data and not code!
 #[inline]
-fn get_data_size(shred: &[u8]) -> Result<u16, Error> {
+pub(crate) fn get_data_size(shred: &[u8]) -> Result<u16, Error> {
     debug_assert_eq!(get_shred_type(shred).unwrap(), ShredType::Data);
     let Some(bytes) = shred.get(86..86 + 2) else {
         return Err(Error::InvalidPayloadSize(shred.len()));
@@ -146,7 +146,7 @@ fn get_data_size(shred: &[u8]) -> Result<u16, Error> {
 }
 
 #[inline]
-pub(crate) fn get_data(shred: &[u8]) -> Result<&[u8], Error> {
+pub fn get_data(shred: &[u8]) -> Result<&[u8], Error> {
     match get_shred_variant(shred)? {
         ShredVariant::MerkleCode { .. } => Err(Error::InvalidShredType),
         ShredVariant::MerkleData {

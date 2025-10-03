@@ -979,6 +979,11 @@ impl OptimisticSlotMetaVersioned {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BlockFooterMeta {
+    pub block_producer_time_nanos: u64,
+}
+
 #[cfg(test)]
 mod test {
     use {
