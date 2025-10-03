@@ -325,7 +325,7 @@ impl StandardBroadcastRun {
                 )
                 .unwrap();
 
-            shreds.append(&mut footer_shreds);
+            // shreds.append(&mut footer_shreds);
         }
 
         // Insert the first data shred synchronously so that blockstore stores

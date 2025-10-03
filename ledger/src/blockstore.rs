@@ -276,6 +276,7 @@ pub struct Blockstore {
     alt_index_cf: LedgerColumn<cf::AlternateIndex>,
     alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
     alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
+    #[allow(dead_code)]
     block_footer_meta_cf: LedgerColumn<cf::BlockFooterMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
@@ -1901,13 +1902,14 @@ impl Blockstore {
         None
     }
 
-    fn check_for_block_components_in_single_shred(
+    #[allow(dead_code)]
+    fn check_for_block_component_in_single_shred(
         &self,
         current_shred: &Shred,
         slot: Slot,
         location: BlockLocation,
         just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
-    ) -> Result<Option<Vec<BlockComponent>>> {
+    ) -> Result<Option<BlockComponent>> {
         // TODO(ksn): rather than reading and writing from the column directly, prefer to use an in
         // memory map and commit it at the end of the shred batch.
         //
@@ -1986,9 +1988,20 @@ impl Blockstore {
             return Ok(None);
         };
 
-        Ok(Some(components))
+        // At most a single BlockComponent goes into a shred, since BlockComponents are aligned to
+        // FEC set boundaries.
+        if components.len() > 1 {
+            return Err(BlockstoreError::InvalidShredData(Box::new(
+                bincode::ErrorKind::Custom(
+                    "Found > 1 BlockComponents in a single shred.".to_string(),
+                ),
+            )));
+        }
+
+        Ok(components.into_iter().next())
     }
 
+    #[allow(dead_code)]
     fn check_for_block_producer_time(
         &self,
         current_shred: &Shred,
@@ -1997,17 +2010,13 @@ impl Blockstore {
         write_batch: &mut WriteBatch,
         just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> Result<()> {
-        let Some(components) = self.check_for_block_components_in_single_shred(
+        let Some(component) = self.check_for_block_component_in_single_shred(
             current_shred,
             slot,
             location,
             just_inserted_shreds,
         )?
         else {
-            return Ok(());
-        };
-
-        let Some(component) = components.first() else {
             return Ok(());
         };
 
@@ -2088,13 +2097,13 @@ impl Blockstore {
         } = shred_insertion_tracker;
 
         // Check for block footer metadata
-        self.check_for_block_producer_time(
-            &shred,
-            slot,
-            location,
-            write_batch,
-            just_inserted_shreds,
-        )?;
+        // self.check_for_block_producer_time(
+        //     &shred,
+        //     slot,
+        //     location,
+        //     write_batch,
+        //     just_inserted_shreds,
+        // )?;
 
         let index_meta_working_set_entry =
             self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
