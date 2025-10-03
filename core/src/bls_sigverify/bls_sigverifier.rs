@@ -136,8 +136,8 @@ impl BLSSigVerifier {
             match message {
                 ConsensusMessage::Vote(vote_message) => {
                     // Only need votes newer than root slot
-                    if vote_message.vote.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                    if vote_message.vote.slot().saturating_add(8) < root_bank.slot() {
+                        self.stats.received_old_vote.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     }
@@ -171,7 +171,7 @@ impl BLSSigVerifier {
                 ConsensusMessage::Certificate(cert_message) => {
                     // Only need certs newer than root slot
                     if cert_message.certificate.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        self.stats.received_old_cert.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     }
@@ -1375,11 +1375,21 @@ mod tests {
             &validator_keypairs,
             stakes_vec,
         );
-        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
-        let bank5 = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), 5);
-        let bank_forks = BankForks::new_rw_arc(bank5);
 
-        bank_forks.write().unwrap().set_root(5, None, None).unwrap();
+        let bank_forks = {
+            let current_slot = 100;
+            let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+            let current_bank =
+                Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), current_slot);
+            let bank_forks = BankForks::new_rw_arc(current_bank);
+
+            bank_forks
+                .write()
+                .unwrap()
+                .set_root(current_slot, None, None)
+                .unwrap();
+            bank_forks
+        };
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let mut sig_verifier =
@@ -1403,7 +1413,10 @@ mod tests {
             message_receiver.is_empty(),
             "Old vote should not have been sent"
         );
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            sig_verifier.stats.received_old_vote.load(Ordering::Relaxed),
+            1
+        );
 
         let cert_message = create_signed_certificate_message(
             &validator_keypairs,
@@ -1420,7 +1433,10 @@ mod tests {
             message_receiver.is_empty(),
             "Old certificate should not have been sent"
         );
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            sig_verifier.stats.received_old_cert.load(Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]

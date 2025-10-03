@@ -181,7 +181,8 @@ pub(crate) struct BLSSigVerifierStats {
     pub(crate) received_discarded: AtomicU64,
     pub(crate) received_malformed: AtomicU64,
     pub(crate) received_no_epoch_stakes: AtomicU64,
-    pub(crate) received_old: AtomicU64,
+    pub(crate) received_old_vote: AtomicU64,
+    pub(crate) received_old_cert: AtomicU64,
     pub(crate) received_verified: AtomicU64,
     pub(crate) received_votes: AtomicU64,
     pub(crate) last_stats_logged: Instant,
@@ -213,7 +214,8 @@ impl BLSSigVerifierStats {
             received_discarded: AtomicU64::new(0),
             received_malformed: AtomicU64::new(0),
             received_no_epoch_stakes: AtomicU64::new(0),
-            received_old: AtomicU64::new(0),
+            received_old_vote: AtomicU64::new(0),
+            received_old_cert: AtomicU64::new(0),
             received_verified: AtomicU64::new(0),
             received_votes: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
@@ -320,8 +322,13 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
-                "received_old",
-                self.received_old.load(Ordering::Relaxed) as i64,
+                "received_old_vote",
+                self.received_old_vote.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_old_cert",
+                self.received_old_cert.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
