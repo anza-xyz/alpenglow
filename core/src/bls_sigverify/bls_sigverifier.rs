@@ -136,8 +136,8 @@ impl BLSSigVerifier {
             match message {
                 ConsensusMessage::Vote(vote_message) => {
                     // Only need votes newer than root slot
-                    if vote_message.vote.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                    if vote_message.vote.slot() + 8 < root_bank.slot() {
+                        self.stats.received_old_vote.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     }
@@ -171,7 +171,7 @@ impl BLSSigVerifier {
                 ConsensusMessage::Certificate(cert_message) => {
                     // Only need certs newer than root slot
                     if cert_message.certificate.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        self.stats.received_old_cert.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     }
@@ -1403,7 +1403,10 @@ mod tests {
             message_receiver.is_empty(),
             "Old vote should not have been sent"
         );
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            sig_verifier.stats.received_old_vote.load(Ordering::Relaxed),
+            1
+        );
 
         let cert_message = create_signed_certificate_message(
             &validator_keypairs,
@@ -1420,7 +1423,10 @@ mod tests {
             message_receiver.is_empty(),
             "Old certificate should not have been sent"
         );
-        assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            sig_verifier.stats.received_old_cert.load(Ordering::Relaxed),
+            2
+        );
     }
 
     #[test]
