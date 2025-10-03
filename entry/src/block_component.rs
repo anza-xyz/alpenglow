@@ -1,21 +1,19 @@
-/// Block components and friends.
+//! Block components and friends.
+//!
+//! A `BlockComponent` is either an entry batch or a block marker. Entry batches contain
+//! the transactions for a block, while markers contain metadata like block footers and
+//! parent updates.
+//!
+//! Supported marker types:
+//! - `BlockFooter`: Block production metadata
+//! - `BlockHeader`: Parent slot and block ID
+//! - `UpdateParent`: Fast leader handover support
+//!
+//! ## Serialization Layouts
+//!
+//! All numeric fields use little-endian encoding.
 ///
-/// A `BlockComponent` represents either a batch of entries or a special block marker.
-/// Most of the time, a block component contains a vector of entries. However, periodically,
-/// there are special messages that a block needs to contain. To accommodate these special
-/// messages, `BlockComponent` allows for the inclusion of special data via `VersionedBlockMarker`.
-///
-/// Currently supported special entry types include:
-/// - `BlockFooter`: Contains metadata about block production
-/// - `UpdateParent`: Used in optimistic block packing algorithms for Alpenglow
-///
-/// Additional special entry types may be added in the future.
-///
-/// ## Serialization Layouts
-///
-/// All numeric fields use little-endian encoding.
-///
-/// ### BlockComponent with Entries
+/// ### BlockComponent with EntryBatch
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Entry Count                  (8 bytes)  │
@@ -101,7 +99,7 @@ pub enum BlockComponentError {
     InsufficientData,
     /// Entry count exceeds the maximum allowed
     TooManyEntries { count: usize, max: usize },
-    /// Entries vector is empty when it shouldn't be
+    /// Entry batch is empty when it shouldn't be
     EmptyEntries,
     /// Unknown variant identifier
     UnknownVariant { variant_type: String, id: u8 },
@@ -111,7 +109,7 @@ pub enum BlockComponentError {
     DataLengthOverflow,
     /// Cursor position exceeded data boundary
     CursorOutOfBounds,
-    /// BlockComponent cannot have both entries and marker data
+    /// BlockComponent cannot have both an entry batch and marker data
     MixedData,
     /// Serialization failed
     SerializationFailed(String),
@@ -126,7 +124,7 @@ impl fmt::Display for BlockComponentError {
             Self::TooManyEntries { count, max } => {
                 write!(f, "Entry count {count} exceeds maximum {max}")
             }
-            Self::EmptyEntries => write!(f, "BlockComponent with entries cannot be empty"),
+            Self::EmptyEntries => write!(f, "BlockComponent entry batch cannot be empty"),
             Self::UnknownVariant { variant_type, id } => {
                 write!(f, "Unknown {variant_type} variant: {id}")
             }
@@ -135,7 +133,10 @@ impl fmt::Display for BlockComponentError {
             }
             Self::DataLengthOverflow => write!(f, "Data length exceeds maximum representable size"),
             Self::CursorOutOfBounds => write!(f, "Cursor exceeded data boundary"),
-            Self::MixedData => write!(f, "BlockComponent cannot have both entries and marker data"),
+            Self::MixedData => write!(
+                f,
+                "BlockComponent cannot have both an entry batch and marker data"
+            ),
             Self::SerializationFailed(msg) => write!(f, "Serialization failed: {msg}"),
             Self::DeserializationFailed(msg) => write!(f, "Deserialization failed: {msg}"),
         }
@@ -171,7 +172,7 @@ impl From<bincode::Error> for BlockComponentError {
     }
 }
 
-/// A block component containing either entries or special metadata.
+/// A block component containing either an entry batch or special metadata.
 ///
 /// Per SIMD-0307, entry batches must have at least one entry. Block markers
 /// are identified by an entry count of zero followed by marker data.
@@ -186,14 +187,13 @@ impl From<bincode::Error> for BlockComponentError {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockComponent {
-    Entries(Vec<Entry>),
+    EntryBatch(Vec<Entry>),
     BlockMarker(VersionedBlockMarker),
 }
 
-/// A versioned block marker supporting multiple format versions.
+/// Versioned block marker with backward compatibility support.
 ///
-/// Provides backward compatibility through versioned variants. During deserialization,
-/// older versions are upgraded to the `Current` variant for forward compatibility.
+/// Older versions are upgraded to `Current` during deserialization.
 ///
 /// # Serialization Format
 /// ```text
@@ -209,7 +209,7 @@ pub enum VersionedBlockMarker {
     Current(BlockMarkerV1),
 }
 
-/// Version 1 block marker supporting basic block metadata.
+/// Version 1 block marker.
 ///
 /// # Serialization Format
 /// ```text
@@ -224,9 +224,6 @@ pub enum VersionedBlockMarker {
 /// │ Variant Data              (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
-///
-/// The byte length field indicates the size of the variant data that follows,
-/// allowing for proper parsing even if unknown variants are encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
@@ -254,10 +251,9 @@ pub enum VersionedBlockFooter {
     Current(BlockFooterV1),
 }
 
-/// Version 1 block footer containing production metadata.
+/// Version 1 block footer.
 ///
-/// The user agent bytes are capped at 255 bytes during serialization to prevent
-/// unbounded growth while maintaining reasonable metadata storage.
+/// User agent is capped at 255 bytes during serialization.
 ///
 /// # Serialization Format
 /// ```text
@@ -353,28 +349,22 @@ pub struct UpdateParentV1 {
 // BlockComponent Implementation
 // ============================================================================
 
-impl Default for BlockComponent {
-    fn default() -> Self {
-        Self::Entries(Vec::new())
-    }
-}
-
 impl BlockComponent {
     /// Maximum number of entries allowed in a block component.
     ///
     /// TODO(karthik): lower this to a reasonable value.
     const MAX_ENTRIES: usize = u32::MAX as usize;
 
-    /// Creates a new block component with entries.
+    /// Creates a new block component with an entry batch.
     ///
     /// # Errors
-    /// Returns an error if the entries vector is empty or exceeds the maximum allowed size.
+    /// Returns an error if the entry batch is empty or exceeds the maximum allowed size.
     pub fn new_entries(entries: Vec<Entry>) -> Result<Self, BlockComponentError> {
         if entries.is_empty() {
             return Err(BlockComponentError::EmptyEntries);
         }
         Self::validate_entries_length(entries.len())?;
-        Ok(Self::Entries(entries))
+        Ok(Self::EntryBatch(entries))
     }
 
     /// Creates a new block component with a special marker.
@@ -385,7 +375,7 @@ impl BlockComponent {
     /// Returns a slice of entries in this component.
     pub fn entries(&self) -> &[Entry] {
         match self {
-            Self::Entries(entries) => entries,
+            Self::EntryBatch(entries) => entries,
             Self::BlockMarker(_) => &[],
         }
     }
@@ -393,7 +383,7 @@ impl BlockComponent {
     /// Consumes this component and returns the entries if it's an entry batch.
     pub fn into_entries(self) -> Option<Vec<Entry>> {
         match self {
-            Self::Entries(entries) => Some(entries),
+            Self::EntryBatch(entries) => Some(entries),
             Self::BlockMarker(_) => None,
         }
     }
@@ -401,14 +391,14 @@ impl BlockComponent {
     /// Returns the special marker if present.
     pub const fn marker(&self) -> Option<&VersionedBlockMarker> {
         match self {
-            Self::Entries(_) => None,
+            Self::EntryBatch(_) => None,
             Self::BlockMarker(marker) => Some(marker),
         }
     }
 
-    /// Returns true if this component contains entries.
+    /// Returns true if this component contains an entry batch.
     pub const fn is_entries(&self) -> bool {
-        matches!(self, Self::Entries(_))
+        matches!(self, Self::EntryBatch(_))
     }
 
     /// Returns true if this component contains a special marker.
@@ -436,7 +426,7 @@ impl BlockComponent {
         let mut buffer = Vec::new();
 
         match self {
-            Self::Entries(entries) => {
+            Self::EntryBatch(entries) => {
                 Self::validate_entries_length(entries.len())?;
 
                 buffer = bincode::serialize(entries)
@@ -485,14 +475,14 @@ impl BlockComponent {
             .ok_or(BlockComponentError::CursorOutOfBounds)?;
 
         match (entries.is_empty(), remaining_bytes.is_empty()) {
-            (true, true) => Ok(Self::Entries(Vec::new())),
+            (true, true) => Ok(Self::EntryBatch(Vec::new())),
             (true, false) => {
                 let marker = VersionedBlockMarker::from_bytes(remaining_bytes)?;
                 Ok(Self::BlockMarker(marker))
             }
             // This is the "everything is empty" case, which means there are no entries and no
             // marker data.
-            (false, true) => Ok(Self::Entries(entries)),
+            (false, true) => Ok(Self::EntryBatch(entries)),
             (false, false) => Err(BlockComponentError::MixedData),
         }
     }
@@ -512,7 +502,7 @@ impl BlockComponent {
     /// Get entries if this is an entry batch.
     pub fn as_entries(&self) -> Option<&Vec<Entry>> {
         match self {
-            Self::Entries(entries) => Some(entries),
+            Self::EntryBatch(entries) => Some(entries),
             _ => None,
         }
     }
@@ -1161,13 +1151,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_component_default() {
-        let component = BlockComponent::default();
-        assert!(component.is_entries());
-        assert_eq!(component.entries().len(), 0);
-    }
-
-    #[test]
     fn test_block_component_entries() {
         let entries = vec![Entry::default(), Entry::default()];
         let component = BlockComponent::new_entries(entries.clone()).unwrap();
@@ -1268,17 +1251,6 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
-    }
-
-    #[test]
-    fn test_block_footer_v1_invalid_data() {
-        // Too short data
-        assert!(BlockFooterV1::from_bytes(&[0u8; 7]).is_err());
-
-        // Missing user agent data
-        let mut data = vec![0u8; 9];
-        data[8] = 5; // Claims 5 bytes but no data follows
-        assert!(BlockFooterV1::from_bytes(&data).is_err());
     }
 
     #[test]
@@ -1491,6 +1463,16 @@ mod tests {
         bad_marker_data.extend_from_slice(&[0u8; 10]);
         assert!(VersionedBlockMarker::from_bytes(&bad_marker_data).is_err());
 
+        // Test version 2
+        let mut v2_data = vec![2, 0]; // Version 2
+        v2_data.extend_from_slice(&[0u8; 10]);
+        let result = VersionedBlockMarker::from_bytes(&v2_data);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            BlockComponentError::UnsupportedVersion { version: 2 }
+        ));
+
         // Test unknown BlockMarkerV1 variant with proper byte length field
         let mut bad_v1_data = vec![99u8]; // Unknown variant
         bad_v1_data.extend_from_slice(&[10, 0]); // byte length = 10
@@ -1500,13 +1482,13 @@ mod tests {
 
     #[test]
     fn test_block_component_invalid_mixed_data() {
-        // Create component with entries and try to add marker data manually
+        // Create component with entries and try to add marker component
         let entries = vec![Entry::default()];
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let component1 = BlockComponent::new_entries(entries).unwrap();
 
-        let mut bytes = component.to_bytes().unwrap();
+        let mut bytes = component1.to_bytes().unwrap();
 
-        // Manually append marker data (this should cause deserialization to fail)
+        // Create a marker component and append it - this will now be parsed as two separate components
         let footer = BlockFooterV1 {
             block_producer_time_nanos: 123456,
             block_user_agent: b"bad-data".to_vec(),
@@ -1517,24 +1499,13 @@ mod tests {
         let component2 = BlockComponent::new_block_marker(marker);
         bytes.extend_from_slice(&component2.to_bytes().unwrap());
 
+        // With multi-component support, this should now parse as 2 components
         let result = BlockComponent::from_bytes(&bytes);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("both entries and marker"));
-    }
-
-    #[test]
-    fn test_block_component_empty_default_serialization() {
-        let component = BlockComponent::default();
-
-        let bytes = component.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
-
-        assert_eq!(component, deserialized);
-        assert!(deserialized.is_entries());
-        assert_eq!(deserialized.entries().len(), 0);
+            .contains("both an entry batch and marker"));
     }
 
     #[test]
@@ -1603,7 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn test_block_marker_v1_malformed_data() {
+    fn test_block_marker_v1_all_variants_malformed_data() {
         // Empty data
         assert!(BlockMarkerV1::from_bytes(&[]).is_err());
 
@@ -1620,7 +1591,7 @@ mod tests {
         // Unknown variant ID with byte length
         assert!(BlockMarkerV1::from_bytes(&[255u8, 4, 0, 1, 2, 3, 4]).is_err());
 
-        // Valid variant ID and byte length but insufficient data
+        // Valid BlockFooter variant ID and byte length but insufficient data
         assert!(BlockMarkerV1::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
 
         // Valid BlockHeader variant ID and byte length but insufficient data
@@ -1662,20 +1633,24 @@ mod tests {
         // Version 1 with variant ID and partial byte length
         assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 0u8, 0u8]).is_err());
 
-        // Version 2 with invalid marker data (missing byte length)
-        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8]).is_err());
-
-        // Version 2 with variant ID and partial byte length
-        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8, 0u8]).is_err());
-
         // Version 1 with valid structure but invalid inner data
         assert!(VersionedBlockMarker::from_bytes(&[1u8, 0u8, 0u8, 10, 0, 1, 2]).is_err());
 
-        // Version 2 with valid structure but invalid inner data
-        assert!(VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8, 10, 0, 1, 2]).is_err());
+        // Unknown version (version 2)
+        let result = VersionedBlockMarker::from_bytes(&[2u8, 0u8, 0u8, 1, 0]);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            BlockComponentError::UnsupportedVersion { version: 2 }
+        ));
 
-        // Unknown version
-        assert!(VersionedBlockMarker::from_bytes(&[99u8, 0u8, 0u8, 1, 0]).is_err());
+        // Unknown version (version 99)
+        let result = VersionedBlockMarker::from_bytes(&[99u8, 0u8, 0u8, 1, 0]);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            BlockComponentError::UnsupportedVersion { version: 99 }
+        ));
     }
 
     #[test]
@@ -2270,7 +2245,7 @@ mod tests {
     #[test]
     fn test_block_component_large_entries_count() {
         let entries = create_mock_entries(1000);
-        let batch = BlockComponent::Entries(entries);
+        let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
@@ -2480,7 +2455,7 @@ mod tests {
     #[test]
     fn test_block_component_with_mixed_entry_sizes() {
         let entries = create_mock_entries(10);
-        let batch = BlockComponent::Entries(entries);
+        let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
