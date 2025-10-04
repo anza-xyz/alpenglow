@@ -1,4 +1,3 @@
-// The following imports are only needed for dev-context-only-utils.
 use {
     crate::vote_state_view::VoteStateView,
     itertools::Itertools,
@@ -24,8 +23,10 @@ use {
     solana_bls_signatures::{
         keypair::Keypair as BLSKeypair, pubkey::PubkeyCompressed as BLSPubkeyCompressed,
     },
-    solana_vote_interface::authorized_voters::AuthorizedVoters,
-    solana_vote_interface::state::{VoteStateV4, VoteStateVersions},
+    solana_vote_interface::{
+        authorized_voters::AuthorizedVoters,
+        state::{VoteStateV4, VoteStateVersions},
+    },
 };
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -47,6 +48,14 @@ struct VoteAccountInner {
     vote_state_view: VoteStateView,
 }
 
+pub fn sort_pubkey_and_stake_pair<T>(
+    (pubkey_a, _, stake_a): &(&Pubkey, T, u64),
+    (pubkey_b, _, stake_b): &(&Pubkey, T, u64),
+) -> Ordering {
+    // Sort by descending stake, then ascending pubkey
+    stake_b.cmp(stake_a).then(pubkey_a.cmp(pubkey_b))
+}
+
 pub type VoteAccountsHashMap = HashMap<Pubkey, (/*stake:*/ u64, VoteAccount)>;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +72,47 @@ pub struct VoteAccounts {
             >,
         >,
     >,
+}
+
+impl VoteAccounts {
+    pub fn clone_and_filter_for_alpenglow(&self, maximum_accounts: usize) -> VoteAccounts {
+        if maximum_accounts == 0 {
+            panic!("maximum_accounts must be > 0");
+        }
+        let mut entries_to_sort: Vec<(&Pubkey, &VoteAccount, u64)> = self
+            .vote_accounts
+            .iter()
+            .filter_map(|(pubkey, (stake, vote_account))| {
+                if vote_account
+                    .vote_state_view()
+                    .bls_pubkey_compressed()
+                    .is_some()
+                    && *stake != 0u64
+                {
+                    Some((pubkey, vote_account, *stake))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort by stake descending first, then pubkey ascending.
+        if entries_to_sort.len() > maximum_accounts {
+            entries_to_sort.sort_by(sort_pubkey_and_stake_pair::<&VoteAccount>);
+            entries_to_sort.truncate(maximum_accounts);
+            let floor_stake = entries_to_sort.last().unwrap().2;
+            entries_to_sort.retain(|(_pubkey, _vote_account, stake)| *stake > floor_stake);
+        }
+        let vote_accounts = Arc::new(
+            entries_to_sort
+                .into_iter()
+                .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
+                .collect(),
+        );
+        VoteAccounts {
+            vote_accounts,
+            staked_nodes: OnceLock::new(),
+        }
+    }
 }
 
 impl Clone for VoteAccounts {
@@ -506,33 +556,39 @@ mod tests {
             authorized_withdrawer: Pubkey::new_unique(),
             commission: rng.gen(),
         };
-        let vote_state_versions = if is_alpenglow {
+        let clock = Clock {
+            slot: rng.gen(),
+            epoch_start_timestamp: rng.gen(),
+            epoch: rng.gen(),
+            leader_schedule_epoch: rng.gen(),
+            unix_timestamp: rng.gen(),
+        };
+        if is_alpenglow {
             let bls_pubkey_compressed: BLSPubkeyCompressed =
                 BLSKeypair::new().public.try_into().unwrap();
             let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
-            VoteStateVersions::new_v4(VoteStateV4 {
+            let vote_state = VoteStateV4 {
                 node_pubkey: vote_init.node_pubkey,
                 authorized_voters: AuthorizedVoters::new(0, vote_init.authorized_voter),
                 authorized_withdrawer: vote_init.authorized_withdrawer,
                 bls_pubkey_compressed: Some(bls_pubkey_compressed_buffer.try_into().unwrap()),
                 ..VoteStateV4::default()
-            })
-        } else {
-            let clock = Clock {
-                slot: rng.gen(),
-                epoch_start_timestamp: rng.gen(),
-                epoch: rng.gen(),
-                leader_schedule_epoch: rng.gen(),
-                unix_timestamp: rng.gen(),
             };
-            VoteStateVersions::new_v3(VoteStateV3::new(&vote_init, &clock))
-        };
-        AccountSharedData::new_data(
-            rng.gen(), // lamports
-            &vote_state_versions,
-            &solana_sdk_ids::vote::id(), // owner
-        )
-        .unwrap()
+            AccountSharedData::new_data(
+                rng.gen(), // lamports
+                &VoteStateVersions::new_v4(vote_state),
+                &solana_sdk_ids::vote::id(), // owner
+            )
+            .unwrap()
+        } else {
+            let vote_state = VoteStateV3::new(&vote_init, &clock);
+            AccountSharedData::new_data(
+                rng.gen(), // lamports
+                &VoteStateVersions::new_v3(vote_state),
+                &solana_sdk_ids::vote::id(), // owner
+            )
+            .unwrap()
+        }
     }
 
     fn new_rand_vote_accounts<R: Rng>(
@@ -548,6 +604,24 @@ mod tests {
             let vote_account = VoteAccount::try_from(account).unwrap();
             (Pubkey::new_unique(), (stake, vote_account))
         })
+    }
+
+    fn new_rand_staked_vote_accounts_fixed_alpenglow_accounts_num<R: Rng>(
+        rng: &mut R,
+        num_nodes: usize,
+        num_alpenglow_nodes: usize,
+    ) -> VoteAccounts {
+        let mut vote_accounts = VoteAccounts::default();
+        for index in 0..num_nodes {
+            let is_alpenglow = index < num_alpenglow_nodes;
+            let pubkey = Pubkey::new_unique();
+            let stake = rng.gen_range(1..997);
+            let account = new_rand_vote_account(rng, None, is_alpenglow);
+            vote_accounts.insert(pubkey, VoteAccount::try_from(account).unwrap(), || {
+                stake as u64
+            });
+        }
+        vote_accounts
     }
 
     fn staked_nodes<'a, I>(vote_accounts: I) -> HashMap<Pubkey, u64>
@@ -890,5 +964,99 @@ mod tests {
                 assert_eq!(value, &other);
             }
         }
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow_truncates() {
+        let mut rng = rand::thread_rng();
+        let current_limit = 3000;
+        let vote_accounts = new_rand_staked_vote_accounts_fixed_alpenglow_accounts_num(
+            &mut rng,
+            current_limit,
+            current_limit,
+        );
+        // All vote accounts should be returned if the limit is high enough.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(current_limit + 500);
+        assert_eq!(filtered.len(), vote_accounts.len());
+
+        // If the limit is smaller than number of accounts, truncate it.
+        let lower_limit = current_limit - 1000;
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(lower_limit);
+        assert!(filtered.len() <= lower_limit);
+        // Check that the filtered accounts are the same as the original accounts.
+        for (pubkey, (_, vote_account)) in filtered.vote_accounts.iter() {
+            assert_eq!(vote_accounts.get(pubkey), Some(vote_account));
+        }
+        // Check that the stake in any filtered account is higher than truncated accounts.
+        let min_stake = filtered
+            .vote_accounts
+            .iter()
+            .map(|(_, (stake, _))| *stake)
+            .min()
+            .unwrap();
+        for (pubkey, (stake, _vote_account)) in vote_accounts.vote_accounts.iter() {
+            if *stake < min_stake {
+                assert!(filtered.get(pubkey).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow_filters_non_alpenglow() {
+        let mut rng = rand::thread_rng();
+        let num_alpenglow_nodes = 2000;
+        // Check that non-alpenglow accounts are kicked out, 2000 accounts with bls pubkey, 1000 accounts without.
+        let num_nodes = num_alpenglow_nodes + 1000;
+        let vote_accounts = new_rand_staked_vote_accounts_fixed_alpenglow_accounts_num(
+            &mut rng,
+            num_nodes,
+            num_alpenglow_nodes,
+        );
+        let new_limit = num_alpenglow_nodes + 500;
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(new_limit);
+        assert!(filtered.len() <= num_alpenglow_nodes);
+        // Check that all filtered accounts have bls pubkey
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account
+                .vote_state_view()
+                .bls_pubkey_compressed()
+                .is_some());
+        }
+        // Now get only 1500 accounts, even some alpenglow accounts are kicked out
+        let new_limit = num_alpenglow_nodes - 500;
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(new_limit);
+        assert!(filtered.len() <= new_limit);
+        for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
+            assert!(vote_account
+                .vote_state_view()
+                .bls_pubkey_compressed()
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow_same_stake_at_border() {
+        let mut rng = rand::thread_rng();
+        let num_alpenglow_nodes = 2000;
+        // Create exactly num_alpenglow_nodes + 2 accounts with the same stake
+        let num_accounts = num_alpenglow_nodes + 2;
+        let accounts = (0..num_accounts).map(|index| {
+            let account = new_rand_vote_account(&mut rng, None, true);
+            let vote_account = VoteAccount::try_from(account).unwrap();
+            let stake = if index < num_alpenglow_nodes - 10 {
+                100 + index as u64
+            } else {
+                10 // same stake for the last 12 accounts
+            };
+            (Pubkey::new_unique(), (stake, vote_account))
+        });
+        let mut vote_accounts = VoteAccounts::default();
+        for (pubkey, (stake, vote_account)) in accounts {
+            vote_accounts.insert(pubkey, vote_account, || stake);
+        }
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(num_accounts);
+        assert_eq!(filtered.len(), num_accounts);
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(num_alpenglow_nodes);
+        assert_eq!(filtered.len(), num_alpenglow_nodes - 10);
     }
 }
