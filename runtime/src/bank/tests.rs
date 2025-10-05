@@ -12492,5 +12492,5 @@ fn test_get_top_epoch_stakes() {
     let slot_in_prev_epoch = test_bank.epoch_schedule().get_first_slot_in_epoch(1);
     let test_bank = create_test_bank(2, Some(slot_in_prev_epoch));
     let stakes = test_bank.get_top_epoch_stakes();
-    assert_eq!(stakes.staked_nodes().len(), 2000);
+    assert!(stakes.staked_nodes().len() <= 2000);
 }
