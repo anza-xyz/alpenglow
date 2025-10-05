@@ -26,8 +26,6 @@ mod serde_stakes;
 pub(crate) use serde_stakes::serialize_stake_accounts_to_delegation_format;
 pub use serde_stakes::SerdeStakesToStakeFormat;
 
-const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Invalid delegation: {0}")]
@@ -177,11 +175,18 @@ pub struct Stakes<T: Clone> {
 }
 
 impl<T: Clone> Stakes<T> {
-    pub fn clone_and_filter_for_alpenglow(&self) -> Stakes<T> {
+    pub fn clone_and_filter_for_alpenglow(
+        &self,
+        max_vote_accounts: usize,
+        minimum_identity_account_balance: u64,
+        identity_account_balances: &HashMap<Pubkey, u64>,
+    ) -> Stakes<T> {
         Stakes {
-            vote_accounts: self
-                .vote_accounts
-                .clone_and_filter_for_alpenglow(MAX_ALPENGLOW_VOTE_ACCOUNTS),
+            vote_accounts: self.vote_accounts.clone_and_filter_for_alpenglow(
+                max_vote_accounts,
+                minimum_identity_account_balance,
+                identity_account_balances,
+            ),
             epoch: self.epoch,
             // Do not need anything else for EpochStakes
             stake_delegations: ImHashMap::new(),

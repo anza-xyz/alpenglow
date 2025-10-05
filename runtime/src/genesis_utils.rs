@@ -114,6 +114,7 @@ pub fn create_genesis_config_with_vote_accounts(
     )
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_genesis_config_with_alpenglow_vote_accounts(
     mint_lamports: u64,
     voting_keypairs: &[impl Borrow<ValidatorVoteKeypairs>],
