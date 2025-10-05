@@ -640,9 +640,7 @@ mod tests {
             let pubkey = Pubkey::new_unique();
             let stake = rng.gen_range(1..997);
             let account = new_rand_vote_account(rng, None, is_alpenglow);
-            let new_vote_account = VoteAccount::try_from(account.clone()).unwrap();
-            let identity = new_vote_account.node_pubkey();
-            identity_balances.insert(*identity, 10_000_000_000);
+            identity_balances.insert(pubkey, 10_000_000_000);
             vote_accounts.insert(pubkey, VoteAccount::try_from(account).unwrap(), || {
                 stake as u64
             });
@@ -1079,13 +1077,14 @@ mod tests {
         let accounts = (0..num_accounts).map(|index| {
             let account = new_rand_vote_account(&mut rng, None, true);
             let vote_account = VoteAccount::try_from(account).unwrap();
-            identity_balances.insert(*vote_account.node_pubkey(), 10_000_000_000);
+            let pubkey = Pubkey::new_unique();
+            identity_balances.insert(pubkey, 10_000_000_000);
             let stake = if index < num_alpenglow_nodes - 10 {
                 100 + index as u64
             } else {
                 10 // same stake for the last 12 accounts
             };
-            (Pubkey::new_unique(), (stake, vote_account))
+            (pubkey, (stake, vote_account))
         });
         let mut vote_accounts = VoteAccounts::default();
         for (pubkey, (stake, vote_account)) in accounts {
@@ -1100,5 +1099,34 @@ mod tests {
             &identity_balances,
         );
         assert_eq!(filtered.len(), num_alpenglow_nodes - 10);
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow_not_enough_lamports_in_identity() {
+        let mut rng = rand::thread_rng();
+        let num_alpenglow_nodes = 2000;
+        let minimum_identity_balance = 1_600_000_000;
+        let (vote_accounts, mut identity_balances) =
+            new_rand_staked_vote_accounts_fixed_alpenglow_accounts_num(
+                &mut rng,
+                num_alpenglow_nodes,
+                num_alpenglow_nodes,
+            );
+        // for 10% in identity_balances, set the balance below the minimum
+        let entries_to_modify = num_alpenglow_nodes / 10;
+        let pubkeys_to_modify = identity_balances
+            .keys()
+            .take(entries_to_modify)
+            .copied()
+            .collect::<Vec<Pubkey>>();
+        for pubkey in pubkeys_to_modify {
+            identity_balances.insert(pubkey, minimum_identity_balance - 1);
+        }
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(
+            num_alpenglow_nodes,
+            minimum_identity_balance,
+            &identity_balances,
+        );
+        assert!(filtered.len() <= num_alpenglow_nodes - entries_to_modify);
     }
 }
