@@ -185,8 +185,12 @@ impl ConsensusPoolService {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
         let root_bank = ctx.sharable_banks.root();
-        let mut consensus_pool =
-            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.consensus_metrics.clone());
+        let mut consensus_pool = ConsensusPool::new_from_root_bank(
+            my_pubkey,
+            &root_bank,
+            ctx.consensus_metrics.clone(),
+            ctx.leader_schedule_cache.clone(),
+        );
 
         // Wait until migration has completed
         info!("{}: Certificate pool loop initialized", &my_pubkey);

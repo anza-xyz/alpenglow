@@ -21,6 +21,7 @@ use {
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_hash::Hash,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
@@ -122,6 +123,7 @@ pub struct ConsensusPool {
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
     pub(crate) consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    leader_schedule_cache: Arc<LeaderScheduleCache>,
 }
 
 impl ConsensusPool {
@@ -129,6 +131,7 @@ impl ConsensusPool {
         my_pubkey: Pubkey,
         bank: &Bank,
         consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
     ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
@@ -145,6 +148,7 @@ impl ConsensusPool {
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
             consensus_metrics,
+            leader_schedule_cache,
         }
     }
 
@@ -422,7 +426,20 @@ impl ConsensusPool {
         }
 
         self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
-        if vote_slot < root_slot {
+        let slot_to_check = match self
+            .leader_schedule_cache
+            .slot_leader_at(vote_slot.saturating_add(8), None)
+        {
+            Some(addr) => {
+                if addr == self.my_pubkey {
+                    vote_slot.saturating_add(8)
+                } else {
+                    vote_slot
+                }
+            }
+            None => vote_slot,
+        };
+        if slot_to_check < root_slot {
             self.stats.out_of_range_votes = self.stats.out_of_range_votes.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
@@ -743,12 +760,16 @@ mod tests {
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
         let root_bank = bank_forks.read().unwrap().root_bank();
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
         (
             validator_keypairs,
             ConsensusPool::new_from_root_bank(
                 Pubkey::new_unique(),
                 &root_bank,
                 Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
+                leader_schedule_cache,
             ),
             bank_forks,
         )
@@ -1872,10 +1893,14 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
         let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
             Arc::new(PlRwLock::new(ConsensusMetrics::new(0))),
+            leader_schedule_cache,
         );
 
         let root_bank = bank_forks.read().unwrap().root_bank();
