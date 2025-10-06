@@ -18,6 +18,7 @@ use {
         signature::{Signature as BlsSignature, SignatureProjective},
     },
     solana_clock::Slot,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
@@ -90,6 +91,8 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
+    leader_schedule_cache: Arc<LeaderScheduleCache>,
+    my_pubkey: Pubkey,
 }
 
 impl BLSSigVerifier {
@@ -135,8 +138,22 @@ impl BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
-                    // Only need votes newer than root slot
-                    if vote_message.vote.slot() <= root_bank.slot() {
+                    // If node will be a leader in 8 slots, it needs to keep older vote messages otherwise, discard older messages to avoid unnecessary verification compute.
+                    let vote_slot = vote_message.vote.slot();
+                    let slot_to_check = match self
+                        .leader_schedule_cache
+                        .slot_leader_at(vote_slot + 8, None)
+                    {
+                        Some(addr) => {
+                            if addr == self.my_pubkey {
+                                vote_slot + 8
+                            } else {
+                                vote_slot
+                            }
+                        }
+                        None => vote_slot,
+                    };
+                    if slot_to_check <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -216,6 +233,8 @@ impl BLSSigVerifier {
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
+        my_pubkey: Pubkey,
     ) -> Self {
         Self {
             sharable_banks,
@@ -224,6 +243,8 @@ impl BLSSigVerifier {
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
+            leader_schedule_cache,
+            my_pubkey,
         }
     }
 
@@ -653,9 +674,19 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
+        let my_pubkey = Pubkey::default();
         (
             validator_keypairs,
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(
+                sharable_banks,
+                verified_vote_sender,
+                message_sender,
+                leader_schedule_cache,
+                my_pubkey,
+            ),
         )
     }
 
@@ -1382,8 +1413,17 @@ mod tests {
         bank_forks.write().unwrap().set_root(5, None, None).unwrap();
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let mut sig_verifier =
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender);
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
+        let my_pubkey = Pubkey::default();
+        let mut sig_verifier = BLSSigVerifier::new(
+            sharable_banks,
+            verified_vote_sender,
+            message_sender,
+            leader_schedule_cache,
+            my_pubkey,
+        );
 
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();

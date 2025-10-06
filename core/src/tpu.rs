@@ -32,7 +32,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         blockstore::Blockstore, blockstore_processor::TransactionStatusSender,
-        entry_notifier_service::EntryNotifierSender,
+        entry_notifier_service::EntryNotifierSender, leader_schedule_cache::LeaderScheduleCache,
     },
     solana_perf::data_budget::DataBudget,
     solana_poh::{
@@ -168,6 +168,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -337,10 +338,13 @@ impl Tpu {
 
         let alpenglow_sigverify_stage = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+            let my_pubkey = cluster_info.id();
             let verifier = BLSSigVerifier::new(
                 sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
+                leader_schedule_cache,
+                my_pubkey,
             );
             BLSSigVerifyStage::new(
                 bls_packet_receiver,

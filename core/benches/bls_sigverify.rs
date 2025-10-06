@@ -6,6 +6,7 @@ use {
     solana_bls_signatures::signature::Signature as BlsSignature,
     solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
     solana_hash::Hash,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
     solana_runtime::{
@@ -54,7 +55,17 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
+    let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+        &bank_forks.read().unwrap().root_bank(),
+    ));
+    let my_pubkey = Pubkey::default();
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        verified_votes_s,
+        consensus_msg_s,
+        leader_schedule_cache,
+        my_pubkey,
+    );
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
