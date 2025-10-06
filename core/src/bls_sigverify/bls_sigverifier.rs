@@ -92,7 +92,9 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
+    /// Contains information about which node will be a leader in which window.
     leader_schedule_cache: Arc<LeaderScheduleCache>,
+    /// Contains information about this node's current pubkey.
     cluster_info: Arc<ClusterInfo>,
 }
 
