@@ -5698,10 +5698,10 @@ impl Bank {
     fn get_all_identity_account_balances(&self) -> HashMap<Pubkey, u64> {
         self.vote_accounts()
             .iter()
-            .map(|(pubkey, (_, account))| {
+            .map(|(_, (_, account))| {
                 let identity = account.node_pubkey();
                 let balance = self.get_balance(identity);
-                (*pubkey, balance)
+                (*identity, balance)
             })
             .collect::<HashMap<_, _>>()
     }
