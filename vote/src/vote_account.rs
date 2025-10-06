@@ -506,24 +506,17 @@ mod tests {
             authorized_withdrawer: Pubkey::new_unique(),
             commission: rng.gen(),
         };
-
-        if is_alpenglow {
+        let vote_state_versions = if is_alpenglow {
             let bls_pubkey_compressed: BLSPubkeyCompressed =
                 BLSKeypair::new().public.try_into().unwrap();
             let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
-            let vote_state = VoteStateV4 {
+            VoteStateVersions::new_v4(VoteStateV4 {
                 node_pubkey: vote_init.node_pubkey,
                 authorized_voters: AuthorizedVoters::new(0, vote_init.authorized_voter),
                 authorized_withdrawer: vote_init.authorized_withdrawer,
                 bls_pubkey_compressed: Some(bls_pubkey_compressed_buffer.try_into().unwrap()),
                 ..VoteStateV4::default()
-            };
-            AccountSharedData::new_data(
-                rng.gen(), // lamports
-                &VoteStateVersions::new_v4(vote_state),
-                &solana_sdk_ids::vote::id(), // owner
-            )
-            .unwrap()
+            })
         } else {
             let clock = Clock {
                 slot: rng.gen(),
@@ -532,15 +525,14 @@ mod tests {
                 leader_schedule_epoch: rng.gen(),
                 unix_timestamp: rng.gen(),
             };
-
-            let vote_state = VoteStateV3::new(&vote_init, &clock);
-            AccountSharedData::new_data(
-                rng.gen(), // lamports
-                &VoteStateVersions::new_v3(vote_state),
-                &solana_sdk_ids::vote::id(), // owner
-            )
-            .unwrap()
-        }
+            VoteStateVersions::new_v3(VoteStateV3::new(&vote_init, &clock))
+        };
+        AccountSharedData::new_data(
+            rng.gen(), // lamports
+            &vote_state_versions,
+            &solana_sdk_ids::vote::id(), // owner
+        )
+        .unwrap()
     }
 
     fn new_rand_vote_accounts<R: Rng>(
