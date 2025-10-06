@@ -34,6 +34,7 @@ use {
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
+    parking_lot::RwLock as PlRwLock,
     quinn::Endpoint,
     solana_accounts_db::{
         accounts_db::{AccountsDbConfig, ACCOUNTS_DB_CONFIG_FOR_TESTING},
@@ -142,6 +143,7 @@ use {
     solana_validator_exit::Exit,
     solana_vote_program::vote_state,
     solana_votor::{
+        consensus_metrics::ConsensusMetrics,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
@@ -1620,6 +1622,9 @@ impl Validator {
                 (None, None)
             };
 
+        let epoch = bank_forks.read().unwrap().sharable_banks().root().epoch();
+        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(epoch)));
+
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
@@ -1692,6 +1697,7 @@ impl Validator {
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
+            consensus_metrics.clone(),
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1788,6 +1794,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
+            consensus_metrics,
         );
 
         datapoint_info!(

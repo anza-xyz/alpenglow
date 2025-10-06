@@ -107,6 +107,7 @@ pub struct VotorConfig {
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -169,6 +170,7 @@ impl Votor {
             event_receiver,
             own_vote_sender,
             consensus_message_receiver: bls_receiver,
+            consensus_metrics,
         } = config;
 
         let start = Arc::new((Mutex::new(false), Condvar::new()));
@@ -188,9 +190,6 @@ impl Votor {
             vote_history_storage,
         };
 
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(
-            sharable_banks.root().epoch(),
-        )));
         let voting_context = VotingContext {
             vote_history,
             vote_account_pubkey: vote_account,
@@ -203,7 +202,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             sharable_banks: sharable_banks.clone(),
-            consensus_metrics: consensus_metrics.clone(),
+            consensus_metrics,
         };
 
         let root_context = RootContext {
@@ -240,7 +239,6 @@ impl Votor {
             bls_sender,
             event_sender,
             commitment_sender,
-            consensus_metrics,
         };
 
         let event_handler = EventHandler::new(event_handler_context);

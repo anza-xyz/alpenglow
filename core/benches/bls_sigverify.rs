@@ -3,6 +3,7 @@
 use {
     criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput},
     crossbeam_channel::unbounded,
+    parking_lot::RwLock as PlRwLock,
     solana_bls_signatures::signature::Signature as BlsSignature,
     solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
     solana_hash::Hash,
@@ -15,7 +16,10 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
-    solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
+    solana_votor::{
+        consensus_metrics::ConsensusMetrics,
+        consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
+    },
     solana_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
@@ -54,7 +58,13 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
+    let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        verified_votes_s,
+        consensus_msg_s,
+        consensus_metrics,
+    );
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
