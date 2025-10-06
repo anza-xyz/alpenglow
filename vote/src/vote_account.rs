@@ -84,7 +84,7 @@ impl VoteAccounts {
         &self,
         max_vote_accounts: usize,
         minimum_identity_account_balance: u64,
-        // The identity_account_balance is indexed with vote account pubkey.
+        // The identity_account_balance is indexed with identity pubkey.
         // The value is the lamport balance of the identity account.
         identity_account_balances: &HashMap<Pubkey, u64>,
     ) -> VoteAccounts {
