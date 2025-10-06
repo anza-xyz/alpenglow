@@ -1794,6 +1794,7 @@ impl Validator {
             key_notifiers.clone(),
             consensus_metrics_sender,
             alpenglow_last_voted,
+            migration_status.clone(),
         );
 
         datapoint_info!(

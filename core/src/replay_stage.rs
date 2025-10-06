@@ -2330,14 +2330,15 @@ impl ReplayStage {
 
         let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
         let root_distance = my_leader_slot - root_slot;
-        let vote_only_bank =
-            if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY || my_leader_slot >= migration_slot {
-                info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
-                datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
-                true
-            } else {
-                false
-            };
+        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY
+            || my_leader_slot >= migration_slot
+        {
+            info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
+            datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
+            true
+        } else {
+            false
+        };
 
         let tpu_bank = Self::new_bank_from_parent_with_notify(
             parent_bank.clone(),
