@@ -109,9 +109,10 @@ impl VoteAccounts {
         // Sort by stake descending
         if entries_to_sort.len() > max_vote_accounts {
             entries_to_sort.sort_by(|a, b| b.2.cmp(&a.2));
+            // Find the stake of the first one being in the truncated list (so it's not max_vote_accounts - 1)
+            let floor_stake = entries_to_sort.get(max_vote_accounts).unwrap().2;
             entries_to_sort.truncate(max_vote_accounts);
-            let floor_stake = entries_to_sort.last().unwrap().2;
-            // Per SIMD 357, we remove all vote accounts with stake equal to the last one
+            // Per SIMD 357, we remove all vote accounts with stake equal to the first truncated one.
             entries_to_sort.retain(|(_pubkey, _vote_account, stake)| *stake > floor_stake);
         }
         let valid_entries: HashMap<Pubkey, (u64, VoteAccount)> = entries_to_sort
