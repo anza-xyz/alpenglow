@@ -18,6 +18,7 @@ use {
         signature::{Signature as BlsSignature, SignatureProjective},
     },
     solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
@@ -92,7 +93,7 @@ pub struct BLSSigVerifier {
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     leader_schedule_cache: Arc<LeaderScheduleCache>,
-    my_pubkey: Pubkey,
+    cluster_info: Arc<ClusterInfo>,
 }
 
 impl BLSSigVerifier {
@@ -105,6 +106,7 @@ impl BLSSigVerifier {
         //            `Vec` for now for clarity and then optimize for the final version
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
+        let my_pubkey = self.cluster_info.id();
 
         let root_bank = self.sharable_banks.root();
         self.verified_certs
@@ -145,7 +147,7 @@ impl BLSSigVerifier {
                         .slot_leader_at(vote_slot + 8, None)
                     {
                         Some(addr) => {
-                            if addr == self.my_pubkey {
+                            if addr == my_pubkey {
                                 vote_slot + 8
                             } else {
                                 vote_slot
@@ -234,7 +236,7 @@ impl BLSSigVerifier {
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
-        my_pubkey: Pubkey,
+        cluster_info: Arc<ClusterInfo>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -244,7 +246,7 @@ impl BLSSigVerifier {
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
             leader_schedule_cache,
-            my_pubkey,
+            cluster_info,
         }
     }
 
@@ -634,6 +636,7 @@ mod tests {
         crate::bls_sigverify::stats::STATS_INTERVAL_DURATION,
         crossbeam_channel::Receiver,
         solana_bls_signatures::{Signature, Signature as BLSSignature},
+        solana_gossip::contact_info::ContactInfo,
         solana_hash::Hash,
         solana_perf::packet::{Packet, PinnedPacketBatch},
         solana_runtime::{
@@ -645,6 +648,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_signer_store::encode_base2,
+        solana_streamer::socket::SocketAddrSpace,
         solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
         solana_votor_messages::{
             consensus_message::{
@@ -677,7 +681,14 @@ mod tests {
         let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
             &bank_forks.read().unwrap().root_bank(),
         ));
-        let my_pubkey = Pubkey::default();
+
+        let contact_info =
+            ContactInfo::new_localhost(&validator_keypairs[0].node_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(validator_keypairs[0].node_keypair.insecure_clone()),
+            SocketAddrSpace::Unspecified,
+        ));
         (
             validator_keypairs,
             BLSSigVerifier::new(
@@ -685,7 +696,7 @@ mod tests {
                 verified_vote_sender,
                 message_sender,
                 leader_schedule_cache,
-                my_pubkey,
+                cluster_info,
             ),
         )
     }
@@ -1416,13 +1427,19 @@ mod tests {
         let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
             &bank_forks.read().unwrap().root_bank(),
         ));
-        let my_pubkey = Pubkey::default();
+        let contact_info =
+            ContactInfo::new_localhost(&validator_keypairs[0].node_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(validator_keypairs[0].node_keypair.insecure_clone()),
+            SocketAddrSpace::Unspecified,
+        ));
         let mut sig_verifier = BLSSigVerifier::new(
             sharable_banks,
             verified_vote_sender,
             message_sender,
             leader_schedule_cache,
-            my_pubkey,
+            cluster_info,
         );
 
         let vote = Vote::new_skip_vote(2);

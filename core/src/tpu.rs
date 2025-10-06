@@ -338,13 +338,12 @@ impl Tpu {
 
         let alpenglow_sigverify_stage = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-            let my_pubkey = cluster_info.id();
             let verifier = BLSSigVerifier::new(
                 sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
                 leader_schedule_cache,
-                my_pubkey,
+                cluster_info.clone(),
             );
             BLSSigVerifyStage::new(
                 bls_packet_receiver,
