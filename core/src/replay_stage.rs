@@ -2626,11 +2626,16 @@ impl ReplayStage {
         migration_status: &MigrationStatus,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
+        assert!(!migration_status.is_alpenglow_enabled());
+        let migration_slot = migration_status.migration_slot().unwrap_or(Slot::MAX);
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         trace!("handle votable bank {}", bank.slot());
-        let new_root = tower.record_bank_vote(bank);
+        let new_root = tower
+            .record_bank_vote(bank)
+            // We do not root during the migration - post genesis rooting is handled by votor
+            .filter(|root| *root < migration_slot);
 
         if let Some(new_root) = new_root {
             let highest_super_majority_root = Some(
