@@ -3922,20 +3922,36 @@ impl Blockstore {
         self.perf_samples_cf.put_bytes(index, &bytes)
     }
 
-    /// Returns the entry vector for the slot starting with `shred_start_index`
-    pub fn get_slot_entries(&self, slot: Slot, shred_start_index: u64) -> Result<Vec<Entry>> {
-        self.get_slot_entries_with_shred_info(slot, shred_start_index, false)
+    /// Returns the component vector for the slot starting with `shred_start_index`
+    pub fn get_slot_components(
+        &self,
+        slot: Slot,
+        shred_start_index: u64,
+    ) -> Result<Vec<BlockComponent>> {
+        self.get_slot_components_with_shred_info(slot, shred_start_index, false)
             .map(|x| x.0)
     }
 
-    /// Returns the entry vector for the slot starting with `shred_start_index`, the number of
+    /// Returns the entry vector for the slot starting with `shred_start_index`
+    pub fn get_slot_entries(&self, slot: Slot, shred_start_index: u64) -> Result<Vec<Entry>> {
+        self.get_slot_components(slot, shred_start_index)
+            .map(|components| {
+                components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect()
+            })
+    }
+
+    /// Returns the components vector for the slot starting with `shred_start_index`, the number of
     /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
-    pub fn get_slot_entries_with_shred_info(
+    pub fn get_slot_components_with_shred_info(
         &self,
         slot: Slot,
         start_index: u64,
         allow_dead_slots: bool,
-    ) -> Result<(Vec<Entry>, u64, bool)> {
+    ) -> Result<(Vec<BlockComponent>, u64, bool)> {
         let (completed_ranges, slot_meta) = self.get_completed_ranges(slot, start_index)?;
 
         // Check if the slot is dead *after* fetching completed ranges to avoid a race
@@ -3954,8 +3970,28 @@ impl Blockstore {
             .map(|&Range { end, .. }| u64::from(end) - start_index)
             .unwrap_or(0);
 
-        let entries = self.get_slot_entries_in_block(slot, completed_ranges, Some(&slot_meta))?;
-        Ok((entries, num_shreds, slot_meta.is_full()))
+        let components =
+            self.get_slot_components_in_block(slot, completed_ranges, Some(&slot_meta))?;
+        Ok((components, num_shreds, slot_meta.is_full()))
+    }
+
+    /// Returns the entries vector for the slot starting with `shred_start_index`, the number of
+    /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
+    pub fn get_slot_entries_with_shred_info(
+        &self,
+        slot: Slot,
+        start_index: u64,
+        allow_dead_slots: bool,
+    ) -> Result<(Vec<Entry>, u64, bool)> {
+        self.get_slot_components_with_shred_info(slot, start_index, allow_dead_slots)
+            .map(|(components, num_shreds, is_full)| {
+                let entries = components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect();
+                (entries, num_shreds, is_full)
+            })
     }
 
     /// Gets accounts used in transactions in the slot range [starting_slot, ending_slot].
@@ -4067,12 +4103,12 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    fn get_slot_entries_in_block(
+    fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: CompletedRanges,
         slot_meta: Option<&SlotMeta>,
-    ) -> Result<Vec<Entry>> {
+    ) -> Result<Vec<BlockComponent>> {
         debug_assert!(completed_ranges
             .iter()
             .tuple_windows()
@@ -4118,19 +4154,23 @@ impl Blockstore {
                     .and_then(|payload| {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
-                        BlockComponent::from_bytes(&payload)
-                            .map(|eb| eb.entries().to_vec())
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct entries: {e:?}"
-                                    )),
-                                ))
-                            })
+                        BlockComponent::from_bytes(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct block component: {e:?}"),
+                            )))
+                        })
                     })
             })
-            .flatten_ok()
             .collect()
+    }
+
+    pub fn get_components_in_data_block(
+        &self,
+        slot: Slot,
+        range: Range<u32>,
+        slot_meta: Option<&SlotMeta>,
+    ) -> Result<Vec<BlockComponent>> {
+        self.get_slot_components_in_block(slot, vec![range], slot_meta)
     }
 
     pub fn get_entries_in_data_block(
@@ -4139,7 +4179,14 @@ impl Blockstore {
         range: Range<u32>,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
-        self.get_slot_entries_in_block(slot, vec![range], slot_meta)
+        self.get_components_in_data_block(slot, range, slot_meta)
+            .map(|components| {
+                components
+                    .into_iter()
+                    .filter_map(|component| component.into_entries())
+                    .flatten()
+                    .collect()
+            })
     }
 
     /// Performs checks on the last fec set of a replayed slot, and returns the block_id.
