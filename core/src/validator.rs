@@ -1792,6 +1792,7 @@ impl Validator {
             config.generator_config.clone(),
             key_notifiers.clone(),
             consensus_metrics,
+            migration_status.clone(),
         );
 
         datapoint_info!(
