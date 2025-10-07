@@ -124,7 +124,7 @@ impl VoteAccounts {
             .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
             .collect();
         if valid_entries.is_empty() {
-            panic!("no valid alpenglow vote accounts found");
+            log::error!("no valid alpenglow vote accounts found");
         }
         VoteAccounts {
             vote_accounts: Arc::new(valid_entries),
