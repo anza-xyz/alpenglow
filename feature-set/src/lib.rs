@@ -89,13 +89,10 @@ impl FeatureSet {
 
     /// All features enabled, useful for testing
     pub fn all_enabled() -> Self {
-        let mut result = Self {
+        Self {
             active: AHashMap::from_iter((*FEATURE_NAMES).keys().cloned().map(|key| (key, 0))),
             inactive: AHashSet::new(),
-        };
-        // Deactivate features that are known to cause issues if enabled in tests
-        result.deactivate(&alpenglow_vat_and_limit_validators::id());
-        result
+        }
     }
 
     pub fn new_warmup_cooldown_rate_epoch(&self, epoch_schedule: &EpochSchedule) -> Option<u64> {
