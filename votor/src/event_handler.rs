@@ -250,15 +250,7 @@ impl EventHandler {
                     if slot == first_of_consecutive_leader_slots(slot) {
                         // all slots except the first in the window would typically start when the block is seen so the recording would essentially record 0.
                         // hence we skip it.
-                        match metrics_guard.record_block_hash_seen(*bank.collector_id(), slot) {
-                            Ok(()) => (),
-                            Err(err) => {
-                                error!(
-                                    "{my_pubkey}: recording block on slot {slot} failed with \
-                                     {err:?}"
-                                );
-                            }
-                        }
+                        metrics_guard.record_block_hash_seen(*bank.collector_id(), slot);
                     }
                     metrics_guard.maybe_new_epoch(bank.epoch());
                 }

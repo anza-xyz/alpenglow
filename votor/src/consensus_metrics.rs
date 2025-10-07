@@ -121,26 +121,21 @@ impl ConsensusMetrics {
     }
 
     /// Records a `vote` from the node with `id`.
-    pub fn record_vote(&mut self, id: Pubkey, vote: &Vote) -> Result<(), RecordVoteError> {
+    pub fn record_vote(&mut self, id: Pubkey, vote: &Vote) {
         let Some(start) = self.start_of_slot.get(&vote.slot()) else {
             self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
-            return Err(RecordVoteError::SlotNotFound);
+            return;
         };
         let node = self.node_metrics.entry(id).or_default();
         let elapsed = start.elapsed();
         node.record_vote(vote, elapsed);
-        Ok(())
     }
 
     /// Records when a block for `slot` was seen and the `leader` is responsible for producing it.
-    pub fn record_block_hash_seen(
-        &mut self,
-        leader: Pubkey,
-        slot: Slot,
-    ) -> Result<(), RecordBlockHashError> {
+    pub fn record_block_hash_seen(&mut self, leader: Pubkey, slot: Slot) {
         let Some(start) = self.start_of_slot.get(&slot) else {
             self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
-            return Err(RecordBlockHashError::SlotNotFound);
+            return;
         };
         let elapsed = start.elapsed().as_micros();
         let elapsed = match elapsed.try_into() {
@@ -150,7 +145,7 @@ impl ConsensusMetrics {
                     "recording duration {elapsed} for block hash for slot {slot}: conversion to \
                      u64 failed with {err}"
                 );
-                return Ok(());
+                return;
             }
         };
         let histogram = self
@@ -166,7 +161,6 @@ impl ConsensusMetrics {
                 );
             }
         }
-        Ok(())
     }
 
     /// Records when a given slot started.

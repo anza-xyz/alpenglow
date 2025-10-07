@@ -159,19 +159,9 @@ impl BLSSigVerifier {
                     };
 
                     // Capture votes received metrics before old messages are potentially discarded below.
-                    match self
-                        .consensus_metrics
+                    self.consensus_metrics
                         .write()
-                        .record_vote(*solana_pubkey, &vote_message.vote)
-                    {
-                        Ok(()) => (),
-                        Err(err) => {
-                            error!(
-                                "recording vote on slot {} failed with {err:?}",
-                                vote_message.vote.slot()
-                            );
-                        }
-                    }
+                        .record_vote(*solana_pubkey, &vote_message.vote);
                     // Only need votes newer than root slot
                     if vote_message.vote.slot() <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
