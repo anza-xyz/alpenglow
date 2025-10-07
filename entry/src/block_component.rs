@@ -45,17 +45,9 @@
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
-/// ├─────────────────────────────────────────┤
-/// │ Byte Length                  (2 bytes)  │
-/// ├─────────────────────────────────────────┤
-/// │ Variant Data              (variable)    │
-/// └─────────────────────────────────────────┘
-/// ```
-///
-/// ### BlockMarkerV2 Layout
-/// ```text
-/// ┌─────────────────────────────────────────┐
-/// │ Variant ID                   (1 byte)   │
+/// │   0 = BlockFooter                       │
+/// │   1 = BlockHeader                       │
+/// │   2 = UpdateParent                      │
 /// ├─────────────────────────────────────────┤
 /// │ Byte Length                  (2 bytes)  │
 /// ├─────────────────────────────────────────┤
@@ -71,6 +63,15 @@
 /// │ User Agent Length            (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Bytes          (0-255 bytes) │
+/// └─────────────────────────────────────────┘
+/// ```
+///
+/// ### BlockHeaderV1 Layout
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Parent Slot                  (8 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Parent Block ID             (32 bytes)  │
 /// └─────────────────────────────────────────┘
 /// ```
 ///
@@ -172,11 +173,8 @@ impl From<bincode::Error> for BlockComponentError {
 
 /// A block component containing either entries or special metadata.
 ///
-/// `BlockComponent` enforces mutual exclusivity between entries and special data:
-/// - Can contain entries with no special data
-/// - Can contain special data with no entries
-/// - Cannot contain both entries and special data simultaneously
-/// - Empty entries with no special data is allowed (via `Default`)
+/// Per SIMD-0307, entry batches must have at least one entry. Block markers
+/// are identified by an entry count of zero followed by marker data.
 ///
 /// # Serialization Format
 /// ```text
@@ -208,7 +206,6 @@ pub enum BlockComponent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedBlockMarker {
     V1(BlockMarkerV1),
-    V2(BlockMarkerV2),
     Current(BlockMarkerV1),
 }
 
@@ -218,6 +215,9 @@ pub enum VersionedBlockMarker {
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
+/// │   0 = BlockFooter                       │
+/// │   1 = BlockHeader                       │
+/// │   2 = UpdateParent                      │
 /// ├─────────────────────────────────────────┤
 /// │ Byte Length                  (2 bytes)  │
 /// ├─────────────────────────────────────────┤
@@ -230,28 +230,7 @@ pub enum VersionedBlockMarker {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
-}
-
-/// Version 2 block marker with extended functionality.
-///
-/// Supports all V1 features plus UpdateParent for optimistic block packing in Alpenglow.
-///
-/// # Serialization Format
-/// ```text
-/// ┌─────────────────────────────────────────┐
-/// │ Variant ID                   (1 byte)   │
-/// ├─────────────────────────────────────────┤
-/// │ Byte Length                  (2 bytes)  │
-/// ├─────────────────────────────────────────┤
-/// │ Variant Data              (variable)    │
-/// └─────────────────────────────────────────┘
-/// ```
-///
-/// The byte length field indicates the size of the variant data that follows,
-/// allowing for proper parsing even if unknown variants are encountered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BlockMarkerV2 {
-    BlockFooter(VersionedBlockFooter),
+    BlockHeader(VersionedBlockHeader),
     UpdateParent(VersionedUpdateParent),
 }
 
@@ -297,14 +276,48 @@ pub struct BlockFooterV1 {
 }
 
 // ============================================================================
-// Parent Ready Update Types
+// Block Header Types
 // ============================================================================
 
-/// Versioned parent ready update for optimistic block packing in Alpenglow.
+/// Versioned block header for backward compatibility.
 ///
-/// Used to signal when the parent changes due to ParentReady being triggered on an earlier parent
-/// in optimistic block packing. Always deserializes to the `Current` variant for forward
-/// compatibility.
+/// # Serialization Format
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Version                      (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ Header Data               (variable)    │
+/// └─────────────────────────────────────────┘
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionedBlockHeader {
+    V1(BlockHeaderV1),
+    Current(BlockHeaderV1),
+}
+
+/// Version 1 block header.
+///
+/// # Serialization Format
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Parent Slot                  (8 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Parent Block ID             (32 bytes)  │
+/// └─────────────────────────────────────────┘
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct BlockHeaderV1 {
+    pub parent_slot: Slot,
+    pub parent_block_id: Hash,
+}
+
+// ============================================================================
+// Update Parent Types
+// ============================================================================
+
+/// Versioned update parent for fast leader handover.
+///
+/// Signals parent changes during fast leader handover.
 ///
 /// # Serialization Format
 /// ```text
@@ -320,10 +333,7 @@ pub enum VersionedUpdateParent {
     Current(UpdateParentV1),
 }
 
-/// Version 1 parent ready update data.
-///
-/// Contains slot and block ID information for the new parent. Uses bincode
-/// serialization for all fields to maintain consistency with other network data.
+/// Version 1 parent update.
 ///
 /// # Serialization Format
 /// ```text
@@ -561,7 +571,7 @@ impl<'de> Deserialize<'de> for BlockComponent {
 
 impl VersionedBlockMarker {
     /// Creates a new versioned marker with V1 variant.
-    pub const fn new_v2(marker: BlockMarkerV1) -> Self {
+    pub const fn new_v1(marker: BlockMarkerV1) -> Self {
         Self::V1(marker)
     }
 
@@ -574,7 +584,6 @@ impl VersionedBlockMarker {
     pub const fn version(&self) -> u16 {
         match self {
             Self::V1(_) | Self::Current(_) => 1,
-            Self::V2(_) => 2,
         }
     }
 
@@ -582,7 +591,6 @@ impl VersionedBlockMarker {
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let marker_bytes = match self {
             Self::V1(marker) | Self::Current(marker) => marker.to_bytes(),
-            Self::V2(marker) => marker.to_bytes(),
         }?;
 
         let mut buffer = Vec::with_capacity(2 + marker_bytes.len());
@@ -606,7 +614,6 @@ impl VersionedBlockMarker {
 
         match version {
             1 => Ok(Self::Current(BlockMarkerV1::from_bytes(marker_data)?)),
-            2 => Ok(Self::V2(BlockMarkerV2::from_bytes(marker_data)?)),
             _ => Err(BlockComponentError::UnsupportedVersion { version }),
         }
     }
@@ -713,9 +720,13 @@ fn read_variant_with_length(data: &[u8]) -> Result<(u8, &[u8]), BlockComponentEr
 impl BlockMarkerV1 {
     /// Serializes to bytes with variant ID and byte length prefix.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        let Self::BlockFooter(footer) = self;
-        let footer_bytes = footer.to_bytes()?;
-        write_variant_with_length(0_u8, &footer_bytes)
+        let (variant_id, data_bytes) = match self {
+            Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
+            Self::BlockHeader(header) => (1_u8, header.to_bytes()?),
+            Self::UpdateParent(update) => (2_u8, update.to_bytes()?),
+        };
+
+        write_variant_with_length(variant_id, &data_bytes)
     }
 
     /// Deserializes from bytes, validating variant ID and byte length.
@@ -724,6 +735,12 @@ impl BlockMarkerV1 {
 
         match variant_id {
             0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
+                payload,
+            )?)),
+            1 => Ok(Self::BlockHeader(VersionedBlockHeader::from_bytes(
+                payload,
+            )?)),
+            2 => Ok(Self::UpdateParent(VersionedUpdateParent::from_bytes(
                 payload,
             )?)),
             _ => Err(BlockComponentError::UnknownVariant {
@@ -767,81 +784,6 @@ impl<'de> Deserialize<'de> for BlockMarkerV1 {
         }
 
         deserializer.deserialize_bytes(BlockMarkerV1Visitor)
-    }
-}
-
-// ============================================================================
-// BlockMarkerV2 Implementation
-// ============================================================================
-
-impl BlockMarkerV2 {
-    /// Returns the version for this marker.
-    pub const fn version(&self) -> u8 {
-        2
-    }
-
-    /// Serializes to bytes with variant ID and byte length prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        let (variant_id, data_bytes) = match self {
-            Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
-            Self::UpdateParent(update) => (1_u8, update.to_bytes()?),
-        };
-
-        write_variant_with_length(variant_id, &data_bytes)
-    }
-
-    /// Deserializes from bytes, validating variant ID and byte length.
-    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
-        let (variant_id, payload) = read_variant_with_length(data)?;
-
-        match variant_id {
-            0 => Ok(Self::BlockFooter(VersionedBlockFooter::from_bytes(
-                payload,
-            )?)),
-            1 => Ok(Self::UpdateParent(VersionedUpdateParent::from_bytes(
-                payload,
-            )?)),
-            _ => Err(BlockComponentError::UnknownVariant {
-                variant_type: "BlockMarkerV2".to_string(),
-                id: variant_id,
-            }),
-        }
-    }
-}
-
-impl Serialize for BlockMarkerV2 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
-        serializer.serialize_bytes(&bytes)
-    }
-}
-
-impl<'de> Deserialize<'de> for BlockMarkerV2 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct BlockMarkerV2Visitor;
-
-        impl Visitor<'_> for BlockMarkerV2Visitor {
-            type Value = BlockMarkerV2;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a serialized BlockMarkerV2 byte stream")
-            }
-
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<BlockMarkerV2, E>
-            where
-                E: de::Error,
-            {
-                BlockMarkerV2::from_bytes(value).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_bytes(BlockMarkerV2Visitor)
     }
 }
 
@@ -984,6 +926,108 @@ impl<'de> Deserialize<'de> for VersionedBlockFooter {
         }
 
         deserializer.deserialize_bytes(VersionedBlockFooterVisitor)
+    }
+}
+
+// ============================================================================
+// BlockHeader Implementation
+// ============================================================================
+
+impl BlockHeaderV1 {
+    /// Returns the version for this struct.
+    pub const fn version(&self) -> u8 {
+        1
+    }
+
+    /// Serializes to bytes using bincode.
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+        bincode::serialize(self)
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
+    }
+
+    /// Deserializes from bytes using bincode.
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+        bincode::deserialize(data)
+            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))
+    }
+}
+
+impl VersionedBlockHeader {
+    /// Creates a new versioned block header with V1 variant.
+    pub const fn new_v1(header: BlockHeaderV1) -> Self {
+        Self::V1(header)
+    }
+
+    /// Creates a new versioned block header with Current variant.
+    pub const fn new(header: BlockHeaderV1) -> Self {
+        Self::Current(header)
+    }
+
+    /// Returns the version number for this header.
+    pub const fn version(&self) -> u8 {
+        match self {
+            Self::V1(_) | Self::Current(_) => 1,
+        }
+    }
+
+    /// Serializes to bytes with version prefix.
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+        let header = match self {
+            Self::V1(header) | Self::Current(header) => header,
+        };
+
+        let header_bytes = header.to_bytes()?;
+        let mut buffer = Vec::with_capacity(1 + header_bytes.len());
+        buffer.push(self.version());
+        buffer.extend_from_slice(&header_bytes);
+
+        Ok(buffer)
+    }
+
+    /// Deserializes from bytes, always creating Current variant.
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+        let (_version, remaining) = data
+            .split_first()
+            .ok_or(BlockComponentError::InsufficientData)?;
+
+        let header = BlockHeaderV1::from_bytes(remaining)?;
+        Ok(Self::Current(header))
+    }
+}
+
+impl Serialize for VersionedBlockHeader {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
+        serializer.serialize_bytes(&bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for VersionedBlockHeader {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct VersionedBlockHeaderVisitor;
+
+        impl Visitor<'_> for VersionedBlockHeaderVisitor {
+            type Value = VersionedBlockHeader;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a serialized VersionedBlockHeader byte stream")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<VersionedBlockHeader, E>
+            where
+                E: de::Error,
+            {
+                VersionedBlockHeader::from_bytes(value).map_err(de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_bytes(VersionedBlockHeaderVisitor)
     }
 }
 
@@ -1296,29 +1340,29 @@ mod tests {
     }
 
     #[test]
-    fn test_block_marker_v2_block_footer_serialization() {
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 1357924680,
-            block_user_agent: b"test-node".to_vec(),
+    fn test_block_marker_v1_block_header_serialization() {
+        let header = BlockHeaderV1 {
+            parent_slot: 12345,
+            parent_block_id: Hash::new_unique(),
         };
-        let marker = BlockMarkerV2::BlockFooter(VersionedBlockFooter::new(footer));
+        let marker = BlockMarkerV1::BlockHeader(VersionedBlockHeader::new(header));
 
         let bytes = marker.to_bytes().unwrap();
-        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(marker, deserialized);
     }
 
     #[test]
-    fn test_block_marker_v2_parent_ready_update_serialization() {
+    fn test_block_marker_v1_update_parent_serialization() {
         let update = UpdateParentV1 {
             new_parent_slot: 24681357,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker = BlockMarkerV2::UpdateParent(VersionedUpdateParent::new(update));
+        let marker = BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(update));
 
         let bytes = marker.to_bytes().unwrap();
-        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(marker, deserialized);
     }
@@ -1340,13 +1384,13 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_block_marker_v2_serialization() {
-        let update = UpdateParentV1 {
-            new_parent_slot: 13579246,
-            new_parent_block_id: Hash::new_unique(),
+    fn test_versioned_block_marker_with_block_header() {
+        let header = BlockHeaderV1 {
+            parent_slot: 13579246,
+            parent_block_id: Hash::new_unique(),
         };
-        let marker = VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(
-            VersionedUpdateParent::new(update),
+        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockHeader(
+            VersionedBlockHeader::new(header),
         ));
 
         let bytes = marker.to_bytes().unwrap();
@@ -1455,12 +1499,6 @@ mod tests {
         bad_v1_data.extend_from_slice(&[10, 0]); // byte length = 10
         bad_v1_data.extend_from_slice(&[0u8; 10]); // 10 bytes of data
         assert!(BlockMarkerV1::from_bytes(&bad_v1_data).is_err());
-
-        // Test unknown BlockMarkerV2 variant with proper byte length field
-        let mut bad_v2_data = vec![99u8]; // Unknown variant
-        bad_v2_data.extend_from_slice(&[10, 0]); // byte length = 10
-        bad_v2_data.extend_from_slice(&[0u8; 10]); // 10 bytes of data
-        assert!(BlockMarkerV2::from_bytes(&bad_v2_data).is_err());
     }
 
     #[test]
@@ -1479,8 +1517,8 @@ mod tests {
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
         ));
-        let marker_bytes = marker.to_bytes().unwrap();
-        bytes.extend_from_slice(&marker_bytes);
+        let component2 = BlockComponent::new_block_marker(marker);
+        bytes.extend_from_slice(&component2.to_bytes().unwrap());
 
         let result = BlockComponent::from_bytes(&bytes);
         assert!(result.is_err());
@@ -1574,9 +1612,13 @@ mod tests {
 
         // Only variant ID (missing byte length)
         assert!(BlockMarkerV1::from_bytes(&[0u8]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[1u8]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[2u8]).is_err());
 
         // Variant ID + only 1 byte of length (need 2)
         assert!(BlockMarkerV1::from_bytes(&[0u8, 0]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[1u8, 0]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[2u8, 0]).is_err());
 
         // Unknown variant ID with byte length
         assert!(BlockMarkerV1::from_bytes(&[255u8, 4, 0, 1, 2, 3, 4]).is_err());
@@ -1584,47 +1626,25 @@ mod tests {
         // Valid variant ID and byte length but insufficient data
         assert!(BlockMarkerV1::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
 
-        // Valid variant ID and byte length but invalid footer data
+        // Valid BlockHeader variant ID and byte length but insufficient data
+        assert!(BlockMarkerV1::from_bytes(&[1u8, 10, 0, 1, 2, 3]).is_err());
+
+        // Valid UpdateParent variant ID and byte length but insufficient data
+        assert!(BlockMarkerV1::from_bytes(&[2u8, 10, 0, 1, 2, 3]).is_err());
+
+        // Valid BlockFooter variant but invalid footer data
         assert!(BlockMarkerV1::from_bytes(&[0u8, 3, 0, 1, 2, 3]).is_err());
 
-        // Byte length mismatch - claims 0 bytes but has data
-        assert!(BlockMarkerV1::from_bytes(&[0u8, 0, 0]).is_err());
+        // Valid BlockHeader variant but invalid header data
+        assert!(BlockMarkerV1::from_bytes(&[1u8, 3, 0, 1, 2, 3]).is_err());
+
+        // Valid UpdateParent variant but invalid update data
+        assert!(BlockMarkerV1::from_bytes(&[2u8, 3, 0, 1, 2, 3]).is_err());
 
         // Byte length exceeds actual data available
         assert!(BlockMarkerV1::from_bytes(&[0u8, 255, 255, 1, 2]).is_err());
-    }
-
-    #[test]
-    fn test_block_marker_v2_malformed_data() {
-        // Empty data
-        assert!(BlockMarkerV2::from_bytes(&[]).is_err());
-
-        // Only variant ID (missing byte length)
-        assert!(BlockMarkerV2::from_bytes(&[0u8]).is_err());
-        assert!(BlockMarkerV2::from_bytes(&[1u8]).is_err());
-
-        // Variant ID + only 1 byte of length (need 2)
-        assert!(BlockMarkerV2::from_bytes(&[0u8, 0]).is_err());
-        assert!(BlockMarkerV2::from_bytes(&[1u8, 0]).is_err());
-
-        // Unknown variant ID with byte length
-        assert!(BlockMarkerV2::from_bytes(&[255u8, 4, 0, 1, 2, 3, 4]).is_err());
-
-        // Valid BlockFooter variant ID and byte length but insufficient data
-        assert!(BlockMarkerV2::from_bytes(&[0u8, 10, 0, 1, 2, 3]).is_err());
-
-        // Valid UpdateParent variant ID and byte length but insufficient data
-        assert!(BlockMarkerV2::from_bytes(&[1u8, 10, 0, 1, 2, 3]).is_err());
-
-        // Valid BlockFooter variant but invalid footer data
-        assert!(BlockMarkerV2::from_bytes(&[0u8, 3, 0, 1, 2, 3]).is_err());
-
-        // Valid UpdateParent variant but invalid update data
-        assert!(BlockMarkerV2::from_bytes(&[1u8, 3, 0, 1, 2, 3]).is_err());
-
-        // Byte length exceeds actual data available
-        assert!(BlockMarkerV2::from_bytes(&[0u8, 255, 255, 1, 2]).is_err());
-        assert!(BlockMarkerV2::from_bytes(&[1u8, 255, 255, 1, 2]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[1u8, 255, 255, 1, 2]).is_err());
+        assert!(BlockMarkerV1::from_bytes(&[2u8, 255, 255, 1, 2]).is_err());
     }
 
     #[test]
@@ -1727,6 +1747,180 @@ mod tests {
     }
 
     #[test]
+    fn test_block_header_v1_serialization() {
+        let header = BlockHeaderV1 {
+            parent_slot: 12345,
+            parent_block_id: Hash::new_unique(),
+        };
+
+        let bytes = header.to_bytes().unwrap();
+        let deserialized = BlockHeaderV1::from_bytes(&bytes).unwrap();
+
+        assert_eq!(header, deserialized);
+    }
+
+    #[test]
+    fn test_versioned_block_header_serialization() {
+        let header = BlockHeaderV1 {
+            parent_slot: 67890,
+            parent_block_id: Hash::new_unique(),
+        };
+        let versioned = VersionedBlockHeader::new(header);
+
+        let bytes = versioned.to_bytes().unwrap();
+        let deserialized = VersionedBlockHeader::from_bytes(&bytes).unwrap();
+
+        assert_eq!(versioned, deserialized);
+    }
+
+    #[test]
+    fn test_block_header_v1_edge_cases() {
+        // Test with maximum slot value
+        let header = BlockHeaderV1 {
+            parent_slot: u64::MAX,
+            parent_block_id: Hash::new_unique(),
+        };
+
+        let bytes = header.to_bytes().unwrap();
+        let deserialized = BlockHeaderV1::from_bytes(&bytes).unwrap();
+        assert_eq!(header, deserialized);
+
+        // Test with zero slot value
+        let header = BlockHeaderV1 {
+            parent_slot: 0,
+            parent_block_id: Hash::default(),
+        };
+
+        let bytes = header.to_bytes().unwrap();
+        let deserialized = BlockHeaderV1::from_bytes(&bytes).unwrap();
+        assert_eq!(header, deserialized);
+    }
+
+    #[test]
+    fn test_block_header_v1_malformed_data() {
+        // Empty data should fail bincode deserialization
+        assert!(BlockHeaderV1::from_bytes(&[]).is_err());
+
+        // Partial data should fail
+        assert!(BlockHeaderV1::from_bytes(&[0u8; 4]).is_err());
+        assert!(BlockHeaderV1::from_bytes(&[0u8; 20]).is_err());
+        assert!(BlockHeaderV1::from_bytes(&[0u8; 39]).is_err());
+
+        // Valid data should work
+        let header = BlockHeaderV1 {
+            parent_slot: 42,
+            parent_block_id: Hash::default(),
+        };
+        let bytes = header.to_bytes().unwrap();
+        assert_eq!(bytes.len(), 40); // 8 + 32 bytes
+
+        let deserialized = BlockHeaderV1::from_bytes(&bytes).unwrap();
+        assert_eq!(header, deserialized);
+    }
+
+    #[test]
+    fn test_versioned_block_header_malformed_data() {
+        // Empty data
+        assert!(VersionedBlockHeader::from_bytes(&[]).is_err());
+
+        // Only version byte
+        assert!(VersionedBlockHeader::from_bytes(&[0u8]).is_err());
+
+        // Invalid header data after version
+        assert!(VersionedBlockHeader::from_bytes(&[0u8, 1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn test_versioned_block_header_v1_variant() {
+        let original_data = BlockHeaderV1 {
+            parent_slot: 255,
+            parent_block_id: Hash::new_unique(),
+        };
+        let versioned_header = VersionedBlockHeader::new_v1(original_data.clone());
+
+        let bytes = versioned_header.to_bytes().unwrap();
+        let deserialized = VersionedBlockHeader::from_bytes(&bytes).unwrap();
+
+        // Should become Current variant after deserialization
+        let VersionedBlockHeader::Current(deser_data) = deserialized else {
+            panic!("Expected Current variant after deserialization");
+        };
+        assert_eq!(original_data, deser_data);
+    }
+
+    #[test]
+    fn test_versioned_block_header_version_upgrade() {
+        let header = BlockHeaderV1 {
+            parent_slot: 7788990011,
+            parent_block_id: Hash::new_unique(),
+        };
+        let v1_header = VersionedBlockHeader::V1(header.clone());
+
+        let bytes = v1_header.to_bytes().unwrap();
+        let deserialized = VersionedBlockHeader::from_bytes(&bytes).unwrap();
+
+        // Should deserialize to Current variant
+        assert!(matches!(deserialized, VersionedBlockHeader::Current(_)));
+    }
+
+    #[test]
+    fn test_block_header_v1_clone_and_debug() {
+        let header = BlockHeaderV1 {
+            parent_slot: 12345,
+            parent_block_id: Hash::default(),
+        };
+        let cloned_header = header.clone();
+
+        assert_eq!(header, cloned_header);
+
+        let debug_str = format!("{header:?}");
+        assert!(debug_str.contains("BlockHeaderV1"));
+    }
+
+    #[test]
+    fn test_block_header_v1_equality() {
+        let hash = Hash::new_unique();
+        let header1 = BlockHeaderV1 {
+            parent_slot: 42,
+            parent_block_id: hash,
+        };
+        let header2 = BlockHeaderV1 {
+            parent_slot: 42,
+            parent_block_id: hash,
+        };
+        let header3 = BlockHeaderV1 {
+            parent_slot: 43,
+            parent_block_id: Hash::new_unique(),
+        };
+
+        assert_eq!(header1, header2);
+        assert_ne!(header1, header3);
+    }
+
+    #[test]
+    fn test_block_header_round_trip_consistency() {
+        let original_header = BlockHeaderV1 {
+            parent_slot: 42,
+            parent_block_id: Hash::new_unique(),
+        };
+
+        let bytes1 = bincode::serialize(&original_header).unwrap();
+        let deser1: BlockHeaderV1 = bincode::deserialize(&bytes1).unwrap();
+
+        let bytes2 = bincode::serialize(&deser1).unwrap();
+        let deser2: BlockHeaderV1 = bincode::deserialize(&bytes2).unwrap();
+
+        let bytes3 = bincode::serialize(&deser2).unwrap();
+        let deser3: BlockHeaderV1 = bincode::deserialize(&bytes3).unwrap();
+
+        assert_eq!(original_header, deser1);
+        assert_eq!(deser1, deser2);
+        assert_eq!(deser2, deser3);
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(bytes2, bytes3);
+    }
+
+    #[test]
     fn test_parent_ready_update_v1_edge_cases() {
         // Test with maximum slot value
         let update = UpdateParentV1 {
@@ -1761,6 +1955,15 @@ mod tests {
         let versioned_footer = VersionedBlockFooter::new(footer);
         assert_eq!(versioned_footer.version(), 1);
 
+        let header = BlockHeaderV1 {
+            parent_slot: 789,
+            parent_block_id: Hash::default(),
+        };
+        assert_eq!(header.version(), 1);
+
+        let versioned_header = VersionedBlockHeader::new(header);
+        assert_eq!(versioned_header.version(), 1);
+
         let update = UpdateParentV1 {
             new_parent_slot: 456,
             new_parent_block_id: Hash::default(),
@@ -1770,14 +1973,17 @@ mod tests {
         let versioned_update = VersionedUpdateParent::new(update);
         assert_eq!(versioned_update.version(), 1);
 
-        let marker_v1 = BlockMarkerV1::BlockFooter(versioned_footer);
-        let marker_v2 = BlockMarkerV2::UpdateParent(versioned_update);
-        assert_eq!(marker_v2.version(), 2);
+        let marker_footer = BlockMarkerV1::BlockFooter(versioned_footer);
+        let marker_header = BlockMarkerV1::BlockHeader(versioned_header);
+        let marker_update = BlockMarkerV1::UpdateParent(versioned_update);
 
-        let versioned_marker_v1 = VersionedBlockMarker::new(marker_v1);
-        let versioned_marker_v2 = VersionedBlockMarker::V2(marker_v2);
-        assert_eq!(versioned_marker_v1.version(), 1);
-        assert_eq!(versioned_marker_v2.version(), 2);
+        let versioned_marker_footer = VersionedBlockMarker::new(marker_footer);
+        let versioned_marker_header = VersionedBlockMarker::new(marker_header);
+        let versioned_marker_update = VersionedBlockMarker::new(marker_update);
+
+        assert_eq!(versioned_marker_footer.version(), 1);
+        assert_eq!(versioned_marker_header.version(), 1);
+        assert_eq!(versioned_marker_update.version(), 1);
     }
 
     #[test]
@@ -2077,7 +2283,7 @@ mod tests {
     #[test]
     fn test_block_component_empty_entries_with_special() {
         let update = VersionedUpdateParent::Current(create_parent_ready_update());
-        let special = VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update));
+        let special = VersionedBlockMarker::new(BlockMarkerV1::UpdateParent(update));
         let batch = BlockComponent::BlockMarker(special);
 
         let bytes = batch.to_bytes().unwrap();
@@ -2087,7 +2293,7 @@ mod tests {
         assert!(deserialized.marker().is_some());
 
         let special = deserialized.marker().unwrap();
-        assert_eq!(special.version(), 2);
+        assert_eq!(special.version(), 1);
     }
 
     #[test]
@@ -2147,7 +2353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_special_entry_v1_parent_ready_update_serialization() {
+    fn test_special_entry_v1_block_footer_serialization() {
         let footer = BlockFooterV1 {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
@@ -2158,11 +2364,16 @@ mod tests {
         assert!(!bytes.is_empty());
 
         let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
-        let BlockMarkerV1::BlockFooter(footer) = deserialized;
-        assert_eq!(footer.version(), 1);
+        match deserialized {
+            BlockMarkerV1::BlockFooter(footer) => {
+                assert_eq!(footer.version(), 1);
+            }
+            _ => panic!("Expected BlockFooter variant"),
+        }
 
         let serialized = bincode::serialize(&entry).unwrap();
-        let BlockMarkerV1::BlockFooter(_) = bincode::deserialize(&serialized).unwrap();
+        let deser: BlockMarkerV1 = bincode::deserialize(&serialized).unwrap();
+        assert!(matches!(deser, BlockMarkerV1::BlockFooter(_)));
     }
 
     #[test]
@@ -2186,21 +2397,22 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_special_entry_with_parent_ready_update() {
+    fn test_versioned_special_entry_with_update_parent() {
         let versioned_update = VersionedUpdateParent::new(create_parent_ready_update_with_data(
             12345,
             Hash::new_unique(),
         ));
-        let special_entry = BlockMarkerV2::UpdateParent(versioned_update);
-        let versioned_entry = VersionedBlockMarker::V2(special_entry);
+        let special_entry = BlockMarkerV1::UpdateParent(versioned_update);
+        let versioned_entry = VersionedBlockMarker::new(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
         assert_eq!(versioned_entry.version(), deserialized.version());
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
-            panic!("Expected V2(UpdateParent) variant");
+        let VersionedBlockMarker::Current(BlockMarkerV1::UpdateParent(update)) = deserialized
+        else {
+            panic!("Expected Current(UpdateParent) variant");
         };
         assert_eq!(update.version(), 1);
 
@@ -2218,13 +2430,13 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_special_entry_zero_version() {
+    fn test_versioned_special_entry_v1_variant() {
         let footer = BlockFooterV1 {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
         let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
-        let versioned_entry = VersionedBlockMarker::new_v2(special_entry);
+        let versioned_entry = VersionedBlockMarker::new_v1(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
@@ -2237,8 +2449,8 @@ mod tests {
         let complex_hash = Hash::new_unique();
         let parent_update = create_parent_ready_update_with_data(u64::MAX, complex_hash);
         let versioned_parent_update = VersionedUpdateParent::new(parent_update);
-        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent_update);
-        let versioned_special = VersionedBlockMarker::V2(special_entry);
+        let special_entry = BlockMarkerV1::UpdateParent(versioned_parent_update);
+        let versioned_special = VersionedBlockMarker::new(special_entry);
 
         let batch = BlockComponent::new_block_marker(versioned_special);
 
@@ -2249,10 +2461,10 @@ mod tests {
         assert!(deserialized.marker().is_some());
 
         let special = deserialized.marker().unwrap();
-        assert_eq!(special.version(), 2);
+        assert_eq!(special.version(), 1);
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = special else {
-            panic!("Expected V2(UpdateParent) variant");
+        let VersionedBlockMarker::Current(BlockMarkerV1::UpdateParent(update)) = special else {
+            panic!("Expected Current(UpdateParent) variant");
         };
         assert_eq!(update.version(), 1);
 
@@ -2283,15 +2495,16 @@ mod tests {
     fn test_all_variant_combinations() {
         let v1_parent = create_parent_ready_update();
         let v1_versioned = VersionedUpdateParent::new_v1(v1_parent);
-        let v2_special = BlockMarkerV2::UpdateParent(v1_versioned);
-        let v2_versioned_special = VersionedBlockMarker::V2(v2_special);
+        let v1_special = BlockMarkerV1::UpdateParent(v1_versioned);
+        let v1_versioned_special = VersionedBlockMarker::new_v1(v1_special);
 
-        let bytes = v2_versioned_special.to_bytes().unwrap();
+        let bytes = v1_versioned_special.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
-        // After deserialization, V2 variant should stay V2
-        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
-            panic!("Expected V2 BlockMarker");
+        // After deserialization, V1 variant should become Current
+        let VersionedBlockMarker::Current(BlockMarkerV1::UpdateParent(update)) = deserialized
+        else {
+            panic!("Expected Current(UpdateParent) BlockMarker");
         };
 
         let VersionedUpdateParent::Current(_) = update else {
@@ -2318,8 +2531,8 @@ mod tests {
     fn test_serialization_deterministic() {
         let update = create_parent_ready_update();
         let versioned_parent = VersionedUpdateParent::new(update);
-        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent);
-        let versioned_special = VersionedBlockMarker::V2(special_entry);
+        let special_entry = BlockMarkerV1::UpdateParent(versioned_parent);
+        let versioned_special = VersionedBlockMarker::new(special_entry);
         let batch = BlockComponent::new_block_marker(versioned_special);
 
         let bytes1 = batch.to_bytes().unwrap();
@@ -2331,18 +2544,19 @@ mod tests {
     }
 
     #[test]
-    fn test_large_version_numbers() {
+    fn test_large_slot_values() {
         let parent_update = create_parent_ready_update_with_data(u64::MAX, Hash::new_unique());
         let versioned_parent = VersionedUpdateParent::new(parent_update);
-        let special_entry = BlockMarkerV2::UpdateParent(versioned_parent);
-        let large_versioned = VersionedBlockMarker::V2(special_entry);
+        let special_entry = BlockMarkerV1::UpdateParent(versioned_parent);
+        let large_versioned = VersionedBlockMarker::new(special_entry);
 
         let bytes = large_versioned.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
 
-        assert_eq!(deserialized.version(), 2);
+        assert_eq!(deserialized.version(), 1);
 
-        let VersionedBlockMarker::V2(BlockMarkerV2::UpdateParent(update)) = deserialized else {
+        let VersionedBlockMarker::Current(BlockMarkerV1::UpdateParent(update)) = deserialized
+        else {
             panic!("Expected UpdateParent variant");
         };
         assert_eq!(update.version(), 1);
@@ -2363,12 +2577,12 @@ mod tests {
 
     #[test]
     fn test_byte_length_validation() {
-        // Test BlockMarkerV1 byte length serialization/deserialization
+        // Test BlockMarkerV1 with BlockFooter
         let footer = BlockFooterV1 {
             block_producer_time_nanos: 123456789,
             block_user_agent: b"test-validator".to_vec(),
         };
-        let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer.clone()));
+        let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
 
         let bytes = marker_v1.to_bytes().unwrap();
         // Check that byte length is included
@@ -2381,9 +2595,13 @@ mod tests {
         let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
         assert_eq!(marker_v1, deserialized);
 
-        // Test BlockMarkerV2 with BlockFooter
-        let marker_v2_footer = BlockMarkerV2::BlockFooter(VersionedBlockFooter::new(footer));
-        let bytes = marker_v2_footer.to_bytes().unwrap();
+        // Test BlockMarkerV1 with BlockHeader
+        let header = BlockHeaderV1 {
+            parent_slot: 987654321,
+            parent_block_id: Hash::new_unique(),
+        };
+        let marker_header = BlockMarkerV1::BlockHeader(VersionedBlockHeader::new(header));
+        let bytes = marker_header.to_bytes().unwrap();
 
         // Check that byte length is included
         assert!(bytes.len() >= 3); // At least variant ID + 2 bytes for length
@@ -2392,16 +2610,16 @@ mod tests {
         let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
         assert_eq!(byte_length as usize, bytes.len() - 3); // Length should match remaining data
 
-        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
-        assert_eq!(marker_v2_footer, deserialized);
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(marker_header, deserialized);
 
-        // Test BlockMarkerV2 with UpdateParent
+        // Test BlockMarkerV1 with UpdateParent
         let update = UpdateParentV1 {
             new_parent_slot: 987654321,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker_v2_update = BlockMarkerV2::UpdateParent(VersionedUpdateParent::new(update));
-        let bytes = marker_v2_update.to_bytes().unwrap();
+        let marker_update = BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(update));
+        let bytes = marker_update.to_bytes().unwrap();
 
         // Check that byte length is included
         assert!(bytes.len() >= 3); // At least variant ID + 2 bytes for length
@@ -2410,8 +2628,8 @@ mod tests {
         let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
         assert_eq!(byte_length as usize, bytes.len() - 3); // Length should match remaining data
 
-        let deserialized = BlockMarkerV2::from_bytes(&bytes).unwrap();
-        assert_eq!(marker_v2_update, deserialized);
+        let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
+        assert_eq!(marker_update, deserialized);
     }
 
     #[test]
