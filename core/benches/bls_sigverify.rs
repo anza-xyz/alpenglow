@@ -5,7 +5,9 @@ use {
     crossbeam_channel::unbounded,
     solana_bls_signatures::signature::Signature as BlsSignature,
     solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
+    solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
     solana_hash::Hash,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
     solana_runtime::{
@@ -15,6 +17,8 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
+    solana_signer::Signer,
+    solana_streamer::socket::SocketAddrSpace,
     solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
     solana_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
@@ -54,7 +58,22 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
+    let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+        &bank_forks.read().unwrap().root_bank(),
+    ));
+    let contact_info = ContactInfo::new_localhost(&validator_keypairs[0].node_keypair.pubkey(), 0);
+    let cluster_info = Arc::new(ClusterInfo::new(
+        contact_info,
+        Arc::new(validator_keypairs[0].node_keypair.insecure_clone()),
+        SocketAddrSpace::Unspecified,
+    ));
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        verified_votes_s,
+        consensus_msg_s,
+        leader_schedule_cache,
+        cluster_info,
+    );
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
