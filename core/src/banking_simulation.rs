@@ -764,7 +764,7 @@ impl BankingSimulator {
             DEFAULT_HASHES_PER_BATCH,
             record_receiver,
             poh_service_message_receiver,
-            migration_status,
+            migration_status.clone(),
             || {},
         );
 
@@ -834,6 +834,7 @@ impl BankingSimulator {
             sender,
             None,
             completed_block_sender,
+            migration_status.clone(),
         );
 
         info!("Start banking stage!...");

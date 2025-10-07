@@ -57,6 +57,7 @@ use {
         xdp::XdpSender,
     },
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -158,6 +159,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -375,6 +377,7 @@ impl Tpu {
             turbine_quic_endpoint_sender,
             xdp_sender,
             votor_event_sender,
+            migration_status,
         );
 
         let mut key_notifiers = key_notifiers.write().unwrap();
