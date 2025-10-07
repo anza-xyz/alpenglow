@@ -224,13 +224,14 @@ impl ConsensusPoolService {
                 let genesis_block = ctx.migration_status.genesis_block();
                 // can expect once we have block id in snapshots (SIMD-0333)
                 let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
-                let kick_off_block = genesis_block.max(root_block);
+                let kick_off_block @ (kick_off_slot, _) = genesis_block.max(root_block);
+                let start_slot = kick_off_slot.checked_add(1).unwrap();
 
-                highest_parent_ready = kick_off_block.0;
                 events.push(VotorEvent::ParentReady {
-                    slot: kick_off_block.0.checked_add(1).unwrap(),
+                    slot: start_slot,
                     parent_block: kick_off_block,
                 });
+                highest_parent_ready = start_slot;
                 kick_off_parent_ready = true;
             }
 

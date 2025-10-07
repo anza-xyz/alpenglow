@@ -873,10 +873,6 @@ impl ReplayStage {
 
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !migration_status.is_alpenglow_enabled() {
-                    // TODO(ashwin): This will be moved to the event coordinator once we figure out
-                    // migration
-                    for _ in votor_event_receiver.try_iter() {}
-
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.

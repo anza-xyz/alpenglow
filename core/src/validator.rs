@@ -1785,7 +1785,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
-            migration_status.clone(),
+            migration_status,
         );
 
         datapoint_info!(

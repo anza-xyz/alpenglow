@@ -378,6 +378,7 @@ impl Tpu {
             turbine_quic_endpoint_sender,
             xdp_sender,
             votor_event_sender,
+            migration_status,
         );
 
         let mut key_notifiers = key_notifiers.write().unwrap();
