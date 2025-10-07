@@ -29,6 +29,7 @@ use {
         consensus_message::{
             Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -94,6 +95,7 @@ pub struct BLSSigVerifier {
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BLSSigVerifier {
@@ -121,6 +123,8 @@ impl BLSSigVerifier {
                 .retain(|vote, _| vote.slot() > root_bank.slot());
         }
 
+        let genesis_slot = self.migration_status.genesis_slot().unwrap_or(Slot::MAX);
+
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -143,6 +147,24 @@ impl BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
+                    let slot = vote_message.vote.slot();
+
+                    // Only allow genesis votes during migration period
+                    if vote_message.vote.is_genesis_vote() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_vote
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow regular alpenglow votes past genesis
+                    if !vote_message.vote.is_genesis_vote() && slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Missing epoch states
                     let Some(key_to_rank_map) =
                         get_key_to_rank_map(&root_bank, vote_message.vote.slot())
@@ -182,8 +204,26 @@ impl BLSSigVerifier {
                     });
                 }
                 ConsensusMessage::Certificate(cert_message) => {
+                    let slot = cert_message.certificate.slot();
+
+                    // Only allow genesis certs during migration period
+                    if cert_message.certificate.is_genesis() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_cert
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow alpenglow certs past genesis
+                    if slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Only need certs newer than root slot
-                    if cert_message.certificate.slot() <= root_bank.slot() {
+                    if slot <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -238,6 +278,7 @@ impl BLSSigVerifier {
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -248,6 +289,7 @@ impl BLSSigVerifier {
             vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,
+            migration_status,
         }
     }
 
@@ -685,6 +727,7 @@ mod tests {
                 verified_vote_sender,
                 message_sender,
                 consensus_metrics_sender,
+                Arc::new(MigrationStatus::post_migration_status()),
             ),
         )
     }
@@ -1479,6 +1522,7 @@ mod tests {
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            Arc::new(MigrationStatus::post_migration_status()),
         );
 
         let vote = Vote::new_skip_vote(2);

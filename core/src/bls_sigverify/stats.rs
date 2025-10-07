@@ -145,6 +145,9 @@ pub(crate) struct BLSSigVerifierStats {
     pub(crate) received_old: AtomicU64,
     pub(crate) received_verified: AtomicU64,
     pub(crate) received_votes: AtomicU64,
+    pub(crate) received_invalid_genesis_vote: AtomicU64,
+    pub(crate) received_invalid_genesis_cert: AtomicU64,
+    pub(crate) received_pre_migration_message: AtomicU64,
     pub(crate) last_stats_logged: Instant,
 }
 
@@ -177,6 +180,9 @@ impl BLSSigVerifierStats {
             received_old: AtomicU64::new(0),
             received_verified: AtomicU64::new(0),
             received_votes: AtomicU64::new(0),
+            received_invalid_genesis_vote: AtomicU64::new(0),
+            received_invalid_genesis_cert: AtomicU64::new(0),
+            received_pre_migration_message: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
         }
     }
@@ -303,6 +309,21 @@ impl BLSSigVerifierStats {
             (
                 "received_malformed",
                 self.received_malformed.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_invalid_genesis_vote",
+                self.received_invalid_genesis_vote.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_invalid_genesis_cert",
+                self.received_invalid_genesis_cert.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_pre_migration_message",
+                self.received_pre_migration_message.load(Ordering::Relaxed) as i64,
                 i64
             ),
         );

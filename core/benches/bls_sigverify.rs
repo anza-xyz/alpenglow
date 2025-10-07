@@ -18,6 +18,7 @@ use {
     solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
     solana_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -104,6 +105,7 @@ fn setup_environment() -> BenchEnvironment {
         verified_votes_s,
         consensus_msg_s,
         consensus_metrics_sender,
+        Arc::new(MigrationStatus::default()),
     );
 
     BenchEnvironment {
