@@ -136,7 +136,10 @@ impl ConsensusPool {
     pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
-        let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
+        let root_block = (
+            bank.slot(),
+            bank.chained_merkle_id().map(|sr| sr.0).unwrap_or_default(),
+        );
         let parent_ready_tracker = ParentReadyTracker::new(my_pubkey, root_block);
 
         Self {

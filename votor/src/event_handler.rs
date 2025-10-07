@@ -492,7 +492,7 @@ impl EventHandler {
             // We haven't finished replay for the block, so we can't trigger parent ready
             return None;
         }
-        if bank.block_id() != Some(block_id) {
+        if bank.chained_merkle_id() != Some(block_id) {
             // We have a different block id for the slot, repair should kick in later
             return None;
         }

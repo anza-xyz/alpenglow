@@ -10,6 +10,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_perf::packet::{PacketRef, PacketRefMut},
+    solana_runtime::bank::SliceRoot,
     solana_signature::{Signature, SIGNATURE_BYTES},
     solana_signer::Signer,
     std::ops::Range,
@@ -185,7 +186,7 @@ pub(crate) fn get_signed_data(shred: &[u8]) -> Option<Hash> {
             resigned,
         } => shred::merkle::ShredData::get_merkle_root(shred, proof_size, chained, resigned)?,
     };
-    Some(data)
+    Some(data.0)
 }
 
 pub fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
@@ -198,7 +199,7 @@ pub fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
     Ok(flags & ShredFlags::SHRED_TICK_REFERENCE_MASK.bits())
 }
 
-pub fn get_merkle_root(shred: &[u8]) -> Option<Hash> {
+pub fn get_merkle_root(shred: &[u8]) -> Option<SliceRoot> {
     match get_shred_variant(shred).ok()? {
         ShredVariant::MerkleCode {
             proof_size,
@@ -213,7 +214,7 @@ pub fn get_merkle_root(shred: &[u8]) -> Option<Hash> {
     }
 }
 
-pub(crate) fn get_chained_merkle_root(shred: &[u8]) -> Option<Hash> {
+pub(crate) fn get_chained_merkle_root(shred: &[u8]) -> Option<SliceRoot> {
     let offset = match get_shred_variant(shred).ok()? {
         ShredVariant::MerkleCode {
             proof_size,
@@ -232,9 +233,9 @@ pub(crate) fn get_chained_merkle_root(shred: &[u8]) -> Option<Hash> {
     }
     .ok()?;
     let merkle_root = shred.get(offset..offset + SIZE_OF_MERKLE_ROOT)?;
-    Some(Hash::from(
+    Some(SliceRoot(Hash::from(
         <[u8; SIZE_OF_MERKLE_ROOT]>::try_from(merkle_root).unwrap(),
-    ))
+    )))
 }
 
 fn get_retransmitter_signature_offset(shred: &[u8]) -> Result<usize, Error> {
@@ -347,7 +348,7 @@ pub fn resign_shred(shred: &mut [u8], keypair: &Keypair) -> Result<(), Error> {
     let Some(buffer) = shred.get_mut(offset..offset + SIGNATURE_BYTES) else {
         return Err(Error::InvalidPayloadSize(shred.len()));
     };
-    let signature = keypair.sign_message(merkle_root.as_ref());
+    let signature = keypair.sign_message(merkle_root.0.as_ref());
     buffer.copy_from_slice(signature.as_ref());
     Ok(())
 }
@@ -555,7 +556,7 @@ mod tests {
             });
             assert_eq!(
                 get_signed_data(bytes).unwrap(),
-                shred.merkle_root().unwrap()
+                shred.merkle_root().unwrap().0
             );
             assert_eq!(
                 get_merkle_root(bytes).unwrap(),
@@ -593,7 +594,7 @@ mod tests {
                 {
                     let mut bytes = bytes.to_vec();
                     let keypair = Keypair::new();
-                    let signature = keypair.sign_message(shred.merkle_root().unwrap().as_ref());
+                    let signature = keypair.sign_message(shred.merkle_root().unwrap().0.as_ref());
                     assert_matches!(resign_shred(&mut bytes, &keypair), Ok(()));
                     assert_eq!(get_retransmitter_signature(&bytes).unwrap(), signature);
                     let shred = shred::merkle::Shred::from_payload(bytes).unwrap();

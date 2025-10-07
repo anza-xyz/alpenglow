@@ -9,6 +9,7 @@ use {
     serde::{Deserialize, Deserializer, Serialize, Serializer},
     solana_clock::{Slot, UnixTimestamp},
     solana_hash::Hash,
+    solana_runtime::bank::SliceRoot,
     std::{
         collections::BTreeSet,
         ops::{Range, RangeBounds},
@@ -396,7 +397,7 @@ pub(crate) struct ErasureConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MerkleRootMeta {
     /// The merkle root, `None` for legacy shreds
-    merkle_root: Option<Hash>,
+    merkle_root: Option<SliceRoot>,
     /// The first received shred index
     first_received_shred_index: u32,
     /// The shred type of the first received shred
@@ -872,7 +873,7 @@ impl MerkleRootMeta {
         }
     }
 
-    pub(crate) fn merkle_root(&self) -> Option<Hash> {
+    pub(crate) fn merkle_root(&self) -> Option<SliceRoot> {
         self.merkle_root
     }
 

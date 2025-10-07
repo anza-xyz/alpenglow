@@ -1,6 +1,10 @@
 use {
-    crate::shred::Error, solana_hash::Hash, solana_sha256_hasher::hashv,
-    static_assertions::const_assert_eq, std::iter::successors,
+    crate::shred::Error,
+    solana_hash::Hash,
+    //solana_runtime::bank::{AlpenglowBlockId,
+    solana_runtime::bank::SliceRoot,
+    solana_sha256_hasher::hashv,
+    static_assertions::const_assert_eq,
 };
 
 pub(crate) const SIZE_OF_MERKLE_ROOT: usize = std::mem::size_of::<Hash>();
@@ -18,58 +22,107 @@ pub(crate) const MERKLE_HASH_PREFIX_LEAF: &[u8] = b"\x00SOLANA_MERKLE_SHREDS_LEA
 pub(crate) const MERKLE_HASH_PREFIX_NODE: &[u8] = b"\x01SOLANA_MERKLE_SHREDS_NODE";
 
 pub(crate) type MerkleProofEntry = [u8; 20];
+pub(crate) struct SliceMerkleTree {
+    pub hashes: Vec<Option<Hash>>,
+    pub root: SliceRoot,
+}
 
-pub fn make_merkle_tree<I>(shreds: I) -> Result<Vec<Hash>, Error>
+/*
+pub(crate) struct DoubleMerkleTree {
+    pub hashes: Vec<Option<Hash>>,
+    pub parent_id: AlpenglowBlockId,
+    pub block_id: AlpenglowBlockId,
+}
+*/
+
+fn make_basic_merkle_tree<I>(items: I) -> Result<Vec<Option<Hash>>, Error>
 where
     I: IntoIterator<Item = Result<Hash, Error>>,
     <I as IntoIterator>::IntoIter: ExactSizeIterator,
 {
-    let shreds = shreds.into_iter();
-    let num_shreds = shreds.len();
-    let capacity = get_merkle_tree_size(num_shreds);
-    let mut nodes = Vec::with_capacity(capacity);
-    for shred in shreds {
-        nodes.push(shred?);
+    let items = items.into_iter();
+    let num_items = items.len();
+    let non_leaf_num = get_non_leaf_num(num_items);
+    let mut nodes = vec![None; num_items + non_leaf_num];
+    let mut leaf_index = non_leaf_num;
+    for item in items {
+        nodes[leaf_index] = Some(item?);
+        leaf_index += 1;
     }
-    let init = (num_shreds > 1).then_some(num_shreds);
-    for size in successors(init, |&k| (k > 2).then_some((k + 1) >> 1)) {
-        let offset = nodes.len() - size;
-        for index in (offset..offset + size).step_by(2) {
-            let node = &nodes[index];
-            let other = &nodes[(index + 1).min(offset + size - 1)];
-            let parent = join_nodes(node, other);
-            nodes.push(parent);
+    for i in (1..=(non_leaf_num - 1)).rev() {
+        if nodes[2 * i].is_none() && nodes[2 * i + 1].is_none() {
+            nodes[i] = None;
+        } else if nodes[2 * i + 1].is_none() {
+            nodes[i] = Some(join_nodes(nodes[2 * i].unwrap(), nodes[2 * i].unwrap()));
+        } else {
+            nodes[i] = Some(join_nodes(nodes[2 * i].unwrap(), nodes[2 * i + 1].unwrap()));
         }
     }
-    debug_assert_eq!(nodes.len(), capacity);
     Ok(nodes)
 }
 
+// The tree for a slice (erasure set).
+pub fn make_merkle_tree<I>(shreds: I) -> Result<SliceMerkleTree, Error>
+where
+    I: IntoIterator<Item = Result<Hash, Error>>,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+{
+    let nodes = make_basic_merkle_tree(shreds)?;
+    let root = nodes[1].unwrap();
+    Ok(SliceMerkleTree {
+        hashes: nodes,
+        root: SliceRoot(root),
+    })
+}
+
+// The tree on top of slice trees for Alpenglow block id/repair.
+/*
+pub fn make_double_merkle_tree<I>(
+    slice_roots: I,
+    parent_id: AlpenglowBlockId,
+) -> Result<DoubleMerkleTree, Error>
+where
+    I: IntoIterator<Item = Result<SliceRoot, Error>>,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+{
+    let hashes: Vec<Result<Hash, Error>> = slice_roots
+        .into_iter()
+        .map(|x| x.map(|sr| sr.0))
+        .chain(std::iter::once(Ok(parent_id.0)))
+        .collect();
+    let nodes = make_basic_merkle_tree(hashes)?;
+    let root = nodes[1].unwrap();
+    Ok(DoubleMerkleTree {
+        hashes: nodes,
+        parent_id,
+        block_id: AlpenglowBlockId(root),
+    })
+}
+*/
+
 pub fn make_merkle_proof(
-    mut index: usize, // leaf index ~ shred's erasure shard index.
-    mut size: usize,  // number of leaves ~ erasure batch size.
-    tree: &[Hash],
+    mut index: usize, // leaf index
+    mut size: usize,  // number of leaves in the tree
+    tree: &[Option<Hash>],
 ) -> impl Iterator<Item = Result<&MerkleProofEntry, Error>> {
-    let mut offset = 0;
-    if index >= size {
-        // Force below iterator to return Error.
-        (size, offset) = (0, tree.len());
-    }
+    let non_leaf_num = get_non_leaf_num(size);
+    size += non_leaf_num;
+    index += non_leaf_num;
+
     std::iter::from_fn(move || {
-        if size > 1 {
-            let Some(node) = tree.get(offset + (index ^ 1).min(size - 1)) else {
-                return Some(Err(Error::InvalidMerkleProof));
-            };
-            offset += size;
-            size = (size + 1) >> 1;
-            index >>= 1;
-            let entry = &node.as_ref()[..SIZE_OF_MERKLE_PROOF_ENTRY];
-            let entry = <&MerkleProofEntry>::try_from(entry).unwrap();
-            Some(Ok(entry))
-        } else if offset + 1 == tree.len() {
+        if index == 1 {
             None
-        } else {
+        } else if index >= size {
             Some(Err(Error::InvalidMerkleProof))
+        } else {
+            let node = match tree.get(index ^ 1) {
+                Some(Some(hash)) => hash,
+                _ => tree[index].as_ref().expect("node must have a hash"),
+            };
+            index >>= 1;
+            let entry_bytes = &node.as_ref()[..SIZE_OF_MERKLE_PROOF_ENTRY];
+            let entry = <&MerkleProofEntry>::try_from(entry_bytes).unwrap();
+            Some(Ok(entry))
         }
     })
 }
@@ -102,9 +155,13 @@ where
         .ok_or(Error::InvalidMerkleProof)
 }
 
-// Given number of shreds, returns the number of nodes in the Merkle tree.
-pub fn get_merkle_tree_size(num_shreds: usize) -> usize {
-    successors(Some(num_shreds), |&k| (k > 1).then_some((k + 1) >> 1)).sum()
+// Given number of items, returns the number of non-leaf nodes in the Merkle tree.
+pub fn get_non_leaf_num(leaf_num: usize) -> usize {
+    let mut non_leaf_num = 1;
+    while non_leaf_num < leaf_num {
+        non_leaf_num *= 2;
+    }
+    non_leaf_num
 }
 
 // Maps number of (code + data) shreds to merkle_proof.len().
@@ -138,14 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_merkle_tree_size() {
-        const TREE_SIZE: [usize; 15] = [0, 1, 3, 6, 7, 11, 12, 14, 15, 20, 21, 23, 24, 27, 28];
-        for (num_shreds, size) in TREE_SIZE.into_iter().enumerate() {
-            assert_eq!(get_merkle_tree_size(num_shreds), size);
-        }
-    }
-
-    #[test]
     fn test_make_merkle_proof_error() {
         let mut rng = rand::thread_rng();
         let nodes = repeat_with(|| rng.gen::<[u8; 32]>()).map(Hash::from);
@@ -154,7 +203,7 @@ mod tests {
         let tree = make_merkle_tree(nodes.into_iter().map(Ok)).unwrap();
         for index in size..size + 3 {
             assert_matches!(
-                make_merkle_proof(index, size, &tree).next(),
+                make_merkle_proof(index, size, &tree.hashes).next(),
                 Some(Err(Error::InvalidMerkleProof))
             );
         }
@@ -164,10 +213,10 @@ mod tests {
         let nodes = repeat_with(|| rng.gen::<[u8; 32]>()).map(Hash::from);
         let nodes: Vec<_> = nodes.take(size).collect();
         let tree = make_merkle_tree(nodes.iter().cloned().map(Ok)).unwrap();
-        let root = tree.last().copied().unwrap();
+        let root = tree.hashes.last().unwrap().unwrap();
         for index in 0..size {
             for (k, &node) in nodes.iter().enumerate() {
-                let proof = make_merkle_proof(index, size, &tree).map(Result::unwrap);
+                let proof = make_merkle_proof(index, size, &tree.hashes).map(Result::unwrap);
                 if k == index {
                     assert_eq!(root, get_merkle_root(k, node, proof).unwrap());
                 } else {

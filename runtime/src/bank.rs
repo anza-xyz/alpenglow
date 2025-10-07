@@ -478,6 +478,12 @@ pub struct BankFieldsToSerialize {
     pub accounts_lt_hash: AccountsLtHash,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SliceRoot(pub Hash);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AlpenglowBlockId(pub Hash);
+
 // Can't derive PartialEq because RwLock doesn't implement PartialEq
 #[cfg(feature = "dev-context-only-utils")]
 impl PartialEq for Bank {
@@ -550,7 +556,8 @@ impl PartialEq for Bank {
             fee_structure: _,
             cache_for_accounts_lt_hash: _,
             stats_for_accounts_lt_hash: _,
-            block_id,
+            chained_merkle_id,
+            alpenglow_block_id,
             bank_hash_stats: _,
             epoch_rewards_calculation_cache: _,
             // Ignore new fields explicitly if they do not impact PartialEq.
@@ -590,7 +597,8 @@ impl PartialEq for Bank {
             && (Arc::ptr_eq(hash_overrides, &other.hash_overrides) ||
                 *hash_overrides.lock().unwrap() == *other.hash_overrides.lock().unwrap())
             && *accounts_lt_hash.lock().unwrap() == *other.accounts_lt_hash.lock().unwrap()
-            && *block_id.read().unwrap() == *other.block_id.read().unwrap()
+            && *chained_merkle_id.read().unwrap() == *other.chained_merkle_id.read().unwrap()
+            && *alpenglow_block_id.read().unwrap() == *other.alpenglow_block_id.read().unwrap()
     }
 }
 
@@ -888,10 +896,13 @@ pub struct Bank {
     /// Stats related to the accounts lt hash
     stats_for_accounts_lt_hash: AccountsLtHashStats,
 
-    /// The unique identifier for the corresponding block for this bank.
-    /// None for banks that have not yet completed replay or for leader banks as we cannot populate block_id
+    /// Chained Merkle root (to be removed when we have time)
+    /// None for banks that have not yet completed replay or for leader banks as we cannot populate the field
     /// until bankless leader. Can be computed directly from shreds without needing to execute transactions.
-    block_id: RwLock<Option<Hash>>,
+    chained_merkle_id: RwLock<Option<SliceRoot>>,
+
+    /// Block ID, used for voting, block repair, and other consensus logic.
+    alpenglow_block_id: RwLock<Option<AlpenglowBlockId>>,
 
     /// Accounts stats for computing the bank hash
     bank_hash_stats: AtomicBankHashStats,
@@ -1093,7 +1104,8 @@ impl Bank {
             accounts_lt_hash: Mutex::new(AccountsLtHash(LtHash::identity())),
             cache_for_accounts_lt_hash: DashMap::default(),
             stats_for_accounts_lt_hash: AccountsLtHashStats::default(),
-            block_id: RwLock::new(None),
+            chained_merkle_id: RwLock::new(None),
+            alpenglow_block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -1340,7 +1352,8 @@ impl Bank {
             accounts_lt_hash: Mutex::new(parent.accounts_lt_hash.lock().unwrap().clone()),
             cache_for_accounts_lt_hash: DashMap::default(),
             stats_for_accounts_lt_hash: AccountsLtHashStats::default(),
-            block_id: RwLock::new(None),
+            chained_merkle_id: RwLock::new(None),
+            alpenglow_block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
         };
@@ -1808,7 +1821,8 @@ impl Bank {
             accounts_lt_hash: Mutex::new(fields.accounts_lt_hash),
             cache_for_accounts_lt_hash: DashMap::default(),
             stats_for_accounts_lt_hash: AccountsLtHashStats::default(),
-            block_id: RwLock::new(None),
+            chained_merkle_id: RwLock::new(None),
+            alpenglow_block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -5560,16 +5574,28 @@ impl Bank {
         &self.fee_structure
     }
 
-    pub fn parent_block_id(&self) -> Option<Hash> {
-        self.parent().and_then(|p| p.block_id())
+    pub fn parent_chained_merkle_id(&self) -> Option<SliceRoot> {
+        self.parent().and_then(|p| p.chained_merkle_id())
     }
 
-    pub fn block_id(&self) -> Option<Hash> {
-        *self.block_id.read().unwrap()
+    pub fn parent_alpenglow_block_id(&self) -> Option<AlpenglowBlockId> {
+        self.parent().and_then(|p| p.alpenglow_block_id())
     }
 
-    pub fn set_block_id(&self, block_id: Option<Hash>) {
-        *self.block_id.write().unwrap() = block_id;
+    pub fn chained_merkle_id(&self) -> Option<SliceRoot> {
+        *self.chained_merkle_id.read().unwrap()
+    }
+
+    pub fn set_chained_merkle_id(&self, chained_merkle_id: Option<SliceRoot>) {
+        *self.chained_merkle_id.write().unwrap() = chained_merkle_id;
+    }
+
+    pub fn alpenglow_block_id(&self) -> Option<AlpenglowBlockId> {
+        *self.alpenglow_block_id.read().unwrap()
+    }
+
+    pub fn set_alpenglow_block_id(&self, alpenglow_block_id: Option<AlpenglowBlockId>) {
+        *self.alpenglow_block_id.write().unwrap() = alpenglow_block_id;
     }
 
     pub fn compute_budget(&self) -> Option<ComputeBudget> {
