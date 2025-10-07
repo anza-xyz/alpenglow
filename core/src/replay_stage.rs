@@ -46,7 +46,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::Blockstore,
+        blockstore::{Blockstore, PurgeType},
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -58,7 +58,9 @@ use {
     solana_measure::measure::Measure,
     solana_poh::{
         poh_controller::PohController,
-        poh_recorder::{PohLeaderStatus, PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
+        poh_recorder::{
+            PohLeaderStatus, PohRecorder, SharedWorkingBank, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS,
+        },
     },
     solana_pubkey::Pubkey,
     solana_rpc::{
@@ -871,6 +873,23 @@ impl ReplayStage {
                 }
                 replay_active_banks_time.stop();
 
+                // Check if we've completed the migration conditions
+                if migration_status.is_ready_to_enable() {
+                    Self::enable_alpenglow(
+                        &exit,
+                        &my_pubkey,
+                        migration_status.as_ref(),
+                        bank_forks.as_ref(),
+                        blockstore.as_ref(),
+                        &mut poh_controller,
+                        &shared_poh_bank,
+                        leader_schedule_cache.as_ref(),
+                        &mut ancestors,
+                        &mut descendants,
+                        &mut progress,
+                    );
+                }
+
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !migration_status.is_alpenglow_enabled() {
                     debug_assert!(votor_event_receiver.is_empty());
@@ -1347,6 +1366,107 @@ impl ReplayStage {
             votor,
             commitment_service,
         })
+    }
+
+    /// Enables alpenglow
+    /// - Clears any in progress leader blocks
+    /// - Clears any TowerBFT blocks past the genesis block
+    /// - Shutdown poh
+    /// - Start block creation loop
+    ///
+    /// Should only be called if we have received a genesis certificate on our view of the genesis block.
+    /// A false return value means that something has gone seriously wrong.
+    #[allow(clippy::too_many_arguments)]
+    fn enable_alpenglow(
+        exit: &AtomicBool,
+        my_pubkey: &Pubkey,
+        migration_status: &MigrationStatus,
+        bank_forks: &RwLock<BankForks>,
+        blockstore: &Blockstore,
+        poh_controller: &mut PohController,
+        shared_poh_bank: &SharedWorkingBank,
+        leader_schedule_cache: &LeaderScheduleCache,
+        ancestors: &mut HashMap<Slot, HashSet<Slot>>,
+        descendants: &mut HashMap<Slot, HashSet<Slot>>,
+        progress: &mut ProgressMap,
+    ) -> bool {
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        warn!("{my_pubkey}: Alpenglow genesis vote has succeeded enabling alpenglow");
+
+        let genesis_block @ (genesis_slot, block_id) = migration_status.genesis_block();
+        warn!("{my_pubkey}: Alpenglow genesis block {genesis_block:?}");
+
+        let Some(genesis_bank) = bank_forks.read().unwrap().get(genesis_slot) else {
+            error!(
+                "{my_pubkey}: Attempting to enable alpenglow before receiving the genesis block"
+            );
+            return false;
+        };
+
+        if genesis_bank.block_id() != Some(block_id) {
+            error!(
+                "{my_pubkey}: Attempting to enable alpenglow but we have the wrong version of the \
+                 genesis block our version: ({genesis_slot}, {:?}), certified version \
+                 ({genesis_slot}, {block_id})",
+                genesis_bank.block_id()
+            );
+            return false;
+        }
+
+        // Reset poh to the genesis block. This has to be done first before we can clear banks to
+        // avoid any inflight issues with transaction recording.
+        Self::reset_poh_recorder(
+            my_pubkey,
+            blockstore,
+            genesis_bank,
+            poh_controller,
+            leader_schedule_cache,
+        );
+        while poh_controller.has_pending_message() || shared_poh_bank.load().is_some() {
+            std::hint::spin_loop();
+        }
+
+        // Purge all slots greater than the genesis slot from AccountsDB & blockstore
+        let slots_to_purge: Vec<Slot> = bank_forks
+            .read()
+            .unwrap()
+            .banks()
+            .iter()
+            .filter_map(|(slot, _)| (*slot > genesis_slot).then_some(*slot))
+            .collect();
+        for slot in slots_to_purge.into_iter() {
+            warn!("{my_pubkey}: Purging poh block in slot {slot}");
+            Self::purge_unconfirmed_duplicate_slot(
+                slot,
+                ancestors,
+                descendants,
+                progress,
+                root_bank.as_ref(),
+                bank_forks,
+                blockstore,
+            );
+        }
+
+        // Purge any partial shreds greater than the genesis slot
+        let start_slot = genesis_slot + 1;
+        let end_slot = blockstore
+            .highest_slot()
+            .unwrap()
+            .expect("Highest slot must be present as blockstore is non-empty");
+        if end_slot >= start_slot {
+            warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
+            blockstore.purge_from_next_slots(start_slot, end_slot);
+            blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+        }
+
+        migration_status.enable_alpenglow(exit);
+
+        assert!(migration_status.is_alpenglow_enabled());
+        datapoint_info!(
+            "migration-complete",
+            ("genesis_slot", genesis_slot as i64, i64),
+        );
+        true
     }
 
     /// Loads the tower from `tower_storage` with identity `node_pubkey`.
