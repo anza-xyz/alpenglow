@@ -1064,7 +1064,7 @@ mod tests {
             MIN_STAKE_FOR_STAKED_ACCOUNT,
             &identity_balances,
         );
-        assert!(filtered.len() <= num_alpenglow_nodes);
+        assert_eq!(filtered.len(), num_alpenglow_nodes);
         // Check that all filtered accounts have bls pubkey
         for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
             assert!(vote_account
