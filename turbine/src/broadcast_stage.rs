@@ -33,6 +33,7 @@ use {
     },
     solana_time_utils::{timestamp, AtomicInterval},
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::migration::MigrationStatus,
     static_assertions::const_assert_eq,
     std::{
         collections::{HashMap, HashSet},
@@ -124,6 +125,7 @@ impl BroadcastStageType {
         quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         xdp_sender: Option<XdpSender>,
         votor_event_sender: VotorEventSender,
+        migration_status: Arc<MigrationStatus>,
     ) -> BroadcastStage {
         match self {
             BroadcastStageType::Standard => BroadcastStage::new(
@@ -136,7 +138,7 @@ impl BroadcastStageType {
                 bank_forks,
                 quic_endpoint_sender,
                 votor_event_sender.clone(),
-                StandardBroadcastRun::new(shred_version),
+                StandardBroadcastRun::new(shred_version, migration_status),
                 xdp_sender,
             ),
 
@@ -778,7 +780,7 @@ pub mod test {
             bank_forks,
             quic_endpoint_sender,
             votor_event_sender,
-            StandardBroadcastRun::new(0),
+            StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default())),
             None,
         );
 
