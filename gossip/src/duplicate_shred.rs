@@ -344,6 +344,7 @@ pub(crate) mod tests {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
+        solana_runtime::bank::SliceRoot,
         solana_signature::Signature,
         solana_signer::Signer,
         solana_system_transaction::transfer,
@@ -457,7 +458,7 @@ pub(crate) mod tests {
             &entries,
             is_last_in_slot,
             // chained_merkle_root
-            Some(Hash::new_from_array(rng.gen())),
+            Some(SliceRoot(Hash::new_from_array(rng.gen()))),
             next_shred_index,
             next_code_index, // next_code_index
             &ReedSolomonCache::default(),

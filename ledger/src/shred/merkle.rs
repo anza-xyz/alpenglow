@@ -28,6 +28,7 @@ use {
     solana_keypair::Keypair,
     solana_perf::packet::deserialize_from_with_limit,
     solana_pubkey::Pubkey,
+    solana_runtime::bank::SliceRoot,
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_signer::Signer,
@@ -80,7 +81,7 @@ impl Shred {
     dispatch!(fn erasure_shard_mut(&mut self) -> Result<PayloadMutGuard<Range<usize>>, Error>);
     dispatch!(fn merkle_node(&self) -> Result<Hash, Error>);
     dispatch!(fn sanitize(&self) -> Result<(), Error>);
-    dispatch!(fn set_chained_merkle_root(&mut self, chained_merkle_root: &Hash) -> Result<(), Error>);
+    dispatch!(fn set_chained_merkle_root(&mut self, chained_merkle_root: &SliceRoot) -> Result<(), Error>);
     dispatch!(fn set_signature(&mut self, signature: Signature));
     dispatch!(fn signed_data(&self) -> Result<Hash, Error>);
     dispatch!(pub(super) fn common_header(&self) -> &ShredCommonHeader);
@@ -139,8 +140,8 @@ impl Shred {
 impl Shred {
     dispatch!(fn erasure_shard(&self) -> Result<&[u8], Error>);
     dispatch!(fn proof_size(&self) -> Result<u8, Error>);
-    dispatch!(pub(super) fn chained_merkle_root(&self) -> Result<Hash, Error>);
-    dispatch!(pub(super) fn merkle_root(&self) -> Result<Hash, Error>);
+    dispatch!(pub(super) fn chained_merkle_root(&self) -> Result<SliceRoot, Error>);
+    dispatch!(pub(super) fn merkle_root(&self) -> Result<SliceRoot, Error>);
     dispatch!(pub(super) fn retransmitter_signature(&self) -> Result<Signature, Error>);
     dispatch!(pub(super) fn retransmitter_signature_offset(&self) -> Result<usize, Error>);
 
@@ -185,7 +186,7 @@ impl ShredData {
         proof_size: u8,
         chained: bool,
         resigned: bool,
-    ) -> Option<Hash> {
+    ) -> Option<SliceRoot> {
         debug_assert_eq!(
             shred::layout::get_shred_variant(shred).unwrap(),
             ShredVariant::MerkleData {
@@ -207,7 +208,7 @@ impl ShredData {
         let proof_offset = Self::get_proof_offset(proof_size, chained, resigned).ok()?;
         let proof = get_merkle_proof(shred, proof_offset, proof_size).ok()?;
         let node = get_merkle_node(shred, SIZE_OF_SIGNATURE..proof_offset).ok()?;
-        get_merkle_root(index, node, proof).ok()
+        get_merkle_root(index, node, proof).map(SliceRoot).ok()
     }
 
     pub(crate) const fn const_capacity(
@@ -241,7 +242,7 @@ impl ShredCode {
         proof_size: u8,
         chained: bool,
         resigned: bool,
-    ) -> Option<Hash> {
+    ) -> Option<SliceRoot> {
         debug_assert_eq!(
             shred::layout::get_shred_variant(shred).unwrap(),
             ShredVariant::MerkleCode {
@@ -265,7 +266,7 @@ impl ShredCode {
         let proof_offset = Self::get_proof_offset(proof_size, chained, resigned).ok()?;
         let proof = get_merkle_proof(shred, proof_offset, proof_size).ok()?;
         let node = get_merkle_node(shred, SIZE_OF_SIGNATURE..proof_offset).ok()?;
-        get_merkle_root(index, node, proof).ok()
+        get_merkle_root(index, node, proof).map(SliceRoot).ok()
     }
 }
 
@@ -347,7 +348,7 @@ macro_rules! impl_merkle_shred {
             Ok(Self::SIZE_OF_HEADERS + Self::capacity(proof_size, chained, resigned)?)
         }
 
-        pub(super) fn chained_merkle_root(&self) -> Result<Hash, Error> {
+        pub(super) fn chained_merkle_root(&self) -> Result<SliceRoot, Error> {
             let offset = self.chained_merkle_root_offset()?;
             self.payload
                 .get(offset..offset + SIZE_OF_MERKLE_ROOT)
@@ -357,25 +358,29 @@ macro_rules! impl_merkle_shred {
                         .unwrap()
                 })
                 .ok_or(Error::InvalidPayloadSize(self.payload.len()))
+                .map(SliceRoot)
         }
 
-        fn set_chained_merkle_root(&mut self, chained_merkle_root: &Hash) -> Result<(), Error> {
+        fn set_chained_merkle_root(
+            &mut self,
+            chained_merkle_root: &SliceRoot,
+        ) -> Result<(), Error> {
             let offset = self.chained_merkle_root_offset()?;
             let Some(mut buffer) = self.payload.get_mut(offset..offset + SIZE_OF_MERKLE_ROOT)
             else {
                 return Err(Error::InvalidPayloadSize(self.payload.len()));
             };
-            buffer.copy_from_slice(chained_merkle_root.as_ref());
+            buffer.copy_from_slice(chained_merkle_root.0.as_ref());
             Ok(())
         }
 
-        pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
+        pub(super) fn merkle_root(&self) -> Result<SliceRoot, Error> {
             let proof_size = self.proof_size()?;
             let index = self.erasure_shard_index()?;
             let proof_offset = self.proof_offset()?;
             let proof = get_merkle_proof(&self.payload, proof_offset, proof_size)?;
             let node = get_merkle_node(&self.payload, SIZE_OF_SIGNATURE..proof_offset)?;
-            get_merkle_root(index, node, proof)
+            get_merkle_root(index, node, proof).map(SliceRoot)
         }
 
         fn merkle_proof(&self) -> Result<impl Iterator<Item = &MerkleProofEntry>, Error> {
@@ -553,7 +558,7 @@ impl<'a> ShredTrait<'a> for ShredData {
     }
 
     fn signed_data(&'a self) -> Result<Self::SignedData, Error> {
-        self.merkle_root()
+        self.merkle_root().map(|sr| sr.0)
     }
 }
 
@@ -609,7 +614,7 @@ impl<'a> ShredTrait<'a> for ShredCode {
     }
 
     fn signed_data(&'a self) -> Result<Self::SignedData, Error> {
-        self.merkle_root()
+        self.merkle_root().map(|sr| sr.0)
     }
 }
 
@@ -839,18 +844,18 @@ pub(super) fn recover(
     // The attached signature verifies only if we obtain the same Merkle root.
     // Because shreds obtained from turbine or repair are sig-verified, this
     // also means that we don't need to verify signatures for recovered shreds.
-    if tree.last() != Some(&merkle_root) {
+    if tree.root != merkle_root {
         return Err(Error::InvalidMerkleRoot);
     }
     let set_merkle_proof = move |(index, (mut shred, mask)): (_, (Shred, _))| {
         if mask {
             debug_assert!({
-                let proof = make_merkle_proof(index, num_shards, &tree);
+                let proof = make_merkle_proof(index, num_shards, &tree.hashes);
                 shred.merkle_proof()?.map(Some).eq(proof.map(Result::ok))
             });
             Ok(None)
         } else {
-            let proof = make_merkle_proof(index, num_shards, &tree);
+            let proof = make_merkle_proof(index, num_shards, &tree.hashes);
             shred.set_merkle_proof(proof)?;
             // Already sanitized after reconstruct.
             debug_assert_matches!(shred.sanitize(), Ok(()));
@@ -901,7 +906,7 @@ fn make_stub_shred(
     erasure_shard_index: usize,
     common_header: &ShredCommonHeader,
     coding_header: &CodingShredHeader,
-    chained_merkle_root: &Option<Hash>,
+    chained_merkle_root: &Option<SliceRoot>,
     retransmitter_signature: &Option<Signature>,
 ) -> Result<Shred, Error> {
     let num_data_shreds = usize::from(coding_header.num_data_shreds);
@@ -1025,7 +1030,7 @@ pub(crate) fn make_shreds_from_data(
     thread_pool: &ThreadPool,
     keypair: &Keypair,
     // The Merkle root of the previous erasure batch if chained.
-    chained_merkle_root: Option<Hash>,
+    chained_merkle_root: Option<SliceRoot>,
     mut data: &[u8], // Serialized &[Entry]
     slot: Slot,
     parent_slot: Slot,
@@ -1225,9 +1230,9 @@ fn finish_erasure_batch(
     keypair: &Keypair,
     shreds: &mut [Shred],
     // The Merkle root of the previous erasure batch if chained.
-    chained_merkle_root: Option<Hash>,
+    chained_merkle_root: Option<SliceRoot>,
     reed_solomon_cache: &ReedSolomonCache,
-) -> Result</*Merkle root:*/ Hash, Error> {
+) -> Result<SliceRoot, Error> {
     debug_assert_eq!(shreds.iter().map(Shred::fec_set_index).dedup().count(), 1);
     // Write common and {data,coding} headers into shreds' payload.
     fn write_headers(shred: &mut Shred) -> Result<(), bincode::Error> {
@@ -1291,11 +1296,11 @@ fn finish_erasure_batch(
         })),
     }?;
     // Sign the root of the Merkle tree.
-    let root = tree.last().copied().ok_or(Error::InvalidMerkleProof)?;
-    let signature = keypair.sign_message(root.as_ref());
+    let root = tree.root;
+    let signature = keypair.sign_message(root.0.as_ref());
     // Populate merkle proof for all shreds and attach signature.
     for (index, shred) in shreds.iter_mut().enumerate() {
-        let proof = make_merkle_proof(index, erasure_batch_size, &tree);
+        let proof = make_merkle_proof(index, erasure_batch_size, &tree.hashes);
         shred.set_merkle_proof(proof)?;
         shred.set_signature(signature);
         debug_assert!(shred.verify(&keypair.pubkey()));
@@ -1413,7 +1418,7 @@ mod test {
         let tree = make_merkle_tree(nodes.into_iter().map(Ok)).unwrap();
         for index in size..size + 3 {
             assert_matches!(
-                make_merkle_proof(index, size, &tree).next(),
+                make_merkle_proof(index, size, &tree.hashes).next(),
                 Some(Err(Error::InvalidMerkleProof))
             );
         }
@@ -1553,7 +1558,7 @@ mod test {
         let nodes = shreds.iter().map(Shred::merkle_node);
         let tree = make_merkle_tree(nodes).unwrap();
         for (index, shred) in shreds.iter_mut().enumerate() {
-            let proof = make_merkle_proof(index, num_shreds, &tree);
+            let proof = make_merkle_proof(index, num_shreds, &tree.hashes);
             shred.set_merkle_proof(proof).unwrap();
             let data = shred.signed_data().unwrap();
             let signature = keypair.sign_message(data.as_ref());
@@ -1686,7 +1691,7 @@ mod test {
     ) {
         let thread_pool = ThreadPoolBuilder::new().num_threads(2).build().unwrap();
         let keypair = Keypair::new();
-        let chained_merkle_root = chained.then(|| Hash::new_from_array(rng.gen()));
+        let chained_merkle_root = chained.then(|| SliceRoot(Hash::new_from_array(rng.gen())));
         let resigned = chained && is_last_in_slot;
         let slot = 149_745_689;
         let parent_slot = slot - rng.gen_range(1..65536);
@@ -1750,7 +1755,7 @@ mod test {
                 assert_matches!(shred.chained_merkle_root(), Err(Error::InvalidShredVariant));
                 None
             };
-            assert!(signature.verify(pubkey.as_ref(), merkle_root.as_ref()));
+            assert!(signature.verify(pubkey.as_ref(), merkle_root.0.as_ref()));
             // Verify shred::layout api.
             let shred = shred.payload();
             assert_eq!(shred::layout::get_signature(shred), Some(signature));
@@ -1769,7 +1774,7 @@ mod test {
                 chained_merkle_root
             );
             let data = shred::layout::get_signed_data(shred).unwrap();
-            assert_eq!(data, merkle_root);
+            assert_eq!(data, merkle_root.0);
             assert!(signature.verify(pubkey.as_ref(), data.as_ref()));
         }
         // Verify common, data and coding headers.
@@ -1842,7 +1847,7 @@ mod test {
         assert!(num_coding_shreds >= num_data_shreds);
         // Verify chained Merkle roots.
         if let Some(chained_merkle_root) = chained_merkle_root {
-            let chained_merkle_roots: HashMap<u32, Hash> =
+            let chained_merkle_roots: HashMap<u32, SliceRoot> =
                 std::iter::once((0, chained_merkle_root))
                     .chain(
                         shreds

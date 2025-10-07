@@ -30,6 +30,7 @@ use {
     sha2::{Digest, Sha512},
     solana_keypair::Keypair,
     solana_perf::packet::PacketRefMut,
+    solana_runtime::bank::SliceRoot,
     solana_signer::Signer,
     std::sync::Arc,
 };
@@ -37,7 +38,7 @@ use {
 #[cfg(test)]
 const SIGN_SHRED_GPU_MIN: usize = 256;
 
-pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, /*merkle root:*/ Hash), ()>;
+pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, Hash), ()>;
 
 pub type SlotPubkeys = HashMap<Slot, Pubkey, BuildNoHashHasher<Slot>>;
 
@@ -161,7 +162,7 @@ fn slot_key_data_for_gpu(
 }
 
 // Recovers merkle roots from shreds binary.
-fn get_merkle_roots(
+fn get_merkle_root_hashes(
     thread_pool: &ThreadPool,
     packets: &[PacketBatch],
     recycler_cache: &RecyclerCache,
@@ -178,7 +179,7 @@ fn get_merkle_roots(
                         return None;
                     }
                     let shred = shred::layout::get_shred(packet)?;
-                    shred::layout::get_merkle_root(shred)
+                    shred::layout::get_merkle_root(shred).map(|root| root.0)
                 })
             })
             .collect()
@@ -281,7 +282,7 @@ pub fn verify_shreds_gpu(
     //HACK: Pubkeys vector is passed along as a `PacketBatch` buffer to the GPU
     //TODO: GPU needs a more opaque interface, which can handle variable sized structures for data
     let (merkle_roots, merkle_roots_offsets) =
-        get_merkle_roots(thread_pool, batches, recycler_cache);
+        get_merkle_root_hashes(thread_pool, batches, recycler_cache);
     // Merkle roots are placed after pubkeys; adjust offsets accordingly.
     let merkle_roots_offsets = {
         let shift = pubkeys.len();
@@ -430,7 +431,7 @@ fn sign_shreds_gpu(
     secret_offsets.resize(packet_count, pubkey_size as u32);
 
     let (merkle_roots, merkle_roots_offsets) =
-        get_merkle_roots(thread_pool, batches, recycler_cache);
+        get_merkle_root_hashes(thread_pool, batches, recycler_cache);
     // Merkle roots are placed after the keypair; adjust offsets accordingly.
     let merkle_roots_offsets = {
         let shift = pinned_keypair.len();
@@ -556,7 +557,7 @@ mod tests {
             &keypair,
             &[],
             true,
-            Some(Hash::default()),
+            Some(SliceRoot(Hash::default())),
             0,
             0,
             &reed_solomon_cache,
@@ -689,7 +690,7 @@ mod tests {
             keypair,
             &[],
             true,
-            Some(Hash::default()),
+            Some(SliceRoot(Hash::default())),
             0,
             0,
             &reed_solomon_cache,
@@ -762,7 +763,7 @@ mod tests {
                     &make_entries(rng, num_entries),
                     is_last_in_slot,
                     // chained_merkle_root
-                    chained.then(|| Hash::new_from_array(rng.gen())),
+                    chained.then(|| SliceRoot(Hash::new_from_array(rng.gen()))),
                     rng.gen_range(0..2671), // next_shred_index
                     rng.gen_range(0..2781), // next_code_index
                     &reed_solomon_cache,

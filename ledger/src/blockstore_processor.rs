@@ -2228,7 +2228,7 @@ pub fn process_single_slot(
         result?
     }
 
-    let block_id = blockstore
+    let chained_merkle_id = blockstore
         .check_last_fec_set_and_get_block_id(slot, bank.hash(), false, &bank.feature_set)
         .inspect_err(|err| {
             warn!("slot {slot} failed last fec set checks: {err}");
@@ -2243,7 +2243,7 @@ pub fn process_single_slot(
                 );
             }
         })?;
-    bank.set_block_id(block_id);
+    bank.set_chained_merkle_id(chained_merkle_id);
     bank.freeze(); // all banks handled by this routine are created from complete slots
 
     if let Some(slot_callback) = &opts.slot_callback {

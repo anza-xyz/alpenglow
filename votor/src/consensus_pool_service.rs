@@ -198,7 +198,13 @@ impl ConsensusPoolService {
         let mut standstill_timer = Instant::now();
 
         // Kick off parent ready
-        let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
+        let root_block = (
+            root_bank.slot(),
+            root_bank
+                .chained_merkle_id()
+                .map(|sr| sr.0)
+                .unwrap_or_default(),
+        );
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
             slot: root_bank.slot().checked_add(1).unwrap(),

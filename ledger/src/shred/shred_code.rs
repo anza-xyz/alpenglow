@@ -9,6 +9,7 @@ use {
     },
     solana_hash::Hash,
     solana_packet::PACKET_DATA_SIZE,
+    solana_runtime::bank::SliceRoot,
     solana_signature::Signature,
     static_assertions::const_assert_eq,
 };
@@ -38,13 +39,13 @@ impl ShredCode {
         shred.signed_data()
     }
 
-    pub(super) fn chained_merkle_root(&self) -> Result<Hash, Error> {
+    pub(super) fn chained_merkle_root(&self) -> Result<SliceRoot, Error> {
         match self {
             Self::Merkle(shred) => shred.chained_merkle_root(),
         }
     }
 
-    pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
+    pub(super) fn merkle_root(&self) -> Result<SliceRoot, Error> {
         match self {
             Self::Merkle(shred) => shred.merkle_root(),
         }
