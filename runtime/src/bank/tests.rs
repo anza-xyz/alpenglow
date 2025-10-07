@@ -12486,11 +12486,11 @@ fn test_get_top_epoch_stakes() {
     // Feature deactivated at genesis, return all accounts
     let test_bank = create_test_bank(0, None);
     let stakes = test_bank.get_top_epoch_stakes();
-    assert_eq!(stakes.staked_nodes().len(), 3000);
+    assert_eq!(stakes.staked_nodes().len(), num_of_nodes as usize);
 
     // Feature activated at epoch 2, return only 2000 accounts
     let slot_in_prev_epoch = test_bank.epoch_schedule().get_first_slot_in_epoch(1);
     let test_bank = create_test_bank(2, Some(slot_in_prev_epoch));
     let stakes = test_bank.get_top_epoch_stakes();
-    assert!(stakes.staked_nodes().len() <= 2000);
+    assert_eq!(stakes.staked_nodes().len(), MAX_ALPENGLOW_VOTE_ACCOUNTS as usize);
 }
