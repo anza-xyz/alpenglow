@@ -11,6 +11,7 @@ use {
     },
     solana_poh::poh_recorder::WorkingBankEntry,
     solana_runtime::bank::Bank,
+    solana_slice_root::SliceRoot,
     solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
     std::{
         sync::Arc,
@@ -170,10 +171,10 @@ pub(super) fn get_chained_merkle_root_from_parent(
     slot: Slot,
     parent: Slot,
     blockstore: &Blockstore,
-) -> Result<Hash> {
+) -> Result<SliceRoot> {
     if slot == parent {
         debug_assert_eq!(slot, 0u64);
-        return Ok(Hash::default());
+        return Ok(SliceRoot(Hash::default()));
     }
     debug_assert!(parent < slot, "parent: {parent} >= slot: {slot}");
     let index = blockstore
@@ -197,9 +198,9 @@ pub(super) fn get_chained_merkle_root_from_parent(
 pub(super) fn set_block_id_and_send(
     votor_event_sender: &VotorEventSender,
     bank: Arc<Bank>,
-    block_id: Hash,
+    chained_merkle_id: SliceRoot,
 ) -> Result<()> {
-    bank.set_block_id(Some(block_id));
+    bank.set_chained_merkle_id(Some(chained_merkle_id));
     if bank.is_frozen() {
         votor_event_sender.send(VotorEvent::Block(CompletedBlock {
             slot: bank.slot(),

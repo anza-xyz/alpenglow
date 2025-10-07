@@ -9,6 +9,7 @@ use {
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_signature::Signature,
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_system_transaction as system_transaction,
     solana_votor::event::VotorEventSender,
     std::collections::HashSet,
@@ -38,7 +39,7 @@ pub struct BroadcastDuplicatesConfig {
 pub(super) struct BroadcastDuplicatesRun {
     config: BroadcastDuplicatesConfig,
     current_slot: Slot,
-    chained_merkle_root: Hash,
+    chained_merkle_root: SliceRoot,
     carryover_entry: Option<WorkingBankEntry>,
     next_shred_index: u32,
     next_code_index: u32,
@@ -60,7 +61,7 @@ impl BroadcastDuplicatesRun {
         ));
         Self {
             config,
-            chained_merkle_root: Hash::default(),
+            chained_merkle_root: SliceRoot(Hash::default()),
             carryover_entry: None,
             next_shred_index: u32::MAX,
             next_code_index: 0,

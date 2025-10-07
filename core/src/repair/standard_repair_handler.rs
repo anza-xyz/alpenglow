@@ -96,13 +96,13 @@ impl StandardRepairHandler {
 
         let get_parent_location_meta = |(location, meta): &(BlockLocation, SlotMeta)| {
             let parent_slot = meta.parent_slot?;
-            let parent_block_id = self
+            let parent_chained_merkle_id = self
                 .blockstore
                 .get_parent_block_id_from_location(meta.slot, *location)
                 .ok()??;
             let parent_location = self
                 .blockstore
-                .get_block_location(parent_slot, parent_block_id)
+                .get_block_location(parent_slot, parent_chained_merkle_id.0)
                 .ok()??;
             let parent_meta = self
                 .blockstore

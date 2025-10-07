@@ -30,6 +30,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
     std::{
         num::NonZeroUsize,
@@ -378,7 +379,7 @@ fn verify_retransmitter_signature(
         Err(shred::Error::InvalidShredVariant) => return true,
         Err(_) => return false,
     };
-    let Some(merkle_root) = shred::layout::get_merkle_root(shred) else {
+    let Some(SliceRoot(merkle_root)) = shred::layout::get_merkle_root(shred) else {
         return false;
     };
     let Some(shred) = shred::layout::get_shred_id(shred) else {
@@ -636,7 +637,7 @@ mod tests {
             &leader_keypair,
             &entries,
             true,
-            Some(Hash::new_unique()),
+            Some(SliceRoot(Hash::new_unique())),
             0,
             0,
             &ReedSolomonCache::default(),
@@ -646,7 +647,7 @@ mod tests {
             &wrong_keypair,
             &entries,
             true,
-            Some(Hash::new_unique()),
+            Some(SliceRoot(Hash::new_unique())),
             0,
             0,
             &ReedSolomonCache::default(),
@@ -700,7 +701,7 @@ mod tests {
             (bank_forks.working_bank(), bank_forks.root_bank())
         };
 
-        let chained_merkle_root = Some(Hash::new_from_array(rng.gen()));
+        let chained_merkle_root = Some(SliceRoot(Hash::new_from_array(rng.gen())));
 
         let shredder = Shredder::new(root_bank.slot(), root_bank.parent_slot(), 0, 0).unwrap();
         let entries = vec![Entry::new(&Hash::default(), 0, vec![])];

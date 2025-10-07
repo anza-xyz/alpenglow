@@ -921,6 +921,7 @@ mod tests {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
+        solana_slice_root::SliceRoot,
     };
 
     fn get_keypair() -> Keypair {
@@ -946,7 +947,7 @@ mod tests {
                 &entries,
                 true,
                 // chained_merkle_root
-                Some(Hash::new_from_array(rand::thread_rng().gen())),
+                Some(SliceRoot(Hash::new_from_array(rand::thread_rng().gen()))),
                 0,
                 code_index,
                 &rsc,

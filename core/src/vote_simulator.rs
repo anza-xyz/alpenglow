@@ -29,6 +29,7 @@ use {
         },
     },
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_vote::vote_transaction,
     solana_vote_program::vote_state::{Lockout, TowerSync},
     std::{
@@ -151,7 +152,7 @@ impl VoteSimulator {
 
             new_bank.fill_bank_with_ticks_for_tests();
             if !visit.node().has_no_child() || is_frozen {
-                new_bank.set_block_id(Some(Hash::new_unique()));
+                new_bank.set_chained_merkle_id(Some(SliceRoot(Hash::new_unique())));
                 new_bank.freeze();
                 self.progress
                     .get_fork_stats_mut(new_bank.slot())
@@ -395,7 +396,7 @@ pub fn initialize_state(
 
     genesis_config.poh_config.hashes_per_tick = Some(2);
     let (bank0, bank_forks) = Bank::new_with_bank_forks_for_tests(&genesis_config);
-    bank0.set_block_id(Some(Hash::new_unique()));
+    bank0.set_chained_merkle_id(Some(SliceRoot(Hash::new_unique())));
 
     for pubkey in validator_keypairs_map.keys() {
         bank0.transfer(10_000, &mint_keypair, pubkey).unwrap();

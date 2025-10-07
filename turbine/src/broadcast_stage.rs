@@ -606,6 +606,7 @@ pub mod test {
         },
         solana_runtime::bank::Bank,
         solana_signer::Signer,
+        solana_slice_root::SliceRoot,
         std::{
             path::Path,
             sync::{atomic::AtomicBool, Arc},
@@ -635,7 +636,7 @@ pub mod test {
             &entries,
             true, // is_last_in_slot
             // chained_merkle_root
-            Some(Hash::new_from_array(rand::thread_rng().gen())),
+            Some(SliceRoot(Hash::new_from_array(rand::thread_rng().gen()))),
             0, // next_shred_index,
             0, // next_code_index
             &ReedSolomonCache::default(),

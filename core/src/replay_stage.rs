@@ -77,6 +77,7 @@ use {
         vote_sender_types::ReplayVoteSender,
     },
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
     solana_transaction::Transaction,
@@ -3471,8 +3472,8 @@ impl ReplayStage {
                     }
                 };
 
-                if bank.block_id().is_none() {
-                    bank.set_block_id(block_id);
+                if bank.chained_merkle_id().is_none() {
+                    bank.set_chained_merkle_id(block_id);
                 }
 
                 let r_replay_stats = replay_stats.read().unwrap();
@@ -3579,7 +3580,7 @@ impl ReplayStage {
                 // 2) Shredding finishes before replay, we notify here
                 //
                 // For non leader banks (2) is always true, so notify here
-                if *is_alpenglow_migration_complete && bank.block_id().is_some() {
+                if *is_alpenglow_migration_complete && bank.chained_merkle_id().is_some() {
                     // Leader blocks will not have a block id, broadcast stage will
                     // take care of notifying the voting loop
                     let _ = votor_event_sender.send(VotorEvent::Block(CompletedBlock {
@@ -3953,7 +3954,7 @@ impl ReplayStage {
         // we must have the compatible versions of both duplicates in order to replay `bank`
         // successfully, so we are once again guaranteed that `bank_vote_state.last_voted_slot()`
         // is present in bank forks and progress map.
-        let block_id = {
+        let chained_merkle_id = {
             // The block_id here will only be relevant if we need to refresh this last vote.
             let bank = bank_forks
                 .read()
@@ -3964,7 +3965,8 @@ impl ReplayStage {
             // that means that it was created from a different instance (hot spare setup or a previous restart),
             // and thus we must have replayed and set the block_id from the shreds.
             // Note: since the new shred format is not rolled out everywhere, we have to provide a default
-            bank.block_id().unwrap_or_default()
+            bank.chained_merkle_id()
+                .unwrap_or(SliceRoot(Hash::default()))
         };
         tower.update_last_vote_from_vote_state(
             progress
@@ -3972,7 +3974,7 @@ impl ReplayStage {
                 .expect("Must exist for us to have frozen descendant"),
             bank.feature_set
                 .is_active(&agave_feature_set::enable_tower_sync_ix::id()),
-            block_id,
+            chained_merkle_id,
         );
         // Since we are updating our tower we need to update associated caches for previously computed
         // slots as well.
@@ -4682,7 +4684,7 @@ pub(crate) mod tests {
         slot: Slot,
     ) -> Arc<Bank> {
         let bank = Bank::new_from_parent(parent, collector_id, slot);
-        bank.set_block_id(Some(Hash::new_unique()));
+        bank.set_chained_merkle_id(Some(SliceRoot(Hash::new_unique())));
         bank_forks
             .write()
             .unwrap()
@@ -5295,7 +5297,7 @@ pub(crate) mod tests {
                     &keypair,
                     &gibberish,
                     true,
-                    Some(Hash::default()),
+                    Some(SliceRoot(Hash::default())),
                     0,
                     0,
                     &reed_solomon_cache,

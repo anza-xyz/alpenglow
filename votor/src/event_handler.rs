@@ -1290,7 +1290,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.block_id().unwrap();
+        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
 
         // Add parent ready for 0 to trigger notar vote for 1
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
@@ -1304,7 +1304,7 @@ mod tests {
         check_for_vote(&test_context, &Vote::new_finalization_vote(1));
 
         let bank2 = create_block_and_send_block_event(&test_context, 2, bank1.clone());
-        let block_id_2 = bank2.block_id().unwrap();
+        let block_id_2 = bank2.chained_merkle_id().unwrap().0;
         // Both Notarize and Finalize votes should trigger for 2
         check_for_vote(&test_context, &Vote::new_notarization_vote(2, block_id_2));
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 2);
@@ -1314,7 +1314,7 @@ mod tests {
         // Create bank3 but do not Notarize, so Finalize vote should not trigger
         let slot = 3;
         let bank3 = create_block_only(&test_context, slot, bank2.clone());
-        let block_id_3 = bank3.block_id().unwrap();
+        let block_id_3 = bank3.chained_merkle_id().unwrap().0;
         // Check no notarization vote for 3
         check_no_vote_or_commitment(&test_context);
 
@@ -1394,7 +1394,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1_old = bank_1.block_id().unwrap();
+        let block_id_1_old = bank_1.chained_merkle_id().unwrap().0;
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
@@ -1446,7 +1446,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank_1.block_id().unwrap();
+        let block_id_1 = bank_1.chained_merkle_id().unwrap().0;
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
         check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
@@ -1531,7 +1531,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.block_id().unwrap();
+        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
 
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
@@ -1568,10 +1568,10 @@ mod tests {
             .sharable_banks()
             .root();
         let bank4 = create_block_and_send_block_event(&test_context, 4, root_bank);
-        let block_id_4 = bank4.block_id().unwrap();
+        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
 
         let bank5 = create_block_and_send_block_event(&test_context, 5, bank4.clone());
-        let block_id_5 = bank5.block_id().unwrap();
+        let block_id_5 = bank5.chained_merkle_id().unwrap().0;
 
         send_finalized_event(&test_context, (5, block_id_5), true);
         sleep(TEST_SHORT_TIMEOUT);
@@ -1581,7 +1581,7 @@ mod tests {
         // We are partitioned off from rest of the network, and suddenly received finalize for
         // slot 9 a little before we finished replay slot 9
         let bank9 = create_block_only(&test_context, 9, bank5.clone());
-        let block_id_9 = bank9.block_id().unwrap();
+        let block_id_9 = bank9.chained_merkle_id().unwrap().0;
         send_finalized_event(&test_context, (9, block_id_9), true);
         sleep(TEST_SHORT_TIMEOUT);
         send_block_event(&test_context, 9, bank9.clone());
@@ -1607,7 +1607,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.block_id().unwrap();
+        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
         send_parent_ready_event(&test_context, 1, (0, Hash::default()));
         sleep(TEST_SHORT_TIMEOUT);
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
@@ -1689,7 +1689,7 @@ mod tests {
         // We should now be able to vote again
         let slot = 4;
         let bank4 = create_block_and_send_block_event(&test_context, slot, root_bank);
-        let block_id_4 = bank4.block_id().unwrap();
+        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
         send_parent_ready_event(&test_context, slot, (0, Hash::default()));
         check_for_vote(
             &test_context,

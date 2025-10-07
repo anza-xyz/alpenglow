@@ -31,6 +31,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE},
+    solana_slice_root::SliceRoot,
     solana_slot_history::{Check, SlotHistory},
     solana_vote::{vote_account::VoteAccountsHashMap, vote_transaction::VoteTransaction},
     solana_vote_program::{
@@ -616,19 +617,19 @@ impl Tower {
     pub fn record_bank_vote(&mut self, bank: &Bank) -> Option<Slot> {
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
-        let block_id = bank.block_id().unwrap_or_else(|| {
+        let chained_merkle_id = bank.chained_merkle_id().unwrap_or_else(|| {
             // This can only happen for our leader bank
             // Note: since the new shred format is yet to be rolled out to all clusters,
             // this can also happen for non-leader banks. Once rolled out we can assert
             // here that this is our leader bank.
-            Hash::default()
+            SliceRoot(Hash::default())
         });
         self.record_bank_vote_and_update_lockouts(
             bank.slot(),
             bank.hash(),
             bank.feature_set
                 .is_active(&agave_feature_set::enable_tower_sync_ix::id()),
-            block_id,
+            chained_merkle_id,
         )
     }
 
@@ -638,8 +639,9 @@ impl Tower {
         &mut self,
         vote_hash: Hash,
         enable_tower_sync_ix: bool,
-        block_id: Hash,
+        chained_merkle_id: SliceRoot,
     ) {
+        let block_id = chained_merkle_id.0;
         let mut new_vote = if enable_tower_sync_ix {
             VoteTransaction::from(TowerSync::new(
                 self.vote_state.votes.clone(),
@@ -664,7 +666,7 @@ impl Tower {
         vote_slot: Slot,
         vote_hash: Hash,
         enable_tower_sync_ix: bool,
-        block_id: Hash,
+        chained_merkle_id: SliceRoot,
     ) -> Option<Slot> {
         if let Some(last_voted_slot) = self.vote_state.last_voted_slot() {
             if vote_slot <= last_voted_slot {
@@ -681,7 +683,7 @@ impl Tower {
         let old_root = self.root();
 
         self.vote_state.process_next_vote_slot(vote_slot);
-        self.update_last_vote_from_vote_state(vote_hash, enable_tower_sync_ix, block_id);
+        self.update_last_vote_from_vote_state(vote_hash, enable_tower_sync_ix, chained_merkle_id);
 
         let new_root = self.root();
 
@@ -699,7 +701,7 @@ impl Tower {
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn record_vote(&mut self, slot: Slot, hash: Hash) -> Option<Slot> {
-        self.record_bank_vote_and_update_lockouts(slot, hash, true, Hash::default())
+        self.record_bank_vote_and_update_lockouts(slot, hash, true, SliceRoot(Hash::default()))
     }
 
     #[cfg(feature = "dev-context-only-utils")]

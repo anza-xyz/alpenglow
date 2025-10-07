@@ -148,6 +148,7 @@ pub mod test {
             shred::{ProcessShredsStats, ReedSolomonCache, Shred, Shredder},
         },
         solana_runtime::bank_utils,
+        solana_slice_root::SliceRoot,
         trees::tr,
     };
 
@@ -293,7 +294,7 @@ pub mod test {
                     &keypair,
                     &[],
                     true,
-                    Some(Hash::default()),
+                    Some(SliceRoot(Hash::default())),
                     last_shred as u32,
                     last_shred as u32,
                     &reed_solomon_cache,

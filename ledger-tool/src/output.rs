@@ -26,6 +26,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
+    solana_slice_root::SliceRoot,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, Encodable, EncodedConfirmedBlock,
@@ -360,8 +361,8 @@ pub struct CliDuplicateShred {
     index: u32,
     shred_type: ShredType,
     version: u16,
-    merkle_root: Option<Hash>,
-    chained_merkle_root: Option<Hash>,
+    merkle_root: Option<SliceRoot>,
+    chained_merkle_root: Option<SliceRoot>,
     last_in_slot: bool,
     #[serde(with = "serde_bytes")]
     payload: Vec<u8>,

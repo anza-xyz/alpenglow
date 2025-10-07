@@ -14,6 +14,7 @@ use {
         ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder, MAX_CODE_SHREDS_PER_SLOT,
         MAX_DATA_SHREDS_PER_SLOT,
     },
+    solana_slice_root::SliceRoot,
     solana_time_utils::AtomicInterval,
     solana_votor::event::VotorEventSender,
     std::{borrow::Cow, sync::RwLock},
@@ -24,7 +25,7 @@ use {
 pub struct StandardBroadcastRun {
     slot: Slot,
     parent: Slot,
-    chained_merkle_root: Hash,
+    chained_merkle_root: SliceRoot,
     carryover_entry: Option<WorkingBankEntry>,
     next_shred_index: u32,
     next_code_index: u32,
@@ -56,7 +57,7 @@ impl StandardBroadcastRun {
         Self {
             slot: Slot::MAX,
             parent: Slot::MAX,
-            chained_merkle_root: Hash::default(),
+            chained_merkle_root: SliceRoot(Hash::default()),
             carryover_entry: None,
             next_shred_index: 0,
             next_code_index: 0,
@@ -250,7 +251,7 @@ impl StandardBroadcastRun {
                 .unwrap_or_else(|err: Error| {
                     error!("Unknown chained Merkle root: {err:?}");
                     process_stats.err_unknown_chained_merkle_root += 1;
-                    Hash::default()
+                    SliceRoot(Hash::default())
                 })
             };
             self.slot = bank.slot();
@@ -581,7 +582,7 @@ mod test {
         let next_shred_index = 10;
         let slot = 1;
         let parent = 0;
-        run.chained_merkle_root = Hash::new_from_array(rand::thread_rng().gen());
+        run.chained_merkle_root = SliceRoot(Hash::new_from_array(rand::thread_rng().gen()));
         run.next_shred_index = next_shred_index;
         run.next_code_index = 17;
         run.slot = slot;
