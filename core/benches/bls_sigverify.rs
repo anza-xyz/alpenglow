@@ -3,7 +3,6 @@
 use {
     criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput},
     crossbeam_channel::unbounded,
-    parking_lot::RwLock as PlRwLock,
     solana_bls_signatures::signature::Signature as BlsSignature,
     solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
     solana_hash::Hash,
@@ -16,10 +15,7 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
-    solana_votor::{
-        consensus_metrics::ConsensusMetrics,
-        consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
-    },
+    solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
     solana_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
