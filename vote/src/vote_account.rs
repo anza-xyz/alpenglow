@@ -1,6 +1,7 @@
 use {
     crate::vote_state_view::VoteStateView,
     itertools::Itertools,
+    log::warn,
     serde::{
         de::{MapAccess, Visitor},
         ser::{Serialize, Serializer},
@@ -79,12 +80,12 @@ impl VoteAccounts {
     //    just because of Pubkey difference, because that can be grinded)
     // 5. If we end up with an empty list (can happen if everyone in the world
     //    has the same stake, happens in tests, doesn't happen in real world),
-    // panic and warn
+    //    log a warning
     pub fn clone_and_filter_for_alpenglow(
         &self,
         max_vote_accounts: usize,
         minimum_identity_account_balance: u64,
-        // The identity_account_balance is indexed with vote account pubkey.
+        // The identity_account_balance is indexed with identity pubkey.
         // The value is the lamport balance of the identity account.
         identity_account_balances: &HashMap<Pubkey, u64>,
     ) -> VoteAccounts {
@@ -124,7 +125,7 @@ impl VoteAccounts {
             .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
             .collect();
         if valid_entries.is_empty() {
-            log::error!("no valid alpenglow vote accounts found");
+            warn!("no valid alpenglow vote accounts found");
         }
         VoteAccounts {
             vote_accounts: Arc::new(valid_entries),
@@ -1144,8 +1145,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no valid alpenglow vote accounts found")]
-    fn test_clone_and_filter_for_alpenglow_panic_on_empty_accounts() {
+    fn test_clone_and_filter_for_alpenglow_empty_accounts() {
         let mut rng = rand::thread_rng();
         let current_limit = 3000;
         let (vote_accounts, identity_balances) = new_staked_vote_accounts(
@@ -1156,12 +1156,13 @@ mod tests {
         );
         // Since everyone has same stake, and we set the limit to 500 less than the number of accounts,
         // we will end up with no accounts after filtering, because all accounts with the same stake
-        // at the border will be removed. This should cause a panic.
-        let _ = vote_accounts.clone_and_filter_for_alpenglow(
+        // at the border will be removed. This should cause a warning and empty result returned.
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(
             current_limit - 500,
             MIN_STAKE_FOR_STAKED_ACCOUNT,
             &identity_balances,
         );
+        assert!(filtered.is_empty());
     }
 
     #[test]
