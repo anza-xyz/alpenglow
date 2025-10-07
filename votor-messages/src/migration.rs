@@ -13,7 +13,7 @@
 //!    less than `MIGRATION_MALICIOUS_THRESHOLD` double voters
 //! 3) We find the earliest such block, `G` and cast a BLS vote (the genesis vote) via all to all
 //! 4) If we observe `GENESIS_VOTE_THRESHOLD`% votes for an eligble block `G`:
-//!    5a) We bump the shred version, and clear any TowerBFT blocks past `G`.
+//!    5a) We clear any TowerBFT blocks past `G`.
 //!    5b) We propagate the Genesis certificate for `G` via all to all
 //! 5) We initialize Votor with `G` as genesis, and disable TowerBFT for any slots past `G`
 //! 6) We exit vote only mode, and reenable rooting and commitment reporting
