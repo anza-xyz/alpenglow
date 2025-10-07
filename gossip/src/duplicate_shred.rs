@@ -344,9 +344,9 @@ pub(crate) mod tests {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-        solana_runtime::bank::SliceRoot,
         solana_signature::Signature,
         solana_signer::Signer,
+        solana_slice_root::SliceRoot,
         solana_system_transaction::transfer,
         std::sync::Arc,
     };

@@ -1,10 +1,6 @@
 use {
-    crate::shred::Error,
-    solana_hash::Hash,
-    //solana_runtime::bank::{AlpenglowBlockId,
-    solana_runtime::bank::SliceRoot,
-    solana_sha256_hasher::hashv,
-    static_assertions::const_assert_eq,
+    crate::shred::Error, solana_hash::Hash, solana_sha256_hasher::hashv,
+    solana_slice_root::SliceRoot, static_assertions::const_assert_eq,
 };
 
 pub(crate) const SIZE_OF_MERKLE_ROOT: usize = std::mem::size_of::<Hash>();

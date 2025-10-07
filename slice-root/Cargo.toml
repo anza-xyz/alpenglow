@@ -12,6 +12,7 @@ edition = { workspace = true }
 
 [dependencies]
 solana-hash = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

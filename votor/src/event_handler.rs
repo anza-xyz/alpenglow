@@ -24,6 +24,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
@@ -475,7 +476,8 @@ impl EventHandler {
         vctx: &mut VotingContext,
         local_context: &mut LocalContext,
     ) -> Option<(Slot, Block)> {
-        let (slot, block_id) = finalized_block;
+        let (slot, hash) = finalized_block;
+        let block_id = SliceRoot(hash);
         let first_slot_of_window = first_of_consecutive_leader_slots(slot);
         if first_slot_of_window == slot || first_slot_of_window == 0 {
             // No need to trigger parent ready for the first slot of the window
@@ -498,7 +500,7 @@ impl EventHandler {
         }
         let parent_bank = bank.parent()?;
         let parent_slot = parent_bank.slot();
-        let Some(parent_block_id) = parent_bank.block_id() else {
+        let Some(SliceRoot(parent_chained_merkle_hash)) = parent_bank.chained_merkle_id() else {
             // Maybe this bank is set to root after we drop bank_forks.
             error!(
                 "{}: Unable to find block id for parent bank {parent_slot} to trigger parent ready",
@@ -508,10 +510,10 @@ impl EventHandler {
         };
         info!(
             "{}: Triggering parent ready for slot {slot} with parent {parent_slot} \
-             {parent_block_id}",
+             {parent_chained_merkle_hash}",
             local_context.my_pubkey
         );
-        Some((slot, (parent_slot, parent_block_id)))
+        Some((slot, (parent_slot, parent_chained_merkle_hash)))
     }
 
     fn handle_set_identity(
@@ -539,18 +541,23 @@ impl EventHandler {
         let slot = bank.slot();
         let block = (
             slot,
-            bank.block_id().expect("Block id must be set upstream"),
+            bank.chained_merkle_id()
+                .expect("Block id must be set upstream")
+                .0,
         );
         let parent_slot = bank.parent_slot();
-        let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
-            // To account for child of genesis and snapshots we insert a
-            // default block id here. Charlie is working on a SIMD to add block
-            // id to snapshots, which can allow us to remove this and update
-            // the default case in parent ready tracker.
-            trace!("Using default block id for {slot} parent {parent_slot}");
-            Hash::default()
-        });
-        let parent_block = (parent_slot, parent_block_id);
+        let parent_chained_merkle_hash = bank
+            .parent_chained_merkle_id()
+            .unwrap_or_else(|| {
+                // To account for child of genesis and snapshots we insert a
+                // default block id here. Charlie is working on a SIMD to add block
+                // id to snapshots, which can allow us to remove this and update
+                // the default case in parent ready tracker.
+                trace!("Using default block id for {slot} parent {parent_slot}");
+                SliceRoot(Hash::default())
+            })
+            .0;
+        let parent_block = (parent_slot, parent_chained_merkle_hash);
         (block, parent_block)
     }
 
@@ -752,7 +759,9 @@ impl EventHandler {
                 (slot > old_root
                     && vctx.vote_history.voted(slot)
                     && bank.is_frozen()
-                    && bank.block_id().is_some_and(|bid| bid == block_id))
+                    && bank
+                        .chained_merkle_id()
+                        .is_some_and(|bid| bid == SliceRoot(block_id)))
                 .then_some(slot)
             })
             .max()
@@ -1052,7 +1061,7 @@ mod tests {
         parent_bank: Arc<Bank>,
     ) -> Arc<Bank> {
         let bank = Bank::new_from_parent(parent_bank, &Pubkey::new_unique(), slot);
-        bank.set_block_id(Some(Hash::new_unique()));
+        bank.set_chained_merkle_id(Some(SliceRoot(Hash::new_unique())));
         bank.freeze();
         let mut bank_forks_w = test_context.bank_forks.write().unwrap();
         bank_forks_w.insert(bank);
@@ -1220,7 +1229,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, slot, root_bank);
-        let block_id_1 = bank1.block_id().unwrap();
+        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
 
         // We should receive Notarize Vote for block 1
         check_for_vote(
@@ -1235,7 +1244,7 @@ mod tests {
 
         let slot = 2;
         let bank2 = create_block_and_send_block_event(&test_context, slot, bank1.clone());
-        let block_id_2 = bank2.block_id().unwrap();
+        let block_id_2 = bank2.chained_merkle_id().unwrap().0;
 
         // Because 2 is middle of window, we should see Notarize vote for block 2 even without parentready
         check_for_vote(
@@ -1251,7 +1260,7 @@ mod tests {
         // Slot 4 completed replay without parent ready or parent notarized should not trigger Notarize vote
         let slot = 4;
         let bank4 = create_block_and_send_block_event(&test_context, slot, bank2.clone());
-        let block_id_4 = bank4.block_id().unwrap();
+        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
         check_no_vote_or_commitment(&test_context);
 
         // Send parent ready for slot 4 should trigger Notarize vote for slot 4

@@ -10,8 +10,8 @@ use {
     },
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_runtime::bank::SliceRoot,
     solana_signature::Signature,
+    solana_slice_root::SliceRoot,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

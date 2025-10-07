@@ -28,10 +28,10 @@ use {
     solana_keypair::Keypair,
     solana_perf::packet::deserialize_from_with_limit,
     solana_pubkey::Pubkey,
-    solana_runtime::bank::SliceRoot,
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     static_assertions::const_assert_eq,
     std::{
         cmp::Ordering,

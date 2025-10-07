@@ -5,14 +5,13 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_slice_root::SliceRoot,
 };
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
 
 /// Block, a (slot, hash) tuple
-pub type Block = (Slot, SliceRoot);
+pub type Block = (Slot, Hash);
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 /// BLS vote message, we need rank to look up pubkey

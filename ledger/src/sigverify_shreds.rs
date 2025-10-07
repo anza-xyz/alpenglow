@@ -30,8 +30,8 @@ use {
     sha2::{Digest, Sha512},
     solana_keypair::Keypair,
     solana_perf::packet::PacketRefMut,
-    solana_runtime::bank::SliceRoot,
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     std::sync::Arc,
 };
 

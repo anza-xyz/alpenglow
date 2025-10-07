@@ -9,8 +9,8 @@ use {
     },
     solana_hash::Hash,
     solana_packet::PACKET_DATA_SIZE,
-    solana_runtime::bank::SliceRoot,
     solana_signature::Signature,
+    solana_slice_root::SliceRoot,
     static_assertions::const_assert_eq,
 };
 

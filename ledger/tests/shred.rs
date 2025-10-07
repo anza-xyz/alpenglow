@@ -8,8 +8,8 @@ use {
         self, max_entries_per_n_shred, recover, verify_test_data_shred, ProcessShredsStats,
         ReedSolomonCache, Shred, ShredData, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
     },
-    solana_runtime::bank::SliceRoot,
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     solana_system_transaction as system_transaction,
     std::{
         collections::{BTreeMap, HashSet},

@@ -10,9 +10,9 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_perf::packet::{PacketRef, PacketRefMut},
-    solana_runtime::bank::SliceRoot,
     solana_signature::{Signature, SIGNATURE_BYTES},
     solana_signer::Signer,
+    solana_slice_root::SliceRoot,
     std::ops::Range,
 };
 #[cfg(test)]

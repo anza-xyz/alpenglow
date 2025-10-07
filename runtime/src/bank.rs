@@ -121,6 +121,7 @@ use {
     solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader},
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
+    solana_slice_root::{AlpenglowBlockId, SliceRoot},
     solana_slot_hashes::SlotHashes,
     solana_slot_history::{Check, SlotHistory},
     solana_stake_interface::{

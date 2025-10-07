@@ -8796,6 +8796,7 @@ dependencies = [
  "solana-short-vec",
  "solana-signature",
  "solana-signer",
+ "solana-slice-root",
  "solana-streamer",
  "solana-system-transaction",
  "solana-time-utils",
@@ -9062,6 +9063,7 @@ dependencies = [
  "solana-shred-version",
  "solana-signature",
  "solana-signer",
+ "solana-slice-root",
  "solana-stake-interface",
  "solana-stake-program",
  "solana-storage-bigtable",
@@ -10312,6 +10314,7 @@ dependencies = [
  "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
+ "solana-slice-root",
  "solana-slot-hashes",
  "solana-slot-history",
  "solana-stake-interface",
@@ -10627,6 +10630,7 @@ dependencies = [
 name = "solana-slice-root"
 version = "3.1.0"
 dependencies = [
+ "serde",
  "solana-hash",
 ]
 
@@ -11880,6 +11884,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-signer-store",
+ "solana-slice-root",
  "solana-streamer",
  "solana-time-utils",
  "solana-transaction",
