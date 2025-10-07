@@ -109,21 +109,26 @@ impl VoteAccounts {
                 Some((pubkey, vote_account, *stake))
             })
             .collect();
-        if entries_to_sort.len() > max_vote_accounts {
-            // Sort by stake descending, we don't care about sorting accounts with same stake, because
-            // this sort is only for truncation purpose, and we remove all accounts with same stake
-            // on the border.
-            entries_to_sort.sort_by(|a, b| b.2.cmp(&a.2));
-            // Find the stake of the first one being in the truncated list (so it's not max_vote_accounts - 1)
-            let floor_stake = entries_to_sort.get(max_vote_accounts).unwrap().2;
-            entries_to_sort.truncate(max_vote_accounts);
-            // Per SIMD 357, we remove all vote accounts with stake equal to the first truncated one.
-            entries_to_sort.retain(|(_pubkey, _vote_account, stake)| *stake > floor_stake);
-        }
-        let valid_entries: HashMap<Pubkey, (u64, VoteAccount)> = entries_to_sort
-            .into_iter()
-            .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
-            .collect();
+        let valid_entries: HashMap<Pubkey, (u64, VoteAccount)> =
+            if entries_to_sort.len() > max_vote_accounts {
+                // Sort by stake descending, we don't care about sorting accounts with same stake, because
+                // this sort is only for truncation purpose, and we remove all accounts with same stake
+                // on the border.
+                entries_to_sort.sort_by(|a, b| b.2.cmp(&a.2));
+                // Find the stake of the first one being in the truncated list (so it's not max_vote_accounts - 1)
+                let floor_stake = entries_to_sort.get(max_vote_accounts).unwrap().2;
+                // Per SIMD 357, we remove all vote accounts with stake smaller or equal to the first truncated one.
+                entries_to_sort
+                    .into_iter()
+                    .take_while(|(_, _, stake)| *stake > floor_stake)
+                    .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
+                    .collect()
+            } else {
+                entries_to_sort
+                    .into_iter()
+                    .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
+                    .collect()
+            };
         if valid_entries.is_empty() {
             warn!("no valid alpenglow vote accounts found");
         }
@@ -1059,7 +1064,7 @@ mod tests {
             MIN_STAKE_FOR_STAKED_ACCOUNT,
             &identity_balances,
         );
-        assert!(filtered.len() <= num_alpenglow_nodes);
+        assert_eq!(filtered.len(), num_alpenglow_nodes);
         // Check that all filtered accounts have bls pubkey
         for (_pubkey, (_stake, vote_account)) in filtered.vote_accounts.iter() {
             assert!(vote_account
