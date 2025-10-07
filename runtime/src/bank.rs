@@ -478,12 +478,6 @@ pub struct BankFieldsToSerialize {
     pub accounts_lt_hash: AccountsLtHash,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SliceRoot(pub Hash);
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct AlpenglowBlockId(pub Hash);
-
 // Can't derive PartialEq because RwLock doesn't implement PartialEq
 #[cfg(feature = "dev-context-only-utils")]
 impl PartialEq for Bank {

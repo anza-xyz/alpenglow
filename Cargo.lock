@@ -10624,6 +10624,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-slice-root"
+version = "3.1.0"
+dependencies = [
+ "solana-hash",
+]
+
+[[package]]
 name = "solana-slot-hashes"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11900,6 +11907,7 @@ dependencies = [
  "solana-hash",
  "solana-logger",
  "solana-program",
+ "solana-slice-root",
  "solana-vote-interface",
  "spl-pod",
 ]

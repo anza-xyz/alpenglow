@@ -5,7 +5,7 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_runtime::bank::SliceRoot,
+    solana_slice_root::SliceRoot,
 };
 
 /// The seed used to derive the BLS keypair
