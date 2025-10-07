@@ -634,7 +634,6 @@ mod tests {
         std::time::{Duration, Instant},
     };
 
-    #[cfg(feature = "dev-context-only-utils")]
     fn create_keypairs_and_bls_sig_verifier(
         verified_vote_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
