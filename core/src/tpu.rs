@@ -345,6 +345,7 @@ impl Tpu {
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
                 Some(consensus_metrics),
+                migration_status.clone(),
             );
             BLSSigVerifyStage::new(
                 bls_packet_receiver,
