@@ -58,13 +58,7 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
-    let verifier = BLSSigVerifier::new(
-        sharable_banks,
-        verified_votes_s,
-        consensus_msg_s,
-        consensus_metrics,
-    );
+    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s, None);
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),

@@ -343,7 +343,7 @@ impl Tpu {
                 sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
-                consensus_metrics,
+                Some(consensus_metrics),
             );
             BLSSigVerifyStage::new(
                 bls_packet_receiver,

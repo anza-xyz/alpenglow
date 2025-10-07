@@ -92,7 +92,7 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
-    consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
 }
 
 impl BLSSigVerifier {
@@ -160,8 +160,8 @@ impl BLSSigVerifier {
 
                     // Capture votes received metrics before old messages are potentially discarded below.
                     self.consensus_metrics
-                        .write()
-                        .record_vote(*solana_pubkey, &vote_message.vote);
+                        .as_ref()
+                        .map(|c| c.write().record_vote(*solana_pubkey, &vote_message.vote));
                     // Only need votes newer than root slot
                     if vote_message.vote.slot() <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
@@ -223,7 +223,7 @@ impl BLSSigVerifier {
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
-        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -662,15 +662,9 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
         (
             validator_keypairs,
-            BLSSigVerifier::new(
-                sharable_banks,
-                verified_vote_sender,
-                message_sender,
-                consensus_metrics,
-            ),
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None),
         )
     }
 
@@ -1397,13 +1391,8 @@ mod tests {
         bank_forks.write().unwrap().set_root(5, None, None).unwrap();
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
-        let mut sig_verifier = BLSSigVerifier::new(
-            sharable_banks,
-            verified_vote_sender,
-            message_sender,
-            consensus_metrics,
-        );
+        let mut sig_verifier =
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None);
 
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();
