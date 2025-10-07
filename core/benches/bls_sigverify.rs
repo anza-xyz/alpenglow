@@ -19,6 +19,7 @@ use {
     solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
     solana_votor_messages::{
         consensus_message::{CertificateType, ConsensusMessage, VoteMessage},
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -106,6 +107,7 @@ fn setup_environment() -> BenchEnvironment {
         consensus_msg_s,
         consensus_metrics_sender,
         Arc::new(AlpenglowLastVoted::default()),
+        Arc::new(MigrationStatus::default()),
     );
 
     BenchEnvironment {

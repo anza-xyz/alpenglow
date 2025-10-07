@@ -349,6 +349,7 @@ impl Tpu {
                 verified_consensus_message_sender,
                 consensus_metrics_sender,
                 alpenglow_last_voted,
+                migration_status.clone(),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
