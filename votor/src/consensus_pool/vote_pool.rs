@@ -54,13 +54,13 @@ impl SimpleVotePool {
         &mut self,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
-        transaction: &VoteMessage,
+        transaction: VoteMessage,
     ) -> Option<Stake> {
         if self.prev_voted_validators.contains(validator_vote_key) {
             return None;
         }
         self.prev_voted_validators.insert(*validator_vote_key);
-        self.vote_entry.transactions.push(*transaction);
+        self.vote_entry.transactions.push(transaction);
         self.vote_entry.total_stake_by_key = self
             .vote_entry
             .total_stake_by_key
@@ -105,7 +105,7 @@ impl DuplicateBlockVotePool {
         &mut self,
         validator_vote_key: &Pubkey,
         voted_block_id: Hash,
-        transaction: &VoteMessage,
+        transaction: VoteMessage,
         validator_stake: Stake,
     ) -> Option<Stake> {
         // Check whether the validator_vote_key already used the same voted_block_id or exceeded max_entries_per_pubkey
@@ -127,7 +127,7 @@ impl DuplicateBlockVotePool {
             .votes
             .entry(voted_block_id)
             .or_insert_with(VoteEntry::new);
-        vote_entry.transactions.push(*transaction);
+        vote_entry.transactions.push(transaction);
         vote_entry.total_stake_by_key = vote_entry
             .total_stake_by_key
             .saturating_add(validator_stake);
@@ -191,16 +191,16 @@ mod test {
         };
         let my_pubkey = Pubkey::new_unique();
 
-        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, &transaction), Some(10));
+        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, transaction), Some(10));
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding the same key again should fail
-        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, &transaction), None);
+        assert_eq!(vote_pool.add_vote(&my_pubkey, 10, transaction), None);
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
-        assert_eq!(vote_pool.add_vote(&new_pubkey, 60, &transaction), Some(70));
+        assert_eq!(vote_pool.add_vote(&new_pubkey, 60, transaction), Some(70));
         assert_eq!(vote_pool.total_stake(), 70);
     }
 
@@ -216,7 +216,7 @@ mod test {
             rank: 1,
         };
         assert_eq!(
-            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            vote_pool.add_vote(&my_pubkey, block_id, transaction, 10),
             Some(10)
         );
         assert_eq!(vote_pool.total_stake(), 10);
@@ -224,14 +224,14 @@ mod test {
 
         // Adding the same key again should fail
         assert_eq!(
-            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            vote_pool.add_vote(&my_pubkey, block_id, transaction, 10),
             None
         );
         assert_eq!(vote_pool.total_stake(), 10);
 
         // Adding a different bankhash should fail
         assert_eq!(
-            vote_pool.add_vote(&my_pubkey, block_id, &transaction, 10),
+            vote_pool.add_vote(&my_pubkey, block_id, transaction, 10),
             None
         );
         assert_eq!(vote_pool.total_stake(), 10);
@@ -239,7 +239,7 @@ mod test {
         // Adding a different key should succeed
         let new_pubkey = Pubkey::new_unique();
         assert_eq!(
-            vote_pool.add_vote(&new_pubkey, block_id, &transaction, 60),
+            vote_pool.add_vote(&new_pubkey, block_id, transaction, 60),
             Some(70)
         );
         assert_eq!(vote_pool.total_stake(), 70);
@@ -263,7 +263,7 @@ mod test {
         // Adding the first 3 votes should succeed, but total_stake should remain at 10
         for block_id in &block_ids[0..3] {
             assert_eq!(
-                vote_pool.add_vote(&my_pubkey, *block_id, &transaction, 10),
+                vote_pool.add_vote(&my_pubkey, *block_id, transaction, 10),
                 Some(10)
             );
             assert_eq!(vote_pool.total_stake(), 10);
@@ -271,7 +271,7 @@ mod test {
         }
         // Adding the 4th vote should fail
         assert_eq!(
-            vote_pool.add_vote(&my_pubkey, block_ids[3], &transaction, 10),
+            vote_pool.add_vote(&my_pubkey, block_ids[3], transaction, 10),
             None
         );
         assert_eq!(vote_pool.total_stake(), 10);
@@ -281,7 +281,7 @@ mod test {
         let new_pubkey = Pubkey::new_unique();
         for block_id in &block_ids[1..3] {
             assert_eq!(
-                vote_pool.add_vote(&new_pubkey, *block_id, &transaction, 60),
+                vote_pool.add_vote(&new_pubkey, *block_id, transaction, 60),
                 Some(70)
             );
             assert_eq!(vote_pool.total_stake(), 70);
@@ -290,7 +290,7 @@ mod test {
 
         // The new key only added 2 votes, so adding block_ids[3] should succeed
         assert_eq!(
-            vote_pool.add_vote(&new_pubkey, block_ids[3], &transaction, 60),
+            vote_pool.add_vote(&new_pubkey, block_ids[3], transaction, 60),
             Some(60)
         );
         assert_eq!(vote_pool.total_stake(), 70);
@@ -298,7 +298,7 @@ mod test {
 
         // Now if adding the same key again, it should fail
         assert_eq!(
-            vote_pool.add_vote(&new_pubkey, block_ids[0], &transaction, 60),
+            vote_pool.add_vote(&new_pubkey, block_ids[0], transaction, 60),
             None
         );
     }
