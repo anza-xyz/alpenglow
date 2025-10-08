@@ -33,6 +33,9 @@ const BENCH_SLOT: u64 = 70;
 // TODO(sam): use a small number for now to emulate the current test cluster
 const NUM_VALIDATORS: usize = 50;
 
+// We want enough unique inputs (due to Hash::new_unique() in generators) to
+// saturate the internal caches (vote_payload_cache, verified_certs) during the
+// warm-up phase, while keeping pre-generation time and memory usage reasonable.
 const NUM_PREGENERATED_BATCHES: usize = 500;
 
 struct BenchEnvironment {
