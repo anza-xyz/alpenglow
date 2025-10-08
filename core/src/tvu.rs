@@ -320,6 +320,7 @@ impl Tvu {
             cluster_info.clone(),
             cluster_slots_update_receiver,
             exit.clone(),
+            migration_status.clone(),
         );
 
         let (cost_update_sender, cost_update_receiver) = unbounded();

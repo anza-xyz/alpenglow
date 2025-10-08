@@ -8,6 +8,7 @@ use {
     solana_ledger::blockstore::Blockstore,
     solana_measure::measure::Measure,
     solana_runtime::bank_forks::BankForks,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -46,6 +47,7 @@ impl ClusterSlotsService {
         cluster_info: Arc<ClusterInfo>,
         cluster_slots_update_receiver: ClusterSlotsUpdateReceiver,
         exit: Arc<AtomicBool>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self::initialize_lowest_slot(&blockstore, &cluster_info);
         Self::initialize_epoch_slots(&bank_forks, &cluster_info);
@@ -59,6 +61,7 @@ impl ClusterSlotsService {
                     cluster_info,
                     cluster_slots_update_receiver,
                     exit,
+                    migration_status,
                 )
             })
             .unwrap();
@@ -79,16 +82,25 @@ impl ClusterSlotsService {
         cluster_info: Arc<ClusterInfo>,
         cluster_slots_update_receiver: ClusterSlotsUpdateReceiver,
         exit: Arc<AtomicBool>,
+        migration_status: Arc<MigrationStatus>,
     ) {
         let mut cluster_slots_service_timing = ClusterSlotsServiceTiming::default();
         let mut last_stats = Instant::now();
         let mut epoch_specs = EpochSpecs::from(bank_forks.clone());
+        let mut alpenglow_genesis_epoch = None;
 
         // initialize cluster slots with the current root bank
         let root_bank = bank_forks.read().unwrap().root_bank();
         cluster_slots.update(&root_bank, &cluster_info);
 
-        while !exit.load(Ordering::Relaxed) {
+        while !exit.load(Ordering::Relaxed)
+            && alpenglow_genesis_epoch.is_none_or(|ge| ge >= epoch_specs.current_epoch())
+        {
+            if alpenglow_genesis_epoch.is_none() {
+                alpenglow_genesis_epoch = migration_status
+                    .genesis_slot()
+                    .map(|gs| root_bank.epoch_schedule().get_epoch(gs));
+            }
             let slots = match cluster_slots_update_receiver.recv_timeout(Duration::from_millis(200))
             {
                 Ok(slots) => Some(slots),

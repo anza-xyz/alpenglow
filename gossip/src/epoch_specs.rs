@@ -37,6 +37,11 @@ impl EpochSpecs {
         self.epoch_duration
     }
 
+    #[inline]
+    pub fn current_epoch(&self) -> Epoch {
+        self.epoch
+    }
+
     // Updates fields if root bank has moved to a new epoch.
     fn maybe_refresh(&mut self) {
         if self.epoch_schedule.get_epoch(self.root.get()) == self.epoch {
