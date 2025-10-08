@@ -89,14 +89,15 @@ use {
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
         vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
+        vote_history_storage::{SavedVoteHistory, VoteHistoryStorage},
         voting_service::BLSOp,
-        voting_utils::GenerateVoteTxResult,
+        voting_utils::{self, GenerateVoteTxResult},
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage},
-        migration::MigrationStatus,
+        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -681,7 +682,7 @@ impl ReplayStage {
             leader_window_notifier,
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
-            own_vote_sender,
+            own_vote_sender: own_vote_sender.clone(),
             consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
@@ -788,6 +789,7 @@ impl ReplayStage {
                 last_refresh_time: Instant::now(),
                 last_print_time: Instant::now(),
             };
+            let mut last_genesis_vote_refresh_time = Instant::now();
             let mut tbft_structs = TowerBFTStructures {
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
@@ -934,9 +936,20 @@ impl ReplayStage {
 
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !migration_status.is_alpenglow_enabled() {
-                    // TODO(ashwin): This will be moved to the event coordinator once we figure out
-                    // migration
-                    for _ in votor_event_receiver.try_iter() {}
+                    // Check if we should vote / refresh our genesis vote
+                    if last_genesis_vote_refresh_time.elapsed() > GENESIS_VOTE_REFRESH
+                        && Self::maybe_send_genesis_vote(
+                            migration_status.as_ref(),
+                            bank_forks.as_ref(),
+                            vote_account,
+                            &identity_keypair,
+                            &authorized_voter_keypairs,
+                            &own_vote_sender,
+                            &bls_sender,
+                        )
+                    {
+                        last_genesis_vote_refresh_time = Instant::now();
+                    }
 
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
@@ -1531,6 +1544,58 @@ impl ReplayStage {
                 i64
             ),
         );
+        true
+    }
+
+    /// If we have an eligble genesis block, send out a genesis vote
+    /// Returns false if no eligble block was found
+    fn maybe_send_genesis_vote(
+        migration_status: &MigrationStatus,
+        bank_forks: &RwLock<BankForks>,
+        vote_account: Pubkey,
+        identity_keypair: &Arc<Keypair>,
+        authorized_voter_keypairs: &Arc<std::sync::RwLock<Vec<Arc<Keypair>>>>,
+        own_vote_sender: &Sender<ConsensusMessage>,
+        bls_sender: &Sender<BLSOp>,
+    ) -> bool {
+        let Some((slot, block_id)) = migration_status.eligble_genesis_block() else {
+            return false;
+        };
+
+        let vote = Vote::new_genesis_vote(slot, block_id);
+        match voting_utils::generate_vote_tx(
+            &vote,
+            bank_forks.read().unwrap().root_bank().as_ref(),
+            vote_account,
+            identity_keypair,
+            authorized_voter_keypairs,
+            None,
+            &mut HashMap::new(),
+        ) {
+            GenerateVoteTxResult::ConsensusMessage(message) => {
+                // TODO(ashwin): Error handling
+                // Send vote to ConsensusPool and rest of cluster
+                warn!(
+                    "{}: Casting genesis vote for ({slot}, {block_id})",
+                    identity_keypair.pubkey()
+                );
+                let _ = own_vote_sender.send(message.clone());
+                let _ = bls_sender.send(BLSOp::PushVote {
+                    message: Arc::new(message),
+                    slot,
+                    saved_vote_history:
+                        solana_votor::vote_history_storage::SavedVoteHistoryVersions::Current(
+                            SavedVoteHistory::default(),
+                        ),
+                });
+            }
+            e => {
+                warn!(
+                    "{}: Unable to send genesis vote for {slot} {block_id}: {e:?}",
+                    identity_keypair.pubkey()
+                );
+            }
+        }
         true
     }
 
@@ -3990,17 +4055,10 @@ impl ReplayStage {
                             .get(eligble_genesis_slot)
                             .expect("Genesis bank must exist, no rooting past migration slot");
 
-                        let genesis_block = if let Some(block_id) = eligble_genesis_bank.block_id()
-                        {
-                            GenesisBlock::Block((eligble_genesis_slot, block_id))
-                        } else {
-                            // This can happen if shredding is lagging behind and we produced this block. For now we store
-                            // the eligbility status of this block, and block id will be checked again when voting.
-                            // Note that we *NEVER* dump our own blocks - so it is impossible for the block id of bank_slot
-                            // to refer to a different version than the one that was checked in this function.
-                            GenesisBlock::YetToShred(eligble_genesis_slot)
-                        };
-                        migration_status.set_genesis_block(genesis_block);
+                        let block_id = eligble_genesis_bank
+                            .block_id()
+                            .expect("A super OC block must have finished shredding");
+                        migration_status.set_genesis_block((eligble_genesis_slot, block_id));
                     }
 
                     let stats = progress
