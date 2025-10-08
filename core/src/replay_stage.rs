@@ -3471,7 +3471,9 @@ impl ReplayStage {
                     r_replay_stats.batch_execute.totals
                 );
                 new_frozen_slots.push(bank.slot());
-                let _ = cluster_slots_update_sender.send(vec![bank_slot]);
+                if bank_slot <= migration_status.genesis_slot().unwrap_or(Slot::MAX) {
+                    let _ = cluster_slots_update_sender.send(vec![bank_slot]);
+                }
 
                 bank.freeze();
                 datapoint_info!(
