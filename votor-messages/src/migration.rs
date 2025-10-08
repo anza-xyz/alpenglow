@@ -69,8 +69,7 @@ pub enum GenesisBlock {
 }
 
 impl GenesisBlock {
-    /// If we have shredded the block, return Some(block) otherwise None
-    pub fn to_block(self) -> Option<Block> {
+    fn to_block(self) -> Option<Block> {
         match self {
             GenesisBlock::Block(b) => Some(b),
             GenesisBlock::YetToShred(_) => None,
