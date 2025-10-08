@@ -2224,6 +2224,7 @@ impl Bank {
             account.set_lamports(account.lamports().saturating_sub(vat));
             self.store_account(identity_pubkey, &account);
         }
+        info!("BURNED total VAT of {total_vat} lamports from staked accounts");
         self.capitalization.fetch_sub(total_vat, Relaxed);
     }
 
