@@ -10,6 +10,7 @@ use {
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
+    parking_lot::RwLock as PlRwLock,
     rayon::iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
     },
@@ -24,6 +25,7 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
+    solana_votor::consensus_metrics::ConsensusMetrics,
     solana_votor_messages::{
         consensus_message::{
             Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
@@ -90,6 +92,7 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
+    consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
 }
 
 impl BLSSigVerifier {
@@ -135,13 +138,6 @@ impl BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
-                    // Only need votes newer than root slot
-                    if vote_message.vote.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    }
-
                     // Missing epoch states
                     let Some(key_to_rank_map) =
                         get_key_to_rank_map(&root_bank, vote_message.vote.slot())
@@ -161,6 +157,17 @@ impl BLSSigVerifier {
                         packet.meta_mut().set_discard(true);
                         continue;
                     };
+
+                    // Capture votes received metrics before old messages are potentially discarded below.
+                    if let Some(c) = self.consensus_metrics.as_ref() {
+                        c.write().record_vote(*solana_pubkey, &vote_message.vote);
+                    }
+                    // Only need votes newer than root slot
+                    if vote_message.vote.slot() <= root_bank.slot() {
+                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
 
                     votes_to_verify.push(VoteToVerify {
                         vote_message,
@@ -216,6 +223,7 @@ impl BLSSigVerifier {
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
+        consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -224,6 +232,7 @@ impl BLSSigVerifier {
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
+            consensus_metrics,
         }
     }
 
@@ -655,7 +664,7 @@ mod tests {
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         (
             validator_keypairs,
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender),
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None),
         )
     }
 
@@ -1383,7 +1392,7 @@ mod tests {
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let mut sig_verifier =
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender);
+            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None);
 
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();

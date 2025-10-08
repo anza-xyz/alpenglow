@@ -20,16 +20,60 @@ use {
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
     },
-    std::{cell::RefCell, sync::Arc},
+    std::{
+        cell::RefCell,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    },
 };
 
 const BENCH_SLOT: u64 = 70;
 // TODO(sam): use a small number for now to emulate the current test cluster
 const NUM_VALIDATORS: usize = 50;
 
+// We want enough unique inputs (due to Hash::new_unique() in generators) to
+// saturate the internal caches (vote_payload_cache, verified_certs) during the
+// warm-up phase, while keeping pre-generation time and memory usage reasonable.
+const NUM_PREGENERATED_BATCHES: usize = 500;
+
 struct BenchEnvironment {
     verifier: RefCell<BLSSigVerifier>,
     validator_keypairs: Arc<Vec<ValidatorVoteKeypairs>>,
+}
+
+struct PregeneratedBatches {
+    batches: Vec<Vec<PacketBatch>>,
+    counter: AtomicUsize,
+}
+
+impl PregeneratedBatches {
+    fn new<F>(env: &BenchEnvironment, generator: F) -> Self
+    where
+        F: Fn(&BenchEnvironment) -> Vec<PacketBatch>,
+    {
+        // Generate the batches upfront, moving expensive crypto ops out of the benchmark loop
+        //
+        // NOTE: Because the root bank slot (which controls cache eviction) is static during the
+        // benchmark, the caches do not get cleared. Therefore, this benchmark measures the *steady-state*
+        // throughput with high cache hit rates. It intentionally excludes the overhead
+        // of serialization (which occurs on cache misses).
+        let batches = (0..NUM_PREGENERATED_BATCHES)
+            .map(|_| generator(env))
+            .collect();
+        Self {
+            batches,
+            counter: AtomicUsize::new(0),
+        }
+    }
+
+    // Get the next batch in a round-robin fashion.
+    // We must clone because the verifier modifies the packets in place (e.g., setting discard flags).
+    fn next(&self) -> Vec<PacketBatch> {
+        let index = self.counter.fetch_add(1, Ordering::Relaxed) % self.batches.len();
+        self.batches[index].clone()
+    }
 }
 
 fn setup_environment() -> BenchEnvironment {
@@ -54,7 +98,7 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s);
+    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s, None);
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
@@ -205,12 +249,16 @@ fn bench_votes(c: &mut Criterion) {
     let env = setup_environment();
     let mut group = c.benchmark_group("verify_votes");
 
+    let two_votes_batches = Arc::new(PregeneratedBatches::new(&env, generate_two_votes_batch));
+    let single_vote_batches = Arc::new(PregeneratedBatches::new(&env, generate_single_vote_batch));
+
     // Benchmark Scenario 1: Two votes in one batch
     // (about 20% of the non-zero votes in the test-cluster consist of a single vote)
     group.throughput(Throughput::Elements(2));
+    let two_votes_batches_clone = two_votes_batches.clone();
     group.bench_function("dynamic/two_votes_batch", |b| {
         b.iter_batched(
-            || generate_two_votes_batch(&env),
+            || two_votes_batches_clone.next(),
             |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
@@ -219,9 +267,10 @@ fn bench_votes(c: &mut Criterion) {
     // Benchmark Scenario 2: Single vote in one batch
     // (about 80% of the non-zero votes in the test-cluster consist of a single vote)
     group.throughput(Throughput::Elements(1));
+    let single_vote_batches_clone = single_vote_batches.clone();
     group.bench_function("dynamic/single_vote_batch", |b| {
         b.iter_batched(
-            || generate_single_vote_batch(&env),
+            || single_vote_batches_clone.next(),
             |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
@@ -235,11 +284,15 @@ fn bench_certificates(c: &mut Criterion) {
     let env = setup_environment();
     let mut group = c.benchmark_group("verify_certificates");
 
+    let single_cert_batches = Arc::new(PregeneratedBatches::new(&env, generate_single_cert_batch));
+    let two_certs_batches = Arc::new(PregeneratedBatches::new(&env, generate_two_certs_batch));
+
     // Benchmark Scenario 3: Single certificate batch (Base2)
     group.throughput(Throughput::Elements(1));
+    let single_cert_batches_clone = single_cert_batches.clone();
     group.bench_function("dynamic/single_cert_batch_base2", |b| {
         b.iter_batched(
-            || generate_single_cert_batch(&env),
+            || single_cert_batches_clone.next(),
             |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );
@@ -247,9 +300,10 @@ fn bench_certificates(c: &mut Criterion) {
 
     // Benchmark Scenario 4: Two certificates batch (Base2 + Base3)
     group.throughput(Throughput::Elements(2));
+    let two_certs_batches_clone = two_certs_batches.clone();
     group.bench_function("dynamic/two_certs_batch_base2_base3", |b| {
         b.iter_batched(
-            || generate_two_certs_batch(&env),
+            || two_certs_batches_clone.next(),
             |batches| env.verifier.borrow_mut().verify_and_send_batches(batches),
             BatchSize::SmallInput,
         );

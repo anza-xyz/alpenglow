@@ -1,6 +1,6 @@
 /// Block components and friends.
 ///
-/// A `BlockComponent` represents either a batch of entries or a special block marker.
+/// A `BlockComponent` represents either an entry batch or a special block marker.
 /// Most of the time, a block component contains a vector of entries. However, periodically,
 /// there are special messages that a block needs to contain. To accommodate these special
 /// messages, `BlockComponent` allows for the inclusion of special data via `VersionedBlockMarker`.
@@ -15,7 +15,7 @@
 ///
 /// All numeric fields use little-endian encoding.
 ///
-/// ### BlockComponent with Entries
+/// ### BlockComponent with EntryBatch
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Entry Count                  (8 bytes)  │
@@ -45,9 +45,6 @@
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
-/// │   0 = BlockFooter                       │
-/// │   1 = BlockHeader                       │
-/// │   2 = UpdateParent                      │
 /// ├─────────────────────────────────────────┤
 /// │ Byte Length                  (2 bytes)  │
 /// ├─────────────────────────────────────────┤
@@ -101,8 +98,8 @@ pub enum BlockComponentError {
     InsufficientData,
     /// Entry count exceeds the maximum allowed
     TooManyEntries { count: usize, max: usize },
-    /// Entries vector is empty when it shouldn't be
-    EmptyEntries,
+    /// EntryBatch is empty when it shouldn't be
+    EmptyEntryBatch,
     /// Unknown variant identifier
     UnknownVariant { variant_type: String, id: u8 },
     /// Unsupported version number
@@ -111,7 +108,7 @@ pub enum BlockComponentError {
     DataLengthOverflow,
     /// Cursor position exceeded data boundary
     CursorOutOfBounds,
-    /// BlockComponent cannot have both entries and marker data
+    /// BlockComponent cannot have both entry batch and marker data
     MixedData,
     /// Serialization failed
     SerializationFailed(String),
@@ -126,7 +123,7 @@ impl fmt::Display for BlockComponentError {
             Self::TooManyEntries { count, max } => {
                 write!(f, "Entry count {count} exceeds maximum {max}")
             }
-            Self::EmptyEntries => write!(f, "BlockComponent with entries cannot be empty"),
+            Self::EmptyEntryBatch => write!(f, "BlockComponent with entry batch cannot be empty"),
             Self::UnknownVariant { variant_type, id } => {
                 write!(f, "Unknown {variant_type} variant: {id}")
             }
@@ -135,7 +132,10 @@ impl fmt::Display for BlockComponentError {
             }
             Self::DataLengthOverflow => write!(f, "Data length exceeds maximum representable size"),
             Self::CursorOutOfBounds => write!(f, "Cursor exceeded data boundary"),
-            Self::MixedData => write!(f, "BlockComponent cannot have both entries and marker data"),
+            Self::MixedData => write!(
+                f,
+                "BlockComponent cannot have both entry batch and marker data"
+            ),
             Self::SerializationFailed(msg) => write!(f, "Serialization failed: {msg}"),
             Self::DeserializationFailed(msg) => write!(f, "Deserialization failed: {msg}"),
         }
@@ -171,7 +171,7 @@ impl From<bincode::Error> for BlockComponentError {
     }
 }
 
-/// A block component containing either entries or special metadata.
+/// A block component containing either an entry batch or special metadata.
 ///
 /// Per SIMD-0307, entry batches must have at least one entry. Block markers
 /// are identified by an entry count of zero followed by marker data.
@@ -186,7 +186,7 @@ impl From<bincode::Error> for BlockComponentError {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockComponent {
-    Entries(Vec<Entry>),
+    EntryBatch(Vec<Entry>),
     BlockMarker(VersionedBlockMarker),
 }
 
@@ -215,9 +215,6 @@ pub enum VersionedBlockMarker {
 /// ```text
 /// ┌─────────────────────────────────────────┐
 /// │ Variant ID                   (1 byte)   │
-/// │   0 = BlockFooter                       │
-/// │   1 = BlockHeader                       │
-/// │   2 = UpdateParent                      │
 /// ├─────────────────────────────────────────┤
 /// │ Byte Length                  (2 bytes)  │
 /// ├─────────────────────────────────────────┤
@@ -355,7 +352,7 @@ pub struct UpdateParentV1 {
 
 impl Default for BlockComponent {
     fn default() -> Self {
-        Self::Entries(Vec::new())
+        Self::EntryBatch(Vec::new())
     }
 }
 
@@ -365,16 +362,16 @@ impl BlockComponent {
     /// TODO(karthik): lower this to a reasonable value.
     const MAX_ENTRIES: usize = u32::MAX as usize;
 
-    /// Creates a new block component with entries.
+    /// Creates a new block component with an entry batch.
     ///
     /// # Errors
     /// Returns an error if the entries vector is empty or exceeds the maximum allowed size.
-    pub fn new_entries(entries: Vec<Entry>) -> Result<Self, BlockComponentError> {
+    pub fn new_entry_batch(entries: Vec<Entry>) -> Result<Self, BlockComponentError> {
         if entries.is_empty() {
-            return Err(BlockComponentError::EmptyEntries);
+            return Err(BlockComponentError::EmptyEntryBatch);
         }
-        Self::validate_entries_length(entries.len())?;
-        Ok(Self::Entries(entries))
+        Self::validate_entry_batch_length(entries.len())?;
+        Ok(Self::EntryBatch(entries))
     }
 
     /// Creates a new block component with a special marker.
@@ -382,31 +379,31 @@ impl BlockComponent {
         Self::BlockMarker(marker)
     }
 
-    /// Returns true if this component contains entries.
-    pub const fn is_entries(&self) -> bool {
-        matches!(self, Self::Entries(_))
+    /// Returns true if this component contains an entry batch.
+    pub const fn is_entry_batch(&self) -> bool {
+        matches!(self, Self::EntryBatch(_))
     }
 
     /// Returns a slice of entries in this component.
-    pub fn entries(&self) -> &[Entry] {
+    pub fn entry_batch(&self) -> &[Entry] {
         match self {
-            Self::Entries(entries) => entries,
+            Self::EntryBatch(entries) => entries,
             Self::BlockMarker(_) => &[],
         }
     }
 
     /// Consumes this component and returns the entries if it's an entry batch.
-    pub fn into_entries(self) -> Option<Vec<Entry>> {
+    pub fn into_entry_batch(self) -> Option<Vec<Entry>> {
         match self {
-            Self::Entries(entries) => Some(entries),
+            Self::EntryBatch(entries) => Some(entries),
             Self::BlockMarker(_) => None,
         }
     }
 
     /// Get entries if this is an entry batch.
-    pub fn as_entries(&self) -> Option<&Vec<Entry>> {
+    pub fn as_entry_batch(&self) -> Option<&Vec<Entry>> {
         match self {
-            Self::Entries(entries) => Some(entries),
+            Self::EntryBatch(entries) => Some(entries),
             _ => None,
         }
     }
@@ -414,7 +411,7 @@ impl BlockComponent {
     /// Returns the special marker if present.
     pub const fn marker(&self) -> Option<&VersionedBlockMarker> {
         match self {
-            Self::Entries(_) => None,
+            Self::EntryBatch(_) => None,
             Self::BlockMarker(marker) => Some(marker),
         }
     }
@@ -425,7 +422,7 @@ impl BlockComponent {
     }
 
     /// Validates that the entries length is within bounds.
-    fn validate_entries_length(len: usize) -> Result<(), BlockComponentError> {
+    fn validate_entry_batch_length(len: usize) -> Result<(), BlockComponentError> {
         if len >= Self::MAX_ENTRIES {
             Err(BlockComponentError::TooManyEntries {
                 count: len,
@@ -444,8 +441,8 @@ impl BlockComponent {
         let mut buffer = Vec::new();
 
         match self {
-            Self::Entries(entries) => {
-                Self::validate_entries_length(entries.len())?;
+            Self::EntryBatch(entries) => {
+                Self::validate_entry_batch_length(entries.len())?;
 
                 buffer = bincode::serialize(entries)
                     .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?;
@@ -479,7 +476,7 @@ impl BlockComponent {
         );
 
         // Validate entry count
-        Self::validate_entries_length(entry_count as usize)?;
+        Self::validate_entry_batch_length(entry_count as usize)?;
 
         let entries = bincode::deserialize::<Vec<Entry>>(data)
             .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
@@ -493,21 +490,21 @@ impl BlockComponent {
             .ok_or(BlockComponentError::CursorOutOfBounds)?;
 
         match (entries.is_empty(), remaining_bytes.is_empty()) {
-            (true, true) => Ok(Self::Entries(Vec::new())),
+            (true, true) => Ok(Self::EntryBatch(Vec::new())),
             (true, false) => {
                 let marker = VersionedBlockMarker::from_bytes(remaining_bytes)?;
                 Ok(Self::BlockMarker(marker))
             }
-            // This is the "everything is empty" case, which means there are no entries and no
+            // This is the normal entry batch case, which means there are entries but no
             // marker data.
-            (false, true) => Ok(Self::Entries(entries)),
+            (false, true) => Ok(Self::EntryBatch(entries)),
             (false, false) => Err(BlockComponentError::MixedData),
         }
     }
 
     /// Check if data looks like an entry batch (non-zero entry count). Returns `None` if we can't
     /// deduce whether the data is an entry batch.
-    pub fn infer_is_entries(data: &[u8]) -> Option<bool> {
+    pub fn infer_is_entry_batch(data: &[u8]) -> Option<bool> {
         // Per documentation, the first 8 bytes denote the length of an entry batch, where a length
         // of zero indicates a block marker.
         data.get(..8)
@@ -517,7 +514,7 @@ impl BlockComponent {
 
     /// Check if data looks like a block marker (zero entry count).
     pub fn infer_is_block_marker(data: &[u8]) -> Option<bool> {
-        Self::infer_is_entries(data).map(|is_entries| !is_entries)
+        Self::infer_is_entry_batch(data).map(|is_entries| !is_entries)
     }
 
     /// Get marker if this is a block marker.
@@ -1142,8 +1139,8 @@ mod tests {
         Entry::default()
     }
 
-    // Helper function to create multiple mock entries
-    fn create_mock_entries(count: usize) -> Vec<Entry> {
+    // Helper function to create a mock entry batch
+    fn create_mock_entry_batch(count: usize) -> Vec<Entry> {
         repeat_n(create_mock_entry(), count).collect()
     }
 
@@ -1166,26 +1163,26 @@ mod tests {
     #[test]
     fn test_block_component_default() {
         let component = BlockComponent::default();
-        assert!(component.is_entries());
-        assert_eq!(component.entries().len(), 0);
+        assert!(component.is_entry_batch());
+        assert_eq!(component.entry_batch().len(), 0);
     }
 
     #[test]
-    fn test_block_component_entries() {
+    fn test_block_component_entry_batch() {
         let entries = vec![Entry::default(), Entry::default()];
-        let component = BlockComponent::new_entries(entries.clone()).unwrap();
+        let component = BlockComponent::new_entry_batch(entries.clone()).unwrap();
 
-        assert!(component.is_entries());
+        assert!(component.is_entry_batch());
         assert!(!component.is_marker());
-        assert_eq!(component.entries(), entries);
+        assert_eq!(component.entry_batch(), entries);
         assert!(component.marker().is_none());
     }
 
     #[test]
-    fn test_block_component_empty_entries_error() {
-        let result = BlockComponent::new_entries(vec![]);
+    fn test_block_component_empty_entry_batch_error() {
+        let result = BlockComponent::new_entry_batch(vec![]);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntries);
+        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntryBatch);
     }
 
     #[test]
@@ -1199,9 +1196,9 @@ mod tests {
         ));
         let component = BlockComponent::new_block_marker(marker.clone());
 
-        assert!(!component.is_entries());
+        assert!(!component.is_entry_batch());
         assert!(component.is_marker());
-        assert_eq!(component.entries().len(), 0);
+        assert_eq!(component.entry_batch().len(), 0);
         assert_eq!(component.marker(), Some(&marker));
     }
 
@@ -1400,9 +1397,9 @@ mod tests {
     }
 
     #[test]
-    fn test_block_component_entries_serialization() {
+    fn test_block_component_entry_batch_serialization() {
         let entries = vec![Entry::default(), Entry::default()];
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let component = BlockComponent::new_entry_batch(entries).unwrap();
 
         let bytes = component.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
@@ -1428,9 +1425,9 @@ mod tests {
     }
 
     #[test]
-    fn test_block_component_serde_entries() {
+    fn test_block_component_serde_entry_batch() {
         let entries = vec![Entry::default()];
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let component = BlockComponent::new_entry_batch(entries).unwrap();
 
         let serialized = bincode::serialize(&component).unwrap();
         let deserialized: BlockComponent = bincode::deserialize(&serialized).unwrap();
@@ -1503,9 +1500,9 @@ mod tests {
 
     #[test]
     fn test_block_component_invalid_mixed_data() {
-        // Create component with entries and try to add marker data manually
+        // Create component with entry batch and try to add marker data manually
         let entries = vec![Entry::default()];
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let component = BlockComponent::new_entry_batch(entries).unwrap();
 
         let mut bytes = component.to_bytes().unwrap();
 
@@ -1525,7 +1522,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("both entries and marker"));
+            .contains("both entry batch and marker"));
     }
 
     #[test]
@@ -1536,8 +1533,8 @@ mod tests {
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
         assert_eq!(component, deserialized);
-        assert!(deserialized.is_entries());
-        assert_eq!(deserialized.entries().len(), 0);
+        assert!(deserialized.is_entry_batch());
+        assert_eq!(deserialized.entry_batch().len(), 0);
     }
 
     #[test]
@@ -1702,7 +1699,7 @@ mod tests {
     fn test_block_component_partial_entry_data() {
         // Create valid component with one entry
         let entries = vec![Entry::default()];
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let component = BlockComponent::new_entry_batch(entries).unwrap();
         let mut bytes = component.to_bytes().unwrap();
 
         // Truncate the data to simulate partial entry
@@ -2009,16 +2006,16 @@ mod tests {
     }
 
     #[test]
-    fn test_block_component_large_entries() {
+    fn test_block_component_large_entry_batch() {
         // Test with large number of entries (but within limits)
         let entries: Vec<Entry> = (0..1000).map(|_| Entry::default()).collect();
-        let component = BlockComponent::new_entries(entries.clone()).unwrap();
+        let component = BlockComponent::new_entry_batch(entries.clone()).unwrap();
 
         let bytes = component.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
         assert_eq!(component, deserialized);
-        assert_eq!(deserialized.entries().len(), 1000);
+        assert_eq!(deserialized.entry_batch().len(), 1000);
     }
 
     #[test]
@@ -2081,18 +2078,18 @@ mod tests {
     // BlockComponent constructor tests
     #[test]
     fn test_block_component_new_valid() {
-        let entries = create_mock_entries(3);
-        let batch = BlockComponent::new_entries(entries).unwrap();
-        assert_eq!(batch.entries().len(), 3);
+        let entries = create_mock_entry_batch(3);
+        let batch = BlockComponent::new_entry_batch(entries).unwrap();
+        assert_eq!(batch.entry_batch().len(), 3);
         assert!(batch.marker().is_none());
     }
 
     #[test]
-    fn test_block_component_new_empty_entries() {
+    fn test_block_component_new_empty_entry_batch() {
         let entries = Vec::new();
-        let result = BlockComponent::new_entries(entries);
+        let result = BlockComponent::new_entry_batch(entries);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntries);
+        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntryBatch);
     }
 
     #[test]
@@ -2102,7 +2099,7 @@ mod tests {
         // by creating a batch with entries and then manually testing the length validation
 
         // First test that MAX_ENTRIES itself fails
-        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
+        let result = BlockComponent::validate_entry_batch_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -2113,7 +2110,7 @@ mod tests {
         );
 
         // Test that MAX_ENTRIES + 1 also fails
-        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES + 1);
+        let result = BlockComponent::validate_entry_batch_length(BlockComponent::MAX_ENTRIES + 1);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -2124,7 +2121,7 @@ mod tests {
         );
 
         // Test that MAX_ENTRIES - 1 succeeds
-        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES - 1);
+        let result = BlockComponent::validate_entry_batch_length(BlockComponent::MAX_ENTRIES - 1);
         assert!(result.is_ok());
     }
 
@@ -2177,7 +2174,7 @@ mod tests {
     fn test_block_component_new_max_entries() {
         // Test near the boundary - creating u32::MAX entries would be impractical
         // So we'll test the validation logic directly
-        let result = BlockComponent::validate_entries_length(BlockComponent::MAX_ENTRIES);
+        let result = BlockComponent::validate_entry_batch_length(BlockComponent::MAX_ENTRIES);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -2198,15 +2195,15 @@ mod tests {
             VersionedBlockFooter::new(footer),
         ));
         let batch = BlockComponent::new_block_marker(marker);
-        assert_eq!(batch.entries().len(), 0);
+        assert_eq!(batch.entry_batch().len(), 0);
         assert!(batch.marker().is_some());
     }
 
     // BlockComponent serialization tests
     #[test]
     fn test_block_component_valid_entries_only() {
-        let entries = create_mock_entries(3);
-        let batch = BlockComponent::new_entries(entries).unwrap();
+        let entries = create_mock_entry_batch(3);
+        let batch = BlockComponent::new_entry_batch(entries).unwrap();
 
         // Test serialization
         let bytes = batch.to_bytes().unwrap();
@@ -2220,13 +2217,13 @@ mod tests {
 
         // Test deserialization
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
-        assert_eq!(deserialized.entries().len(), 3);
+        assert_eq!(deserialized.entry_batch().len(), 3);
         assert!(deserialized.marker().is_none());
 
         // Test serde serialization
         let serialized = bincode::serialize(&batch).unwrap();
         let serde_deserialized: BlockComponent = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(serde_deserialized.entries().len(), 3);
+        assert_eq!(serde_deserialized.entry_batch().len(), 3);
         assert!(serde_deserialized.marker().is_none());
     }
 
@@ -2253,13 +2250,13 @@ mod tests {
 
         // Test deserialization
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
-        assert_eq!(deserialized.entries().len(), 0);
+        assert_eq!(deserialized.entry_batch().len(), 0);
         assert!(deserialized.marker().is_some());
 
         // Test serde serialization
         let serialized = bincode::serialize(&batch).unwrap();
         let serde_deserialized: BlockComponent = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(serde_deserialized.entries().len(), 0);
+        assert_eq!(serde_deserialized.entry_batch().len(), 0);
         assert!(serde_deserialized.marker().is_some());
     }
 
@@ -2272,12 +2269,12 @@ mod tests {
 
     #[test]
     fn test_block_component_large_entries_count() {
-        let entries = create_mock_entries(1000);
-        let batch = BlockComponent::Entries(entries);
+        let entries = create_mock_entry_batch(1000);
+        let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
-        assert_eq!(deserialized.entries().len(), 1000);
+        assert_eq!(deserialized.entry_batch().len(), 1000);
     }
 
     #[test]
@@ -2289,7 +2286,7 @@ mod tests {
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
-        assert_eq!(deserialized.entries().len(), 0);
+        assert_eq!(deserialized.entry_batch().len(), 0);
         assert!(deserialized.marker().is_some());
 
         let special = deserialized.marker().unwrap();
@@ -2457,7 +2454,7 @@ mod tests {
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
 
-        assert_eq!(deserialized.entries().len(), 0);
+        assert_eq!(deserialized.entry_batch().len(), 0);
         assert!(deserialized.marker().is_some());
 
         let special = deserialized.marker().unwrap();
@@ -2476,18 +2473,18 @@ mod tests {
 
         let serde_bytes = bincode::serialize(&batch).unwrap();
         let serde_deserialized: BlockComponent = bincode::deserialize(&serde_bytes).unwrap();
-        assert_eq!(serde_deserialized.entries().len(), 0);
+        assert_eq!(serde_deserialized.entry_batch().len(), 0);
         assert!(serde_deserialized.marker().is_some());
     }
 
     #[test]
     fn test_block_component_with_mixed_entry_sizes() {
-        let entries = create_mock_entries(10);
-        let batch = BlockComponent::Entries(entries);
+        let entries = create_mock_entry_batch(10);
+        let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
         let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
-        assert_eq!(deserialized.entries().len(), 10);
+        assert_eq!(deserialized.entry_batch().len(), 10);
         assert!(deserialized.marker().is_none());
     }
 
@@ -2693,12 +2690,12 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_is_entries_is_block_marker() {
+    fn test_infer_is_entry_batch_is_block_marker() {
         // Test with entries data (non-zero entry count)
-        let entries = create_mock_entries(1);
-        let component = BlockComponent::new_entries(entries).unwrap();
+        let entries = create_mock_entry_batch(1);
+        let component = BlockComponent::new_entry_batch(entries).unwrap();
         let bytes = component.to_bytes().unwrap();
-        assert_eq!(BlockComponent::infer_is_entries(&bytes), Some(true));
+        assert_eq!(BlockComponent::infer_is_entry_batch(&bytes), Some(true));
         assert_eq!(BlockComponent::infer_is_block_marker(&bytes), Some(false));
 
         // Test with marker data (zero entry count)
@@ -2711,18 +2708,18 @@ mod tests {
         ));
         let component = BlockComponent::new_block_marker(marker);
         let bytes = component.to_bytes().unwrap();
-        assert_eq!(BlockComponent::infer_is_entries(&bytes), Some(false));
+        assert_eq!(BlockComponent::infer_is_entry_batch(&bytes), Some(false));
         assert_eq!(BlockComponent::infer_is_block_marker(&bytes), Some(true));
 
-        // Test with empty entries (zero entry count)
+        // Test with empty entry batch (zero entry count)
         let component = BlockComponent::default();
         let bytes = component.to_bytes().unwrap();
-        assert_eq!(BlockComponent::infer_is_entries(&bytes), Some(false));
+        assert_eq!(BlockComponent::infer_is_entry_batch(&bytes), Some(false));
         assert_eq!(BlockComponent::infer_is_block_marker(&bytes), Some(true));
 
         // Test with insufficient data
-        assert_eq!(BlockComponent::infer_is_entries(&[1, 2, 3]), None);
-        assert_eq!(BlockComponent::infer_is_entries(&[]), None);
+        assert_eq!(BlockComponent::infer_is_entry_batch(&[1, 2, 3]), None);
+        assert_eq!(BlockComponent::infer_is_entry_batch(&[]), None);
         assert_eq!(BlockComponent::infer_is_block_marker(&[1, 2, 3]), None);
         assert_eq!(BlockComponent::infer_is_block_marker(&[]), None);
     }
