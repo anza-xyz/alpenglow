@@ -2182,12 +2182,15 @@ impl Bank {
                 leader_schedule_epoch,
                 new_epoch_stakes.total_stake(),
             );
-            // Burn VAT only if Alpenglow feature is enabled.
+            // Burn VAT only if Alpenglow features are enabled.
             if self
                 .feature_set
                 .is_active(&agave_feature_set::alpenglow::id())
+                && self
+                    .feature_set
+                    .is_active(&agave_feature_set::alpenglow_vat_and_limit_validators::id())
             {
-                self.deduct_vat_from_staked_accounts(&new_epoch_stakes);
+                self.burn_vat_from_staked_accounts(&new_epoch_stakes);
             }
 
             // It is expensive to log the details of epoch stakes. Only log them at "trace"
@@ -2207,7 +2210,7 @@ impl Bank {
         }
     }
 
-    fn deduct_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
+    fn burn_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
         let mut total_vat = 0;
         for identity_pubkey in epoch_stakes
             .stakes()
