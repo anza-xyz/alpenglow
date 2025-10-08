@@ -50,13 +50,13 @@ solana-rpc-client-api = { workspace = true }
 solana-runtime = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
-solana-slice-root = { workspace = true }
 solana-streamer = { workspace = true }
 solana-system-transaction = { workspace = true }
 solana-time-utils = { workspace = true }
 solana-tls-utils = { workspace = true }
 solana-transaction-error = { workspace = true }
 solana-votor = { workspace = true }
+solana-votor-messages = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

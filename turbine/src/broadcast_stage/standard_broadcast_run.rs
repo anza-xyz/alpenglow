@@ -14,9 +14,9 @@ use {
         ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder, MAX_CODE_SHREDS_PER_SLOT,
         MAX_DATA_SHREDS_PER_SLOT,
     },
-    solana_slice_root::SliceRoot,
     solana_time_utils::AtomicInterval,
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::SliceRoot,
     std::{borrow::Cow, sync::RwLock},
     tokio::sync::mpsc::Sender as AsyncSender,
 };

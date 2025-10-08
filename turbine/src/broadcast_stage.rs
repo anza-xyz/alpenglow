@@ -606,7 +606,7 @@ pub mod test {
         },
         solana_runtime::bank::Bank,
         solana_signer::Signer,
-        solana_slice_root::SliceRoot,
+        solana_votor_messages::SliceRoot,
         std::{
             path::Path,
             sync::{atomic::AtomicBool, Arc},

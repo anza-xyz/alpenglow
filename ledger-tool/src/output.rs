@@ -26,7 +26,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, Encodable, EncodedConfirmedBlock,

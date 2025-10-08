@@ -51,7 +51,6 @@ use {
     solana_runtime::bank::Bank,
     solana_signature::Signature,
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
     solana_storage_proto::{StoredExtendedRewards, StoredTransactionStatusMeta},
     solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
     solana_time_utils::timestamp,
@@ -64,6 +63,7 @@ use {
         VersionedConfirmedBlock, VersionedConfirmedBlockWithEntries,
         VersionedTransactionWithStatusMeta,
     },
+    solana_votor_messages::SliceRoot,
     std::{
         borrow::Cow,
         cell::RefCell,

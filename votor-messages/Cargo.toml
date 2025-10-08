@@ -32,7 +32,6 @@ solana-frozen-abi-macro = { workspace = true, optional = true, features = [
 solana-hash = { workspace = true }
 solana-logger = { workspace = true }
 solana-program = { workspace = true }
-solana-slice-root = { workspace = true }
 solana-vote-interface = { workspace = true }
 spl-pod = { workspace = true }
 

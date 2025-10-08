@@ -9,7 +9,7 @@ use {
     serde::{Deserialize, Deserializer, Serialize, Serializer},
     solana_clock::{Slot, UnixTimestamp},
     solana_hash::Hash,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     std::{
         collections::BTreeSet,
         ops::{Range, RangeBounds},

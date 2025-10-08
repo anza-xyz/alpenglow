@@ -4,7 +4,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_votor::event::VotorEventSender,
     std::{thread::sleep, time::Duration},
     tokio::sync::mpsc::Sender as AsyncSender,

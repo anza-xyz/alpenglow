@@ -11,7 +11,7 @@ use {
     },
     solana_poh::poh_recorder::WorkingBankEntry,
     solana_runtime::bank::Bank,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
     std::{
         sync::Arc,

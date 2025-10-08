@@ -9,7 +9,7 @@ use {
         ReedSolomonCache, Shred, ShredData, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
     },
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_system_transaction as system_transaction,
     std::{
         collections::{BTreeMap, HashSet},

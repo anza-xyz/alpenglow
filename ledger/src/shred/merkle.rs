@@ -31,7 +31,7 @@ use {
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     static_assertions::const_assert_eq,
     std::{
         cmp::Ordering,

@@ -1,6 +1,6 @@
 use {
     crate::shred::Error, solana_hash::Hash, solana_sha256_hasher::hashv,
-    solana_slice_root::SliceRoot, static_assertions::const_assert_eq,
+    solana_votor_messages::SliceRoot, static_assertions::const_assert_eq,
 };
 
 pub(crate) const SIZE_OF_MERKLE_ROOT: usize = std::mem::size_of::<Hash>();

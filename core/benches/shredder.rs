@@ -14,7 +14,7 @@ use {
         CODING_SHREDS_PER_FEC_BLOCK, DATA_SHREDS_PER_FEC_BLOCK,
     },
     solana_perf::test_tx,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     test::{black_box, Bencher},
 };
 

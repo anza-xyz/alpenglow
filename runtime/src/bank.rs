@@ -121,7 +121,6 @@ use {
     solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader},
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
-    solana_slice_root::{AlpenglowBlockId, SliceRoot},
     solana_slot_hashes::SlotHashes,
     solana_slot_history::{Check, SlotHistory},
     solana_stake_interface::{
@@ -161,6 +160,7 @@ use {
     solana_transaction_context::{transaction_accounts::TransactionAccount, TransactionReturnData},
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
+    solana_votor_messages::{AlpenglowBlockId, SliceRoot},
     std::{
         collections::{HashMap, HashSet},
         fmt,

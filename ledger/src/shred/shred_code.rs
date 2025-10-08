@@ -10,7 +10,7 @@ use {
     solana_hash::Hash,
     solana_packet::PACKET_DATA_SIZE,
     solana_signature::Signature,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     static_assertions::const_assert_eq,
 };
 

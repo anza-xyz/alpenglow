@@ -12,7 +12,7 @@ use {
     solana_perf::packet::{PacketRef, PacketRefMut},
     solana_signature::{Signature, SIGNATURE_BYTES},
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     std::ops::Range,
 };
 #[cfg(test)]

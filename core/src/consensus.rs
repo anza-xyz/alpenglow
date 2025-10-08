@@ -31,7 +31,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::BankForks, commitment::VOTE_THRESHOLD_SIZE},
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_slot_history::{Check, SlotHistory},
     solana_vote::{vote_account::VoteAccountsHashMap, vote_transaction::VoteTransaction},
     solana_vote_program::{

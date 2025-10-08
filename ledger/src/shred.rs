@@ -76,7 +76,7 @@ use {
     solana_pubkey::Pubkey,
     solana_sha256_hasher::hashv,
     solana_signature::{Signature, SIGNATURE_BYTES},
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     static_assertions::const_assert_eq,
     std::fmt::Debug,
     thiserror::Error,

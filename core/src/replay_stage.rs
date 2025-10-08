@@ -77,7 +77,7 @@ use {
         vote_sender_types::ReplayVoteSender,
     },
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
     solana_transaction::Transaction,

@@ -29,7 +29,7 @@ use {
         },
     },
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_vote::vote_transaction,
     solana_vote_program::vote_state::{Lockout, TowerSync},
     std::{

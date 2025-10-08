@@ -31,7 +31,7 @@ use {
     solana_keypair::Keypair,
     solana_perf::packet::PacketRefMut,
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     std::sync::Arc,
 };
 

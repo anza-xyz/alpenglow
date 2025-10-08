@@ -24,7 +24,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},

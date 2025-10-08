@@ -1554,7 +1554,7 @@ mod tests {
         solana_perf::packet::{deserialize_from_with_limit, Packet, PacketFlags, PacketRef},
         solana_pubkey::Pubkey,
         solana_runtime::bank::Bank,
-        solana_slice_root::SliceRoot,
+        solana_votor_messages::SliceRoot,
         solana_streamer::socket::SocketAddrSpace,
         solana_time_utils::timestamp,
         std::{io::Cursor, net::Ipv4Addr},

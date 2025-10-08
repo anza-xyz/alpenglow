@@ -94,7 +94,6 @@ solana-sha256-hasher = "=3.0.0"
 solana-short-vec = "=3.0.0"
 solana-signature = { version = "=3.1.0", default-features = false }
 solana-signer = "=3.0.0"
-solana-slice-root = { workspace = true }
 solana-streamer = { workspace = true }
 solana-time-utils = "=3.0.0"
 solana-tpu-client = { workspace = true }
@@ -102,6 +101,7 @@ solana-transaction = "=3.0.1"
 solana-version = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-votor-messages = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
 

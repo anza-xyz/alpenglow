@@ -921,7 +921,7 @@ mod tests {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
-        solana_slice_root::SliceRoot,
+        solana_votor_messages::SliceRoot,
     };
 
     fn get_keypair() -> Keypair {

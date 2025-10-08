@@ -258,7 +258,6 @@ dependencies = [
  "solana-sdk-ids",
  "solana-shred-version",
  "solana-signature",
- "solana-slice-root",
  "solana-stake-interface",
  "solana-stake-program",
  "solana-storage-bigtable",
@@ -275,6 +274,7 @@ dependencies = [
  "solana-version",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor-messages",
  "thiserror 2.0.16",
  "tikv-jemallocator",
  "tokio",
@@ -8126,7 +8126,6 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-signer-store",
- "solana-slice-root",
  "solana-slot-hashes",
  "solana-slot-history",
  "solana-stake-program",
@@ -8798,7 +8797,6 @@ dependencies = [
  "solana-short-vec",
  "solana-signature",
  "solana-signer",
- "solana-slice-root",
  "solana-streamer",
  "solana-system-transaction",
  "solana-time-utils",
@@ -8808,6 +8806,7 @@ dependencies = [
  "solana-vote",
  "solana-vote-interface",
  "solana-vote-program",
+ "solana-votor-messages",
  "static_assertions",
  "test-case",
  "thiserror 2.0.16",
@@ -9065,7 +9064,6 @@ dependencies = [
  "solana-shred-version",
  "solana-signature",
  "solana-signer",
- "solana-slice-root",
  "solana-stake-interface",
  "solana-stake-program",
  "solana-storage-bigtable",
@@ -10316,7 +10314,6 @@ dependencies = [
  "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
- "solana-slice-root",
  "solana-slot-hashes",
  "solana-slot-history",
  "solana-stake-interface",
@@ -10626,14 +10623,6 @@ dependencies = [
  "bitvec",
  "num-derive",
  "num-traits",
-]
-
-[[package]]
-name = "solana-slice-root"
-version = "3.1.0"
-dependencies = [
- "serde",
- "solana-hash",
 ]
 
 [[package]]
@@ -11563,7 +11552,6 @@ dependencies = [
  "solana-runtime",
  "solana-signature",
  "solana-signer",
- "solana-slice-root",
  "solana-streamer",
  "solana-system-transaction",
  "solana-time-utils",
@@ -11572,6 +11560,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-turbine",
  "solana-votor",
+ "solana-votor-messages",
  "static_assertions",
  "test-case",
  "thiserror 2.0.16",
@@ -11887,7 +11876,6 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-signer-store",
- "solana-slice-root",
  "solana-streamer",
  "solana-time-utils",
  "solana-transaction",
@@ -11915,7 +11903,6 @@ dependencies = [
  "solana-hash",
  "solana-logger",
  "solana-program",
- "solana-slice-root",
  "solana-vote-interface",
  "spl-pod",
 ]

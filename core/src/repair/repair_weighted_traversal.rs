@@ -148,7 +148,7 @@ pub mod test {
             shred::{ProcessShredsStats, ReedSolomonCache, Shred, Shredder},
         },
         solana_runtime::bank_utils,
-        solana_slice_root::SliceRoot,
+        solana_votor_messages::SliceRoot,
         trees::tr,
     };
 

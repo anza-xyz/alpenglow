@@ -10,7 +10,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_rayon_threadlimit::get_thread_count,
-    solana_slice_root::SliceRoot,
+    solana_votor_messages::SliceRoot,
     std::{
         fmt::Debug,
         sync::{Arc, OnceLock, RwLock},
