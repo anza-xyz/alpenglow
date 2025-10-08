@@ -132,6 +132,11 @@ impl VoteAccounts {
         if valid_entries.is_empty() {
             warn!("no valid alpenglow vote accounts found");
         }
+        info!(
+            "Out of {} vote accounts, {} are valid alpenglow vote accounts after filtering",
+            self.vote_accounts.len(),
+            valid_entries.len()
+        );
         VoteAccounts {
             vote_accounts: Arc::new(valid_entries),
             staked_nodes: OnceLock::new(),
