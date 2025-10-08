@@ -54,6 +54,11 @@ impl PregeneratedBatches {
         F: Fn(&BenchEnvironment) -> Vec<PacketBatch>,
     {
         // Generate the batches upfront, moving expensive crypto ops out of the benchmark loop
+        //
+        // NOTE: Because the root bank slot (which controls cache eviction) is static during the
+        // benchmark, the caches do not get cleared. Therefore, this benchmark measures the *steady-state*
+        // throughput with high cache hit rates. It intentionally excludes the overhead
+        // of serialization (which occurs on cache misses).
         let batches = (0..NUM_PREGENERATED_BATCHES)
             .map(|_| generator(env))
             .collect();
