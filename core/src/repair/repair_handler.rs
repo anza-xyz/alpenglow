@@ -21,6 +21,7 @@ use {
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
     solana_pubkey::Pubkey,
     solana_runtime::bank_forks::SharableBanks,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashSet,
         net::SocketAddr,
@@ -167,12 +168,14 @@ impl RepairHandlerType {
         cluster_info: Arc<ClusterInfo>,
         sharable_banks: SharableBanks,
         serve_repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
+        migration_status: Arc<MigrationStatus>,
     ) -> ServeRepair {
         ServeRepair::new(
             cluster_info,
             sharable_banks,
             serve_repair_whitelist,
             self.to_handler(blockstore),
+            migration_status,
         )
     }
 }

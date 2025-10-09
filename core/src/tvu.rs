@@ -308,6 +308,7 @@ impl Tvu {
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
+                migration_status.clone(),
             )
         };
 
