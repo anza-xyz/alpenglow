@@ -13,9 +13,14 @@ edition = { workspace = true }
 targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
-dev-context-only-utils = ["solana-core/dev-context-only-utils"]
+dev-context-only-utils = [
+    "solana-core/dev-context-only-utils",
+    "agave-feature-set/dev-context-only-utils",
+    "solana-votor-messages/dev-context-only-utils",
+]
 
 [dependencies]
+agave-feature-set = { workspace = true }
 bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 itertools = { workspace = true }
@@ -34,6 +39,7 @@ solana-connection-cache = { workspace = true }
 solana-core = { workspace = true }
 solana-entry = { workspace = true }
 solana-epoch-schedule = { workspace = true }
+solana-feature-gate-interface = { workspace = true }
 solana-genesis-config = { workspace = true }
 solana-gossip = { workspace = true }
 solana-hard-forks = { workspace = true }

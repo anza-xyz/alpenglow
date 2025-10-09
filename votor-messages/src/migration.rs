@@ -44,7 +44,12 @@ use {solana_bls_signatures::Signature as BLSSignature, solana_hash::Hash};
 /// The slot offset post feature flag activation to begin the migration.
 /// Epoch boundaries induce heavy computation often resulting in forks. It's best to decouple the migration period
 /// from the boundary. We require that a root is made between the epoch boundary and this migration slot offset.
+#[cfg(not(feature = "dev-context-only-utils"))]
 pub const MIGRATION_SLOT_OFFSET: Slot = 5000;
+
+/// Small offset for tests
+#[cfg(feature = "dev-context-only-utils")]
+pub const MIGRATION_SLOT_OFFSET: Slot = 32;
 
 /// We match Alpenglow's 20 + 20 model, by allowing a maximum of 20% malicious stake during the migration.
 pub const MIGRATION_MALICIOUS_THRESHOLD: f64 = 20.0 / 100.0;
