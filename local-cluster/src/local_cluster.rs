@@ -58,9 +58,10 @@ use {
     solana_transaction_error::TransportError,
     solana_vote_program::{
         vote_instruction,
-        vote_state::{self, VoteInit},
+        vote_state::{self, VoteInit, VoteStateTargetVersion},
     },
     solana_votor::vote_history_storage::FileVoteHistoryStorage,
+    solana_votor_messages::migration::GENESIS_CERTIFICATE_ACCOUNT,
     std::{
         collections::HashMap,
         io::{Error, Result},
@@ -74,6 +75,16 @@ use {
 
 pub const DEFAULT_MINT_LAMPORTS: u64 = 10_000_000 * LAMPORTS_PER_SOL;
 const DUMMY_SNAPSHOT_CONFIG_PATH_MARKER: &str = "dummy";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlpenglowMode {
+    /// No alpenglow - creates regular vote accounts (V3)
+    Disabled,
+    /// Full alpenglow - creates V4 vote accounts and activates alpenglow featurea and set GenesisCertificate
+    Enabled,
+    /// Pre-migration mode - creates V4 vote accounts but does NOT activate alpenglow feature or set GenesisCertificate
+    PreMigration,
+}
 
 pub struct ClusterConfig {
     /// The validator config that should be applied to every node in the cluster
@@ -200,17 +211,33 @@ impl LocalCluster {
     }
 
     pub fn new(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        Self::init(config, socket_addr_space, false)
+        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
+            .lock()
+            .unwrap() = VoteStateTargetVersion::V3;
+        Self::init(config, socket_addr_space, AlpenglowMode::Disabled)
     }
 
     pub fn new_alpenglow(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        Self::init(config, socket_addr_space, true)
+        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
+            .lock()
+            .unwrap() = VoteStateTargetVersion::V4;
+        Self::init(config, socket_addr_space, AlpenglowMode::Enabled)
+    }
+
+    pub fn new_pre_migration_alpenglow(
+        config: &mut ClusterConfig,
+        socket_addr_space: SocketAddrSpace,
+    ) -> Self {
+        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
+            .lock()
+            .unwrap() = VoteStateTargetVersion::V4;
+        Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
     }
 
     pub fn init(
         config: &mut ClusterConfig,
         socket_addr_space: SocketAddrSpace,
-        is_alpenglow: bool,
+        alpenglow_mode: AlpenglowMode,
     ) -> Self {
         assert_eq!(config.validator_configs.len(), config.node_stakes.len());
 
@@ -318,6 +345,12 @@ impl LocalCluster {
         let leader_pubkey = leader_keypair.pubkey();
         let leader_node = Node::new_localhost_with_pubkey(&leader_pubkey);
 
+        // For PreMigration mode, we need to create V4 vote accounts but not activate the feature
+        let create_v4_accounts = matches!(
+            alpenglow_mode,
+            AlpenglowMode::Enabled | AlpenglowMode::PreMigration
+        );
+
         let GenesisConfigInfo {
             mut genesis_config,
             mint_keypair,
@@ -327,8 +360,17 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            is_alpenglow,
+            create_v4_accounts,
         );
+
+        // Remove the alpenglow feature and genesis certificate for PreMigration mode
+        if alpenglow_mode == AlpenglowMode::PreMigration {
+            genesis_config
+                .accounts
+                .remove(&agave_feature_set::alpenglow::id());
+            genesis_config.accounts.remove(&GENESIS_CERTIFICATE_ACCOUNT);
+        }
+
         genesis_config.accounts.extend(
             config
                 .additional_accounts
