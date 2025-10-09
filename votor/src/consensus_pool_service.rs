@@ -49,7 +49,7 @@ pub(crate) struct ConsensusPoolContext {
     // TODO: for now we ingest our own votes into the certificate pool
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
-    // consider adding a separate pathway in consensus_pool.add_transaction for ingesting own votes
+    // consider adding a separate pathway in consensus_pool.add_message() for ingesting own votes
     pub(crate) consensus_message_receiver: Receiver<ConsensusMessage>,
 
     pub(crate) bls_sender: Sender<BLSOp>,
@@ -128,7 +128,7 @@ impl ConsensusPoolService {
     fn process_consensus_message(
         ctx: &mut ConsensusPoolContext,
         my_pubkey: &Pubkey,
-        message: &ConsensusMessage,
+        message: ConsensusMessage,
         consensus_pool: &mut ConsensusPool,
         events: &mut Vec<VotorEvent>,
         standstill_timer: &mut Instant,
@@ -263,7 +263,7 @@ impl ConsensusPoolService {
                 match Self::process_consensus_message(
                     &mut ctx,
                     &my_pubkey,
-                    &message,
+                    message,
                     &mut consensus_pool,
                     &mut events,
                     &mut standstill_timer,
@@ -293,7 +293,7 @@ impl ConsensusPoolService {
         root_bank: &Bank,
         my_pubkey: &Pubkey,
         my_vote_pubkey: &Pubkey,
-        message: &ConsensusMessage,
+        message: ConsensusMessage,
         consensus_pool: &mut ConsensusPool,
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<CommitmentAggregationData>,
