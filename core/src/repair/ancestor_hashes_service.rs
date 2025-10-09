@@ -937,6 +937,7 @@ mod test {
         solana_runtime::bank_forks::BankForks,
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
+        solana_votor_messages::migration::MigrationStatus,
         std::collections::HashMap,
         trees::tr,
     };
@@ -2096,6 +2097,7 @@ mod test {
             &dumped_slots_sender,
             &my_pubkey,
             &leader_schedule_cache,
+            &MigrationStatus::default(),
         );
 
         let (ancestor_hashes_request_quic_sender, _) =

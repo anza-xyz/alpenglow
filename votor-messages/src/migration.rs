@@ -76,6 +76,13 @@ impl GenesisBlock {
             GenesisBlock::YetToShred(_) => None,
         }
     }
+
+    /// The genesis slot
+    pub fn slot(&self) -> Slot {
+        match self {
+            GenesisBlock::Block((slot, _)) | GenesisBlock::YetToShred(slot) => *slot,
+        }
+    }
 }
 
 /// Tracks the details about the migrationary period and eligble genesis blocks
@@ -272,9 +279,10 @@ impl MigrationStatus {
         self.genesis_block()
     }
 
-    /// Set our view of the genesis block.
+    /// Set our view of the eligble genesis block.
     ///
-    /// If we have received a genesis certificate and it matches the genesis block, enable alpenglow
+    /// If we have received a genesis certificate and it matches this block, then it will be
+    /// the Alpenglow genesis
     pub fn set_genesis_block(&self, genesis: GenesisBlock) {
         let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
         match genesis_tracker_w.genesis_block.replace(genesis) {
@@ -294,8 +302,6 @@ impl MigrationStatus {
 
     /// Set the genesis certificate. If one already exists, verify that it matches.
     /// This should only be called with certificates that have passed signature verification
-    ///
-    /// If the certificate matches our view of the genesis block, enable alpenglow
     pub fn set_genesis_certificate(&self, cert: Arc<CertificateMessage>) {
         let mut genesis_tracker_w = self.genesis_vote_tracker.write().unwrap();
         match cert.certificate {
