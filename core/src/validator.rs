@@ -1386,11 +1386,13 @@ impl Validator {
             Some(stats_reporter_sender.clone()),
             exit.clone(),
         );
+        let migration_status = Arc::new(MigrationStatus::new(cluster_info.id()));
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
             bank_forks.read().unwrap().sharable_banks(),
             config.repair_whitelist.clone(),
+            migration_status.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
         let (repair_response_quic_sender, repair_response_quic_receiver) = unbounded();
@@ -1412,7 +1414,6 @@ impl Validator {
         let wait_for_vote_to_start_leader =
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
-        let migration_status = Arc::new(MigrationStatus::new(cluster_info.id()));
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
         let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
         let block_creation_loop_config = BlockCreationLoopConfig {

@@ -55,6 +55,7 @@ use {
         streamer::PacketBatchSender,
     },
     solana_time_utils::timestamp,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},
@@ -412,6 +413,7 @@ pub struct ServeRepair {
     sharable_banks: SharableBanks,
     repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
     repair_handler: Box<dyn RepairHandler + Send + Sync>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 // Cache entry for repair peers for a slot.
@@ -475,12 +477,14 @@ impl ServeRepair {
         sharable_banks: SharableBanks,
         repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
         repair_handler: Box<dyn RepairHandler + Send + Sync>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self {
             cluster_info,
             sharable_banks,
             repair_whitelist,
             repair_handler,
+            migration_status,
         }
     }
 
@@ -498,6 +502,7 @@ impl ServeRepair {
             bank_forks.read().unwrap().sharable_banks(),
             repair_whitelist,
             repair_handler,
+            Arc::new(MigrationStatus::default()),
         )
     }
 
@@ -575,11 +580,15 @@ impl ServeRepair {
                     slot,
                 } => {
                     stats.ancestor_hashes += 1;
-                    (
-                        self.repair_handler
-                            .run_ancestor_hashes(recycler, from_addr, *slot, *nonce),
-                        "AncestorHashes",
-                    )
+                    if *slot > self.migration_status.genesis_slot().unwrap_or(Slot::MAX) {
+                        (None, "AncestorHashes")
+                    } else {
+                        (
+                            self.repair_handler
+                                .run_ancestor_hashes(recycler, from_addr, *slot, *nonce),
+                            "AncestorHashes",
+                        )
+                    }
                 }
                 RepairProtocol::Pong(pong) => {
                     stats.pong += 1;

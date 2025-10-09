@@ -27,6 +27,7 @@ use {
     solana_runtime::bank_forks::BankForks,
     solana_streamer::evicting_sender::EvictingSender,
     solana_turbine::cluster_nodes,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         borrow::Cow,
         net::UdpSocket,
@@ -165,13 +166,6 @@ fn run_check_duplicate(
             }
         };
 
-        if root_bank
-            .feature_set
-            .is_active(&agave_feature_set::alpenglow::id())
-        {
-            return Ok(());
-        }
-
         // Propagate duplicate proof through gossip
         cluster_info.push_duplicate_shred(&shred1, &shred2)?;
         // Notify duplicate consensus state machine
@@ -288,6 +282,7 @@ impl WindowService {
         window_service_channels: WindowServiceChannels,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         outstanding_repair_requests: Arc<RwLock<OutstandingShredRepairs>>,
+        migration_status: Arc<MigrationStatus>,
     ) -> WindowService {
         let cluster_info = repair_info.cluster_info.clone();
         let bank_forks = repair_info.bank_forks.clone();
@@ -312,6 +307,7 @@ impl WindowService {
             repair_info,
             outstanding_repair_requests.clone(),
             repair_service_channels,
+            migration_status,
         );
 
         let (duplicate_sender, duplicate_receiver) = unbounded();
