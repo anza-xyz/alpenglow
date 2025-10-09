@@ -32,6 +32,7 @@ use {
     solana_runtime::bank::Bank,
     solana_streamer::streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     solana_time_utils::timestamp,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashSet,
         io::{Cursor, Read},
@@ -157,6 +158,7 @@ impl AncestorHashesService {
         ancestor_hashes_request_socket: Arc<UdpSocket>,
         ancestor_hashes_channels: AncestorHashesChannels,
         repair_info: RepairInfo,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let outstanding_requests = Arc::<RwLock<OutstandingAncestorHashesRepairs>>::default();
         let (response_sender, response_receiver) = unbounded();
@@ -210,6 +212,7 @@ impl AncestorHashesService {
             retryable_slots_sender,
             repair_info.cluster_info.clone(),
             ancestor_hashes_request_socket.clone(),
+            migration_status.clone(),
         );
 
         // Generate ancestor requests for dead slots that are repairable
@@ -223,6 +226,7 @@ impl AncestorHashesService {
             exit,
             ancestor_hashes_replay_update_receiver,
             retryable_slots_receiver,
+            migration_status,
         );
         Self {
             thread_hdls: vec![
@@ -239,6 +243,7 @@ impl AncestorHashesService {
     }
 
     /// Listen for responses to our ancestors hashes repair requests
+    #[allow(clippy::too_many_arguments)]
     fn run_responses_listener(
         ancestor_hashes_request_statuses: Arc<DashMap<Slot, AncestorRequestStatus>>,
         response_receiver: PacketBatchReceiver,
@@ -249,6 +254,7 @@ impl AncestorHashesService {
         retryable_slots_sender: RetryableSlotsSender,
         cluster_info: Arc<ClusterInfo>,
         ancestor_socket: Arc<UdpSocket>,
+        migration_status: Arc<MigrationStatus>,
     ) -> JoinHandle<()> {
         Builder::new()
             .name("solAncHashesSvc".to_string())
@@ -256,7 +262,7 @@ impl AncestorHashesService {
                 let mut last_stats_report = Instant::now();
                 let mut stats = AncestorHashesResponsesStats::default();
                 let mut packet_threshold = DynamicPacketToProcessThreshold::default();
-                while !exit.load(Ordering::Relaxed) {
+                while !exit.load(Ordering::Relaxed) && !migration_status.is_alpenglow_enabled() {
                     let keypair = cluster_info.keypair().clone();
                     let result = Self::process_new_packets_from_channel(
                         &ancestor_hashes_request_statuses,
@@ -591,6 +597,7 @@ impl AncestorHashesService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_manage_ancestor_requests(
         blockstore: Arc<Blockstore>,
         ancestor_hashes_request_statuses: Arc<DashMap<Slot, AncestorRequestStatus>>,
@@ -601,6 +608,7 @@ impl AncestorHashesService {
         exit: Arc<AtomicBool>,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
         retryable_slots_receiver: RetryableSlotsReceiver,
+        migration_status: Arc<MigrationStatus>,
     ) -> JoinHandle<()> {
         let serve_repair = {
             ServeRepair::new(
@@ -608,6 +616,7 @@ impl AncestorHashesService {
                 repair_info.bank_forks.read().unwrap().sharable_banks(),
                 repair_info.repair_whitelist.clone(),
                 Box::new(StandardRepairHandler::new(blockstore)),
+                migration_status.clone(),
             )
         };
         let mut repair_stats = AncestorRepairRequestsStats::default();
@@ -632,17 +641,7 @@ impl AncestorHashesService {
         Builder::new()
             .name("solManAncReqs".to_string())
             .spawn(move || loop {
-                if exit.load(Ordering::Relaxed) {
-                    return;
-                }
-                if repair_info
-                    .bank_forks
-                    .read()
-                    .unwrap()
-                    .root_bank()
-                    .feature_set
-                    .is_active(&agave_feature_set::alpenglow::id())
-                {
+                if exit.load(Ordering::Relaxed) || migration_status.is_alpenglow_enabled() {
                     return;
                 }
                 Self::manage_ancestor_requests(
@@ -1278,12 +1277,14 @@ mod test {
             // Set up blockstore for responses
             let ledger_path = get_tmp_ledger_path!();
             let blockstore = Arc::new(Blockstore::open(&ledger_path).unwrap());
+            let migration_status = Arc::new(MigrationStatus::default());
             let responder_serve_repair = {
                 ServeRepair::new(
                     Arc::new(cluster_info),
                     vote_simulator.bank_forks.read().unwrap().sharable_banks(),
                     Arc::<RwLock<HashSet<_>>>::default(), // repair whitelist
                     Box::new(StandardRepairHandler::new(blockstore.clone())),
+                    migration_status,
                 )
             };
 
@@ -1385,12 +1386,14 @@ mod test {
             let repair_whitelist = Arc::new(RwLock::new(HashSet::default()));
             let ledger_path = get_tmp_ledger_path!();
             let blockstore = Arc::new(Blockstore::open(&ledger_path).unwrap());
+            let migration_status = Arc::new(MigrationStatus::default());
             let requester_serve_repair = {
                 ServeRepair::new(
                     requester_cluster_info.clone(),
                     bank_forks.read().unwrap().sharable_banks(),
                     repair_whitelist.clone(),
                     Box::new(StandardRepairHandler::new(blockstore)),
+                    migration_status.clone(),
                 )
             };
             let (ancestor_duplicate_slots_sender, _ancestor_duplicate_slots_receiver) = unbounded();
