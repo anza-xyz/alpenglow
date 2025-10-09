@@ -157,7 +157,7 @@ impl ConsensusPool {
         slot: Slot,
         vote_type: VoteType,
         block_id: Option<Hash>,
-        transaction: VoteMessage,
+        vote_message: VoteMessage,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
     ) -> Option<Stake> {
@@ -167,12 +167,12 @@ impl ConsensusPool {
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
             VotePoolType::SimpleVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, transaction)
+                pool.add_vote(validator_vote_key, validator_stake, vote_message)
             }
             VotePoolType::DuplicateBlockVotePool(pool) => pool.add_vote(
                 validator_vote_key,
                 block_id.expect("Duplicate block pool expects a block id"),
-                transaction,
+                vote_message,
                 validator_stake,
             ),
         }
@@ -685,7 +685,7 @@ mod tests {
         test_case::test_case,
     };
 
-    fn dummy_transaction(
+    fn dummy_vote_message(
         keypairs: &[ValidatorVoteKeypairs],
         vote: &Vote,
         rank: usize,
@@ -744,7 +744,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(validator_keypairs, &vote, rank),
+                    dummy_vote_message(validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
                 .is_ok());
@@ -755,7 +755,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(validator_keypairs, &vote, 6),
+                dummy_vote_message(validator_keypairs, &vote, 6),
                 &mut vec![]
             )
             .is_ok());
@@ -784,7 +784,7 @@ mod tests {
                     root_bank.epoch_stakes_map(),
                     root_bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(keypairs, &vote, rank),
+                    dummy_vote_message(keypairs, &vote, rank),
                     &mut vec![]
                 )
                 .is_ok());
@@ -1066,7 +1066,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, my_validator_ix),
+                dummy_vote_message(&validator_keypairs, &vote, my_validator_ix),
                 &mut vec![]
             )
             .is_ok());
@@ -1079,7 +1079,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, my_validator_ix),
+                dummy_vote_message(&validator_keypairs, &vote, my_validator_ix),
                 &mut vec![]
             )
             .is_ok());
@@ -1091,7 +1091,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut vec![]
                 )
                 .is_ok());
@@ -1104,7 +1104,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, new_validator_ix),
+                dummy_vote_message(&validator_keypairs, &vote, new_validator_ix),
                 &mut vec![],
             )
             .unwrap();
@@ -1207,7 +1207,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut vec![],
                 )
                 .unwrap();
@@ -1271,7 +1271,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, i),
+                    dummy_vote_message(&validator_keypairs, &vote, i),
                     &mut vec![]
                 )
                 .is_ok());
@@ -1393,7 +1393,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 6),
+                dummy_vote_message(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
             .is_ok());
@@ -1408,7 +1408,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 7),
+                dummy_vote_message(&validator_keypairs, &vote, 7),
                 &mut vec![]
             )
             .is_ok());
@@ -1424,7 +1424,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 8),
+                dummy_vote_message(&validator_keypairs, &vote, 8),
                 &mut vec![]
             )
             .is_ok());
@@ -1468,7 +1468,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 6),
+                dummy_vote_message(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
             .is_ok());
@@ -1506,7 +1506,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 6),
+                dummy_vote_message(&validator_keypairs, &vote, 6),
                 &mut vec![]
             )
             .is_ok());
@@ -1595,7 +1595,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &my_vote_key,
-                dummy_transaction(&validator_keypairs, &vote, 0),
+                dummy_vote_message(&validator_keypairs, &vote, 0),
                 &mut new_events
             )
             .is_ok());
@@ -1610,7 +1610,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut new_events
                 )
                 .is_ok());
@@ -1637,7 +1637,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut new_events
                 )
                 .is_ok());
@@ -1652,7 +1652,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &my_vote_key,
-                dummy_transaction(&validator_keypairs, &vote, 0),
+                dummy_vote_message(&validator_keypairs, &vote, 0),
                 &mut new_events
             )
             .is_ok());
@@ -1668,7 +1668,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut new_events
                 )
                 .is_ok());
@@ -1698,7 +1698,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut new_events
                 )
                 .is_ok());
@@ -1731,7 +1731,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &my_vote_key,
-                dummy_transaction(&validator_keypairs, &vote, 0),
+                dummy_vote_message(&validator_keypairs, &vote, 0),
                 &mut new_events
             )
             .is_ok());
@@ -1746,7 +1746,7 @@ mod tests {
                     bank.epoch_stakes_map(),
                     bank.slot(),
                     &Pubkey::new_unique(),
-                    dummy_transaction(&validator_keypairs, &vote, rank),
+                    dummy_vote_message(&validator_keypairs, &vote, rank),
                     &mut new_events
                 )
                 .is_ok());
@@ -1766,7 +1766,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 6),
+                dummy_vote_message(&validator_keypairs, &vote, 6),
                 &mut new_events
             )
             .is_ok());
@@ -1801,7 +1801,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(validator_keypairs, &vote_1, 0),
+                dummy_vote_message(validator_keypairs, &vote_1, 0),
                 &mut vec![]
             )
             .is_ok());
@@ -1811,7 +1811,7 @@ mod tests {
                 bank.epoch_stakes_map(),
                 bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(validator_keypairs, &vote_2, 0),
+                dummy_vote_message(validator_keypairs, &vote_2, 0),
                 &mut vec![]
             )
             .is_err());
@@ -1911,7 +1911,7 @@ mod tests {
                 new_bank.epoch_stakes_map(),
                 new_bank.slot(),
                 &Pubkey::new_unique(),
-                dummy_transaction(&validator_keypairs, &vote, 0),
+                dummy_vote_message(&validator_keypairs, &vote, 0),
                 &mut vec![]
             )
             .is_err());
@@ -2297,7 +2297,7 @@ mod tests {
         let rank_to_test = 3;
         let vote = Vote::new_notarization_vote(42, Hash::new_unique());
 
-        let consensus_message = dummy_transaction(&validator_keypairs, &vote, rank_to_test);
+        let consensus_message = dummy_vote_message(&validator_keypairs, &vote, rank_to_test);
         let ConsensusMessage::Vote(vote_message) = consensus_message else {
             panic!("Expected Vote message")
         };

@@ -49,7 +49,7 @@ pub(crate) struct ConsensusPoolContext {
     // TODO: for now we ingest our own votes into the certificate pool
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
-    // consider adding a separate pathway in consensus_pool.add_transaction for ingesting own votes
+    // consider adding a separate pathway in consensus_pool.add_message() for ingesting own votes
     pub(crate) consensus_message_receiver: Receiver<ConsensusMessage>,
 
     pub(crate) bls_sender: Sender<BLSOp>,
