@@ -711,6 +711,33 @@ impl VersionedBlockMarker {
         // Total size includes the version field
         Ok(VERSION_SIZE + marker_inner_size)
     }
+
+    /// Returns the block footer if this marker contains one.
+    pub fn as_block_footer(&self) -> Option<&VersionedBlockFooter> {
+        match self {
+            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => {
+                marker.as_block_footer()
+            }
+        }
+    }
+
+    /// Returns the block header if this marker contains one.
+    pub fn as_block_header(&self) -> Option<&VersionedBlockHeader> {
+        match self {
+            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => {
+                marker.as_block_header()
+            }
+        }
+    }
+
+    /// Returns the update parent if this marker contains one.
+    pub fn as_update_parent(&self) -> Option<&VersionedUpdateParent> {
+        match self {
+            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => {
+                marker.as_update_parent()
+            }
+        }
+    }
 }
 
 impl Serialize for VersionedBlockMarker {
@@ -841,6 +868,30 @@ impl BlockMarkerV1 {
                 variant_type: "BlockMarkerV1".to_string(),
                 id: variant_id,
             }),
+        }
+    }
+
+    /// Returns the block header if this marker contains one.
+    pub fn as_block_header(&self) -> Option<&VersionedBlockHeader> {
+        match self {
+            BlockMarkerV1::BlockHeader(header) => Some(header),
+            _ => None,
+        }
+    }
+
+    /// Returns the block footer if this marker contains one.
+    pub fn as_block_footer(&self) -> Option<&VersionedBlockFooter> {
+        match self {
+            BlockMarkerV1::BlockFooter(footer) => Some(footer),
+            _ => None,
+        }
+    }
+
+    /// Returns the update parent if this marker contains one.
+    pub fn as_update_parent(&self) -> Option<&VersionedUpdateParent> {
+        match self {
+            BlockMarkerV1::UpdateParent(update_parent) => Some(update_parent),
+            _ => None,
         }
     }
 }

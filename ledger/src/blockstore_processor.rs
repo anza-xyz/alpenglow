@@ -1,5 +1,6 @@
 use {
     crate::{
+        block_component_verifier::BlockComponentVerifier,
         block_error::BlockError,
         blockstore::{Blockstore, BlockstoreError},
         blockstore_meta::SlotMeta,
@@ -19,8 +20,12 @@ use {
     },
     solana_clock::{Slot, MAX_PROCESSING_AGE},
     solana_cost_model::{cost_model::CostModel, transaction_cost::TransactionCost},
-    solana_entry::entry::{
-        self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus, VerifyRecyclers,
+    solana_entry::{
+        block_component::BlockComponent,
+        entry::{
+            self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus,
+            VerifyRecyclers,
+        },
     },
     solana_genesis_config::GenesisConfig,
     solana_hash::Hash,
@@ -833,6 +838,26 @@ pub enum BlockstoreProcessorError {
 
     #[error("non consecutive leader slot for bank {0} parent {1}")]
     NonConsecutiveLeaderSlot(Slot, Slot),
+
+    /// All blocks must contain exactly one block footer
+    #[error("missing block footer")]
+    MissingBlockFooter,
+
+    /// All blocks must contain exactly one block footer
+    #[error("multiple block footers")]
+    MultipleBlockFooters,
+
+    /// All blocks must contain exactly one block header
+    #[error("missing block header")]
+    MissingBlockHeader,
+
+    /// All blocks must contain exactly one block header
+    #[error("multiple block headers")]
+    MultipleBlockHeaders,
+
+    /// All blocks must contain at most one update parent
+    #[error("multiple update parents")]
+    MultipleUpdateParents,
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1508,10 +1533,10 @@ pub fn confirm_slot(
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
-    let slot_entries_load_result = {
+    let (slot_components, num_shreds, slot_full) = {
         let mut load_elapsed = Measure::start("load_elapsed");
         let load_result = blockstore
-            .get_slot_entries_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
+            .get_slot_components_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
             .map_err(BlockstoreProcessorError::FailedToLoadEntries);
         load_elapsed.stop();
         if load_result.is_err() {
@@ -1522,10 +1547,18 @@ pub fn confirm_slot(
         load_result
     }?;
 
+    confirm_slot_components(&slot_components)?;
+
+    let slot_entries = slot_components
+        .into_iter()
+        .filter_map(|c| c.into_entry_batch())
+        .flatten()
+        .collect_vec();
+
     confirm_slot_entries(
         bank,
         replay_tx_thread_pool,
-        slot_entries_load_result,
+        (slot_entries, num_shreds, slot_full),
         timing,
         progress,
         skip_verification,
@@ -1538,6 +1571,22 @@ pub fn confirm_slot(
     )
 }
 
+fn confirm_slot_components(
+    components: &[BlockComponent],
+) -> result::Result<(), BlockstoreProcessorError> {
+    let mut verifier = BlockComponentVerifier::new();
+
+    for marker in components
+        .iter()
+        .filter_map(|c| c.as_versioned_block_marker())
+    {
+        verifier.on_marker(marker)?;
+    }
+
+    verifier.finish()?;
+
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 fn confirm_slot_entries(
     bank: &BankWithScheduler,
