@@ -39,7 +39,7 @@ use {
         ThreadPool,
     },
     solana_accounts_db::contains::Contains,
-    solana_clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
+    solana_clock::{BankId, Slot, UnixTimestamp, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::entry::VerifyRecyclers,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
     solana_gossip::cluster_info::ClusterInfo,
@@ -2469,6 +2469,7 @@ impl ReplayStage {
         verify_recyclers: &VerifyRecyclers,
         log_messages_bytes_limit: Option<usize>,
         prioritization_fee_cache: &PrioritizationFeeCache,
+        parent_alpenglow_timestamp: UnixTimestamp,
     ) -> result::Result<usize, BlockstoreProcessorError> {
         let mut w_replay_stats = replay_stats.write().unwrap();
         let mut w_replay_progress = replay_progress.write().unwrap();
@@ -2490,6 +2491,7 @@ impl ReplayStage {
             false,
             log_messages_bytes_limit,
             prioritization_fee_cache,
+            parent_alpenglow_timestamp,
         )?;
         let tx_count_after = w_replay_progress.num_txs;
         let tx_count = tx_count_after - tx_count_before;
@@ -3197,6 +3199,14 @@ impl ReplayStage {
                     drop(progress_lock);
 
                     if bank.collector_id() != my_pubkey {
+                        let parent_alpenglow_timestamp = bank_forks
+                            .read()
+                            .unwrap()
+                            .get(bank.parent_slot())
+                            .unwrap()
+                            .alpenglow_timestamp()
+                            .unwrap();
+
                         let mut replay_blockstore_time =
                             Measure::start("replay_blockstore_into_bank");
                         let blockstore_result = Self::replay_blockstore_into_bank(
@@ -3211,6 +3221,7 @@ impl ReplayStage {
                             &verify_recyclers.clone(),
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
+                            parent_alpenglow_timestamp,
                         );
                         replay_blockstore_time.stop();
                         replay_result.replay_result = Some(blockstore_result);
@@ -3287,6 +3298,14 @@ impl ReplayStage {
             });
 
             if bank.collector_id() != my_pubkey {
+                let parent_alpenglow_timestamp = bank_forks
+                    .read()
+                    .unwrap()
+                    .get(bank.parent_slot())
+                    .unwrap()
+                    .alpenglow_timestamp()
+                    .unwrap();
+
                 let mut replay_blockstore_time = Measure::start("replay_blockstore_into_bank");
                 let blockstore_result = Self::replay_blockstore_into_bank(
                     &bank,
@@ -3300,6 +3319,7 @@ impl ReplayStage {
                     &verify_recyclers.clone(),
                     log_messages_bytes_limit,
                     prioritization_fee_cache,
+                    parent_alpenglow_timestamp,
                 );
                 replay_blockstore_time.stop();
                 replay_result.replay_result = Some(blockstore_result);
@@ -5389,6 +5409,13 @@ pub(crate) mod tests {
                 .thread_name(|i| format!("solReplayTest{i:02}"))
                 .build()
                 .expect("new rayon threadpool");
+            let parent_alpenglow_timestamp = bank_forks
+                .read()
+                .unwrap()
+                .get(bank1.parent_slot())
+                .unwrap()
+                .alpenglow_timestamp()
+                .unwrap();
             let res = ReplayStage::replay_blockstore_into_bank(
                 &bank1,
                 &blockstore,
@@ -5401,6 +5428,7 @@ pub(crate) mod tests {
                 &VerifyRecyclers::default(),
                 None,
                 &PrioritizationFeeCache::new(0u64),
+                parent_alpenglow_timestamp,
             );
             let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
             let rpc_subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
