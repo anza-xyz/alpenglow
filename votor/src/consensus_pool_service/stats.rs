@@ -72,10 +72,7 @@ impl ConsensusPoolServiceStats {
             ),
             ("received_votes", received_votes, i64),
             ("received_certificates", received_certificates, i64),
-            // This field was earlier reported as `i64` and was then changed to `bool`.
-            // This is causing conflicts in influxdb and causing problems with metrics collection.
-            // TODO: after roughly November 2, 2025 the older data referring to this value as `i64` in influxdb will be dropped and then this field can be renamed back to `standstill`.
-            ("standstill_bool", standstill, bool),
+            ("in_standstill_bool", standstill, bool),
             ("prune_old_state_called", prune_old_state_called, i64),
         );
     }
