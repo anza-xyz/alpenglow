@@ -433,6 +433,21 @@ impl BlockComponent {
         }
     }
 
+    ///
+    /// This function serializes each component in the slice and concatenates the results.
+    /// The resulting bytes can be deserialized using `from_bytes_multiple()`.
+    ///
+    /// # Errors
+    /// Returns an error if any component fails to serialize.
+    pub fn to_bytes_multiple(components: &[Self]) -> Result<Vec<u8>, BlockComponentError> {
+        let mut result = Vec::new();
+        for component in components {
+            let bytes = component.to_bytes()?;
+            result.extend(bytes);
+        }
+        Ok(result)
+    }
+
     /// Serializes to bytes.
     ///
     /// # Errors
@@ -582,15 +597,16 @@ impl<'de> Deserialize<'de> for BlockComponent {
             where
                 E: de::Error,
             {
-                let components =
-                    BlockComponent::from_bytes_multiple(value).map_err(de::Error::custom)?;
-                if components.len() == 1 {
-                    Ok(components.into_iter().next().unwrap())
-                } else {
+                let (component, bytes_consumed) =
+                    BlockComponent::from_bytes(value).map_err(de::Error::custom)?;
+                if bytes_consumed != value.len() {
                     Err(de::Error::custom(format!(
-                        "expected 1 component, got {}",
-                        components.len()
+                        "expected to consume all {} bytes, but only consumed {}",
+                        value.len(),
+                        bytes_consumed
                     )))
+                } else {
+                    Ok(component)
                 }
             }
         }
