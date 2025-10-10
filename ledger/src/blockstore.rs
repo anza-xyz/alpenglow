@@ -3928,14 +3928,13 @@ impl Blockstore {
             .map(|x| x.0)
     }
 
-    /// Returns the entry vector for the slot starting with `shred_start_index`, the number of
-    /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
-    pub fn get_slot_entries_with_shred_info(
+    /// Helper function that contains the common logic for getting slot data with shred info
+    fn get_slot_data_with_shred_info_common(
         &self,
         slot: Slot,
         start_index: u64,
         allow_dead_slots: bool,
-    ) -> Result<(Vec<Entry>, u64, bool)> {
+    ) -> Result<(CompletedRanges, SlotMeta, u64)> {
         let (completed_ranges, slot_meta) = self.get_completed_ranges(slot, start_index)?;
 
         // Check if the slot is dead *after* fetching completed ranges to avoid a race
@@ -3945,7 +3944,7 @@ impl Blockstore {
         if self.is_dead(slot) && !allow_dead_slots {
             return Err(BlockstoreError::DeadSlot);
         } else if completed_ranges.is_empty() {
-            return Ok((vec![], 0, false));
+            return Err(BlockstoreError::SlotUnavailable);
         }
 
         let slot_meta = slot_meta.unwrap();
@@ -3954,8 +3953,47 @@ impl Blockstore {
             .map(|&Range { end, .. }| u64::from(end) - start_index)
             .unwrap_or(0);
 
+        Ok((completed_ranges, slot_meta, num_shreds))
+    }
+
+    /// Returns the entry vector for the slot starting with `shred_start_index`, the number of
+    /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
+    pub fn get_slot_entries_with_shred_info(
+        &self,
+        slot: Slot,
+        start_index: u64,
+        allow_dead_slots: bool,
+    ) -> Result<(Vec<Entry>, u64, bool)> {
+        let (completed_ranges, slot_meta, num_shreds) =
+            match self.get_slot_data_with_shred_info_common(slot, start_index, allow_dead_slots) {
+                Ok(data) => data,
+                Err(BlockstoreError::SlotUnavailable) => return Ok((vec![], 0, false)),
+                Err(e) => return Err(e),
+            };
+
         let entries = self.get_slot_entries_in_block(slot, completed_ranges, Some(&slot_meta))?;
         Ok((entries, num_shreds, slot_meta.is_full()))
+    }
+
+    /// Returns the components vector for the slot starting with `shred_start_index`, the number of
+    /// shreds that comprise the components vector, and whether the slot is full (consumed all
+    /// shreds).
+    pub fn get_slot_components_with_shred_info(
+        &self,
+        slot: Slot,
+        start_index: u64,
+        allow_dead_slots: bool,
+    ) -> Result<(Vec<BlockComponent>, u64, bool)> {
+        let (completed_ranges, slot_meta, num_shreds) =
+            match self.get_slot_data_with_shred_info_common(slot, start_index, allow_dead_slots) {
+                Ok(data) => data,
+                Err(BlockstoreError::SlotUnavailable) => return Ok((vec![], 0, false)),
+                Err(e) => return Err(e),
+            };
+
+        let components =
+            self.get_slot_components_in_block(slot, completed_ranges, Some(&slot_meta))?;
+        Ok((components, num_shreds, slot_meta.is_full()))
     }
 
     /// Gets accounts used in transactions in the slot range [starting_slot, ending_slot].
