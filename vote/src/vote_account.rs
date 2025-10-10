@@ -92,6 +92,8 @@ impl VoteAccounts {
         if max_vote_accounts == 0 {
             panic!("max_vote_accounts must be > 0");
         }
+        let mut identity_has_only_one_vote_accounts: HashMap<&Pubkey, bool> =
+            HashMap::with_capacity(self.vote_accounts.len());
         let mut entries_to_sort: Vec<(&Pubkey, &VoteAccount, u64)> = self
             .vote_accounts
             .iter()
@@ -106,9 +108,20 @@ impl VoteAccounts {
                 {
                     return None;
                 }
+                identity_has_only_one_vote_accounts
+                    .entry(identity_pubkey)
+                    .and_modify(|v| *v = false)
+                    .or_insert(true);
                 Some((pubkey, vote_account, *stake))
             })
             .collect();
+        // If any identity has multiple vote accounts, we remove all of them from entries_to_sort
+        entries_to_sort.retain(|(_, vote_account, _)| {
+            let identity_pubkey = vote_account.node_pubkey();
+            *identity_has_only_one_vote_accounts
+                .get(identity_pubkey)
+                .unwrap()
+        });
         let valid_entries: HashMap<Pubkey, (u64, VoteAccount)> =
             if entries_to_sort.len() > max_vote_accounts {
                 // Sort by stake descending, we don't care about sorting accounts with same stake, because
@@ -1173,6 +1186,30 @@ mod tests {
             &identity_balances,
         );
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_clone_and_filter_for_alpenglow_remove_identity_accounts_with_multiple_vote_accounts() {
+        let mut rng = rand::thread_rng();
+        let num_alpenglow_nodes = 2000;
+        let (mut vote_accounts, mut identity_balances) =
+            new_staked_vote_accounts(&mut rng, num_alpenglow_nodes, num_alpenglow_nodes, None);
+        let num_identity_nodes_with_multiple_vote_accounts = 42;
+        let invalid_vote_accounts = new_rand_vote_accounts(&mut rng, 2, true)
+            .take(num_identity_nodes_with_multiple_vote_accounts);
+        // Add invalid_vote_accounts to vote_accounts and add to identity_balances
+        for (pubkey, (stake, vote_account)) in invalid_vote_accounts {
+            let node_pubkey = *vote_account.node_pubkey();
+            vote_accounts.insert(pubkey, vote_account, || stake);
+            // Give each identity account a large enough balance so they all pass the minimum vat check.
+            identity_balances.insert(node_pubkey, 10_000_000_000);
+        }
+        let filtered = vote_accounts.clone_and_filter_for_alpenglow(
+            num_alpenglow_nodes,
+            MIN_STAKE_FOR_STAKED_ACCOUNT,
+            &identity_balances,
+        );
+        assert_eq!(filtered.len(), num_alpenglow_nodes);
     }
 
     #[test]
