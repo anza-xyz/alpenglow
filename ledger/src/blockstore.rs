@@ -4118,7 +4118,7 @@ impl Blockstore {
                     .and_then(|payload| {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
-                        BlockComponent::from_bytes(&payload)
+                        BlockComponent::from_bytes_multiple(&payload)
                             .map(|cs| {
                                 cs.into_iter()
                                     .filter_map(|bc| bc.into_entry_batch())
