@@ -9,7 +9,6 @@ pub(crate) const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1);
 pub(crate) struct BLSPacketStats {
     pub(crate) recv_batches_us_hist: histogram::Histogram, // time to call recv_batch
     pub(crate) verify_batches_pp_us_hist: histogram::Histogram, // per-packet time to call verify_batch
-    pub(crate) discard_packets_pp_us_hist: histogram::Histogram, // per-packet time to call verify_batch
     pub(crate) dedup_packets_pp_us_hist: histogram::Histogram, // per-packet time to call verify_batch
     pub(crate) batches_hist: histogram::Histogram, // number of packet batches per verify call
     pub(crate) packets_hist: histogram::Histogram, // number of packets per verify call
@@ -17,25 +16,19 @@ pub(crate) struct BLSPacketStats {
     pub(crate) total_batches: usize,
     pub(crate) total_packets: usize,
     pub(crate) total_dedup: usize,
-    pub(crate) total_excess_fail: usize,
-    pub(crate) total_shrinks: usize,
-    pub(crate) total_discard_random: usize,
     pub(crate) total_dedup_time_us: usize,
-    pub(crate) total_discard_time_us: usize,
-    pub(crate) total_discard_random_time_us: usize,
     pub(crate) total_verify_time_us: usize,
-    pub(crate) total_shrink_time_us: usize,
 }
 
 impl BLSPacketStats {
-    pub(crate) fn maybe_report(&self, name: &'static str) {
+    pub(crate) fn maybe_report(&self) {
         // No need to report a datapoint if no batches/packets received
         if self.total_batches == 0 {
             return;
         }
 
         datapoint_info!(
-            name,
+            "tpu-consensus-messages",
             (
                 "recv_batches_us_90pct",
                 self.recv_batches_us_hist.percentile(90.0).unwrap_or(0),
@@ -74,28 +67,6 @@ impl BLSPacketStats {
             (
                 "verify_batches_pp_us_mean",
                 self.verify_batches_pp_us_hist.mean().unwrap_or(0),
-                i64
-            ),
-            (
-                "discard_packets_pp_us_90pct",
-                self.discard_packets_pp_us_hist
-                    .percentile(90.0)
-                    .unwrap_or(0),
-                i64
-            ),
-            (
-                "discard_packets_pp_us_min",
-                self.discard_packets_pp_us_hist.minimum().unwrap_or(0),
-                i64
-            ),
-            (
-                "discard_packets_pp_us_max",
-                self.discard_packets_pp_us_hist.maximum().unwrap_or(0),
-                i64
-            ),
-            (
-                "discard_packets_pp_us_mean",
-                self.discard_packets_pp_us_hist.mean().unwrap_or(0),
                 i64
             ),
             (
@@ -138,18 +109,8 @@ impl BLSPacketStats {
             ("total_batches", self.total_batches, i64),
             ("total_packets", self.total_packets, i64),
             ("total_dedup", self.total_dedup, i64),
-            ("total_excess_fail", self.total_excess_fail, i64),
-            ("total_discard_random", self.total_discard_random, i64),
-            ("total_shrinks", self.total_shrinks, i64),
             ("total_dedup_time_us", self.total_dedup_time_us, i64),
-            ("total_discard_time_us", self.total_discard_time_us, i64),
-            (
-                "total_discard_random_time_us",
-                self.total_discard_random_time_us,
-                i64
-            ),
             ("total_verify_time_us", self.total_verify_time_us, i64),
-            ("total_shrink_time_us", self.total_shrink_time_us, i64),
         );
     }
 }

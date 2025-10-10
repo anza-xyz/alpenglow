@@ -9,7 +9,9 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
-        bls_sigverify::{bls_sigverifier::BLSSigVerifier, bls_sigverify_stage::BLSSigVerifyStage},
+        bls_sigverify::{
+            bls_sigverifier::BLSSigVerifier, bls_sigverify_service::BLSSigverifyService,
+        },
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
             VerifiedVoteSender, VoteTracker,
@@ -107,7 +109,7 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sig_verifier: SigVerifier,
     vote_sigverify_stage: SigVerifyStage,
-    alpenglow_sigverify_stage: BLSSigVerifyStage,
+    alpenglow_sigverify_service: BLSSigverifyService,
     banking_stage: Arc<RwLock<Option<BankingStage>>>,
     forwarding_stage: JoinHandle<()>,
     cluster_info_vote_listener: ClusterInfoVoteListener,
@@ -337,7 +339,7 @@ impl Tpu {
             )
         };
 
-        let alpenglow_sigverify_stage = {
+        let alpenglow_sigverify_service = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
             let verifier = BLSSigVerifier::new(
                 sharable_banks,
@@ -345,12 +347,7 @@ impl Tpu {
                 verified_consensus_message_sender,
                 Some(consensus_metrics),
             );
-            BLSSigVerifyStage::new(
-                bls_packet_receiver,
-                verifier,
-                "solSigVerAlpenglow",
-                "tpu-alpenglow-verifier",
-            )
+            BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
 
         let cluster_info_vote_listener = ClusterInfoVoteListener::new(
@@ -440,7 +437,7 @@ impl Tpu {
             fetch_stage,
             sig_verifier,
             vote_sigverify_stage,
-            alpenglow_sigverify_stage,
+            alpenglow_sigverify_service,
             banking_stage: Arc::new(RwLock::new(Some(banking_stage))),
             forwarding_stage,
             cluster_info_vote_listener,
@@ -464,7 +461,7 @@ impl Tpu {
             self.fetch_stage.join(),
             self.sig_verifier.join(),
             self.vote_sigverify_stage.join(),
-            self.alpenglow_sigverify_stage.join(),
+            self.alpenglow_sigverify_service.join(),
             self.cluster_info_vote_listener.join(),
             self.banking_stage
                 .write()

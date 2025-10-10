@@ -4,7 +4,7 @@
 use {
     crate::{
         bls_sigverify::{
-            bls_sigverify_stage::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
+            bls_sigverify_service::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
