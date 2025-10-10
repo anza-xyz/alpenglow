@@ -4061,18 +4061,18 @@ impl Blockstore {
             .collect()
     }
 
-    /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
+    /// Fetch the components corresponding to all of the shred indices in `completed_ranges`
     /// This function takes advantage of the fact that `completed_ranges` are both
     /// contiguous and in sorted order. To clarify, suppose completed_ranges is as follows:
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    fn get_slot_entries_in_block(
+    fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: CompletedRanges,
         slot_meta: Option<&SlotMeta>,
-    ) -> Result<Vec<Entry>> {
+    ) -> Result<Vec<BlockComponent>> {
         debug_assert!(completed_ranges
             .iter()
             .tuple_windows()
@@ -4118,24 +4118,36 @@ impl Blockstore {
                     .and_then(|payload| {
                         // TODO(karthik): if Alpenglow flag is disabled, return an error on special
                         // EntryBatches.
-                        BlockComponent::from_bytes_multiple(&payload)
-                            .map(|cs| {
-                                cs.into_iter()
-                                    .filter_map(|bc| bc.into_entry_batch())
-                                    .flatten()
-                                    .collect_vec()
-                            })
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct entries: {e:?}"
-                                    )),
-                                ))
-                            })
+                        BlockComponent::from_bytes_multiple(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct entries: {e:?}"),
+                            )))
+                        })
                     })
             })
             .flatten_ok()
             .collect()
+    }
+
+    /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
+    /// This function takes advantage of the fact that `completed_ranges` are both
+    /// contiguous and in sorted order. To clarify, suppose completed_ranges is as follows:
+    ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
+    /// Then, the following statements are true:
+    ///   s_i < e_i == s_i+1 < e_i+1
+    fn get_slot_entries_in_block(
+        &self,
+        slot: Slot,
+        completed_ranges: CompletedRanges,
+        slot_meta: Option<&SlotMeta>,
+    ) -> Result<Vec<Entry>> {
+        self.get_slot_components_in_block(slot, completed_ranges, slot_meta)
+            .map(|cs| {
+                cs.into_iter()
+                    .filter_map(|c| c.into_entry_batch())
+                    .flatten()
+                    .collect_vec()
+            })
     }
 
     pub fn get_entries_in_data_block(
