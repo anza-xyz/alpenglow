@@ -854,10 +854,6 @@ pub enum BlockstoreProcessorError {
     /// All blocks must contain exactly one block header
     #[error("multiple block headers")]
     MultipleBlockHeaders,
-
-    /// All blocks must contain at most one update parent
-    #[error("multiple update parents")]
-    MultipleUpdateParents,
 }
 
 /// Callback for accessing bank state after each slot is confirmed while

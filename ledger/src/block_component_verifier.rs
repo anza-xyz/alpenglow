@@ -8,7 +8,6 @@ use {
 pub struct BlockComponentVerifier {
     has_footer: bool,
     has_header: bool,
-    has_update_parent: bool,
 }
 
 impl BlockComponentVerifier {
@@ -39,7 +38,8 @@ impl BlockComponentVerifier {
         match marker {
             BlockMarkerV1::BlockFooter(_) => self.on_footer(),
             BlockMarkerV1::BlockHeader(_) => self.on_header(),
-            BlockMarkerV1::UpdateParent(_) => self.on_update_parent(),
+            // We process UpdateParent messages on shred ingest
+            BlockMarkerV1::UpdateParent(_) => Ok(()),
         }
     }
 
@@ -58,15 +58,6 @@ impl BlockComponentVerifier {
         }
 
         self.has_header = true;
-        Ok(())
-    }
-
-    fn on_update_parent(&mut self) -> result::Result<(), BlockstoreProcessorError> {
-        if self.has_update_parent {
-            return Err(BlockstoreProcessorError::MultipleUpdateParents);
-        }
-
-        self.has_update_parent = true;
         Ok(())
     }
 }
