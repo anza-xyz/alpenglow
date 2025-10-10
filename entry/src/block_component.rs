@@ -465,22 +465,24 @@ impl BlockComponent {
     ///
     /// # Errors
     /// Returns an error if deserialization fails or data is invalid.
-    pub fn from_bytes(data: &[u8]) -> Result<Vec<Self>, BlockComponentError> {
+    pub fn from_bytes_multiple(data: &[u8]) -> Result<Vec<Self>, BlockComponentError> {
         let mut components = Vec::new();
         let mut cursor = 0;
 
         while cursor < data.len() {
             let remaining = &data[cursor..];
-            let (component, bytes_consumed) = Self::parse_single_from_bytes(remaining)?;
+            let (component, bytes_consumed) = Self::from_bytes(remaining)?;
             components.push(component);
             cursor += bytes_consumed;
         }
+
+        assert_eq!(cursor, data.len());
 
         Ok(components)
     }
 
     /// Parse a single component, returning (component, bytes_consumed).
-    fn parse_single_from_bytes(data: &[u8]) -> Result<(Self, usize), BlockComponentError> {
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, usize), BlockComponentError> {
         const ENTRY_COUNT_SIZE: usize = 8;
 
         let entry_count = u64::from_le_bytes(
@@ -492,7 +494,7 @@ impl BlockComponent {
         // Validate entry count
         Self::validate_entry_batch_length(entry_count as usize)?;
 
-        let entries = bincode::deserialize::<Vec<Entry>>(data)
+        let entries = bincode::deserialize::<Vec<_>>(data)
             .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
         let cursor = bincode::serialized_size(&entries)
             .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?
@@ -580,7 +582,8 @@ impl<'de> Deserialize<'de> for BlockComponent {
             where
                 E: de::Error,
             {
-                let components = BlockComponent::from_bytes(value).map_err(de::Error::custom)?;
+                let components =
+                    BlockComponent::from_bytes_multiple(value).map_err(de::Error::custom)?;
                 if components.len() == 1 {
                     Ok(components.into_iter().next().unwrap())
                 } else {
@@ -633,7 +636,7 @@ impl VersionedBlockMarker {
 
     /// Deserializes from bytes, creating appropriate variant based on version.
     fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
-        const VERSION_SIZE: usize = 2;
+        const VERSION_SIZE: usize = std::mem::size_of::<u16>();
 
         let version = u16::from_le_bytes(
             data.get(..VERSION_SIZE)
@@ -1480,7 +1483,7 @@ mod tests {
         let component = BlockComponent::new_entry_batch(entries).unwrap();
 
         let bytes = component.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
 
         assert_eq!(deserialized.len(), 1);
         assert_eq!(component, deserialized[0]);
@@ -1498,7 +1501,7 @@ mod tests {
         let component = BlockComponent::new_block_marker(marker);
 
         let bytes = component.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
 
         assert_eq!(deserialized.len(), 1);
         assert_eq!(component, deserialized[0]);
@@ -1597,7 +1600,7 @@ mod tests {
         let component2 = BlockComponent::new_block_marker(marker);
         bytes.extend_from_slice(&component2.to_bytes().unwrap());
 
-        let result = BlockComponent::from_bytes(&bytes);
+        let result = BlockComponent::from_bytes_multiple(&bytes);
         assert!(result.is_ok());
         let components = result.unwrap();
         assert_eq!(components.len(), 2);
@@ -1609,7 +1612,7 @@ mod tests {
     fn test_block_component_deserialize_eight_zero_bytes() {
         // Test that exactly 8 zero bytes is allowed as an empty entry batch
         let data = [0_u8; 8];
-        let result = BlockComponent::from_bytes(&data);
+        let result = BlockComponent::from_bytes_multiple(&data);
 
         assert!(result.is_ok());
         let components = result.unwrap();
@@ -1762,20 +1765,20 @@ mod tests {
     #[test]
     fn test_block_component_malformed_data() {
         // Empty data - with multi-component support, this returns empty Vec
-        let result = BlockComponent::from_bytes(&[]);
+        let result = BlockComponent::from_bytes_multiple(&[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
 
         // Incomplete entry count
-        assert!(BlockComponent::from_bytes(&[0u8; 7]).is_err());
+        assert!(BlockComponent::from_bytes_multiple(&[0u8; 7]).is_err());
 
         // Valid entry count but no entry data when count > 0
-        assert!(BlockComponent::from_bytes(&[1u8, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert!(BlockComponent::from_bytes_multiple(&[1u8, 0, 0, 0, 0, 0, 0, 0]).is_err());
 
         // Entry count at maximum boundary should fail
         let mut max_count_data = Vec::new();
         max_count_data.extend_from_slice(&(u32::MAX as u64).to_le_bytes());
-        assert!(BlockComponent::from_bytes(&max_count_data).is_err());
+        assert!(BlockComponent::from_bytes_multiple(&max_count_data).is_err());
     }
 
     #[test]
@@ -1788,7 +1791,7 @@ mod tests {
         // Truncate the data to simulate partial entry
         bytes.truncate(bytes.len() - 10);
 
-        let result = BlockComponent::from_bytes(&bytes);
+        let result = BlockComponent::from_bytes_multiple(&bytes);
         assert!(result.is_err());
     }
 
@@ -2095,7 +2098,7 @@ mod tests {
         let component = BlockComponent::new_entry_batch(entries.clone()).unwrap();
 
         let bytes = component.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
 
         assert_eq!(deserialized.len(), 1);
         assert_eq!(component, deserialized[0]);
@@ -2220,7 +2223,7 @@ mod tests {
         // Add some dummy data to prevent other errors
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = BlockComponent::from_bytes(&data);
+        let result = BlockComponent::from_bytes_multiple(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
@@ -2229,7 +2232,7 @@ mod tests {
         data.extend_from_slice(&((BlockComponent::MAX_ENTRIES + 1000) as u64).to_le_bytes());
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = BlockComponent::from_bytes(&data);
+        let result = BlockComponent::from_bytes_multiple(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
@@ -2238,7 +2241,7 @@ mod tests {
         data.extend_from_slice(&u64::MAX.to_le_bytes());
         data.extend_from_slice(&[1, 2, 3, 4]);
 
-        let result = BlockComponent::from_bytes(&data);
+        let result = BlockComponent::from_bytes_multiple(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
 
@@ -2248,7 +2251,7 @@ mod tests {
         // Note: This will still fail because we don't have valid entry data,
         // but it should fail for a different reason (not the length check)
 
-        let result = BlockComponent::from_bytes(&data);
+        let result = BlockComponent::from_bytes_multiple(&data);
         assert!(result.is_err());
         // Should NOT contain "exceeds maximum" since the length is valid
         assert!(!result.unwrap_err().to_string().contains("exceeds maximum"));
@@ -2300,7 +2303,7 @@ mod tests {
         assert_eq!(entries_len, 3);
 
         // Test deserialization
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 3);
         assert!(deserialized[0].marker().is_none());
@@ -2334,7 +2337,7 @@ mod tests {
         assert_eq!(entries_len, 0);
 
         // Test deserialization
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 0);
         assert!(deserialized[0].marker().is_some());
@@ -2349,7 +2352,7 @@ mod tests {
     #[test]
     fn test_block_component_from_bytes_insufficient_data() {
         let short_data = vec![1, 2, 3]; // Less than 8 bytes
-        let result = BlockComponent::from_bytes(&short_data);
+        let result = BlockComponent::from_bytes_multiple(&short_data);
         assert!(result.is_err());
     }
 
@@ -2359,7 +2362,7 @@ mod tests {
         let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 1000);
     }
@@ -2371,7 +2374,7 @@ mod tests {
         let batch = BlockComponent::BlockMarker(special);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
 
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 0);
@@ -2542,7 +2545,7 @@ mod tests {
         let batch = BlockComponent::new_block_marker(versioned_special);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
 
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 0);
@@ -2574,7 +2577,7 @@ mod tests {
         let batch = BlockComponent::EntryBatch(entries);
 
         let bytes = batch.to_bytes().unwrap();
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 1);
         assert_eq!(deserialized[0].entry_batch().len(), 10);
         assert!(deserialized[0].marker().is_none());
@@ -2661,7 +2664,7 @@ mod tests {
         assert!(VersionedUpdateParent::from_bytes(&[]).is_err());
         assert!(BlockMarkerV1::from_bytes(&[]).is_err());
         assert!(VersionedBlockMarker::from_bytes(&[1]).is_err());
-        assert!(BlockComponent::from_bytes(&[1, 2, 3]).is_err());
+        assert!(BlockComponent::from_bytes_multiple(&[1, 2, 3]).is_err());
     }
 
     #[test]
@@ -2814,7 +2817,7 @@ mod tests {
         bytes.extend_from_slice(&component3.to_bytes().unwrap());
 
         // Deserialize and verify
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 3);
 
         // Verify first component
@@ -2851,7 +2854,7 @@ mod tests {
         bytes.extend_from_slice(&component3.to_bytes().unwrap());
 
         // Deserialize and verify
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 3);
 
         // Verify each component
@@ -2905,7 +2908,7 @@ mod tests {
         bytes.extend_from_slice(&footer_component.to_bytes().unwrap());
 
         // Deserialize and verify
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 4);
 
         // Verify first component (entries)
@@ -2987,7 +2990,7 @@ mod tests {
         bytes.extend_from_slice(&header_component.to_bytes().unwrap());
 
         // Deserialize and verify
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 3);
 
         // All should be markers
@@ -3021,7 +3024,7 @@ mod tests {
         }
 
         // Deserialize
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), num_pairs * 2);
 
         // Verify pattern
@@ -3076,7 +3079,7 @@ mod tests {
         bytes.extend_from_slice(&footer_component.to_bytes().unwrap());
 
         // Deserialize
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 4);
 
         assert!(deserialized[0].is_entry_batch());
@@ -3124,7 +3127,7 @@ mod tests {
         bytes.extend_from_slice(&footer_component.to_bytes().unwrap());
 
         // Deserialize
-        let deserialized = BlockComponent::from_bytes(&bytes).unwrap();
+        let deserialized = BlockComponent::from_bytes_multiple(&bytes).unwrap();
         assert_eq!(deserialized.len(), 4);
 
         // Verify entries
