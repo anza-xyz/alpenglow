@@ -397,52 +397,6 @@ impl LocalCluster {
         let leader_keypair = Arc::new(leader_keypair.insecure_clone());
         let leader_vote_keypair = Arc::new(leader_vote_keypair.insecure_clone());
 
-        let leader_server = Validator::new(
-            leader_node,
-            leader_keypair.clone(),
-            &leader_ledger_path,
-            &leader_vote_keypair.pubkey(),
-            Arc::new(RwLock::new(vec![leader_vote_keypair.clone()])),
-            vec![],
-            &leader_config,
-            true, // should_check_duplicate_instance
-            None, // rpc_to_plugin_manager_receiver
-            Arc::new(RwLock::new(ValidatorStartProgress::default())),
-            socket_addr_space,
-            // We are turning tpu_enable_udp to true in order to prevent concurrent local cluster tests
-            // to use the same QUIC ports due to SO_REUSEPORT.
-            ValidatorTpuConfig::new_for_tests(true),
-            Arc::new(RwLock::new(None)),
-        )
-        .expect("assume successful validator start");
-
-        let leader_contact_info = leader_server.cluster_info.my_contact_info();
-        let mut validators = HashMap::new();
-        let leader_info = ValidatorInfo {
-            keypair: leader_keypair,
-            voting_keypair: leader_vote_keypair,
-            ledger_path: leader_ledger_path,
-            contact_info: leader_contact_info.clone(),
-        };
-        let cluster_leader = ClusterValidatorInfo::new(
-            leader_info,
-            safe_clone_config(&config.validator_configs[0]),
-            leader_server,
-        );
-
-        validators.insert(leader_pubkey, cluster_leader);
-
-        let mut cluster = Self {
-            funding_keypair: mint_keypair,
-            entry_point_info: leader_contact_info.clone(),
-            validators,
-            genesis_config,
-            connection_cache,
-            quic_connection_cache_config,
-            tpu_connection_pool_size: config.tpu_connection_pool_size,
-            shred_version: leader_contact_info.shred_version(),
-        };
-
         let node_pubkey_to_vote_key: HashMap<Pubkey, Arc<Keypair>> = keys_in_genesis
             .into_iter()
             .map(|keypairs| {
@@ -452,18 +406,130 @@ impl LocalCluster {
                 )
             })
             .collect();
-        for (stake, validator_config, (key, _)) in izip!(
-            config.node_stakes[1..].iter(),
-            config.validator_configs[1..].iter(),
-            validator_keys[1..].iter(),
-        ) {
-            cluster.add_validator(
-                validator_config,
-                *stake,
-                key.clone(),
-                node_pubkey_to_vote_key.get(&key.pubkey()).cloned(),
-                socket_addr_space,
+
+        // Check if any validator (including leader) has wait_for_supermajority set
+        let has_wait_for_supermajority = config
+            .validator_configs
+            .iter()
+            .any(|cfg| cfg.wait_for_supermajority.is_some());
+
+        let (mut cluster, leader_contact_info) = if has_wait_for_supermajority {
+            info!(
+                "Detected wait_for_supermajority in validator configs, starting all validators \
+                 (including leader) in parallel"
             );
+
+            // Create a temporary cluster with empty validators to use for parallel startup
+            let mut temp_cluster = Self {
+                funding_keypair: mint_keypair,
+                entry_point_info: ContactInfo::new_localhost(&Pubkey::new_unique(), 0), // Temporary
+                validators: HashMap::new(),
+                genesis_config,
+                connection_cache,
+                quic_connection_cache_config,
+                tpu_connection_pool_size: config.tpu_connection_pool_size,
+                shred_version: 0, // Will be updated
+            };
+
+            // Start all validators in parallel
+            temp_cluster.start_all_validators_parallel(
+                &config.validator_configs,
+                &config.node_stakes,
+                &validator_keys,
+                &node_pubkey_to_vote_key,
+                socket_addr_space,
+                (
+                    leader_pubkey,
+                    leader_node,
+                    leader_config,
+                    leader_keypair.clone(),
+                    leader_vote_keypair.clone(),
+                    leader_ledger_path,
+                ),
+            );
+
+            // Get the leader contact info from the started validators
+            let leader_contact_info = temp_cluster
+                .validators
+                .get(&leader_pubkey)
+                .unwrap()
+                .info
+                .contact_info
+                .clone();
+
+            // Update cluster with correct entry point and shred version
+            temp_cluster.entry_point_info = leader_contact_info.clone();
+            temp_cluster.shred_version = leader_contact_info.shred_version();
+
+            (temp_cluster, leader_contact_info)
+        } else {
+            // Original sequential startup path
+            let leader_server = Validator::new(
+                leader_node,
+                leader_keypair.clone(),
+                &leader_ledger_path,
+                &leader_vote_keypair.pubkey(),
+                Arc::new(RwLock::new(vec![leader_vote_keypair.clone()])),
+                vec![],
+                &leader_config,
+                true, // should_check_duplicate_instance
+                None, // rpc_to_plugin_manager_receiver
+                Arc::new(RwLock::new(ValidatorStartProgress::default())),
+                socket_addr_space,
+                // We are turning tpu_enable_udp to true in order to prevent concurrent local cluster tests
+                // to use the same QUIC ports due to SO_REUSEPORT.
+                ValidatorTpuConfig::new_for_tests(true),
+                Arc::new(RwLock::new(None)),
+            )
+            .expect("assume successful validator start");
+
+            let leader_contact_info = leader_server.cluster_info.my_contact_info();
+            let mut validators = HashMap::new();
+            let leader_info = ValidatorInfo {
+                keypair: leader_keypair,
+                voting_keypair: leader_vote_keypair,
+                ledger_path: leader_ledger_path,
+                contact_info: leader_contact_info.clone(),
+            };
+            let cluster_leader = ClusterValidatorInfo::new(
+                leader_info,
+                safe_clone_config(&config.validator_configs[0]),
+                leader_server,
+            );
+
+            validators.insert(leader_pubkey, cluster_leader);
+
+            let cluster = Self {
+                funding_keypair: mint_keypair,
+                entry_point_info: leader_contact_info.clone(),
+                validators,
+                genesis_config,
+                connection_cache,
+                quic_connection_cache_config,
+                tpu_connection_pool_size: config.tpu_connection_pool_size,
+                shred_version: leader_contact_info.shred_version(),
+            };
+
+            (cluster, leader_contact_info)
+        };
+
+        if has_wait_for_supermajority {
+            // All validators already started in parallel, nothing more to do
+        } else {
+            // Original sequential startup
+            for (stake, validator_config, (key, _)) in izip!(
+                config.node_stakes[1..].iter(),
+                config.validator_configs[1..].iter(),
+                validator_keys[1..].iter(),
+            ) {
+                cluster.add_validator(
+                    validator_config,
+                    *stake,
+                    key.clone(),
+                    node_pubkey_to_vote_key.get(&key.pubkey()).cloned(),
+                    socket_addr_space,
+                );
+            }
         }
 
         let mut listener_config = safe_clone_config(&config.validator_configs[0]);
@@ -647,6 +713,231 @@ impl LocalCluster {
 
         self.validators.insert(validator_pubkey, validator_info);
         validator_pubkey
+    }
+
+    fn start_all_validators_parallel(
+        &mut self,
+        validator_configs: &[ValidatorConfig],
+        stakes: &[u64],
+        validator_keys: &[(Arc<Keypair>, bool)],
+        node_pubkey_to_vote_key: &HashMap<Pubkey, Arc<Keypair>>,
+        socket_addr_space: SocketAddrSpace,
+        leader_data: (
+            Pubkey,
+            Node,
+            ValidatorConfig,
+            Arc<Keypair>,
+            Arc<Keypair>,
+            PathBuf,
+        ),
+    ) {
+        let (
+            leader_pubkey,
+            leader_node,
+            leader_config,
+            leader_keypair,
+            leader_vote_keypair,
+            leader_ledger_path,
+        ) = leader_data;
+        use std::thread;
+
+        // We'll fund validators after they start since we need a working TPU client
+
+        // Now spawn threads to start ALL validators in parallel (including leader)
+        let genesis_config = self.genesis_config.clone();
+        let mut handles = vec![];
+        let entry_point_info = Arc::new(RwLock::new(None::<ContactInfo>));
+
+        // Start leader in parallel with others
+        {
+            let mut config = leader_config;
+            config.rpc_addrs = Some((
+                leader_node.info.rpc().unwrap(),
+                leader_node.info.rpc_pubsub().unwrap(),
+            ));
+            Self::sync_ledger_path_across_nested_config_fields(&mut config, &leader_ledger_path);
+
+            let leader_stake = stakes[0];
+
+            // Pre-populate the entry point info with leader's node info
+            // This is needed because other validators need the contact info to start,
+            // but the leader might block in wait_for_supermajority
+            let leader_contact_info_for_others = leader_node.info.clone();
+            *entry_point_info.write().unwrap() = Some(leader_contact_info_for_others);
+
+            let handle = thread::spawn(move || {
+                info!("Starting leader {leader_pubkey} in parallel thread");
+
+                let leader_server = Validator::new(
+                    leader_node,
+                    leader_keypair.clone(),
+                    &leader_ledger_path,
+                    &leader_vote_keypair.pubkey(),
+                    Arc::new(RwLock::new(vec![leader_vote_keypair.clone()])),
+                    vec![],
+                    &config,
+                    true, // should_check_duplicate_instance
+                    None, // rpc_to_plugin_manager_receiver
+                    Arc::new(RwLock::new(ValidatorStartProgress::default())),
+                    socket_addr_space,
+                    ValidatorTpuConfig::new_for_tests(true),
+                    Arc::new(RwLock::new(None)),
+                )
+                .expect("assume successful validator start");
+
+                let leader_contact_info = leader_server.cluster_info.my_contact_info();
+                let leader_info = ValidatorInfo {
+                    keypair: leader_keypair,
+                    voting_keypair: leader_vote_keypair,
+                    ledger_path: leader_ledger_path,
+                    contact_info: leader_contact_info.clone(),
+                };
+                let cluster_leader = ClusterValidatorInfo::new(leader_info, config, leader_server);
+
+                info!("Leader {leader_pubkey} started successfully");
+                (leader_pubkey, cluster_leader, leader_stake, 0)
+            });
+
+            handles.push(handle);
+        }
+
+        // Start remaining validators
+        for (i, ((key, _), (stake, validator_config))) in validator_keys[1..]
+            .iter()
+            .zip(stakes[1..].iter().zip(validator_configs[1..].iter()))
+            .enumerate()
+        {
+            let validator_keypair = key.clone();
+            let voting_keypair = node_pubkey_to_vote_key
+                .get(&validator_keypair.pubkey())
+                .cloned();
+            let stake = *stake;
+            let validator_config = safe_clone_config(validator_config);
+            let genesis_config = genesis_config.clone();
+            let entry_point_info = entry_point_info.clone();
+            let entry_points = vec![entry_point_info.read().unwrap().clone().unwrap()];
+
+            let handle = thread::spawn(move || {
+                let validator_pubkey = validator_keypair.pubkey();
+                info!("Starting validator {validator_pubkey} in parallel thread");
+
+                let validator_node = Node::new_localhost_with_pubkey(&validator_keypair.pubkey());
+                let contact_info = validator_node.info.clone();
+                let (ledger_path, _blockhash) = create_new_tmp_ledger_with_size!(
+                    &genesis_config,
+                    validator_config.max_genesis_archive_unpacked_size,
+                );
+
+                let mut config = validator_config;
+                config.rpc_addrs = Some((
+                    validator_node.info.rpc().unwrap(),
+                    validator_node.info.rpc_pubsub().unwrap(),
+                ));
+                Self::sync_ledger_path_across_nested_config_fields(&mut config, &ledger_path);
+
+                let voting_keypair = voting_keypair.unwrap_or_else(|| Arc::new(Keypair::new()));
+
+                let validator_server = Validator::new(
+                    validator_node,
+                    validator_keypair.clone(),
+                    &ledger_path,
+                    &voting_keypair.pubkey(),
+                    Arc::new(RwLock::new(vec![voting_keypair.clone()])),
+                    entry_points,
+                    &config,
+                    true, // should_check_duplicate_instance
+                    None, // rpc_to_plugin_manager_receiver
+                    Arc::new(RwLock::new(ValidatorStartProgress::default())),
+                    socket_addr_space,
+                    ValidatorTpuConfig::new_for_tests(DEFAULT_TPU_ENABLE_UDP),
+                    Arc::new(RwLock::new(None)),
+                )
+                .expect("assume successful validator start");
+
+                let validator_pubkey = validator_keypair.pubkey();
+                let validator_info = ClusterValidatorInfo::new(
+                    ValidatorInfo {
+                        keypair: validator_keypair,
+                        voting_keypair: voting_keypair.clone(),
+                        ledger_path,
+                        contact_info,
+                    },
+                    config,
+                    validator_server,
+                );
+
+                info!("Validator {validator_pubkey} started successfully");
+                (validator_pubkey, validator_info, stake, i + 1)
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all validators to start
+        let mut validators_data = vec![];
+        for (idx, handle) in handles.into_iter().enumerate() {
+            let data = handle.join().expect("validator thread panicked");
+
+            // If this is the leader (index 0), update the entry point info
+            if idx == 0 {
+                let (_, ref cluster_info, _, _) = data;
+                *entry_point_info.write().unwrap() = Some(cluster_info.info.contact_info.clone());
+            }
+
+            validators_data.push(data);
+        }
+
+        // Sort by original index to maintain order
+        validators_data.sort_by_key(|(_, _, _, idx)| *idx);
+
+        // First, insert all validators into the cluster so we can build TPU client
+        let leader_pubkey = validators_data[0].0;
+        let validators_to_fund: Vec<_> = validators_data
+            .iter()
+            .filter(|(pubkey, _, stake, idx)| {
+                *idx > 0 && node_pubkey_to_vote_key.get(pubkey).is_none() && *stake > 0
+            })
+            .map(|(pubkey, info, stake, _)| {
+                (
+                    *pubkey,
+                    info.info.voting_keypair.clone(),
+                    info.info.keypair.clone(),
+                    *stake,
+                )
+            })
+            .collect();
+
+        for (validator_pubkey, validator_info, _, _) in validators_data {
+            self.validators.insert(validator_pubkey, validator_info);
+        }
+
+        // Now fund and set up vote and stake accounts for validators that need them
+        if !validators_to_fund.is_empty() {
+            let client = self
+                .build_validator_tpu_quic_client(&leader_pubkey)
+                .expect("tpu_client");
+
+            for (validator_pubkey, voting_keypair, validator_keypair, stake) in validators_to_fund {
+                // First fund the validator
+                info!("Funding validator {validator_pubkey}");
+                Self::transfer_with_client(
+                    &client,
+                    &self.funding_keypair,
+                    &validator_pubkey,
+                    Self::required_validator_funding(stake),
+                );
+
+                // Then set up vote and stake accounts
+                info!("Setting up vote and stake accounts for validator {validator_pubkey}");
+                Self::setup_vote_and_stake_accounts(
+                    &client,
+                    &voting_keypair,
+                    &validator_keypair,
+                    stake,
+                )
+                .unwrap();
+            }
+        }
     }
 
     pub fn ledger_path(&self, validator_pubkey: &Pubkey) -> PathBuf {
