@@ -59,7 +59,7 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
         votor::LeaderWindowNotifier,
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -197,6 +197,7 @@ impl Tvu {
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
         consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -255,6 +256,7 @@ impl Tvu {
             slot_status_notifier.clone(),
             tvu_config.xdp_sender,
             votor_event_sender.clone(),
+            migration_status.clone(),
         );
 
         let (ancestor_duplicate_slots_sender, ancestor_duplicate_slots_receiver) = unbounded();
@@ -306,6 +308,7 @@ impl Tvu {
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
+                migration_status.clone(),
             )
         };
 
@@ -386,6 +389,7 @@ impl Tvu {
             replay_highest_frozen,
             leader_window_notifier,
             consensus_metrics,
+            migration_status,
         };
 
         let voting_service = VotingService::new(
@@ -682,6 +686,7 @@ pub mod tests {
             votor_event_sender,
             votor_event_receiver,
             consensus_metrics,
+            Arc::new(MigrationStatus::default()),
         )
         .expect("assume success");
         if enable_wen_restart {

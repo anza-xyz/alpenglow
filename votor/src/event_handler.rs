@@ -11,7 +11,7 @@ use {
         vote_history::{VoteHistory, VoteHistoryError},
         voting_service::BLSOp,
         voting_utils::{generate_vote_message, VoteError, VotingContext},
-        votor::{SharedContext, Votor},
+        votor::SharedContext,
     },
     crossbeam_channel::{select, RecvError, SendError},
     parking_lot::RwLock,
@@ -24,12 +24,12 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::Block, vote::Vote},
+    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex,
+            Arc,
         },
         thread::{self, Builder, JoinHandle},
         time::Duration,
@@ -46,7 +46,7 @@ pub(crate) type PendingBlocks = BTreeMap<Slot, Vec<(Block, Block)>>;
 /// Inputs for the event handler thread
 pub(crate) struct EventHandlerContext {
     pub(crate) exit: Arc<AtomicBool>,
-    pub(crate) start: Arc<(Mutex<bool>, Condvar)>,
+    pub(crate) migration_status: Arc<MigrationStatus>,
 
     pub(crate) event_receiver: VotorEventReceiver,
     pub(crate) timer_manager: Arc<RwLock<TimerManager>>,
@@ -106,7 +106,7 @@ impl EventHandler {
     fn event_loop(context: EventHandlerContext) -> Result<(), EventLoopError> {
         let EventHandlerContext {
             exit,
-            start,
+            migration_status,
             event_receiver,
             timer_manager,
             shared_context: ctx,
@@ -123,24 +123,52 @@ impl EventHandler {
 
         // Wait until migration has completed
         info!("{}: Event loop initialized", local_context.my_pubkey);
-        Votor::wait_for_migration_or_exit(&exit, &start);
-        info!("{}: Event loop starting", local_context.my_pubkey);
-
-        if exit.load(Ordering::Relaxed) {
+        let Some(genesis_block @ (genesis_slot, _)) =
+            migration_status.wait_for_migration_or_exit(&exit)
+        else {
+            // Exited during migration
             return Ok(());
-        }
+        };
+        let root_slot = vctx.sharable_banks.root().slot();
+        info!(
+            "{}: Event loop starting genesis {genesis_slot} root {root_slot}",
+            local_context.my_pubkey
+        );
 
         // Check for set identity
         if let Err(e) = Self::handle_set_identity(&mut local_context.my_pubkey, &ctx, &mut vctx) {
             error!(
-                "Unable to load new vote history when attempting to change identity from {} to {} \
-                 on voting loop startup, Exiting: {}",
+                "Unable to load new vote history when attempting to change identity at startup \
+                 from {} to {} on voting loop startup, Exiting: {}",
                 vctx.vote_history.node_pubkey,
                 ctx.cluster_info.id(),
                 e
             );
             return Err(EventLoopError::SetIdentityError(e));
         }
+
+        // Kick off parent ready. If this is immediately after migration, we use the genesis block.
+        // If this is post migration we use root
+        let parent_block @ (parent_slot, _) = if genesis_slot > root_slot {
+            genesis_block
+        } else {
+            // TODO(ashwin): Once block id is in snapshot, remove _or_default()
+            (
+                root_slot,
+                vctx.sharable_banks.root().block_id().unwrap_or_default(),
+            )
+        };
+        let _ = Self::handle_event(
+            VotorEvent::ParentReady {
+                slot: parent_slot.checked_add(1).unwrap(),
+                parent_block,
+            },
+            &timer_manager,
+            &ctx,
+            &mut vctx,
+            &rctx,
+            &mut local_context,
+        )?;
 
         while !exit.load(Ordering::Relaxed) {
             let mut receive_event_time = Measure::start("receive_event");
@@ -857,12 +885,12 @@ mod tests {
         let (own_vote_sender, own_vote_receiver) = unbounded();
         let (drop_bank_sender, drop_bank_receiver) = unbounded();
         let exit = Arc::new(AtomicBool::new(false));
-        let start = Arc::new((Mutex::new(true), Condvar::new()));
         let (event_sender, event_receiver) = unbounded();
         let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
+            Arc::new(MigrationStatus::default()),
         )));
 
         // Create 10 node validatorvotekeypairs vec
@@ -936,7 +964,7 @@ mod tests {
 
         let event_handler_context = EventHandlerContext {
             exit: exit.clone(),
-            start,
+            migration_status: Arc::new(MigrationStatus::post_migration_status()),
             event_receiver,
             timer_manager: timer_manager.clone(),
             shared_context,

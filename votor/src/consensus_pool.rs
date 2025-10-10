@@ -25,6 +25,7 @@ use {
         consensus_message::{
             Block, Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -119,9 +120,21 @@ pub struct ConsensusPool {
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
+    /// Stores details about the genesis vote during the migration
+    migration_status: Option<Arc<MigrationStatus>>,
 }
 
 impl ConsensusPool {
+    pub fn new_from_root_bank_pre_migration(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
+        let mut pool = Self::new_from_root_bank(my_pubkey, bank);
+        pool.migration_status = Some(migration_status);
+        pool
+    }
+
     pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
@@ -137,6 +150,7 @@ impl ConsensusPool {
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
+            migration_status: None,
         }
     }
 
@@ -287,7 +301,7 @@ impl ConsensusPool {
         events: &mut Vec<VotorEvent>,
     ) {
         trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_id);
-        self.completed_certificates.insert(cert_id, cert);
+        self.completed_certificates.insert(cert_id, cert.clone());
         match cert_id {
             Certificate::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
@@ -337,6 +351,13 @@ impl ConsensusPool {
                 {
                     self.highest_finalized_with_notarize = Some((slot, true));
                 }
+            }
+            Certificate::Genesis(slot, block_id) => {
+                if let Some(ref migration_status) = self.migration_status {
+                    migration_status.set_genesis_certificate(cert);
+                }
+                self.parent_ready_tracker
+                    .add_new_notar_fallback_or_stronger((slot, block_id), events);
             }
         }
     }
@@ -408,8 +429,11 @@ impl ConsensusPool {
             return Err(AddVoteError::UnrootedSlot);
         }
         let block_id = vote.block_id().map(|block_id| {
-            if !matches!(vote, Vote::Notarize(_) | Vote::NotarizeFallback(_)) {
-                panic!("expected Notarize or NotarizeFallback vote");
+            if !matches!(
+                vote,
+                Vote::Notarize(_) | Vote::NotarizeFallback(_) | Vote::Genesis(_)
+            ) {
+                panic!("expected Notarize/ NotarizeFallback/ Genesis vote");
             }
             *block_id
         });
@@ -609,6 +633,7 @@ impl ConsensusPool {
                 | Certificate::FinalizeFast(s, _)
                 | Certificate::Notarize(s, _)
                 | Certificate::NotarizeFallback(s, _)
+                | Certificate::Genesis(s, _)
                 | Certificate::Skip(s) => s >= &root_slot,
             });
         self.vote_pools = self.vote_pools.split_off(&(root_slot, VoteType::Finalize));
@@ -765,6 +790,7 @@ mod tests {
             Vote::Skip(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
             Vote::SkipFallback(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
             Vote::Finalize(vote) => assert_eq!(pool.highest_finalized_slot(), vote.slot()),
+            Vote::Genesis(_genesis_vote) => (),
         }
     }
 
@@ -1058,6 +1084,7 @@ mod tests {
             Vote::NotarizeFallback(_) => |pool: &ConsensusPool| pool.highest_notarized_slot(),
             Vote::Skip(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
             Vote::SkipFallback(_) => |pool: &ConsensusPool| pool.highest_skip_slot(),
+            Vote::Genesis(_genesis_vote) => |_pool: &ConsensusPool| 0,
         };
         let bank = bank_forks.read().unwrap().root_bank();
         assert!(pool
@@ -1782,6 +1809,7 @@ mod tests {
             VoteType::Skip => Vote::new_skip_vote(slot),
             VoteType::SkipFallback => Vote::new_skip_fallback_vote(slot),
             VoteType::Finalize => Vote::new_finalization_vote(slot),
+            VoteType::Genesis => Vote::new_genesis_vote(slot, Hash::default()),
         }
     }
 

@@ -30,6 +30,7 @@ use {
         consensus_message::{
             Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -93,6 +94,7 @@ pub struct BLSSigVerifier {
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BLSSigVerifier {
@@ -116,6 +118,8 @@ impl BLSSigVerifier {
             .unwrap()
             .retain(|vote, _| vote.slot() > root_bank.slot());
 
+        let genesis_slot = self.migration_status.genesis_slot().unwrap_or(Slot::MAX);
+
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -138,6 +142,24 @@ impl BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
+                    let slot = vote_message.vote.slot();
+
+                    // Only allow genesis votes during migration period
+                    if vote_message.vote.is_genesis_vote() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_vote
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow regular alpenglow votes past genesis
+                    if !vote_message.vote.is_genesis_vote() && slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Missing epoch states
                     let Some(key_to_rank_map) =
                         get_key_to_rank_map(&root_bank, vote_message.vote.slot())
@@ -176,8 +198,26 @@ impl BLSSigVerifier {
                     });
                 }
                 ConsensusMessage::Certificate(cert_message) => {
+                    let slot = cert_message.certificate.slot();
+
+                    // Only allow genesis certs during migration period
+                    if cert_message.certificate.is_genesis() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_cert
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow alpenglow certs past genesis
+                    if slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Only need certs newer than root slot
-                    if cert_message.certificate.slot() <= root_bank.slot() {
+                    if slot <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -224,6 +264,7 @@ impl BLSSigVerifier {
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -233,6 +274,7 @@ impl BLSSigVerifier {
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics,
+            migration_status,
         }
     }
 
@@ -664,7 +706,13 @@ mod tests {
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         (
             validator_keypairs,
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None),
+            BLSSigVerifier::new(
+                sharable_banks,
+                verified_vote_sender,
+                message_sender,
+                None,
+                Arc::new(MigrationStatus::post_migration_status()),
+            ),
         )
     }
 
@@ -1391,8 +1439,13 @@ mod tests {
         bank_forks.write().unwrap().set_root(5, None, None).unwrap();
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let mut sig_verifier =
-            BLSSigVerifier::new(sharable_banks, verified_vote_sender, message_sender, None);
+        let mut sig_verifier = BLSSigVerifier::new(
+            sharable_banks,
+            verified_vote_sender,
+            message_sender,
+            None,
+            Arc::new(MigrationStatus::post_migration_status()),
+        );
 
         let vote = Vote::new_skip_vote(2);
         let vote_payload = bincode::serialize(&vote).unwrap();

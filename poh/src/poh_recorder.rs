@@ -32,6 +32,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
     solana_transaction::versioned::VersionedTransaction,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         cmp,
         sync::{
@@ -197,8 +198,11 @@ pub struct PohRecorder {
     // Allocation to hold PohEntrys recorded into PoHStream.
     entries: Vec<PohEntry>,
     track_transaction_indexes: bool,
-    pub is_alpenglow_enabled: bool,
-    pub use_alpenglow_tick_producer: bool,
+
+    /// When alpenglow is enabled there will be no ticks apart from a final one
+    /// to complete the block. This tick will not be verified, and we use this
+    /// flag to unset hashes_per_tick
+    alpenglow_enabled: bool,
 }
 
 impl PohRecorder {
@@ -229,7 +233,6 @@ impl PohRecorder {
             leader_schedule_cache,
             poh_config,
             is_exited,
-            false,
         )
     }
 
@@ -246,7 +249,6 @@ impl PohRecorder {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         poh_config: &PohConfig,
         is_exited: Arc<AtomicBool>,
-        is_alpenglow_enabled: bool,
     ) -> (Self, Receiver<WorkingBankEntry>) {
         let tick_number = 0;
         let poh = Arc::new(Mutex::new(Poh::new_with_slot_info(
@@ -289,8 +291,7 @@ impl PohRecorder {
                 is_exited,
                 entries: Vec::with_capacity(64),
                 track_transaction_indexes: false,
-                is_alpenglow_enabled,
-                use_alpenglow_tick_producer: is_alpenglow_enabled,
+                alpenglow_enabled: false,
             },
             working_bank_receiver,
         )
@@ -527,7 +528,7 @@ impl PohRecorder {
 
     fn reset_poh(&mut self, reset_bank: Arc<Bank>, reset_start_bank: bool) {
         let blockhash = reset_bank.last_blockhash();
-        let hashes_per_tick = if self.use_alpenglow_tick_producer {
+        let hashes_per_tick = if self.alpenglow_enabled {
             None
         } else {
             *reset_bank.hashes_per_tick()
@@ -946,7 +947,8 @@ impl PohRecorder {
         }
     }
 
-    pub fn migrate_to_alpenglow_poh(&mut self) {
+    pub fn enable_alpenglow(&mut self) {
+        self.alpenglow_enabled = true;
         self.tick_cache = vec![];
         {
             let mut poh = self.poh.lock().unwrap();
@@ -1011,6 +1013,7 @@ fn do_create_test_recorder(
         crate::poh_service::DEFAULT_HASHES_PER_BATCH,
         record_receiver,
         poh_service_message_receiver,
+        Arc::new(MigrationStatus::default()),
         || {},
     );
 
@@ -1793,7 +1796,6 @@ mod tests {
             &Arc::new(LeaderScheduleCache::default()),
             &PohConfig::default(),
             Arc::new(AtomicBool::default()),
-            false,
         );
         poh_recorder.set_bank_for_test(bank);
         poh_recorder.clear_bank();
