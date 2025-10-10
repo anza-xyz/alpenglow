@@ -350,12 +350,6 @@ pub struct UpdateParentV1 {
 // BlockComponent Implementation
 // ============================================================================
 
-impl Default for BlockComponent {
-    fn default() -> Self {
-        Self::EntryBatch(Vec::new())
-    }
-}
-
 impl BlockComponent {
     /// Maximum number of entries allowed in a block component.
     ///
@@ -521,12 +515,8 @@ impl BlockComponent {
 
         match (entries.is_empty(), remaining_bytes.is_empty()) {
             (true, true) => {
-                // Special case: allow exactly 8 zero bytes as empty entry batch
-                if data.len() == ENTRY_COUNT_SIZE {
-                    Ok((Self::EntryBatch(vec![]), ENTRY_COUNT_SIZE))
-                } else {
-                    Err(BlockComponentError::EmptyEntryBatch)
-                }
+                // Empty entry batches are not allowed
+                Err(BlockComponentError::EmptyEntryBatch)
             }
             (true, false) => {
                 // Zero entries means a marker follows
@@ -1258,13 +1248,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_component_default() {
-        let component = BlockComponent::default();
-        assert!(component.is_entry_batch());
-        assert_eq!(component.entry_batch().len(), 0);
-    }
-
-    #[test]
     fn test_block_component_entry_batch() {
         let entries = vec![Entry::default(), Entry::default()];
         let component = BlockComponent::new_entry_batch(entries.clone()).unwrap();
@@ -1626,15 +1609,12 @@ mod tests {
 
     #[test]
     fn test_block_component_deserialize_eight_zero_bytes() {
-        // Test that exactly 8 zero bytes is allowed as an empty entry batch
+        // Test that exactly 8 zero bytes (empty entry batch) is rejected
         let data = [0_u8; 8];
         let result = BlockComponent::from_bytes_multiple(&data);
 
-        assert!(result.is_ok());
-        let components = result.unwrap();
-        assert_eq!(components.len(), 1);
-        assert!(components[0].is_entry_batch());
-        assert_eq!(components[0].entry_batch().len(), 0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), BlockComponentError::EmptyEntryBatch);
     }
 
     #[test]
