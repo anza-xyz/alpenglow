@@ -553,6 +553,8 @@ impl PartialEq for Bank {
             block_id,
             bank_hash_stats: _,
             epoch_rewards_calculation_cache: _,
+            // TODO(ksn): should this be included?
+            alpenglow_timestamp: _,
             // Ignore new fields explicitly if they do not impact PartialEq.
             // Adding ".." will remove compile-time checks that if a new field
             // is added to the struct, this PartialEq is accordingly updated.
@@ -900,6 +902,9 @@ pub struct Bank {
     /// This is used to avoid recalculating the same epoch rewards at epoch boundary.
     /// The hashmap is keyed by parent_hash.
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
+
+    /// Alpenglow block timestamp
+    alpenglow_timestamp: Option<UnixTimestamp>,
 }
 
 #[derive(Debug)]
@@ -1096,6 +1101,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
+            alpenglow_timestamp: None,
         };
 
         bank.transaction_processor =
@@ -1343,6 +1349,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
+            alpenglow_timestamp: None,
         };
 
         let (_, ancestors_time_us) = measure_us!({
@@ -1811,6 +1818,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
+            alpenglow_timestamp: None,
         };
 
         // Sanity assertions between bank snapshot and genesis config
@@ -5643,6 +5651,14 @@ impl Bank {
     /// Return total transaction fee collected
     pub fn get_collector_fee_details(&self) -> CollectorFeeDetails {
         self.collector_fee_details.read().unwrap().clone()
+    }
+
+    pub fn set_alpenglow_timestamp(&mut self, timestamp: UnixTimestamp) {
+        self.alpenglow_timestamp = Some(timestamp);
+    }
+
+    pub fn alpenglow_timestamp(&self) -> Option<UnixTimestamp> {
+        self.alpenglow_timestamp
     }
 }
 

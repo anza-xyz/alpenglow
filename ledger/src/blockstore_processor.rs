@@ -18,14 +18,10 @@ use {
     solana_accounts_db::{
         accounts_db::AccountsDbConfig, accounts_update_notifier_interface::AccountsUpdateNotifier,
     },
-    solana_clock::{Slot, MAX_PROCESSING_AGE},
+    solana_clock::{Slot, UnixTimestamp, MAX_PROCESSING_AGE},
     solana_cost_model::{cost_model::CostModel, transaction_cost::TransactionCost},
-    solana_entry::{
-        block_component::BlockComponent,
-        entry::{
-            self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus,
-            VerifyRecyclers,
-        },
+    solana_entry::entry::{
+        self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus, VerifyRecyclers,
     },
     solana_genesis_config::GenesisConfig,
     solana_hash::Hash,
@@ -854,6 +850,10 @@ pub enum BlockstoreProcessorError {
     /// All blocks must contain exactly one block header
     #[error("multiple block headers")]
     MultipleBlockHeaders,
+
+    /// Alpenglow clock bounds must respect the rules specified in SIMD-0363
+    #[error("Alpenglow clock bounds exceeded")]
+    AlpenglowClockBoundsExceeded,
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1187,6 +1187,8 @@ fn confirm_full_slot(
         opts.allow_dead_slots,
         opts.runtime_config.log_messages_bytes_limit,
         &ignored_prioritization_fee_cache,
+        // TODO(ksn): fix this!
+        UnixTimestamp::default(),
     )?;
 
     timing.accumulate(&confirmation_timing.batch_execute.totals);
@@ -1526,6 +1528,7 @@ pub fn confirm_slot(
     allow_dead_slots: bool,
     log_messages_bytes_limit: Option<usize>,
     prioritization_fee_cache: &PrioritizationFeeCache,
+    parent_alpenglow_timestamp: UnixTimestamp,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
@@ -1543,7 +1546,16 @@ pub fn confirm_slot(
         load_result
     }?;
 
-    confirm_slot_components(&slot_components)?;
+    let mut verifier = BlockComponentVerifier::new(parent_alpenglow_timestamp);
+    let markers = slot_components
+        .iter()
+        .filter_map(|c| c.as_versioned_block_marker());
+
+    for marker in markers {
+        verifier.on_marker(marker)?;
+    }
+
+    verifier.finish(bank.clone_without_scheduler())?;
 
     let slot_entries = slot_components
         .into_iter()
@@ -1567,22 +1579,6 @@ pub fn confirm_slot(
     )
 }
 
-fn confirm_slot_components(
-    components: &[BlockComponent],
-) -> result::Result<(), BlockstoreProcessorError> {
-    let mut verifier = BlockComponentVerifier::new();
-
-    for marker in components
-        .iter()
-        .filter_map(|c| c.as_versioned_block_marker())
-    {
-        verifier.on_marker(marker)?;
-    }
-
-    verifier.finish()?;
-
-    Ok(())
-}
 #[allow(clippy::too_many_arguments)]
 fn confirm_slot_entries(
     bank: &BankWithScheduler,
