@@ -12,6 +12,7 @@ pub mod block_location_lookup;
 pub mod blockstore;
 pub mod ancestor_iterator;
 pub mod bit_vec;
+pub mod block_component_verifier;
 pub mod blockstore_cleanup_service;
 pub mod blockstore_db;
 pub mod blockstore_meta;
