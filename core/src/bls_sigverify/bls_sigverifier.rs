@@ -93,6 +93,7 @@ pub struct BLSSigVerifier {
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
+    last_checked_root_slot: Slot,
 }
 
 impl BLSSigVerifier {
@@ -107,14 +108,17 @@ impl BLSSigVerifier {
         let mut certs_to_verify = Vec::new();
 
         let root_bank = self.sharable_banks.root();
-        self.verified_certs
-            .write()
-            .unwrap()
-            .retain(|cert| cert.slot() > root_bank.slot());
-        self.vote_payload_cache
-            .write()
-            .unwrap()
-            .retain(|vote, _| vote.slot() > root_bank.slot());
+        if self.last_checked_root_slot < root_bank.slot() {
+            self.last_checked_root_slot = root_bank.slot();
+            self.verified_certs
+                .write()
+                .unwrap()
+                .retain(|cert| cert.slot() > root_bank.slot());
+            self.vote_payload_cache
+                .write()
+                .unwrap()
+                .retain(|vote, _| vote.slot() > root_bank.slot());
+        }
 
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
@@ -233,6 +237,7 @@ impl BLSSigVerifier {
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics,
+            last_checked_root_slot: 0,
         }
     }
 
