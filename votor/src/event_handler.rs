@@ -1257,10 +1257,7 @@ mod tests {
         let bank1 = create_block_and_send_block_event(&test_context, slot, root_bank);
         let block_id_1 = bank1.block_id().unwrap();
 
-        check_for_metrics_event(
-            &test_context,
-            ConsensusMetricsEvent::StartOfSlot { slot: slot },
-        );
+        check_for_metrics_event(&test_context, ConsensusMetricsEvent::StartOfSlot { slot });
 
         // We should receive Notarize Vote for block 1
         check_for_vote(
