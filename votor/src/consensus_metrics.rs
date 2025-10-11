@@ -1,4 +1,5 @@
 use {
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
     histogram::Histogram,
     solana_clock::{Epoch, Slot},
     solana_metrics::datapoint_info,
@@ -6,9 +7,28 @@ use {
     solana_votor_messages::vote::Vote,
     std::{
         collections::BTreeMap,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread::Builder,
         time::{Duration, Instant},
     },
 };
+
+pub enum ConsensusMetricsEvent {
+    /// A vote was received from the node with `id`.
+    Vote { id: Pubkey, vote: Vote },
+    /// A block hash was seen for `slot` and the `leader` is responsible for producing it.
+    BlockHashSeen { leader: Pubkey, slot: Slot },
+    /// Check on new epoch
+    MaybeNewEpoch { epoch: Epoch },
+    /// Start of slot
+    StartOfSlot { slot: Slot },
+}
+
+pub type ConsensusMetricsEventSender = Sender<(Instant, Vec<ConsensusMetricsEvent>)>;
+pub type ConsensusMetricsEventReceiver = Receiver<(Instant, Vec<ConsensusMetricsEvent>)>;
 
 /// Returns a [`Histogram`] configured for the use cases for this module.
 ///
@@ -107,37 +127,86 @@ pub struct ConsensusMetrics {
     start_of_slot: BTreeMap<Slot, Instant>,
     /// Tracks the current epoch, used for end of epoch reporting.
     current_epoch: Epoch,
+    /// Receiver for events
+    receiver: ConsensusMetricsEventReceiver,
 }
 
 impl ConsensusMetrics {
-    pub fn new(epoch: Epoch) -> Self {
+    fn new(epoch: Epoch, receiver: ConsensusMetricsEventReceiver) -> Self {
         Self {
             node_metrics: BTreeMap::default(),
             leader_metrics: BTreeMap::default(),
             metrics_recording_failed: 0,
             start_of_slot: BTreeMap::default(),
             current_epoch: epoch,
+            receiver,
+        }
+    }
+
+    pub fn start_metrics_loop(
+        epoch: Epoch,
+        receiver: ConsensusMetricsEventReceiver,
+        exit: Arc<AtomicBool>,
+    ) {
+        Builder::new()
+            .name("consensus-metrics".into())
+            .spawn(move || {
+                let mut metrics = Self::new(epoch, receiver);
+                metrics.run(exit);
+            })
+            .expect("Failed to start consensus metrics thread");
+    }
+
+    fn run(&mut self, exit: Arc<AtomicBool>) {
+        while !exit.load(Ordering::Relaxed) {
+            match self.receiver.recv_timeout(Duration::from_secs(1)) {
+                Ok((received, events)) => {
+                    for event in events {
+                        match event {
+                            ConsensusMetricsEvent::Vote { id, vote } => {
+                                self.record_vote(id, &vote, received);
+                            }
+                            ConsensusMetricsEvent::BlockHashSeen { leader, slot } => {
+                                self.record_block_hash_seen(leader, slot, received);
+                            }
+                            ConsensusMetricsEvent::MaybeNewEpoch { epoch } => {
+                                self.maybe_new_epoch(epoch);
+                            }
+                            ConsensusMetricsEvent::StartOfSlot { slot } => {
+                                self.record_start_of_slot(slot, received);
+                            }
+                        }
+                    }
+                }
+                Err(err) => match err {
+                    RecvTimeoutError::Timeout => (),
+                    RecvTimeoutError::Disconnected => {
+                        warn!("ConsensusMetricsEventReceiver disconnected, exiting loop");
+                        return;
+                    }
+                },
+            }
         }
     }
 
     /// Records a `vote` from the node with `id`.
-    pub fn record_vote(&mut self, id: Pubkey, vote: &Vote) {
+    fn record_vote(&mut self, id: Pubkey, vote: &Vote, received: Instant) {
         let Some(start) = self.start_of_slot.get(&vote.slot()) else {
             self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
             return;
         };
         let node = self.node_metrics.entry(id).or_default();
-        let elapsed = start.elapsed();
+        let elapsed = received.duration_since(*start);
         node.record_vote(vote, elapsed);
     }
 
     /// Records when a block for `slot` was seen and the `leader` is responsible for producing it.
-    pub fn record_block_hash_seen(&mut self, leader: Pubkey, slot: Slot) {
+    fn record_block_hash_seen(&mut self, leader: Pubkey, slot: Slot, received: Instant) {
         let Some(start) = self.start_of_slot.get(&slot) else {
             self.metrics_recording_failed = self.metrics_recording_failed.saturating_add(1);
             return;
         };
-        let elapsed = start.elapsed().as_micros();
+        let elapsed = received.duration_since(*start).as_micros();
         let elapsed = match elapsed.try_into() {
             Ok(e) => e,
             Err(err) => {
@@ -164,8 +233,8 @@ impl ConsensusMetrics {
     }
 
     /// Records when a given slot started.
-    pub fn record_start_of_slot(&mut self, slot: Slot) {
-        self.start_of_slot.entry(slot).or_insert(Instant::now());
+    fn record_start_of_slot(&mut self, slot: Slot, received: Instant) {
+        self.start_of_slot.entry(slot).or_insert(received);
     }
 
     /// Performs end of epoch reporting and reset all the statistics for the subsequent epoch.
@@ -222,11 +291,11 @@ impl ConsensusMetrics {
             ),
         );
 
-        *self = Self::new(epoch);
+        *self = Self::new(epoch, self.receiver.clone());
     }
 
     /// This function can be called if there is a new [`Epoch`] and it will carry out end of epoch reporting.
-    pub fn maybe_new_epoch(&mut self, epoch: Epoch) {
+    fn maybe_new_epoch(&mut self, epoch: Epoch) {
         assert!(epoch >= self.current_epoch);
         if epoch != self.current_epoch {
             self.current_epoch = epoch;

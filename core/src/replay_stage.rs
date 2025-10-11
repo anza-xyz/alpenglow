@@ -33,7 +33,6 @@ use {
         window_service::DuplicateSlotReceiver,
     },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
-    parking_lot::RwLock as PlRwLock,
     rayon::{
         iter::{IntoParallelIterator, ParallelIterator},
         ThreadPool,
@@ -83,7 +82,7 @@ use {
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        consensus_metrics::ConsensusMetrics,
+        consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
         vote_history::VoteHistory,
@@ -287,7 +286,8 @@ pub struct ReplayStageConfig {
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
-    pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    pub consensus_metrics_sender: ConsensusMetricsEventSender,
+    pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
 }
 
 pub struct ReplaySenders {
@@ -604,7 +604,8 @@ impl ReplayStage {
             snapshot_controller,
             replay_highest_frozen,
             leader_window_notifier,
-            consensus_metrics,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
         } = config;
 
         let ReplaySenders {
@@ -672,7 +673,8 @@ impl ReplayStage {
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender,
             consensus_message_receiver,
-            consensus_metrics,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
         };
         let votor = Votor::new(votor_config);
 

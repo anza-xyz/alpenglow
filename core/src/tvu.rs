@@ -23,7 +23,6 @@ use {
     },
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
-    parking_lot::RwLock as PlRwLock,
     solana_client::connection_cache::ConnectionCache,
     solana_clock::Slot,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
@@ -52,7 +51,7 @@ use {
     solana_streamer::evicting_sender::EvictingSender,
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
-        consensus_metrics::ConsensusMetrics,
+        consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
         event::{VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
@@ -196,7 +195,8 @@ impl Tvu {
         voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
-        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        consensus_metrics_sender: ConsensusMetricsEventSender,
+        consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -385,7 +385,8 @@ impl Tvu {
             snapshot_controller,
             replay_highest_frozen,
             leader_window_notifier,
-            consensus_metrics,
+            consensus_metrics_sender: consensus_metrics_sender.clone(),
+            consensus_metrics_receiver,
         };
 
         let voting_service = VotingService::new(
@@ -609,7 +610,7 @@ pub mod tests {
             DEFAULT_TPU_CONNECTION_POOL_SIZE,
         );
         let (votor_event_sender, votor_event_receiver) = unbounded();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -681,7 +682,8 @@ pub mod tests {
             None,
             votor_event_sender,
             votor_event_receiver,
-            consensus_metrics,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {

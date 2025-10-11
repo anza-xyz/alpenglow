@@ -10,7 +10,6 @@ use {
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
-    parking_lot::RwLock as PlRwLock,
     rayon::iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
     },
@@ -25,7 +24,7 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
-    solana_votor::consensus_metrics::ConsensusMetrics,
+    solana_votor::consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
     solana_votor_messages::{
         consensus_message::{
             Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
@@ -35,6 +34,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         sync::{atomic::Ordering, Arc, RwLock},
+        time::Instant,
     },
     thiserror::Error,
 };
@@ -92,7 +92,7 @@ pub struct BLSSigVerifier {
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<Certificate>>,
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
-    consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
+    consensus_metrics_sender: Option<ConsensusMetricsEventSender>,
     last_checked_root_slot: Slot,
 }
 
@@ -106,6 +106,7 @@ impl BLSSigVerifier {
         //            `Vec` for now for clarity and then optimize for the final version
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
+        let mut consensus_metrics_to_send = Vec::new();
 
         let root_bank = self.sharable_banks.root();
         if self.last_checked_root_slot < root_bank.slot() {
@@ -163,9 +164,10 @@ impl BLSSigVerifier {
                     };
 
                     // Capture votes received metrics before old messages are potentially discarded below.
-                    if let Some(c) = self.consensus_metrics.as_ref() {
-                        c.write().record_vote(*solana_pubkey, &vote_message.vote);
-                    }
+                    consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
+                        id: *solana_pubkey,
+                        vote: vote_message.vote,
+                    });
                     // Only need votes newer than root slot
                     if vote_message.vote.slot() <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
@@ -216,6 +218,14 @@ impl BLSSigVerifier {
         votes_result?;
         certs_result?;
 
+        if let Some(consensus_metrics_sender) = self.consensus_metrics_sender.as_ref() {
+            if let Err(e) =
+                consensus_metrics_sender.send((Instant::now(), consensus_metrics_to_send))
+            {
+                warn!("Failed to send consensus metrics: {e}");
+            }
+        }
+
         self.stats.maybe_report_stats();
 
         Ok(())
@@ -227,7 +237,7 @@ impl BLSSigVerifier {
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
-        consensus_metrics: Option<Arc<PlRwLock<ConsensusMetrics>>>,
+        consensus_metrics_sender: Option<ConsensusMetricsEventSender>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -236,7 +246,7 @@ impl BLSSigVerifier {
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
             vote_payload_cache: RwLock::new(HashMap::new()),
-            consensus_metrics,
+            consensus_metrics_sender,
             last_checked_root_slot: 0,
         }
     }

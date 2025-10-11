@@ -4,6 +4,7 @@
 use {
     crate::{
         commitment::{update_commitment_cache, CommitmentType},
+        consensus_metrics::ConsensusMetricsEvent,
         event::{CompletedBlock, VotorEvent, VotorEventReceiver},
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
@@ -32,7 +33,7 @@ use {
             Arc, Condvar, Mutex,
         },
         thread::{self, Builder, JoinHandle},
-        time::Duration,
+        time::{Duration, Instant},
     },
     thiserror::Error,
 };
@@ -244,16 +245,23 @@ impl EventHandler {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
                 debug_assert!(bank.is_frozen());
-                {
-                    let mut metrics_guard = vctx.consensus_metrics.write();
-                    metrics_guard.record_start_of_slot(slot);
-                    if slot == first_of_consecutive_leader_slots(slot) {
-                        // all slots except the first in the window would typically start when the block is seen so the recording would essentially record 0.
-                        // hence we skip it.
-                        metrics_guard.record_block_hash_seen(*bank.collector_id(), slot);
-                    }
-                    metrics_guard.maybe_new_epoch(bank.epoch());
+                let now = Instant::now();
+                let mut consensus_metrics_events =
+                    vec![ConsensusMetricsEvent::StartOfSlot { slot }];
+                if slot == first_of_consecutive_leader_slots(slot) {
+                    // all slots except the first in the window would typically start when the block is seen so the recording would essentially record 0.
+                    // hence we skip it.
+                    consensus_metrics_events.push(ConsensusMetricsEvent::BlockHashSeen {
+                        leader: *bank.collector_id(),
+                        slot,
+                    });
                 }
+                consensus_metrics_events.push(ConsensusMetricsEvent::MaybeNewEpoch {
+                    epoch: bank.epoch(),
+                });
+                vctx.consensus_metrics_sender
+                    .send((now, consensus_metrics_events))
+                    .map_err(|_| SendError(()))?;
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
                 if Self::try_notar(
@@ -310,7 +318,12 @@ impl EventHandler {
 
             // Received a parent ready notification for `slot`
             VotorEvent::ParentReady { slot, parent_block } => {
-                vctx.consensus_metrics.write().record_start_of_slot(slot);
+                vctx.consensus_metrics_sender
+                    .send((
+                        Instant::now(),
+                        vec![ConsensusMetricsEvent::StartOfSlot { slot }],
+                    ))
+                    .map_err(|_| SendError(()))?;
                 Self::handle_parent_ready_event(
                     slot,
                     parent_block,
@@ -334,9 +347,12 @@ impl EventHandler {
             VotorEvent::Timeout(slot) => {
                 info!("{my_pubkey}: Timeout {slot}");
                 if slot != last_of_consecutive_leader_slots(slot) {
-                    vctx.consensus_metrics
-                        .write()
-                        .record_start_of_slot(slot.saturating_add(1));
+                    vctx.consensus_metrics_sender
+                        .send((
+                            Instant::now(),
+                            vec![ConsensusMetricsEvent::StartOfSlot { slot }],
+                        ))
+                        .map_err(|_| SendError(()))?;
                 }
                 if vctx.vote_history.voted(slot) {
                     return Ok(votes);
@@ -792,7 +808,6 @@ mod tests {
         super::*,
         crate::{
             commitment::CommitmentAggregationData,
-            consensus_metrics::ConsensusMetrics,
             event::{LeaderWindowInfo, VotorEventSender},
             vote_history_storage::{
                 FileVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
@@ -859,7 +874,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let start = Arc::new((Mutex::new(true), Condvar::new()));
         let (event_sender, event_receiver) = unbounded();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(0)));
+        let (consensus_metrics_sender, _consensus_metrics_receiver) = unbounded();
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
@@ -922,7 +937,7 @@ mod tests {
             derived_bls_keypairs: HashMap::new(),
             has_new_vote_been_rooted: false,
             own_vote_sender,
-            consensus_metrics,
+            consensus_metrics_sender,
         };
 
         let root_context = RootContext {
