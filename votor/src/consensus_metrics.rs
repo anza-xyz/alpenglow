@@ -16,6 +16,7 @@ use {
     },
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusMetricsEvent {
     /// A vote was received from the node with `id`.
     Vote { id: Pubkey, vote: Vote },
