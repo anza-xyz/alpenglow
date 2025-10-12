@@ -79,6 +79,7 @@ impl PregeneratedBatches {
 fn setup_environment() -> BenchEnvironment {
     let (verified_votes_s, _) = unbounded();
     let (consensus_msg_s, _) = unbounded();
+    let (consensus_metrics_sender, _) = unbounded();
 
     let validator_keypairs: Arc<Vec<_>> = Arc::new(
         (0..NUM_VALIDATORS)
@@ -98,7 +99,12 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s, None);
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        verified_votes_s,
+        consensus_msg_s,
+        consensus_metrics_sender,
+    );
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
