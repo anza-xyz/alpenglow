@@ -385,7 +385,7 @@ impl Tvu {
             snapshot_controller,
             replay_highest_frozen,
             leader_window_notifier,
-            consensus_metrics_sender: consensus_metrics_sender.clone(),
+            consensus_metrics_sender: consensus_metrics_sender,
             consensus_metrics_receiver,
         };
 
