@@ -222,7 +222,7 @@ impl BLSSigVerifier {
             if let Err(e) =
                 consensus_metrics_sender.send((Instant::now(), consensus_metrics_to_send))
             {
-                warn!("Failed to send consensus metrics: {e}");
+                warn!("could not send consensus metrics, receive side of channel is closed");
             }
         }
 
