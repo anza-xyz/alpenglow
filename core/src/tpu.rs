@@ -344,7 +344,7 @@ impl Tpu {
                 sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
-                Some(consensus_metrics_sender.clone()),
+                Some(consensus_metrics_sender),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
