@@ -350,7 +350,7 @@ impl EventHandler {
                     vctx.consensus_metrics_sender
                         .send((
                             Instant::now(),
-                            vec![ConsensusMetricsEvent::StartOfSlot { slot }],
+                            vec![ConsensusMetricsEvent::StartOfSlot { slot.saturating_add(1) }],
                         ))
                         .map_err(|_| SendError(()))?;
                 }
