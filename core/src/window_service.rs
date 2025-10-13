@@ -480,6 +480,7 @@ mod test {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_time_utils::timestamp,
+        solana_votor_messages::SliceRoot,
     };
 
     fn local_entries_to_shred(
@@ -494,7 +495,7 @@ mod test {
             entries,
             true, // is_last_in_slot
             // chained_merkle_root
-            Some(Hash::new_from_array(rand::thread_rng().gen())),
+            Some(SliceRoot(Hash::new_from_array(rand::thread_rng().gen()))),
             0, // next_shred_index
             0, // next_code_index
             &ReedSolomonCache::default(),
