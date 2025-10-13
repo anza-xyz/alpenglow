@@ -19,9 +19,9 @@
 //! 5) We initialize Votor with `G` as genesis, and disable TowerBFT for any slots past `G`
 //! 6) We exit vote only mode, and reenable rooting and commitment reporting
 //!
-//! If at any point during the migration we see:
+//! If at any point during the migration we see a:
 //! - A genesis certificate
-//! - A finalization certificate
+//! - or a finalization certificate (fast finalization or a slow finalization with notarization)
 //!
 //! It means the cluster has already switched to Alpenglow and our node is behind. We perform any appropriate
 //! repairs and immediately transition to Alpenglow at the certified block.
