@@ -82,7 +82,11 @@ impl VoteCertificateBuilder {
 
     pub fn build(mut self) -> Result<CertificateMessage, CertificateError> {
         let bitmap = match self.bitmap_1 {
-            None => encode_base2(&self.bitmap_0).map_err(CertificateError::EncodeError)?,
+            None => {
+                let new_len = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
+                self.bitmap_0.resize(new_len, false);
+                encode_base2(&self.bitmap_0).map_err(CertificateError::EncodeError)?
+            }
             Some(mut bitmap_1) => {
                 let last_one_0 = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
                 let last_one_1 = bitmap_1.last_one().map_or(0, |i| i.saturating_add(1));
