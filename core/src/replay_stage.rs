@@ -77,7 +77,6 @@ use {
         vote_sender_types::ReplayVoteSender,
     },
     solana_signer::Signer,
-    solana_votor_messages::SliceRoot,
     solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
     solana_transaction::Transaction,
@@ -92,6 +91,7 @@ use {
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
     solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::SliceRoot,
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},

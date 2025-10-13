@@ -9,9 +9,9 @@ use {
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_signature::Signature,
     solana_signer::Signer,
-    solana_votor_messages::SliceRoot,
     solana_system_transaction as system_transaction,
     solana_votor::event::VotorEventSender,
+    solana_votor_messages::SliceRoot,
     std::collections::HashSet,
 };
 

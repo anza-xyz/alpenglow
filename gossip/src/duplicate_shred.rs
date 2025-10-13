@@ -346,8 +346,8 @@ pub(crate) mod tests {
         solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
         solana_signature::Signature,
         solana_signer::Signer,
-        solana_votor_messages::SliceRoot,
         solana_system_transaction::transfer,
+        solana_votor_messages::SliceRoot,
         std::sync::Arc,
     };
 

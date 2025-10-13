@@ -26,7 +26,6 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_votor_messages::SliceRoot,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, Encodable, EncodedConfirmedBlock,
@@ -34,6 +33,7 @@ use {
         UiTransactionEncoding, VersionedConfirmedBlock, VersionedConfirmedBlockWithEntries,
         VersionedTransactionWithStatusMeta,
     },
+    solana_votor_messages::SliceRoot,
     std::{
         cell::RefCell,
         collections::HashMap,

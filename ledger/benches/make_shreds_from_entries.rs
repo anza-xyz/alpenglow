@@ -8,8 +8,8 @@ use {
     solana_ledger::shred::{self, ProcessShredsStats, ReedSolomonCache, Shred, Shredder},
     solana_packet::PACKET_DATA_SIZE,
     solana_pubkey::Pubkey,
-    solana_votor_messages::SliceRoot,
     solana_transaction::Transaction,
+    solana_votor_messages::SliceRoot,
     std::iter::repeat_with,
 };
 

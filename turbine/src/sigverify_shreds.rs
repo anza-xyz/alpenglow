@@ -30,8 +30,8 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
     solana_signer::Signer,
-    solana_votor_messages::SliceRoot,
     solana_streamer::{evicting_sender::EvictingSender, streamer::ChannelSend},
+    solana_votor_messages::SliceRoot,
     std::{
         num::NonZeroUsize,
         sync::{
