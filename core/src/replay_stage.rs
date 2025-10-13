@@ -90,8 +90,7 @@ use {
         voting_utils::GenerateVoteTxResult,
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
-    solana_votor_messages::SliceRoot,
+    solana_votor_messages::{consensus_message::ConsensusMessage, SliceRoot},
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
