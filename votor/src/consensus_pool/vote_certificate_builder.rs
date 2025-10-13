@@ -34,34 +34,29 @@ pub enum CertificateError {
 pub struct VoteCertificateBuilder {
     certificate: Certificate,
     signature: SignatureProjective,
-    // For some certificates we need two bitmaps, for example, NotarizeFallback
-    // certificates have Notarize and NotarizeFallback votes, so we need two bitmaps
-    // to represent them. The order of the VoteType is defined in certificate_limits_and_vote_types.
+    // All certificates require at least 1 bitmap and some require 2 if they have two types of votes.
+    // The order of the VoteType is defined in certificate_limits_and_vote_types.
     // We normally put fallback votes in the second bitmap.
-    // The order of the VoteType is important, if you change it, you might interpret
-    // the bitmap incorrectly.
-    // Some certificates (like Finalize) only need one bitmap, then the second bitmap
-    // will be empty.
-    input_bitmap_1: BitVec<u8, Lsb0>,
-    input_bitmap_2: BitVec<u8, Lsb0>,
+    // The order of the VoteType is important, if you change it, you might interpret the bitmap incorrectly.
+    bitmap_0: BitVec<u8, Lsb0>,
+    bitmap_1: Option<BitVec<u8, Lsb0>>,
 }
 
 impl VoteCertificateBuilder {
     pub fn new(certificate_id: Certificate) -> Self {
+        let bitmap_cnt = certificate_limits_and_vote_types(certificate_id).1.len();
+        assert!(bitmap_cnt == 1 || bitmap_cnt == 2);
+        let bitmap_1 = (bitmap_cnt == 2).then_some(BitVec::repeat(false, MAXIMUM_VALIDATORS));
         Self {
             certificate: certificate_id,
             signature: SignatureProjective::identity(),
-            input_bitmap_1: BitVec::repeat(false, MAXIMUM_VALIDATORS),
-            input_bitmap_2: BitVec::repeat(false, MAXIMUM_VALIDATORS),
+            bitmap_0: BitVec::repeat(false, MAXIMUM_VALIDATORS),
+            bitmap_1,
         }
     }
 
     /// Aggregates a slice of `VoteMessage`s into the builder.
     pub fn aggregate(&mut self, messages: &[VoteMessage]) -> Result<(), CertificateError> {
-        if messages.is_empty() {
-            return Ok(());
-        }
-
         let vote_types = certificate_limits_and_vote_types(self.certificate).1;
         for vote_message in messages {
             let rank = vote_message.rank as usize;
@@ -69,12 +64,12 @@ impl VoteCertificateBuilder {
                 return Err(CertificateError::ValidatorDoesNotExist(vote_message.rank));
             }
 
-            let current_vote_type = VoteType::get_type(&vote_message.vote);
-
-            if current_vote_type == vote_types[0] {
-                self.input_bitmap_1.set(rank, true);
-            } else if vote_types.len() == 2 && current_vote_type == vote_types[1] {
-                self.input_bitmap_2.set(rank, true);
+            let vote_type = VoteType::get_type(&vote_message.vote);
+            if vote_type == vote_types[0] {
+                self.bitmap_0.set(rank, true);
+            } else {
+                assert_eq!(vote_type, vote_types[1]);
+                self.bitmap_1.as_deref_mut().unwrap().set(rank, true);
             }
         }
 
@@ -85,33 +80,17 @@ impl VoteCertificateBuilder {
         Ok(self.signature.aggregate_with(&signature_iter)?)
     }
 
-    pub fn build(self) -> Result<CertificateMessage, CertificateError> {
-        let mut input_bitmap_1 = self.input_bitmap_1;
-        let mut input_bitmap_2 = self.input_bitmap_2;
-
-        let last_one_1 = input_bitmap_1 // use local variable
-            .last_one()
-            .map_or(0, |i| i.saturating_add(1));
-        let last_one_2 = input_bitmap_2 // use local variable
-            .last_one()
-            .map_or(0, |i| i.saturating_add(1));
-        let new_length = last_one_1.max(last_one_2);
-        if new_length > MAXIMUM_VALIDATORS {
-            error!(
-                "Bitmap length exceeds maximum allowed: {MAXIMUM_VALIDATORS} should be caught \
-                 during aggregation"
-            );
-            return Err(CertificateError::ValidatorDoesNotExist(new_length as u16));
-        }
-
-        input_bitmap_1.resize(new_length, false);
-        input_bitmap_2.resize(new_length, false);
-        let bitmap = if input_bitmap_2.count_ones() > 0 {
-            // If we have two bitmaps, use Base3 encoding
-            encode_base3(&input_bitmap_1, &input_bitmap_2).map_err(CertificateError::EncodeError)?
-        } else {
-            // If we only have one bitmap, use Base2 encoding
-            encode_base2(&input_bitmap_1).map_err(CertificateError::EncodeError)?
+    pub fn build(mut self) -> Result<CertificateMessage, CertificateError> {
+        let bitmap = match self.bitmap_1 {
+            None => encode_base2(&self.bitmap_0).map_err(CertificateError::EncodeError)?,
+            Some(mut bitmap_1) => {
+                let last_one_0 = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
+                let last_one_1 = bitmap_1.last_one().map_or(0, |i| i.saturating_add(1));
+                let new_length = last_one_0.max(last_one_1);
+                self.bitmap_0.resize(new_length, false);
+                bitmap_1.resize(new_length, false);
+                encode_base3(&self.bitmap_0, &bitmap_1).map_err(CertificateError::EncodeError)?
+            }
         };
         Ok(CertificateMessage {
             certificate: self.certificate,
