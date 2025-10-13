@@ -37,6 +37,8 @@ pub enum Certificate {
     NotarizeFallback(Slot, Hash),
     /// Skip certificate
     Skip(Slot),
+    /// Genesis certificate
+    Genesis(Slot, Hash),
 }
 
 /// Certificate type
@@ -52,6 +54,8 @@ pub enum CertificateType {
     NotarizeFallback,
     /// Skip certificate
     Skip,
+    /// Genesis certificate
+    Genesis,
 }
 
 impl Certificate {
@@ -77,6 +81,7 @@ impl Certificate {
             Certificate::Notarize(_, _) => CertificateType::Notarize,
             Certificate::NotarizeFallback(_, _) => CertificateType::NotarizeFallback,
             Certificate::Skip(_) => CertificateType::Skip,
+            Certificate::Genesis(_, _) => CertificateType::Genesis,
         }
     }
 
@@ -87,6 +92,7 @@ impl Certificate {
             | Certificate::FinalizeFast(slot, _)
             | Certificate::Notarize(slot, _)
             | Certificate::NotarizeFallback(slot, _)
+            | Certificate::Genesis(slot, _)
             | Certificate::Skip(slot) => *slot,
         }
     }
@@ -117,6 +123,7 @@ impl Certificate {
             Certificate::Finalize(_) | Certificate::Skip(_) => None,
             Certificate::Notarize(slot, block_id)
             | Certificate::NotarizeFallback(slot, block_id)
+            | Certificate::Genesis(slot, block_id)
             | Certificate::FinalizeFast(slot, block_id) => Some((slot, block_id)),
         }
     }
@@ -150,6 +157,7 @@ impl Certificate {
             Certificate::Finalize(slot) => Vote::new_finalization_vote(*slot),
             Certificate::NotarizeFallback(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
             Certificate::Skip(slot) => Vote::new_skip_vote(*slot),
+            Certificate::Genesis(slot, hash) => Vote::new_genesis_vote(*slot, *hash),
         }
     }
 
