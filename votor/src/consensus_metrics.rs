@@ -180,7 +180,7 @@ impl ConsensusMetrics {
                     }
                 }
                 Err(err) => match err {
-                    RecvTimeoutError::Timeout => (),
+                    RecvTimeoutError::Timeout => trace!("ConsensusMetricsEventReceiver timeout"),
                     RecvTimeoutError::Disconnected => {
                         warn!("ConsensusMetricsEventReceiver disconnected, exiting loop");
                         return;
