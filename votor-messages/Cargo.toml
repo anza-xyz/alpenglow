@@ -11,11 +11,16 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [features]
-frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
+frozen-abi = [
+    "dep:solana-frozen-abi",
+    "dep:solana-frozen-abi-macro",
+    "solana-hash/frozen-abi",
+]
 
 [dependencies]
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
+log = { workspace = true }
 num_enum = { workspace = true }
 serde = { workspace = true }
 solana-account = { workspace = true }

@@ -22,6 +22,7 @@ frozen-abi = [
     "solana-runtime/frozen-abi",
     "solana-vote/frozen-abi",
     "solana-vote-program/frozen-abi",
+    "solana-votor-messages/frozen-abi",
 ]
 
 [dependencies]

@@ -34,8 +34,8 @@ impl Default for ConsensusPoolStats {
 
 impl ConsensusPoolStats {
     pub fn new() -> Self {
-        let num_vote_types = (VoteType::SkipFallback as usize).saturating_add(1);
-        let num_cert_types = (CertificateType::Skip as usize).saturating_add(1);
+        let num_vote_types = (VoteType::Genesis as usize).saturating_add(1);
+        let num_cert_types = (CertificateType::Genesis as usize).saturating_add(1);
         Self {
             conflicting_votes: 0,
             event_safe_to_notarize: 0,

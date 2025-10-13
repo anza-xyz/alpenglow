@@ -1,5 +1,7 @@
 use {
-    solana_votor_messages::{consensus_message::Certificate, vote::Vote},
+    solana_votor_messages::{
+        consensus_message::Certificate, migration::GENESIS_VOTE_THRESHOLD, vote::Vote,
+    },
     std::time::Duration,
 };
 
@@ -13,6 +15,7 @@ pub enum VoteType {
     NotarizeFallback,
     Skip,
     SkipFallback,
+    Genesis,
 }
 
 impl VoteType {
@@ -23,6 +26,7 @@ impl VoteType {
             Vote::Skip(_) => VoteType::Skip,
             Vote::SkipFallback(_) => VoteType::SkipFallback,
             Vote::Finalize(_) => VoteType::Finalize,
+            Vote::Genesis(_) => VoteType::Genesis,
         }
     }
 }
@@ -38,6 +42,13 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
             VoteType::SkipFallback,
         ],
         VoteType::SkipFallback => &[VoteType::Skip],
+        VoteType::Genesis => &[
+            VoteType::Finalize,
+            VoteType::Notarize,
+            VoteType::NotarizeFallback,
+            VoteType::Skip,
+            VoteType::SkipFallback,
+        ],
     }
 }
 
@@ -56,6 +67,7 @@ pub const fn certificate_limits_and_vote_types(
         Certificate::FinalizeFast(_, _) => (0.8, &[VoteType::Notarize]),
         Certificate::Finalize(_) => (0.6, &[VoteType::Finalize]),
         Certificate::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+        Certificate::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
     }
 }
 
@@ -75,6 +87,7 @@ pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<Certificate> {
         Vote::Finalize(vote) => vec![Certificate::Finalize(vote.slot())],
         Vote::Skip(vote) => vec![Certificate::Skip(vote.slot())],
         Vote::SkipFallback(vote) => vec![Certificate::Skip(vote.slot())],
+        Vote::Genesis(vote) => vec![Certificate::Genesis(vote.slot(), *vote.block_id())],
     }
 }
 
