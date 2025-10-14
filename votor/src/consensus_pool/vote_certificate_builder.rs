@@ -79,22 +79,41 @@ impl VoteCertificateBuilder {
         Ok(self.signature.aggregate_with(&signature_iter)?)
     }
 
+    /// Builds a [`CertificateMessage`] from the builder.
+    ///
+    /// The built certificate considers both bitmaps for inclusion and is suitable for consensus.
+    /// See [`Self::build_for_rewards`] for building certificates for rewards.
     pub fn build(mut self) -> Result<CertificateMessage, CertificateError> {
-        let bitmap = match self.bitmap_1 {
-            None => {
-                let new_len = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
-                self.bitmap_0.resize(new_len, false);
-                encode_base2(&self.bitmap_0).map_err(CertificateError::EncodeError)?
-            }
+        match self.bitmap_1 {
+            None => self.build_with_just_bitmap_0(),
             Some(mut bitmap_1) => {
                 let last_one_0 = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
                 let last_one_1 = bitmap_1.last_one().map_or(0, |i| i.saturating_add(1));
                 let new_length = last_one_0.max(last_one_1);
                 self.bitmap_0.resize(new_length, false);
                 bitmap_1.resize(new_length, false);
-                encode_base3(&self.bitmap_0, &bitmap_1).map_err(CertificateError::EncodeError)?
+                let bitmap = encode_base3(&self.bitmap_0, &bitmap_1)
+                    .map_err(CertificateError::EncodeError)?;
+                Ok(CertificateMessage {
+                    certificate: self.certificate,
+                    signature: self.signature.into(),
+                    bitmap,
+                })
             }
-        };
+        }
+    }
+
+    /// Builds a [`CertificateMessage`] from the builder that only considers the first bitmap for inclusion.
+    ///
+    /// This builds a certificate for rewards and as per the SIMD does not include fallback votes so does not include the second bitmap.
+    pub fn build_for_rewards(self) -> Result<CertificateMessage, CertificateError> {
+        self.build_with_just_bitmap_0()
+    }
+
+    fn build_with_just_bitmap_0(mut self) -> Result<CertificateMessage, CertificateError> {
+        let new_len = self.bitmap_0.last_one().map_or(0, |i| i.saturating_add(1));
+        self.bitmap_0.resize(new_len, false);
+        let bitmap = encode_base2(&self.bitmap_0).map_err(CertificateError::EncodeError)?;
         Ok(CertificateMessage {
             certificate: self.certificate,
             signature: self.signature.into(),
