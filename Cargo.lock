@@ -11901,6 +11901,7 @@ dependencies = [
  "solana-logger",
  "solana-program",
  "solana-vote-interface",
+ "solana-votor-messages",
  "spl-pod",
 ]
 
