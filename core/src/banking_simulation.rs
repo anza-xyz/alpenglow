@@ -43,6 +43,7 @@ use {
     solana_streamer::socket::SocketAddrSpace,
     solana_turbine::broadcast_stage::{BroadcastStage, BroadcastStageType},
     solana_votor::event::VotorEventReceiver,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::BTreeMap,
         fmt::Display,
@@ -741,12 +742,12 @@ impl BankingSimulator {
             &leader_schedule_cache,
             &genesis_config.poh_config,
             exit.clone(),
-            false,
         );
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let (record_sender, record_receiver) = unbounded();
         let transaction_recorder = TransactionRecorder::new(record_sender, exit.clone());
         let (poh_controller, poh_service_message_receiver) = PohController::new();
+        let migration_status = Arc::new(MigrationStatus::default());
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,
@@ -756,6 +757,7 @@ impl BankingSimulator {
             DEFAULT_HASHES_PER_BATCH,
             record_receiver,
             poh_service_message_receiver,
+            migration_status,
             || {},
         );
 

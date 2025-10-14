@@ -16,6 +16,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
     solana_transaction::versioned::VersionedTransaction,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{atomic::AtomicBool, Arc, RwLock},
         time::{Duration, Instant},
@@ -76,6 +77,7 @@ fn bench_record_transactions(c: &mut Criterion) {
 
     let poh_recorder = Arc::new(RwLock::new(poh_recorder));
     let (_poh_controller, poh_service_message_receiver) = PohController::new();
+    let migration_status = Arc::new(MigrationStatus::default());
     let poh_service = PohService::new(
         poh_recorder.clone(),
         &genesis_config_info.genesis_config.poh_config,
@@ -85,6 +87,7 @@ fn bench_record_transactions(c: &mut Criterion) {
         DEFAULT_HASHES_PER_BATCH,
         record_receiver,
         poh_service_message_receiver,
+        migration_status,
         || {},
     );
 
