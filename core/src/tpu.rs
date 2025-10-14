@@ -29,7 +29,6 @@ use {
     },
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
-    parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
@@ -60,7 +59,7 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
         xdp::XdpSender,
     },
-    solana_votor::{consensus_metrics::ConsensusMetrics, event::VotorEventSender},
+    solana_votor::{consensus_metrics::ConsensusMetricsEventSender, event::VotorEventSender},
     solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         collections::HashMap,
@@ -171,7 +170,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
-        consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+        consensus_metrics_sender: ConsensusMetricsEventSender,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -345,7 +344,7 @@ impl Tpu {
                 sharable_banks,
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
-                Some(consensus_metrics),
+                consensus_metrics_sender,
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };

@@ -43,7 +43,9 @@
 use {
     crate::{
         commitment::CommitmentAggregationData,
-        consensus_metrics::ConsensusMetrics,
+        consensus_metrics::{
+            ConsensusMetrics, ConsensusMetricsEventReceiver, ConsensusMetricsEventSender,
+        },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
@@ -107,7 +109,7 @@ pub struct VotorConfig {
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
-    pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    pub consensus_metrics_sender: ConsensusMetricsEventSender,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -122,6 +124,7 @@ pub struct VotorConfig {
     // Receivers
     pub event_receiver: VotorEventReceiver,
     pub consensus_message_receiver: Receiver<ConsensusMessage>,
+    pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
@@ -170,7 +173,8 @@ impl Votor {
             event_receiver,
             own_vote_sender,
             consensus_message_receiver: bls_receiver,
-            consensus_metrics,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
         } = config;
 
         let start = Arc::new((Mutex::new(false), Condvar::new()));
@@ -202,7 +206,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             sharable_banks: sharable_banks.clone(),
-            consensus_metrics,
+            consensus_metrics_sender: consensus_metrics_sender.clone(),
         };
 
         let root_context = RootContext {
@@ -227,6 +231,8 @@ impl Votor {
             root_context,
         };
 
+        let root_epoch = sharable_banks.root().epoch();
+
         let consensus_pool_context = ConsensusPoolContext {
             exit: exit.clone(),
             start: start.clone(),
@@ -241,6 +247,7 @@ impl Votor {
             commitment_sender,
         };
 
+        ConsensusMetrics::start_metrics_loop(root_epoch, consensus_metrics_receiver, exit.clone());
         let event_handler = EventHandler::new(event_handler_context);
         let consensus_pool_service = ConsensusPoolService::new(consensus_pool_context);
 
