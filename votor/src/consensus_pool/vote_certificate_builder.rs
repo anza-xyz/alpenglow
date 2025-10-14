@@ -44,14 +44,11 @@ pub struct VoteCertificateBuilder {
 
 impl VoteCertificateBuilder {
     pub fn new(certificate_id: Certificate) -> Self {
-        let bitmap_cnt = certificate_limits_and_vote_types(certificate_id).1.len();
-        assert!(bitmap_cnt == 1 || bitmap_cnt == 2);
-        let bitmap_1 = (bitmap_cnt == 2).then_some(BitVec::repeat(false, MAXIMUM_VALIDATORS));
         Self {
             certificate: certificate_id,
             signature: SignatureProjective::identity(),
             bitmap_0: BitVec::repeat(false, MAXIMUM_VALIDATORS),
-            bitmap_1,
+            bitmap_1: None,
         }
     }
 
@@ -69,7 +66,9 @@ impl VoteCertificateBuilder {
                 self.bitmap_0.set(rank, true);
             } else {
                 assert_eq!(vote_type, vote_types[1]);
-                self.bitmap_1.as_deref_mut().unwrap().set(rank, true);
+                self.bitmap_1
+                    .get_or_insert(BitVec::repeat(false, MAXIMUM_VALIDATORS))
+                    .set(rank, true);
             }
         }
 
