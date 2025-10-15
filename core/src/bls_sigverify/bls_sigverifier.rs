@@ -344,11 +344,10 @@ impl BLSSigVerifier {
             .collect();
 
         let verified_optimistically = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
-            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(
-                votes_to_verify
-                    .par_iter()
-                    .map(|v| &v.vote_message.signature),
-            ) {
+            let signatures = votes_to_verify
+                .par_iter()
+                .map(|v| &v.vote_message.signature);
+            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(signatures) {
                 if distinct_messages == 1 {
                     let payload_slice = distinct_payloads[0].as_slice();
                     aggregate_pubkeys[0]
