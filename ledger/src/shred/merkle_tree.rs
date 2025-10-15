@@ -211,7 +211,7 @@ mod tests {
         let nodes = repeat_with(|| rng.gen::<[u8; 32]>()).map(Hash::from);
         let nodes: Vec<_> = nodes.take(size).collect();
         let tree = make_merkle_tree(nodes.iter().cloned().map(Ok)).unwrap();
-        let root = tree.hashes.last().unwrap().unwrap();
+        let root = tree.hashes[1].unwrap();
         for index in 0..size {
             for (k, &node) in nodes.iter().enumerate() {
                 let proof = make_merkle_proof(index, size, &tree.hashes).map(Result::unwrap);
