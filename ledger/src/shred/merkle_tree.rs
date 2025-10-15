@@ -46,12 +46,14 @@ where
         leaf_index += 1;
     }
     for i in (1..=(non_leaf_num - 1)).rev() {
-        if nodes[2 * i].is_none() && nodes[2 * i + 1].is_none() {
-            nodes[i] = None;
-        } else if nodes[2 * i + 1].is_none() {
-            nodes[i] = Some(join_nodes(nodes[2 * i].unwrap(), nodes[2 * i].unwrap()));
+        if let Some(Some(h1)) = nodes.get(2 * i) {
+            if let Some(Some(h2)) = nodes.get(2 * i + 1) {
+                nodes[i] = Some(join_nodes(h1, h2));
+            } else {
+                nodes[i] = Some(join_nodes(h1, h1));
+            }
         } else {
-            nodes[i] = Some(join_nodes(nodes[2 * i].unwrap(), nodes[2 * i + 1].unwrap()));
+            nodes[i] = None;
         }
     }
     Ok(nodes)
