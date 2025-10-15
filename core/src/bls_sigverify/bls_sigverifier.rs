@@ -319,9 +319,12 @@ impl BLSSigVerifier {
         self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
         let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
 
-        let mut grouped_pubkeys: HashMap<Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
-        for v in votes_to_verify.iter() {
-            let payload = self.get_vote_payload(&v.vote_message.vote);
+        let payloads = votes_to_verify
+            .iter()
+            .map(|v| self.get_vote_payload(&v.vote_message.vote))
+            .collect::<Vec<_>>();
+        let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+        for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
             grouped_pubkeys
                 .entry(payload)
                 .or_default()
@@ -388,11 +391,11 @@ impl BLSSigVerifier {
         let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
         let verified_votes = votes_to_verify
             .into_par_iter()
-            .zip(distinct_payloads.par_iter())
+            .zip(payloads.par_iter())
             .filter(|(vote_to_verify, payload)| {
                 if vote_to_verify
                     .bls_pubkey
-                    .verify_signature(&vote_to_verify.vote_message.signature, payload)
+                    .verify_signature(&vote_to_verify.vote_message.signature, payload.as_slice())
                     .unwrap_or(false)
                 {
                     true
@@ -403,7 +406,7 @@ impl BLSSigVerifier {
                     false
                 }
             })
-            .map(|(vote, _payload)| vote)
+            .map(|(v, _)| v)
             .collect();
         votes_batch_parallel_verify_time.stop();
         self.stats
