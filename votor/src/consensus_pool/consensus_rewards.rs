@@ -16,6 +16,7 @@ use {
 
 mod rewards_entry;
 
+/// Returns true if we are interested in storing entries for this slot.
 fn should_record(
     cluster_info: &ClusterInfo,
     leader_schedule_cache: &LeaderScheduleCache,
@@ -86,32 +87,6 @@ impl ConsensusRewards {
         }
     }
 
-    /// Add a builder for notar certificates.
-    fn add_notar_builder(&mut self, slot: Slot, builder: VoteCertificateBuilder) {
-        match self.rewards_entries.entry(slot) {
-            Entry::Vacant(map_entry) => {
-                map_entry.insert(RewardsEntry::with_notar_builder(builder));
-            }
-            Entry::Occupied(mut map_entry) => {
-                let rewards_entry = map_entry.get_mut();
-                rewards_entry.add_notar_builder(builder);
-            }
-        }
-    }
-
-    /// Add a builder for skip certificates.
-    fn add_skip_builder(&mut self, slot: Slot, builder: VoteCertificateBuilder) {
-        match self.rewards_entries.entry(slot) {
-            Entry::Vacant(map_entry) => {
-                map_entry.insert(RewardsEntry::with_skip_builder(builder));
-            }
-            Entry::Occupied(mut map_entry) => {
-                let rewards_entry = map_entry.get_mut();
-                rewards_entry.add_skip_builder(builder);
-            }
-        }
-    }
-
     /// Adds vote messages that were not already included in the builders above.
     //
     // TODO: this needs to be called from BLSSigVerifier
@@ -148,6 +123,32 @@ impl ConsensusRewards {
         match self.rewards_entries.remove(&slot) {
             Some(r) => r.generate_certs(),
             None => vec![],
+        }
+    }
+
+    /// Add a builder for notar certificates.
+    fn add_notar_builder(&mut self, slot: Slot, builder: VoteCertificateBuilder) {
+        match self.rewards_entries.entry(slot) {
+            Entry::Vacant(map_entry) => {
+                map_entry.insert(RewardsEntry::with_notar_builder(builder));
+            }
+            Entry::Occupied(mut map_entry) => {
+                let rewards_entry = map_entry.get_mut();
+                rewards_entry.add_notar_builder(builder);
+            }
+        }
+    }
+
+    /// Add a builder for skip certificates.
+    fn add_skip_builder(&mut self, slot: Slot, builder: VoteCertificateBuilder) {
+        match self.rewards_entries.entry(slot) {
+            Entry::Vacant(map_entry) => {
+                map_entry.insert(RewardsEntry::with_skip_builder(builder));
+            }
+            Entry::Occupied(mut map_entry) => {
+                let rewards_entry = map_entry.get_mut();
+                rewards_entry.add_skip_builder(builder);
+            }
         }
     }
 }
