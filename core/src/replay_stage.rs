@@ -38,6 +38,7 @@ use {
         ThreadPool,
     },
     solana_accounts_db::contains::Contains,
+    solana_bls_signatures::Signature as BLSSignature,
     solana_clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::entry::VerifyRecyclers,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
@@ -46,7 +47,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::Blockstore,
+        blockstore::{Blockstore, PurgeType},
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -58,7 +59,9 @@ use {
     solana_measure::measure::Measure,
     solana_poh::{
         poh_controller::PohController,
-        poh_recorder::{PohLeaderStatus, PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
+        poh_recorder::{
+            PohLeaderStatus, PohRecorder, SharedWorkingBank, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS,
+        },
     },
     solana_pubkey::Pubkey,
     solana_rpc::{
@@ -86,12 +89,16 @@ use {
         event::{CompletedBlock, VotorEvent, VotorEventReceiver, VotorEventSender},
         root_utils,
         vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
+        vote_history_storage::{SavedVoteHistory, VoteHistoryStorage},
         voting_service::BLSOp,
-        voting_utils::GenerateVoteTxResult,
+        voting_utils::{self, GenerateVoteTxResult},
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateMessage, ConsensusMessage},
+        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        vote::Vote,
+    },
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -288,6 +295,7 @@ pub struct ReplayStageConfig {
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
+    pub migration_status: Arc<MigrationStatus>,
 }
 
 pub struct ReplaySenders {
@@ -606,6 +614,7 @@ impl ReplayStage {
             leader_window_notifier,
             consensus_metrics_sender,
             consensus_metrics_receiver,
+            migration_status,
         } = config;
 
         let ReplaySenders {
@@ -642,6 +651,8 @@ impl ReplayStage {
         trace!("replay stage");
 
         // Start the replay stage loop
+        let mut identity_keypair = cluster_info.keypair().clone();
+        let mut my_pubkey = identity_keypair.pubkey();
         let (lockouts_sender, commitment_sender, commitment_service) =
             AggregateCommitmentService::new(
                 exit.clone(),
@@ -671,36 +682,50 @@ impl ReplayStage {
             leader_window_notifier,
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
-            own_vote_sender,
+            own_vote_sender: own_vote_sender.clone(),
             consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
+            migration_status: migration_status.clone(),
         };
         let votor = Votor::new(votor_config);
 
-        let mut first_alpenglow_slot = bank_forks
-            .read()
-            .unwrap()
-            .root_bank()
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        let alpenglow_ff_activation_slot = root_bank
             .feature_set
             .activated_slot(&agave_feature_set::alpenglow::id());
 
-        let mut is_alpenglow_migration_complete = false;
-        if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-            if bank_forks
-                .read()
-                .unwrap()
-                .frozen_banks()
-                .any(|(slot, _bank)| slot >= first_alpenglow_slot)
-            {
-                info!("initiating alpenglow migration on startup");
-                Self::initiate_alpenglow_migration(
-                    &poh_recorder,
-                    &mut is_alpenglow_migration_complete,
-                );
-                votor.start_migration();
-            }
+        // Check the status of the Alpenglow migration
+        if let Some((genesis_block, genesis_cert)) = root_bank.get_alpenglow_genesis() {
+            // We have started up post Alpenglow genesis
+            warn!("{my_pubkey}: Enabling alpenglow on startup");
+            migration_status.record_feature_activation(
+                alpenglow_ff_activation_slot.expect("FF must be active"),
+            );
+            migration_status.set_genesis_block(genesis_block);
+            migration_status.set_genesis_certificate(Arc::new(genesis_cert));
+            migration_status.enable_alpenglow();
+            assert!(migration_status.is_alpenglow_enabled());
+        } else if let Some(ff_activation_slot) = alpenglow_ff_activation_slot {
+            // Alpenglow is not enabled on startup, however the feature flag is active.
+            // Start tracking the migration.
+            migration_status.record_feature_activation(ff_activation_slot);
+
+            // TODO(ashwin): once migration PRs have all landed delete the following.
+            // Otherwise invalidator will be broken in the meantime since we're landing
+            // migration PRs piecemeal. For now we just enable alpenglow if the FF is active.
+            let block = (0, Hash::default());
+            let cert = CertificateMessage {
+                certificate: Certificate::Genesis(0, Hash::default()),
+                signature: BLSSignature::default(),
+                bitmap: Vec::default(),
+            };
+            migration_status.set_genesis_block(block);
+            migration_status.set_genesis_certificate(Arc::new(cert));
+            migration_status.enable_alpenglow();
+            assert!(migration_status.is_alpenglow_enabled());
         }
+
         let mut highest_frozen_slot = bank_forks
             .read()
             .unwrap()
@@ -711,14 +736,12 @@ impl ReplayStage {
         let run_replay = move || {
             let verify_recyclers = VerifyRecyclers::default();
             let _exit = Finalizer::new(exit.clone());
-            let mut identity_keypair = cluster_info.keypair().clone();
-            let mut my_pubkey = identity_keypair.pubkey();
 
             if my_pubkey != tower.node_pubkey {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
                 let my_old_pubkey = tower.node_pubkey;
-                if !is_alpenglow_migration_complete {
+                if !migration_status.is_alpenglow_enabled() {
                     tower = match Self::load_tower(
                         tower_storage.as_ref(),
                         &my_pubkey,
@@ -766,6 +789,7 @@ impl ReplayStage {
                 last_refresh_time: Instant::now(),
                 last_print_time: Instant::now(),
             };
+            let mut last_genesis_vote_refresh_time = Instant::now();
             let mut tbft_structs = TowerBFTStructures {
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
@@ -800,7 +824,7 @@ impl ReplayStage {
                 .expect("new rayon threadpool");
 
             let shared_poh_bank = poh_recorder.read().unwrap().shared_working_bank();
-            if !is_alpenglow_migration_complete {
+            if !migration_status.is_alpenglow_enabled() {
                 // This reset is handled in block creation loop for alpenglow
                 Self::reset_poh_recorder(
                     &my_pubkey,
@@ -829,6 +853,7 @@ impl ReplayStage {
                     &slot_status_notifier,
                     &mut progress,
                     &mut replay_timing,
+                    migration_status.as_ref(),
                 );
                 generate_new_bank_forks_time.stop();
 
@@ -867,14 +892,12 @@ impl ReplayStage {
                     &replay_tx_thread_pool,
                     &prioritization_fee_cache,
                     &mut purge_repair_slot_counter,
-                    &poh_recorder,
-                    first_alpenglow_slot,
-                    (!is_alpenglow_migration_complete).then_some(&mut tbft_structs),
-                    &mut is_alpenglow_migration_complete,
+                    (!migration_status.is_alpenglow_enabled()).then_some(&mut tbft_structs),
+                    migration_status.as_ref(),
                     &votor_event_sender,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
-                if is_alpenglow_migration_complete {
+                if migration_status.is_alpenglow_enabled() {
                     if let Some(highest) = new_frozen_slots.iter().max() {
                         if *highest > highest_frozen_slot {
                             highest_frozen_slot = *highest;
@@ -892,11 +915,41 @@ impl ReplayStage {
                 }
                 replay_active_banks_time.stop();
 
+                // Check if we've completed the migration conditions
+                if !migration_status.is_alpenglow_enabled()
+                    && migration_status.migration_slot().is_some()
+                    && migration_status.is_genesis_certified()
+                {
+                    Self::enable_alpenglow(
+                        &my_pubkey,
+                        migration_status.as_ref(),
+                        bank_forks.as_ref(),
+                        blockstore.as_ref(),
+                        &mut poh_controller,
+                        &shared_poh_bank,
+                        leader_schedule_cache.as_ref(),
+                        &mut ancestors,
+                        &mut descendants,
+                        &mut progress,
+                    );
+                }
+
                 let forks_root = bank_forks.read().unwrap().root();
-                let start_leader_time = if !is_alpenglow_migration_complete {
-                    // TODO(ashwin): This will be moved to the event coordinator once we figure out
-                    // migration
-                    for _ in votor_event_receiver.try_iter() {}
+                let start_leader_time = if !migration_status.is_alpenglow_enabled() {
+                    // Check if we should vote / refresh our genesis vote
+                    if last_genesis_vote_refresh_time.elapsed() > GENESIS_VOTE_REFRESH
+                        && Self::maybe_send_genesis_vote(
+                            migration_status.as_ref(),
+                            bank_forks.as_ref(),
+                            vote_account,
+                            &identity_keypair,
+                            &authorized_voter_keypairs,
+                            &own_vote_sender,
+                            &bls_sender,
+                        )
+                    {
+                        last_genesis_vote_refresh_time = Instant::now();
+                    }
 
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
@@ -1014,6 +1067,7 @@ impl ReplayStage {
                         &bank_forks,
                         &mut tbft_structs.heaviest_subtree_fork_choice,
                         &mut latest_validator_votes_for_frozen_banks,
+                        migration_status.as_ref(),
                     );
                     compute_bank_stats_time.stop();
 
@@ -1142,7 +1196,7 @@ impl ReplayStage {
                             &voting_sender,
                             &drop_bank_sender,
                             wait_to_vote_slot,
-                            &mut first_alpenglow_slot,
+                            &migration_status,
                             &mut tbft_structs,
                         ) {
                             error!("Unable to set root: {e}");
@@ -1191,7 +1245,7 @@ impl ReplayStage {
                                 ),
                             );
 
-                            if my_pubkey != cluster_info.id() && !is_alpenglow_migration_complete {
+                            if my_pubkey != cluster_info.id() {
                                 identity_keypair = cluster_info.keypair().clone();
                                 let my_old_pubkey = my_pubkey;
                                 my_pubkey = identity_keypair.pubkey();
@@ -1272,6 +1326,7 @@ impl ReplayStage {
                         &dumped_slots_sender,
                         &my_pubkey,
                         &leader_schedule_cache,
+                        migration_status.as_ref(),
                     );
                     dump_then_repair_correct_slots_time.stop();
 
@@ -1322,8 +1377,7 @@ impl ReplayStage {
                             &mut skipped_slots_info,
                             &banking_tracer,
                             has_new_vote_been_rooted,
-                            &first_alpenglow_slot,
-                            &mut is_alpenglow_migration_complete,
+                            migration_status.as_ref(),
                         ) {
                             Self::log_leader_change(
                                 &my_pubkey,
@@ -1372,6 +1426,177 @@ impl ReplayStage {
             votor,
             commitment_service,
         })
+    }
+
+    /// Enables alpenglow
+    /// - Clears any in progress leader blocks
+    /// - Clears any TowerBFT blocks past the genesis block
+    /// - Shutdown poh
+    /// - Start block creation loop
+    ///
+    /// Should only be called if we have received a genesis certificate on our view of the genesis block.
+    /// A false return value means that something has gone seriously wrong.
+    #[allow(clippy::too_many_arguments)]
+    fn enable_alpenglow(
+        my_pubkey: &Pubkey,
+        migration_status: &MigrationStatus,
+        bank_forks: &RwLock<BankForks>,
+        blockstore: &Blockstore,
+        poh_controller: &mut PohController,
+        shared_poh_bank: &SharedWorkingBank,
+        leader_schedule_cache: &LeaderScheduleCache,
+        ancestors: &mut HashMap<Slot, HashSet<Slot>>,
+        descendants: &mut HashMap<Slot, HashSet<Slot>>,
+        progress: &mut ProgressMap,
+    ) -> bool {
+        let root_bank = bank_forks.read().unwrap().root_bank();
+        warn!("{my_pubkey}: Alpenglow genesis vote has succeeded enabling alpenglow");
+
+        let Some(genesis_block @ (genesis_slot, block_id)) =
+            migration_status.eligble_genesis_block()
+        else {
+            error!(
+                "{my_pubkey}: Attempting to enable alpenglow before viewing an eligble genesis \
+                 block"
+            );
+            return false;
+        };
+        warn!("{my_pubkey}: Alpenglow genesis block {genesis_block:?}");
+
+        let Some(genesis_bank) = bank_forks.read().unwrap().get(genesis_slot) else {
+            error!(
+                "{my_pubkey}: Attempting to enable alpenglow before receiving the genesis block"
+            );
+            return false;
+        };
+
+        if genesis_bank.block_id() != Some(block_id) {
+            error!(
+                "{my_pubkey}: Attempting to enable alpenglow but we have the wrong version of the \
+                 genesis block our version: ({genesis_slot}, {:?}), certified version \
+                 ({genesis_slot}, {block_id})",
+                genesis_bank.block_id()
+            );
+            return false;
+        }
+
+        // Reset poh to the genesis block. This has to be done first before we can clear banks to
+        // avoid any inflight issues with transaction recording.
+        Self::reset_poh_recorder(
+            my_pubkey,
+            blockstore,
+            genesis_bank,
+            poh_controller,
+            leader_schedule_cache,
+        );
+        while poh_controller.has_pending_message() || shared_poh_bank.load().is_some() {
+            std::hint::spin_loop();
+        }
+
+        // Purge all slots greater than the genesis slot from AccountsDB & blockstore
+        let slots_to_purge: Vec<Slot> = bank_forks
+            .read()
+            .unwrap()
+            .banks()
+            .iter()
+            .filter_map(|(slot, _)| (*slot > genesis_slot).then_some(*slot))
+            .collect();
+        for slot in slots_to_purge.into_iter() {
+            warn!("{my_pubkey}: Purging poh block in slot {slot}");
+            Self::purge_unconfirmed_duplicate_slot(
+                slot,
+                ancestors,
+                descendants,
+                progress,
+                root_bank.as_ref(),
+                bank_forks,
+                blockstore,
+                migration_status,
+            );
+        }
+
+        // Purge any partial shreds greater than the genesis slot
+        let start_slot = genesis_slot + 1;
+        let end_slot = blockstore
+            .highest_slot()
+            .unwrap()
+            .expect("Highest slot must be present as blockstore is non-empty");
+        if end_slot >= start_slot {
+            warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
+            blockstore.purge_from_next_slots(start_slot, end_slot);
+            blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+        }
+
+        migration_status.enable_alpenglow();
+
+        assert!(migration_status.is_alpenglow_enabled());
+        datapoint_info!(
+            "migration-complete",
+            ("one", 1, i64),
+            (
+                "migration_slot",
+                migration_status.migration_slot().unwrap() as i64,
+                i64
+            ),
+            (
+                "genesis_slot",
+                migration_status.genesis_slot().unwrap() as i64,
+                i64
+            ),
+        );
+        true
+    }
+
+    /// If we have an eligble genesis block, send out a genesis vote
+    /// Returns false if no eligble block was found
+    fn maybe_send_genesis_vote(
+        migration_status: &MigrationStatus,
+        bank_forks: &RwLock<BankForks>,
+        vote_account: Pubkey,
+        identity_keypair: &Arc<Keypair>,
+        authorized_voter_keypairs: &Arc<std::sync::RwLock<Vec<Arc<Keypair>>>>,
+        own_vote_sender: &Sender<ConsensusMessage>,
+        bls_sender: &Sender<BLSOp>,
+    ) -> bool {
+        let Some((slot, block_id)) = migration_status.eligble_genesis_block() else {
+            return false;
+        };
+
+        let vote = Vote::new_genesis_vote(slot, block_id);
+        match voting_utils::generate_vote_tx(
+            &vote,
+            bank_forks.read().unwrap().root_bank().as_ref(),
+            vote_account,
+            identity_keypair,
+            authorized_voter_keypairs,
+            None,
+            &mut HashMap::new(),
+        ) {
+            GenerateVoteTxResult::ConsensusMessage(message) => {
+                // TODO(ashwin): Error handling
+                // Send vote to ConsensusPool and rest of cluster
+                warn!(
+                    "{}: Casting genesis vote for ({slot}, {block_id})",
+                    identity_keypair.pubkey()
+                );
+                let _ = own_vote_sender.send(message.clone());
+                let _ = bls_sender.send(BLSOp::PushVote {
+                    message: Arc::new(message),
+                    slot,
+                    saved_vote_history:
+                        solana_votor::vote_history_storage::SavedVoteHistoryVersions::Current(
+                            SavedVoteHistory::default(),
+                        ),
+                });
+            }
+            e => {
+                warn!(
+                    "{}: Unable to send genesis vote for {slot} {block_id}: {e:?}",
+                    identity_keypair.pubkey()
+                );
+            }
+        }
+        true
     }
 
     /// Loads the tower from `tower_storage` with identity `node_pubkey`.
@@ -1638,6 +1863,7 @@ impl ReplayStage {
         dumped_slots_sender: &DumpedSlotsSender,
         my_pubkey: &Pubkey,
         leader_schedule_cache: &LeaderScheduleCache,
+        migration_status: &MigrationStatus,
     ) {
         if duplicate_slots_to_repair.is_empty() {
             return;
@@ -1744,6 +1970,7 @@ impl ReplayStage {
                         &root_bank,
                         bank_forks,
                         blockstore,
+                        migration_status,
                     );
 
                     dumped.push((*duplicate_slot, *correct_hash));
@@ -1842,8 +2069,11 @@ impl ReplayStage {
         root_bank: &Bank,
         bank_forks: &RwLock<BankForks>,
         blockstore: &Blockstore,
+        migration_status: &MigrationStatus,
     ) {
         warn!("purging slot {duplicate_slot}");
+        assert!(!migration_status.is_alpenglow_enabled());
+        let eligble_genesis_slot = migration_status.eligble_genesis_block().map(|gb| gb.0);
 
         // Doesn't need to be root bank, just needs a common bank to
         // access the status cache and accounts
@@ -1889,6 +2119,13 @@ impl ReplayStage {
         drop(removed_banks);
 
         for (slot, slot_id) in slots_to_purge {
+            if Some(slot) == eligble_genesis_slot {
+                // We are dumping the eligble genesis slot, this should never happen
+                panic!(
+                    "We are dumping the bank in {slot} that we casted our Genesis Vote for. \
+                     Something is extremely wrong"
+                )
+            }
             // Clear the slot signatures from status cache for this slot.
             // TODO: What about RPC queries that had already cloned the Bank for this slot
             // and are looking up the signature for this slot?
@@ -2267,7 +2504,9 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         banking_tracer: &BankingTracer,
+        migration_status: &MigrationStatus,
     ) -> bool {
+        assert!(!migration_status.is_alpenglow_enabled());
         let parent_slot = parent_bank.slot();
         if !Self::check_propagation_for_start_leader(my_leader_slot, parent_slot, progress_map) {
             let latest_unconfirmed_leader_slot = progress_map
@@ -2306,8 +2545,12 @@ impl ReplayStage {
         datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
         info!("new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}");
 
+        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
         let root_distance = my_leader_slot - root_slot;
-        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY {
+        let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY
+            || my_leader_slot >= migration_slot
+        {
+            info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
             datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
             true
         } else {
@@ -2358,49 +2601,21 @@ impl ReplayStage {
         skipped_slots_info: &mut SkippedSlotsInfo,
         banking_tracer: &Arc<BankingTracer>,
         has_new_vote_been_rooted: bool,
-        first_alpenglow_slot: &Option<Slot>,
-        is_alpenglow_migration_complete: &mut bool,
+        migration_status: &MigrationStatus,
     ) -> Option<Slot> {
         // all the individual calls to poh_recorder.read() are designed to
         // increase granularity, decrease contention
-        let (parent_slot, maybe_my_leader_slot) = {
-            if !(*is_alpenglow_migration_complete) {
-                // We need to check regular Poh in these situations
-                match poh_recorder.read().unwrap().reached_leader_slot(my_pubkey) {
-                    PohLeaderStatus::Reached {
-                        poh_slot,
-                        parent_slot,
-                    } => (parent_slot, poh_slot),
-                    PohLeaderStatus::NotReached => {
-                        trace!("{my_pubkey} poh_recorder hasn't reached_leader_slot");
-                        return None;
-                    }
+        let (parent_slot, maybe_my_leader_slot) =
+            match poh_recorder.read().unwrap().reached_leader_slot(my_pubkey) {
+                PohLeaderStatus::Reached {
+                    poh_slot,
+                    parent_slot,
+                } => (parent_slot, poh_slot),
+                PohLeaderStatus::NotReached => {
+                    trace!("{my_pubkey} poh_recorder hasn't reached_leader_slot");
+                    return None;
                 }
-            } else {
-                // Migration is already complete voting loop will handle the rest
-                return None;
-            }
-        };
-
-        // Check if migration is necessary
-        if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-            if !(*is_alpenglow_migration_complete) && maybe_my_leader_slot >= *first_alpenglow_slot
-            {
-                // Initiate migration
-                // TODO: need to keep the ticks around for parent slots in previous epoch
-                // because reset below will delete those ticks
-                info!(
-                    "initiating alpenglow migration from maybe_start_leader() for slot \
-                     {maybe_my_leader_slot}"
-                );
-                Self::initiate_alpenglow_migration(poh_recorder, is_alpenglow_migration_complete);
-            }
-        }
-
-        if *is_alpenglow_migration_complete {
-            // Alpenglow voting loop will handle leader blocks from now on
-            return None;
-        }
+            };
 
         trace!("{my_pubkey} reached_leader_slot");
 
@@ -2412,9 +2627,7 @@ impl ReplayStage {
             return None;
         };
 
-        if parent_slot < *first_alpenglow_slot.as_ref().unwrap_or(&u64::MAX) {
-            assert!(parent_bank.is_frozen());
-        }
+        assert!(parent_bank.is_frozen());
 
         if !Self::common_maybe_start_leader_checks(
             my_pubkey,
@@ -2428,24 +2641,20 @@ impl ReplayStage {
         }
 
         let my_leader_slot = maybe_my_leader_slot;
-        if my_leader_slot < *first_alpenglow_slot.as_ref().unwrap_or(&u64::MAX) {
-            // Alpenglow is not enabled yet for my leader slot, do the regular checks
-            if !Self::poh_maybe_start_leader(
-                my_pubkey,
-                my_leader_slot,
-                &parent_bank,
-                poh_controller,
-                progress_map,
-                skipped_slots_info,
-                bank_forks,
-                retransmit_slots_sender,
-                slot_status_notifier,
-                rpc_subscriptions,
-                banking_tracer,
-            ) {
-                return None;
-            }
-        } else {
+        if !Self::poh_maybe_start_leader(
+            my_pubkey,
+            my_leader_slot,
+            &parent_bank,
+            poh_controller,
+            progress_map,
+            skipped_slots_info,
+            bank_forks,
+            retransmit_slots_sender,
+            slot_status_notifier,
+            rpc_subscriptions,
+            banking_tracer,
+            migration_status,
+        ) {
             return None;
         }
 
@@ -2639,30 +2848,21 @@ impl ReplayStage {
         voting_sender: &Sender<VoteOp>,
         drop_bank_sender: &Sender<Vec<BankWithScheduler>>,
         wait_to_vote_slot: Option<Slot>,
-        first_alpenglow_slot: &mut Option<Slot>,
+        migration_status: &MigrationStatus,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
+        assert!(!migration_status.is_alpenglow_enabled());
+        let migration_slot = migration_status.migration_slot().unwrap_or(Slot::MAX);
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         trace!("handle votable bank {}", bank.slot());
-        let new_root = tower.record_bank_vote(bank);
+        let new_root = tower
+            .record_bank_vote(bank)
+            // We do not root during the migration. Post genesis rooting is handled by votor
+            .filter(|root| *root < migration_slot);
 
         if let Some(new_root) = new_root {
-            if first_alpenglow_slot.is_none() {
-                *first_alpenglow_slot = bank_forks
-                    .read()
-                    .unwrap()
-                    .root_bank()
-                    .feature_set
-                    .activated_slot(&agave_feature_set::alpenglow::id());
-                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-                    info!(
-                        "alpenglow feature detected in root bank {new_root}, to be enabled on \
-                         slot {first_alpenglow_slot}",
-                    );
-                }
-            }
             let highest_super_majority_root = Some(
                 block_commitment_cache
                     .read()
@@ -2686,35 +2886,59 @@ impl ReplayStage {
                 drop_bank_sender,
                 tbft_structs,
             )?;
+
+            // Check if we've rooted a bank that will tell us the migration slot
+            if migration_status.migration_slot().is_none() {
+                if let Some(slot) = bank_forks
+                    .read()
+                    .unwrap()
+                    .root_bank()
+                    .feature_set
+                    .activated_slot(&agave_feature_set::alpenglow::id())
+                {
+                    migration_status.record_feature_activation(slot);
+                    datapoint_info!(
+                        "migration-started",
+                        (
+                            "migration_slot",
+                            migration_status.migration_slot().unwrap() as i64,
+                            i64
+                        ),
+                    );
+                }
+            }
         }
 
-        let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
-        // Send (voted) bank along with the updated vote account state for this node, the vote
-        // state is always newer than the one in the bank by definition, because banks can't
-        // contain vote transactions which are voting on its own slot.
-        //
-        // It should be acceptable to aggressively use the vote for our own _local view_ of
-        // commitment aggregation, although it's not guaranteed that the new vote transaction is
-        // observed by other nodes at this point.
-        //
-        // The justification stems from the assumption of the sensible voting behavior from the
-        // consensus subsystem. That's because it means there would be a slashing possibility
-        // otherwise.
-        //
-        // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
-        // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
-        // `finalized` confirmation if a node is materially staked and servicing RPC requests at
-        // the same time for development purposes.
-        let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
-        Self::update_commitment_cache(
-            bank.clone(),
-            bank_forks.read().unwrap().root(),
-            progress.get_fork_stats(bank.slot()).unwrap().total_stake,
-            node_vote_state,
-            lockouts_sender,
-        );
-        update_commitment_cache_time.stop();
-        replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
+        // We do not report commitments during the migration period. Post genesis commitments are handled via votor
+        if bank.slot() < migration_slot {
+            let mut update_commitment_cache_time = Measure::start("update_commitment_cache");
+            // Send (voted) bank along with the updated vote account state for this node, the vote
+            // state is always newer than the one in the bank by definition, because banks can't
+            // contain vote transactions which are voting on its own slot.
+            //
+            // It should be acceptable to aggressively use the vote for our own _local view_ of
+            // commitment aggregation, although it's not guaranteed that the new vote transaction is
+            // observed by other nodes at this point.
+            //
+            // The justification stems from the assumption of the sensible voting behavior from the
+            // consensus subsystem. That's because it means there would be a slashing possibility
+            // otherwise.
+            //
+            // This behavior isn't significant normally for mainnet-beta, because staked nodes aren't
+            // servicing RPC requests. However, this eliminates artificial 1-slot delay of the
+            // `finalized` confirmation if a node is materially staked and servicing RPC requests at
+            // the same time for development purposes.
+            let node_vote_state = (*vote_account_pubkey, tower.vote_state.clone());
+            Self::update_commitment_cache(
+                bank.clone(),
+                bank_forks.read().unwrap().root(),
+                progress.get_fork_stats(bank.slot()).unwrap().total_stake,
+                node_vote_state,
+                lockouts_sender,
+            );
+            update_commitment_cache_time.stop();
+            replay_timing.update_commitment_cache_us += update_commitment_cache_time.as_us();
+        }
 
         Self::push_vote(
             bank,
@@ -3311,20 +3535,6 @@ impl ReplayStage {
         replay_result
     }
 
-    fn initiate_alpenglow_migration(
-        poh_recorder: &RwLock<PohRecorder>,
-        is_alpenglow_migration_complete: &mut bool,
-    ) {
-        info!("initiating alpenglow migration from replay");
-        poh_recorder.write().unwrap().is_alpenglow_enabled = true;
-        while !poh_recorder.read().unwrap().use_alpenglow_tick_producer {
-            // Wait for PohService to migrate to alpenglow tick producer
-            thread::sleep(Duration::from_millis(10));
-        }
-        *is_alpenglow_migration_complete = true;
-        info!("alpenglow migration complete!");
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
         blockstore: &Blockstore,
@@ -3343,10 +3553,8 @@ impl ReplayStage {
         replay_result_vec: &[ReplaySlotFromBlockstore],
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
         my_pubkey: &Pubkey,
-        first_alpenglow_slot: Option<Slot>,
-        poh_recorder: &RwLock<PohRecorder>,
-        is_alpenglow_migration_complete: &mut bool,
         mut tbft_structs: Option<&mut TowerBFTStructures>,
+        migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
     ) -> Vec<Slot> {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
@@ -3389,18 +3597,6 @@ impl ReplayStage {
 
             assert_eq!(bank_slot, bank.slot());
             if bank.is_complete() {
-                if let Some(first_alpenglow_slot) = first_alpenglow_slot {
-                    if !*is_alpenglow_migration_complete && bank.slot() >= first_alpenglow_slot {
-                        info!(
-                            "initiating alpenglow migration from replaying bank {}",
-                            bank.slot()
-                        );
-                        Self::initiate_alpenglow_migration(
-                            poh_recorder,
-                            is_alpenglow_migration_complete,
-                        );
-                    }
-                }
                 let mut bank_complete_time = Measure::start("bank_complete_time");
                 let bank_progress = progress
                     .get_mut(&bank.slot())
@@ -3492,7 +3688,9 @@ impl ReplayStage {
                     r_replay_stats.batch_execute.totals
                 );
                 new_frozen_slots.push(bank.slot());
-                let _ = cluster_slots_update_sender.send(vec![bank_slot]);
+                if bank_slot <= migration_status.genesis_slot().unwrap_or(Slot::MAX) {
+                    let _ = cluster_slots_update_sender.send(vec![bank_slot]);
+                }
 
                 bank.freeze();
                 datapoint_info!(
@@ -3586,7 +3784,11 @@ impl ReplayStage {
                 // 2) Shredding finishes before replay, we notify here
                 //
                 // For non leader banks (2) is always true, so notify here
-                if *is_alpenglow_migration_complete && bank.block_id().is_some() {
+                if migration_status
+                    .genesis_slot()
+                    .is_some_and(|gs| bank.slot() > gs)
+                    && bank.block_id().is_some()
+                {
                     // Leader blocks will not have a block id, broadcast stage will
                     // take care of notifying the voting loop
                     let _ = votor_event_sender.send(VotorEvent::Block(CompletedBlock {
@@ -3691,10 +3893,8 @@ impl ReplayStage {
         replay_tx_thread_pool: &ThreadPool,
         prioritization_fee_cache: &PrioritizationFeeCache,
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
-        poh_recorder: &RwLock<PohRecorder>,
-        first_alpenglow_slot: Option<Slot>,
         tbft_structs: Option<&mut TowerBFTStructures>,
-        is_alpenglow_migration_complete: &mut bool,
+        migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
     ) -> Vec<Slot> /* completed slots */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
@@ -3765,10 +3965,8 @@ impl ReplayStage {
             &replay_result_vec,
             purge_repair_slot_counter,
             my_pubkey,
-            first_alpenglow_slot,
-            poh_recorder,
-            is_alpenglow_migration_complete,
             tbft_structs,
+            migration_status,
             votor_event_sender,
         )
     }
@@ -3785,9 +3983,11 @@ impl ReplayStage {
         bank_forks: &RwLock<BankForks>,
         heaviest_subtree_fork_choice: &mut HeaviestSubtreeForkChoice,
         latest_validator_votes_for_frozen_banks: &mut LatestValidatorVotesForFrozenBanks,
+        migration_status: &MigrationStatus,
     ) -> Vec<Slot> {
         frozen_banks.sort_by_key(|bank| bank.slot());
         let mut new_stats = vec![];
+        let migration_slot = migration_status.migration_slot().unwrap_or(Slot::MAX);
         for bank in frozen_banks.iter() {
             let bank_slot = bank.slot();
             // Only time progress map should be missing a bank slot
@@ -3798,6 +3998,7 @@ impl ReplayStage {
                     .get_fork_stats_mut(bank_slot)
                     .expect("All frozen banks must exist in the Progress map")
                     .computed;
+
                 if !is_computed {
                     // Check if our tower is behind, if so adopt the on chain tower from this Bank
                     Self::adopt_on_chain_tower_if_behind(
@@ -3812,6 +4013,7 @@ impl ReplayStage {
                     let computed_bank_state = Tower::collect_vote_lockouts(
                         my_vote_pubkey,
                         bank_slot,
+                        bank.parent_slot(),
                         &bank.vote_accounts(),
                         ancestors,
                         |slot| progress.get_hash(slot),
@@ -3830,8 +4032,35 @@ impl ReplayStage {
                         fork_stake,
                         lockout_intervals,
                         my_latest_landed_vote,
+                        parent_is_super_oc,
                         ..
                     } = computed_bank_state;
+
+                    if parent_is_super_oc
+                        && bank.parent_slot() >= migration_slot - 1
+                        && migration_status.eligble_genesis_block().is_none()
+                    {
+                        // We have a block whose ancestor fits our conditions to be eligble as the genesis block.
+                        let eligble_genesis_slot = ancestors
+                            .get(&bank_slot)
+                            .expect("Ancestors must exist, as this cannot be genesis")
+                            .iter()
+                            .filter(|slot| **slot < migration_slot)
+                            .max()
+                            .copied()
+                            .expect("Genesis slot must exist, no rooting past migration slot");
+                        let eligble_genesis_bank = bank_forks
+                            .read()
+                            .unwrap()
+                            .get(eligble_genesis_slot)
+                            .expect("Genesis bank must exist, no rooting past migration slot");
+
+                        let block_id = eligble_genesis_bank
+                            .block_id()
+                            .expect("A super OC block must have finished shredding");
+                        migration_status.set_genesis_block((eligble_genesis_slot, block_id));
+                    }
+
                     let stats = progress
                         .get_fork_stats_mut(bank_slot)
                         .expect("All frozen banks must exist in the Progress map");
@@ -4432,7 +4661,11 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         progress: &mut ProgressMap,
         replay_timing: &mut ReplayLoopTiming,
+        migration_status: &MigrationStatus,
     ) {
+        let genesis_slot = migration_status.genesis_slot();
+        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
+
         // Find the next slot that chains to the old slot
         let mut generate_new_bank_forks_read_lock =
             Measure::start("generate_new_bank_forks_read_lock");
@@ -4479,6 +4712,13 @@ impl ReplayStage {
                     parent_slot,
                     forks.root()
                 );
+                // Migration period banks are VoM
+                let options = NewBankOptions {
+                    vote_only_bank: child_slot >= migration_slot && genesis_slot.is_none(),
+                };
+                if options.vote_only_bank {
+                    info!("Replaying block in slot {child_slot} in VoM");
+                }
                 let child_bank = Self::new_bank_from_parent_with_notify(
                     parent_bank.clone(),
                     child_slot,
@@ -4486,9 +4726,9 @@ impl ReplayStage {
                     &leader,
                     rpc_subscriptions,
                     slot_status_notifier,
-                    NewBankOptions::default(),
+                    options,
                 );
-                blockstore_processor::set_alpenglow_ticks(&child_bank);
+                blockstore_processor::set_alpenglow_ticks(&child_bank, migration_status);
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(
                     progress,
@@ -4506,7 +4746,6 @@ impl ReplayStage {
         let mut generate_new_bank_forks_write_lock =
             Measure::start("generate_new_bank_forks_write_lock");
 
-        // TODO(ksn): should we have this if-statement check?
         if !new_banks.is_empty() {
             let mut forks = bank_forks.write().unwrap();
             let root = forks.root();
@@ -4878,6 +5117,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert!(bank_forks
             .read()
@@ -4902,6 +5142,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert!(bank_forks
             .read()
@@ -5696,6 +5937,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         // bank 0 has no votes, should not send any votes on the channel
@@ -5747,6 +5989,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         // Bank 1 had one vote
@@ -5782,6 +6025,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
         // No new stats should have been computed
         assert!(newly_computed.is_empty());
@@ -5821,6 +6065,7 @@ pub(crate) mod tests {
             &vote_simulator.bank_forks,
             heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         let bank1 = vote_simulator.bank_forks.read().unwrap().get(1).unwrap();
@@ -5889,6 +6134,7 @@ pub(crate) mod tests {
             &vote_simulator.bank_forks,
             &mut vote_simulator.tbft_structs.heaviest_subtree_fork_choice,
             &mut vote_simulator.latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         frozen_banks.sort_by_key(|bank| bank.slot());
@@ -6625,6 +6871,8 @@ pub(crate) mod tests {
             .set_dead_slot(7)
             .expect("Failed to mark slot as dead in blockstore");
 
+        let migration_status = MigrationStatus::default();
+
         // Purging slot 5 should purge only slots 5 and its descendant 6. Since 7 is already dead,
         // it gets reset but not removed
         ReplayStage::purge_unconfirmed_duplicate_slot(
@@ -6635,6 +6883,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &migration_status,
         );
         for i in 5..=7 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -6675,6 +6924,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &migration_status,
         );
         for i in 4..=6 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -6698,6 +6948,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &migration_status,
         );
         for i in 1..=6 {
             assert!(bank_forks.read().unwrap().get(i).is_none());
@@ -6756,6 +7007,8 @@ pub(crate) mod tests {
             .set_dead_slot(6)
             .expect("Failed to mark slot 6 as dead in blockstore");
 
+        let migration_status = MigrationStatus::default();
+
         // Purge slot 3 as it is duplicate, this should also purge slot 5 but not touch 6 and 7
         ReplayStage::purge_unconfirmed_duplicate_slot(
             3,
@@ -6765,6 +7018,7 @@ pub(crate) mod tests {
             &root_bank,
             &bank_forks,
             &blockstore,
+            &migration_status,
         );
         for slot in &[3, 5, 6, 7] {
             assert!(bank_forks.read().unwrap().get(*slot).is_none());
@@ -6805,6 +7059,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![3]);
 
@@ -6835,6 +7090,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![5]);
 
@@ -6866,6 +7122,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![6]);
 
@@ -6896,6 +7153,7 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);
     }
@@ -7014,6 +7272,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut HeaviestSubtreeForkChoice::new_from_bank_forks(bank_forks.clone()),
             &mut LatestValidatorVotesForFrozenBanks::default(),
+            &MigrationStatus::default(),
         );
 
         // Check status is true
@@ -7448,6 +7707,8 @@ pub(crate) mod tests {
             .map(|(&s, &h)| (s, h))
             .collect_vec();
 
+        let migration_status = MigrationStatus::default();
+
         ReplayStage::dump_then_repair_correct_slots(
             &mut duplicate_slots_to_repair,
             &mut ancestors,
@@ -7460,6 +7721,7 @@ pub(crate) mod tests {
             &dumped_slots_sender,
             &Pubkey::new_unique(),
             leader_schedule_cache,
+            &migration_status,
         );
         assert_eq!(should_be_dumped, dumped_slots_receiver.recv().ok().unwrap());
 
@@ -7579,6 +7841,7 @@ pub(crate) mod tests {
             &dumped_slots_sender,
             &Pubkey::new_unique(),
             leader_schedule_cache,
+            &MigrationStatus::default(),
         );
 
         // Check everything was purged properly
@@ -7636,6 +7899,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         // Try to switch to vote to the heaviest slot 6, then return the vote results
@@ -7760,6 +8024,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
         // Try to switch to vote to the heaviest slot 5, then return the vote results
         let (heaviest_bank, heaviest_bank_on_same_fork) = tbft_structs
@@ -8544,6 +8809,7 @@ pub(crate) mod tests {
             &bank_forks,
             &mut tbft_structs.heaviest_subtree_fork_choice,
             &mut latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
         assert_eq!(tower.last_voted_slot(), Some(last_voted_slot));
         assert_eq!(progress.my_latest_landed_vote(tip_of_voted_fork), Some(0));
@@ -8941,6 +9207,7 @@ pub(crate) mod tests {
         duplicate_slots_to_repair.insert(slot_to_dump, bank_to_dump_bad_hash);
         let mut purge_repair_slot_counter = PurgeRepairSlotCounter::default();
         let (dumped_slots_sender, dumped_slots_receiver) = unbounded();
+        let migration_status = MigrationStatus::default();
 
         ReplayStage::dump_then_repair_correct_slots(
             &mut duplicate_slots_to_repair,
@@ -8954,6 +9221,7 @@ pub(crate) mod tests {
             &dumped_slots_sender,
             my_pubkey,
             &leader_schedule_cache,
+            &migration_status,
         );
         assert_eq!(
             dumped_slots_receiver.recv_timeout(Duration::from_secs(1)),
@@ -8987,8 +9255,7 @@ pub(crate) mod tests {
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
-            &None,
-            &mut false,
+            &MigrationStatus::default(),
         )
         .is_none());
     }
@@ -9025,6 +9292,7 @@ pub(crate) mod tests {
         duplicate_slots_to_repair.insert(2, Hash::new_unique());
         let mut purge_repair_slot_counter = PurgeRepairSlotCounter::default();
         let (dumped_slots_sender, _) = unbounded();
+        let migration_status = MigrationStatus::default();
 
         ReplayStage::dump_then_repair_correct_slots(
             &mut duplicate_slots_to_repair,
@@ -9038,6 +9306,7 @@ pub(crate) mod tests {
             &dumped_slots_sender,
             my_pubkey,
             leader_schedule_cache,
+            &migration_status,
         );
     }
 
@@ -9068,6 +9337,7 @@ pub(crate) mod tests {
             bank_forks,
             heaviest_subtree_fork_choice,
             latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
         let (heaviest_bank, heaviest_bank_on_same_fork) = heaviest_subtree_fork_choice
             .select_forks(&frozen_banks, tower, progress, ancestors, bank_forks);
@@ -9659,8 +9929,7 @@ pub(crate) mod tests {
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
-            &None,
-            &mut false,
+            &MigrationStatus::default(),
         )
         .is_none());
 
@@ -9689,8 +9958,7 @@ pub(crate) mod tests {
             &mut SkippedSlotsInfo::default(),
             &banking_tracer,
             has_new_vote_been_rooted,
-            &None,
-            &mut false,
+            &MigrationStatus::default(),
         )
         .is_some());
         wait_for_poh_service(&poh_controller);

@@ -31,6 +31,7 @@ use {
     solana_signer::Signer,
     solana_vote::vote_transaction,
     solana_vote_program::vote_state::{Lockout, TowerSync},
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{HashMap, HashSet, VecDeque},
         sync::{Arc, RwLock},
@@ -196,6 +197,7 @@ impl VoteSimulator {
             &self.bank_forks,
             &mut self.tbft_structs.heaviest_subtree_fork_choice,
             &mut self.latest_validator_votes_for_frozen_banks,
+            &MigrationStatus::default(),
         );
 
         let vote_bank = self

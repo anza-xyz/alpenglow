@@ -147,6 +147,7 @@ use {
         voting_service::VotingServiceOverride,
         votor::LeaderWindowNotifier,
     },
+    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -962,14 +963,6 @@ impl Validator {
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
         let (mut poh_recorder, entry_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
-            let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
-            let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
-                hfb.feature_set
-                    .activated_slot(&agave_feature_set::alpenglow::id())
-            });
-            let is_alpenglow_enabled = highest_frozen_bank
-                .zip(first_alpenglow_slot)
-                .is_some_and(|(hfs, fas)| hfs.slot() >= fas);
             PohRecorder::new_with_clear_signal(
                 bank.tick_height(),
                 bank.last_blockhash(),
@@ -982,7 +975,6 @@ impl Validator {
                 &leader_schedule_cache,
                 &genesis_config.poh_config,
                 exit.clone(),
-                is_alpenglow_enabled,
             )
         };
         if transaction_status_sender.is_some() {
@@ -1391,11 +1383,13 @@ impl Validator {
             Some(stats_reporter_sender.clone()),
             exit.clone(),
         );
+        let migration_status = Arc::new(MigrationStatus::new(cluster_info.id()));
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
             bank_forks.read().unwrap().sharable_banks(),
             config.repair_whitelist.clone(),
+            migration_status.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
         let (repair_response_quic_sender, repair_response_quic_receiver) = unbounded();
@@ -1446,6 +1440,7 @@ impl Validator {
             config.poh_hashes_per_batch,
             record_receiver,
             poh_service_message_receiver,
+            migration_status.clone(),
             block_creation_loop,
         );
         assert_eq!(
@@ -1564,10 +1559,11 @@ impl Validator {
                     vote_history
                 }
                 Err(e) => {
+                    // TODO(ashwin): we need to be viligant about this and add a CLI option to panic here.
                     warn!(
                         "Unable to retrieve vote history: {e:?} creating default vote history...."
                     );
-                    VoteHistory::default()
+                    VoteHistory::new(identity_keypair.pubkey(), 0)
                 }
             };
             (Tower::default(), vote_history)
@@ -1582,7 +1578,7 @@ impl Validator {
                     Tower::default()
                 }
             };
-            (tower, VoteHistory::default())
+            (tower, VoteHistory::new(identity_keypair.pubkey(), 0))
         };
 
         let last_vote = tower.last_vote();
@@ -1696,6 +1692,7 @@ impl Validator {
             votor_event_receiver,
             consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
+            migration_status.clone(),
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1793,6 +1790,7 @@ impl Validator {
             config.generator_config.clone(),
             key_notifiers.clone(),
             consensus_metrics_sender,
+            migration_status.clone(),
         );
 
         datapoint_info!(

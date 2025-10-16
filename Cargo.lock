@@ -124,6 +124,7 @@ dependencies = [
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
+ "solana-keypair",
  "solana-pubkey",
  "solana-sha256-hasher",
  "solana-svm-feature-set",
@@ -9167,6 +9168,7 @@ dependencies = [
 name = "solana-local-cluster"
 version = "3.1.0"
 dependencies = [
+ "agave-feature-set",
  "assert_matches",
  "bincode",
  "crossbeam-channel",
@@ -9190,6 +9192,7 @@ dependencies = [
  "solana-download-utils",
  "solana-entry",
  "solana-epoch-schedule",
+ "solana-feature-gate-interface",
  "solana-genesis-config",
  "solana-gossip",
  "solana-hard-forks",
@@ -9507,6 +9510,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
+ "solana-votor-messages",
  "thiserror 2.0.16",
  "tikv-jemallocator",
 ]
@@ -11557,6 +11561,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-turbine",
  "solana-votor",
+ "solana-votor-messages",
  "static_assertions",
  "test-case",
  "thiserror 2.0.16",
@@ -11878,6 +11883,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor",
  "solana-votor-messages",
  "test-case",
  "thiserror 2.0.16",
@@ -11901,6 +11907,7 @@ dependencies = [
  "solana-logger",
  "solana-program",
  "solana-vote-interface",
+ "solana-votor-messages",
  "spl-pod",
 ]
 
