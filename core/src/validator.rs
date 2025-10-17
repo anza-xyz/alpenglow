@@ -1699,6 +1699,7 @@ impl Validator {
             votor_event_receiver,
             consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
+            alpenglow_last_voted.clone(),
         )
         .map_err(ValidatorError::Other)?;
 

@@ -16,10 +16,9 @@ pub struct AlpenglowLastVoted {
 }
 
 impl AlpenglowLastVoted {
-    pub fn update_last_voted(&self, verified_votes_by_pubkey: &HashMap<Pubkey, Vec<Slot>>) {
+    pub fn update_last_voted(&self, verified_votes_by_pubkey: &HashMap<Pubkey, Slot>) {
         let mut map = self.last_voted_map.write().unwrap();
-        for (pubkey, slots) in verified_votes_by_pubkey {
-            let largest_slot = slots.iter().max().unwrap();
+        for (pubkey, largest_slot) in verified_votes_by_pubkey {
             let Some(entry) = map.get_mut(pubkey) else {
                 if map.len() >= MAX_ENTRIES {
                     warn!("AlpenglowLastVoted map reached max entries, removing oldest entry");
@@ -52,8 +51,7 @@ mod tests {
         let alpenglow_last_voted = AlpenglowLastVoted::default();
         let pubkey1 = Pubkey::new_unique();
         let pubkey2 = Pubkey::new_unique();
-        alpenglow_last_voted
-            .update_last_voted(&HashMap::from([(pubkey1, vec![1]), (pubkey2, vec![2])]));
+        alpenglow_last_voted.update_last_voted(&HashMap::from([(pubkey1, 1), (pubkey2, 2)]));
         assert_eq!(alpenglow_last_voted.get_last_voted(&pubkey1), Some(1));
         assert_eq!(alpenglow_last_voted.get_last_voted(&pubkey2), Some(2));
         assert_eq!(
