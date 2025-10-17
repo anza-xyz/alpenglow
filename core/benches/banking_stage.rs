@@ -7,6 +7,7 @@ use {
         banking_trace::Channels,
         validator::{BlockProductionMethod, TransactionStructure},
     },
+    solana_entry::entry_marker::EntryMarker,
     solana_vote::vote_transaction::new_tower_sync_transaction,
     solana_vote_program::vote_state::TowerSync,
 };
@@ -54,7 +55,9 @@ fn check_txs(receiver: &Arc<Receiver<WorkingBankEntry>>, ref_tx_count: usize) {
     let mut total = 0;
     let now = Instant::now();
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::new(1, 0)) {
+        if let Ok((_bank, (EntryMarker::Entry(entry), _tick_height))) =
+            receiver.recv_timeout(Duration::new(1, 0))
+        {
             total += entry.transactions.len();
         }
         if total >= ref_tx_count {

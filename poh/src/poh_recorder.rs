@@ -23,6 +23,7 @@ use {
     solana_clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::{
         entry::Entry,
+        entry_marker::EntryMarker,
         poh::{Poh, PohEntry},
     },
     solana_hash::Hash,
@@ -60,7 +61,7 @@ pub enum PohRecorderError {
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
 
-pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
+pub type WorkingBankEntry = (Arc<Bank>, (EntryMarker, u64));
 
 // Sends the Result of the record operation, including the index in the slot of the first
 // transaction, if being tracked by WorkingBank
@@ -375,7 +376,8 @@ impl PohRecorder {
                                     num_hashes: entry.num_hashes,
                                     hash: entry.hash,
                                     transactions,
-                                },
+                                }
+                                .into(),
                                 tick_height, // `record_batches` guarantees that mixins are **not** split across ticks.
                             ),
                         )));
@@ -590,8 +592,11 @@ impl PohRecorder {
                 entry_count,
             );
 
-            for tick in &self.tick_cache[..entry_count] {
-                working_bank.bank.register_tick(&tick.0.hash);
+            for (entry, tick_height) in &self.tick_cache[..entry_count] {
+                working_bank.bank.register_tick(&entry.hash);
+
+                let tick = (EntryMarker::from(entry.clone()), *tick_height);
+
                 send_result = self
                     .working_bank_sender
                     .send((working_bank.bank.clone(), tick.clone()));
@@ -1500,11 +1505,11 @@ mod tests {
         //tick in the cache + entry
         for _ in 0..min_tick_height {
             let (_bank, (e, _tick_height)) = entry_receiver.recv().unwrap();
-            assert!(e.is_tick());
+            assert!(e.as_entry().map(|e| e.is_tick()).unwrap());
         }
 
         let (_bank, (e, _tick_height)) = entry_receiver.recv().unwrap();
-        assert!(!e.is_tick());
+        assert!(!e.as_entry().map(|e| e.is_tick()).unwrap());
     }
 
     #[test]
@@ -1539,7 +1544,7 @@ mod tests {
             .is_err());
         for _ in 0..num_ticks_to_max {
             let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
-            assert!(entry.is_tick());
+            assert!(entry.as_entry().map(|e| e.is_tick()).unwrap());
         }
     }
 

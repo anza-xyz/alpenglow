@@ -673,7 +673,10 @@ mod tests {
         agave_banking_stage_ingress_types::BankingPacketBatch,
         crossbeam_channel::{unbounded, Receiver},
         itertools::Itertools,
-        solana_entry::entry::{self, EntrySlice},
+        solana_entry::{
+            entry::{self, EntrySlice},
+            entry_marker::EntryMarker,
+        },
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
@@ -833,7 +836,10 @@ mod tests {
         trace!("getting entries");
         let entries: Vec<_> = entry_receiver
             .iter()
-            .map(|(_bank, (entry, _tick_height))| entry)
+            .filter_map(|(_bank, (entry_marker, _tick_height))| match entry_marker {
+                EntryMarker::Entry(entry) => Some(entry),
+                EntryMarker::Marker(_) => None,
+            })
             .collect();
         trace!("done");
         assert_eq!(entries.len(), genesis_config.ticks_per_slot as usize);
@@ -924,7 +930,13 @@ mod tests {
         // capture the entry receiver until we've received all our entries.
         let mut entries = Vec::with_capacity(100);
         loop {
-            if let Ok((_bank, (entry, _))) = entry_receiver.try_recv() {
+            if let Ok((_bank, (entry_marker, _))) = entry_receiver.try_recv() {
+                // Extract entry from EntryMarker, skip markers
+                let entry = match entry_marker {
+                    EntryMarker::Entry(entry) => entry,
+                    EntryMarker::Marker(_) => continue,
+                };
+
                 let tx_entry = !entry.transactions.is_empty();
                 entries.push(entry);
                 if tx_entry {
@@ -948,11 +960,12 @@ mod tests {
 
         // receive entries + ticks. The sender has been dropped, so there
         // are no more entries that will ever come in after the `iter` here.
-        entries.extend(
-            entry_receiver
-                .iter()
-                .map(|(_bank, (entry, _tick_height))| entry),
-        );
+        entries.extend(entry_receiver.iter().filter_map(
+            |(_bank, (entry_marker, _tick_height))| match entry_marker {
+                EntryMarker::Entry(entry) => Some(entry),
+                EntryMarker::Marker(_) => None,
+            },
+        ));
 
         assert!(entries.verify(&blockhash, &entry::thread_pool_for_tests()));
         for entry in entries {
@@ -1071,7 +1084,10 @@ mod tests {
         // check that the balance is what we expect.
         let entries: Vec<_> = entry_receiver
             .iter()
-            .map(|(_bank, (entry, _tick_height))| entry)
+            .filter_map(|(_bank, (entry_marker, _tick_height))| match entry_marker {
+                EntryMarker::Entry(entry) => Some(entry),
+                EntryMarker::Marker(_) => None,
+            })
             .collect();
 
         let (bank, _bank_forks) = Bank::new_no_wallclock_throttle_for_tests(&genesis_config);
@@ -1122,6 +1138,7 @@ mod tests {
             .write()
             .unwrap()
             .set_bank_for_test(bank.clone());
+
         let pubkey = solana_pubkey::new_rand();
         let keypair2 = Keypair::new();
         let pubkey2 = solana_pubkey::new_rand();
@@ -1132,7 +1149,13 @@ mod tests {
         ];
 
         let _ = recorder.record_transactions(bank.slot(), txs.clone());
-        let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+        let (_bank, (entry_marker, _tick_height)) = entry_receiver.recv().unwrap();
+        let entry = match entry_marker {
+            EntryMarker::Entry(entry) => entry,
+            EntryMarker::Marker(_) => {
+                panic!("Expected entry, got marker")
+            }
+        };
         assert_eq!(entry.transactions, txs);
 
         // Once bank is set to a new bank (setting bank.slot() + 1 in record_transactions),

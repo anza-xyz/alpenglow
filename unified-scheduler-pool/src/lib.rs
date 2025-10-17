@@ -2724,6 +2724,7 @@ mod tests {
         crate::sleepless_testing,
         assert_matches::assert_matches,
         solana_clock::{Slot, MAX_PROCESSING_AGE},
+        solana_entry::entry_marker::EntryMarker,
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
@@ -4599,9 +4600,10 @@ mod tests {
                         None, // no work id
                     )))
                 );
+
                 assert_matches!(
                     signal_receiver.try_recv(),
-                    Ok((_, (solana_entry::entry::Entry {transactions, ..} , _)))
+                    Ok((_, (EntryMarker::Entry(solana_entry::entry::Entry {transactions, ..}), _)))
                         if transactions == vec![tx.to_versioned_transaction()]
                 );
             } else {
