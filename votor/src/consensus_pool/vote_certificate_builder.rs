@@ -53,7 +53,7 @@ impl VoteCertificateBuilder {
 
     /// Aggregates a slice of `VoteMessage`s into the builder.
     pub fn aggregate(&mut self, messages: &[VoteMessage]) -> Result<(), CertificateError> {
-        let vote_types = certificate_limits_and_vote_types(self.certificate).1;
+        let vote_types = certificate_limits_and_vote_types(&self.certificate).1;
         for vote_message in messages {
             let rank = vote_message.rank as usize;
             if MAXIMUM_VALIDATORS <= rank {

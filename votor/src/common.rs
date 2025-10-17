@@ -57,7 +57,7 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
 ///
 /// Must be in sync with `vote_to_certificate_ids`
 pub const fn certificate_limits_and_vote_types(
-    cert_type: Certificate,
+    cert_type: &Certificate,
 ) -> (f64, &'static [VoteType]) {
     match cert_type {
         Certificate::Notarize(_, _) => (0.6, &[VoteType::Notarize]),
