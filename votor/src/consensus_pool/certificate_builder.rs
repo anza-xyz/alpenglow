@@ -244,6 +244,7 @@ impl BuilderType {
         }
     }
 
+    /// Builds a [`CertificateMessage`] for rewards purposes from the builder.
     fn build_for_rewards(
         self,
         certificate: Certificate,
