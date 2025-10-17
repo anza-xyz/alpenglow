@@ -516,7 +516,7 @@ mod test {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore::Blockstore,
+            blockstore::{Blockstore, BlockstoreError},
             genesis_utils::create_genesis_config,
             get_tmp_ledger_path,
             shred::{max_ticks_per_n_shreds, DATA_SHREDS_PER_FEC_BLOCK},
@@ -735,12 +735,20 @@ mod test {
             .get(interrupted_slot)
             .is_none());
 
-        // Try to fetch the incomplete ticks from blockstore, should succeed
-        assert_eq!(blockstore.get_slot_entries(0, 0).unwrap(), ticks0);
-        assert_eq!(
-            blockstore.get_slot_entries(0, num_shreds_per_slot).unwrap(),
-            vec![],
-        );
+        // Try to fetch the incomplete ticks from blockstore; this should error out.
+        let actual = blockstore.get_slot_entries(0, 0);
+        assert!(actual.is_err());
+        assert!(matches!(
+            actual.unwrap_err(),
+            BlockstoreError::InvalidShredData(_)
+        ));
+
+        let actual = blockstore.get_slot_entries(0, num_shreds_per_slot);
+        assert!(actual.is_err());
+        assert!(matches!(
+            actual.unwrap_err(),
+            BlockstoreError::InvalidShredData(_)
+        ));
     }
 
     #[test]
