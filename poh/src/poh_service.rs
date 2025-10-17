@@ -11,6 +11,7 @@ use {
     solana_entry::poh::Poh,
     solana_measure::{measure::Measure, measure_us},
     solana_poh_config::PohConfig,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -110,6 +111,7 @@ impl PohService {
         hashes_per_batch: u64,
         record_receiver: Receiver<Record>,
         poh_service_receiver: PohServiceMessageReceiver,
+        migration_status: Arc<MigrationStatus>,
         block_creation_loop: F,
     ) -> Self
     where
@@ -119,11 +121,10 @@ impl PohService {
         F: FnOnce() + std::marker::Send + 'static,
     {
         let poh_config = poh_config.clone();
-        let is_alpenglow_enabled = poh_recorder.read().unwrap().is_alpenglow_enabled;
         let tick_producer = Builder::new()
             .name("solPohTickProd".to_string())
             .spawn(move || {
-                if !is_alpenglow_enabled {
+                if !migration_status.shutdown_poh.load(Ordering::Acquire) {
                     if poh_config.hashes_per_tick.is_none() {
                         if poh_config.target_tick_count.is_none() {
                             Self::low_power_tick_producer(
@@ -132,6 +133,7 @@ impl PohService {
                                 &poh_exit,
                                 record_receiver.clone(),
                                 poh_service_receiver,
+                                &migration_status.shutdown_poh,
                             );
                         } else {
                             Self::short_lived_low_power_tick_producer(
@@ -160,14 +162,14 @@ impl PohService {
                                 ticks_per_slot,
                                 poh_config.target_tick_duration.as_nanos() as u64,
                             ),
+                            &migration_status.shutdown_poh,
                         );
                     }
 
                     // Migrate to alpenglow PoH
                     if !poh_exit.load(Ordering::Relaxed)
-                    // Should be set by replay_stage after it sees a notarized
-                    // block in the new alpenglow epoch
-                    && poh_recorder.read().unwrap().is_alpenglow_enabled
+                    // Should be set by replay_stage once the Alpenglow migration has completed
+                    && migration_status.shutdown_poh.load(Ordering::Acquire)
                     {
                         info!("Migrating poh service to alpenglow tick producer");
                     } else {
@@ -186,9 +188,11 @@ impl PohService {
                 // once we properly remove poh/entry verification in replay
                 {
                     let mut w_poh_recorder = poh_recorder.write().unwrap();
-                    w_poh_recorder.migrate_to_alpenglow_poh();
-                    w_poh_recorder.use_alpenglow_tick_producer = true;
+                    w_poh_recorder.enable_alpenglow();
                 }
+                migration_status
+                    .block_creation_loop_started
+                    .store(true, Ordering::Release);
                 info!("Starting alpenglow block creation loop");
                 block_creation_loop();
                 poh_exit.store(true, Ordering::Relaxed);
@@ -215,6 +219,7 @@ impl PohService {
         poh_exit: &AtomicBool,
         record_receiver: Receiver<Record>,
         poh_service_receiver: PohServiceMessageReceiver,
+        shutdown_poh: &AtomicBool,
     ) {
         let mut last_tick = Instant::now();
         while !poh_exit.load(Ordering::Relaxed) {
@@ -232,10 +237,11 @@ impl PohService {
                 last_tick = Instant::now();
                 let mut w_poh_recorder = poh_recorder.write().unwrap();
                 w_poh_recorder.tick();
-                if w_poh_recorder.is_alpenglow_enabled {
-                    info!("exiting tick_producer because alpenglow enabled");
-                    break;
-                }
+            }
+
+            if shutdown_poh.load(Ordering::Relaxed) {
+                info!("Shutting down tick producer because Alpenglow has started");
+                break;
             }
 
             if let Ok(service_message) = service_message {
@@ -404,6 +410,7 @@ impl PohService {
         record_receiver: Receiver<Record>,
         poh_service_receiver: PohServiceMessageReceiver,
         target_ns_per_tick: u64,
+        shutdown_poh: &AtomicBool,
     ) {
         let poh = poh_recorder.read().unwrap().poh.clone();
         let mut timing = PohTiming::new();
@@ -427,10 +434,6 @@ impl PohService {
                     let mut poh_recorder_l = poh_recorder.write().unwrap();
                     lock_time.stop();
                     timing.total_lock_time_ns += lock_time.as_ns();
-                    if poh_recorder_l.is_alpenglow_enabled {
-                        info!("exiting tick_producer because alpenglow enabled");
-                        break;
-                    }
                     let mut tick_time = Measure::start("tick");
                     poh_recorder_l.tick();
                     tick_time.stop();
@@ -439,6 +442,10 @@ impl PohService {
                 timing.num_ticks += 1;
 
                 timing.report(ticks_per_slot);
+                if shutdown_poh.load(Ordering::Relaxed) {
+                    info!("Shutting down tick producer because Alpenglow has started");
+                    break;
+                }
                 if poh_exit.load(Ordering::Relaxed) {
                     break;
                 }
@@ -620,6 +627,7 @@ mod tests {
             hashes_per_batch,
             record_receiver,
             poh_service_message_receiver,
+            Arc::new(MigrationStatus::default()),
             || {},
         );
         poh_recorder.write().unwrap().set_bank_for_test(bank);
