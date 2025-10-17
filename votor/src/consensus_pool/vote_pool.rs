@@ -1,5 +1,6 @@
 use {
-    crate::{common::Stake, consensus_pool::vote_certificate_builder::VoteCertificateBuilder},
+    super::CertificateBuilder,
+    crate::common::Stake,
     solana_hash::Hash,
     solana_pubkey::Pubkey,
     solana_votor_messages::consensus_message::VoteMessage,
@@ -68,7 +69,7 @@ impl SimpleVotePool {
         Some(self.vote_entry.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, output: &mut VoteCertificateBuilder) {
+    pub fn add_to_certificate(&self, output: &mut CertificateBuilder) {
         output
             .aggregate(&self.vote_entry.vote_messages)
             .expect("Incoming vote message signatures are assumed to be valid")
@@ -144,7 +145,7 @@ impl DuplicateBlockVotePool {
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificateBuilder) {
+    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut CertificateBuilder) {
         if let Some(vote_entries) = self.votes.get(block_id) {
             output
                 .aggregate(&vote_entries.vote_messages)

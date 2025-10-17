@@ -10,11 +10,11 @@ use {
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
             stats::ConsensusPoolStats,
-            vote_certificate_builder::{CertificateError, VoteCertificateBuilder},
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
         },
         event::VotorEvent,
     },
+    certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
     log::{error, trace},
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
@@ -35,6 +35,7 @@ use {
     thiserror::Error,
 };
 
+mod certificate_builder;
 pub mod parent_ready_tracker;
 mod slot_stake_counters;
 mod stats;
@@ -58,7 +59,7 @@ pub enum AddVoteError {
     SlotInFuture,
 
     #[error("Certificate error: {0}")]
-    Certificate(#[from] CertificateError),
+    Certificate(#[from] CertificateBuildError),
 
     #[error("{0} channel disconnected")]
     ChannelDisconnected(String),
@@ -200,7 +201,7 @@ impl ConsensusPool {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let (limit, vote_types) = certificate_limits_and_vote_types(cert_id);
+            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_id);
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
@@ -218,24 +219,24 @@ impl ConsensusPool {
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
-            let mut vote_certificate_builder = VoteCertificateBuilder::new(cert_id);
+            let mut certificate_builder = CertificateBuilder::new(cert_id);
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match vote_pool {
                         VotePoolType::SimpleVotePool(pool) => {
-                            pool.add_to_certificate(&mut vote_certificate_builder)
+                            pool.add_to_certificate(&mut certificate_builder)
                         }
                         VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
                             block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
                                  certificate {cert_id:?}",
                             ),
-                            &mut vote_certificate_builder,
+                            &mut certificate_builder,
                         ),
                     };
                 }
             });
-            let new_cert = Arc::new(vote_certificate_builder.build()?);
+            let new_cert = Arc::new(certificate_builder.build()?);
             self.insert_certificate(cert_id, new_cert.clone(), events);
             self.stats
                 .incr_cert_type(new_cert.certificate.certificate_type(), true);
