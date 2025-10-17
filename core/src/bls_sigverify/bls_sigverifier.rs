@@ -62,7 +62,7 @@ fn aggregate_keys_from_bitmap(
         .map(|(_, bls_pubkey)| PubkeyProjective::try_from(*bls_pubkey))
         .collect();
     let pubkeys = pubkeys.ok()?;
-    PubkeyProjective::par_aggregate(&pubkeys.iter().collect::<Vec<_>>()).ok()
+    PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -326,11 +326,11 @@ impl BLSSigVerifier {
 
         self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
         let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
-        let payloads: Vec<Arc<Vec<u8>>> = votes_to_verify
+
+        let payloads = votes_to_verify
             .iter()
             .map(|v| self.get_vote_payload(&v.vote_message.vote))
-            .collect();
-
+            .collect::<Vec<_>>();
         let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
         for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
             grouped_pubkeys
@@ -344,35 +344,32 @@ impl BLSSigVerifier {
             .votes_batch_distinct_messages_count
             .fetch_add(distinct_messages as u64, Ordering::Relaxed);
 
-        let distinct_data: Vec<_> = grouped_pubkeys.into_iter().collect();
-        let aggregate_pubkeys_result: Result<Vec<PubkeyProjective>, _> = distinct_data
-            .iter()
-            .map(|(_, pubkeys)| PubkeyProjective::par_aggregate(pubkeys))
+        let (distinct_payloads, distinct_pubkeys): (Vec<_>, Vec<_>) =
+            grouped_pubkeys.into_iter().unzip();
+        let aggregate_pubkeys_result: Result<Vec<PubkeyProjective>, _> = distinct_pubkeys
+            .into_iter()
+            .map(|pks| PubkeyProjective::par_aggregate(pks.into_par_iter()))
             .collect();
 
         let verified_optimistically = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
-            let all_signatures: Vec<&BlsSignature> = votes_to_verify
-                .iter()
-                .map(|v| &v.vote_message.signature)
-                .collect();
-
-            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(&all_signatures) {
+            let signatures = votes_to_verify
+                .par_iter()
+                .map(|v| &v.vote_message.signature);
+            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(signatures) {
                 if distinct_messages == 1 {
-                    let payload_slice = distinct_data[0].0.as_slice();
+                    let payload_slice = distinct_payloads[0].as_slice();
                     aggregate_pubkeys[0]
                         .verify_signature(&aggregate_signature, payload_slice)
                         .unwrap_or(false)
                 } else {
                     let payload_slices: Vec<&[u8]> =
-                        distinct_data.iter().map(|(p, _)| p.as_slice()).collect();
+                        distinct_payloads.iter().map(|p| p.as_slice()).collect();
 
                     let aggregate_pubkeys_affine: Vec<BlsPubkey> =
                         aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
-                    let aggregate_pubkeys_refs: Vec<&BlsPubkey> =
-                        aggregate_pubkeys_affine.iter().collect();
 
                     SignatureProjective::par_verify_distinct_aggregated(
-                        &aggregate_pubkeys_refs,
+                        &aggregate_pubkeys_affine,
                         &aggregate_signature.into(),
                         &payload_slices,
                     )
@@ -405,7 +402,7 @@ impl BLSSigVerifier {
             .filter(|(vote_to_verify, payload)| {
                 if vote_to_verify
                     .bls_pubkey
-                    .verify_signature(&vote_to_verify.vote_message.signature, payload)
+                    .verify_signature(&vote_to_verify.vote_message.signature, payload.as_slice())
                     .unwrap_or(false)
                 {
                     true
@@ -416,7 +413,7 @@ impl BLSSigVerifier {
                     false
                 }
             })
-            .map(|(vote, _payload)| vote)
+            .map(|(v, _)| v)
             .collect();
         votes_batch_parallel_verify_time.stop();
         self.stats
@@ -595,10 +592,9 @@ impl BLSSigVerifier {
         };
 
         let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
-        let pubkey_refs: Vec<&BlsPubkey> = pubkeys_affine.iter().collect();
 
         match SignatureProjective::par_verify_distinct_aggregated(
-            &pubkey_refs,
+            &pubkeys_affine,
             &cert_to_verify.cert_message.signature,
             &messages_to_verify,
         ) {
