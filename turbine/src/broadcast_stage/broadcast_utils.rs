@@ -95,12 +95,13 @@ pub(super) fn recv_slot_entries(
     let recv_start = Instant::now();
 
     // If there is a carryover entry, use it. Else, see if there is a new entry.
-    let (mut bank, (entry_marker, mut last_tick_height)) = match carryover_entry.take() {
+    let (mut bank, (entry, mut last_tick_height)) = match carryover_entry.take() {
         Some((bank, (entry, tick_height))) => (bank, (entry, tick_height)),
         None => receiver.recv_timeout(Duration::new(1, 0))?,
     };
     assert!(last_tick_height <= bank.max_tick_height());
-    let mut components: Vec<BlockComponent> = vec![entry_marker.into()];
+
+    let mut entries = vec![entry.as_entry().unwrap().clone()];
 
     // Drain the channel of entries.
     while last_tick_height != bank.max_tick_height() {
@@ -111,35 +112,15 @@ pub(super) fn recv_slot_entries(
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            components.clear();
+            entries.clear();
             bank = try_bank;
         }
         last_tick_height = tick_height;
-
-        // Fuse entry batches together when possible - otherwise, create a new BlockComponent.
-        let component = entry.into();
-
-        if let Some(last_component) = components.last_mut() {
-            if let Some(component) = last_component.try_fuse(component) {
-                components.push(component);
-            }
-        } else {
-            components.push(component);
-        }
-
+        entries.push(entry.as_entry().unwrap().clone());
         assert!(last_tick_height <= bank.max_tick_height());
     }
 
-    let mut serialized_batch_byte_count = 0_u64;
-
-    for component in components.iter() {
-        serialized_batch_byte_count += component.serialized_size().map_err(|_| {
-            Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
-                "Couldn't serialize BlockComponent: {component:?}",
-            ))))
-        })?;
-    }
-
+    let mut serialized_batch_byte_count = serialized_size(&entries)?;
     let next_full_batch_byte_count = serialized_batch_byte_count
         .div_ceil(get_data_shred_bytes_per_batch_typical())
         .saturating_mul(get_data_shred_bytes_per_batch_typical());
@@ -157,7 +138,7 @@ pub(super) fn recv_slot_entries(
         max_batch_byte_count,
         process_stats,
     ) {
-        let Ok((try_bank, (entry_marker, tick_height))) = receiver.recv_deadline(
+        let Ok((try_bank, (entry, tick_height))) = receiver.recv_deadline(
             coalesce_start + max_coalesce_time(serialized_batch_byte_count, max_batch_byte_count),
         ) else {
             process_stats.coalesce_exited_rcv_timeout += 1;
@@ -167,43 +148,31 @@ pub(super) fn recv_slot_entries(
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            components.clear();
+            entries.clear();
             serialized_batch_byte_count = 8; // Vec len
             bank = try_bank.clone();
             coalesce_start = Instant::now();
         }
         last_tick_height = tick_height;
 
-        let component: BlockComponent = entry_marker.into();
-
-        let entry_bytes = match &component {
-            BlockComponent::EntryBatch(items) if components.last().is_some() => {
-                serialized_size(&items[0])?
-            }
-            _ => component.serialized_size().map_err(|e| {
-                Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
-                    "Couldn't serialize BlockComponent: {e:?}",
-                ))))
-            })?,
-        };
-
+        let entry_bytes = serialized_size(entry.as_entry().unwrap())?;
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
             // the next batch.
-            *carryover_entry = Some((try_bank, (component.into(), tick_height)));
+            *carryover_entry = Some((try_bank, (entry, tick_height)));
             process_stats.coalesce_exited_hit_max += 1;
             break;
         }
 
         // Add the entry to the batch.
         serialized_batch_byte_count += entry_bytes;
-        components.push(component);
+        entries.push(entry.as_entry().unwrap().clone());
         assert!(last_tick_height <= bank.max_tick_height());
     }
     process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
     process_stats.coalesce_elapsed = coalesce_start.elapsed().as_micros() as u64;
     Ok(ReceiveResults {
-        components,
+        components: vec![BlockComponent::EntryBatch(entries)],
         bank,
         last_tick_height,
     })

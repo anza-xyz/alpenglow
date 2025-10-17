@@ -121,38 +121,55 @@ impl StandardBroadcastRun {
         max_data_shreds_per_slot: u32,
         max_code_shreds_per_slot: u32,
     ) -> std::result::Result<Vec<Shred>, BroadcastError> {
-        let shreds: Vec<_> =
-            Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
-                .unwrap()
-                .make_merkle_shreds_from_components(
-                    keypair,
-                    components,
-                    is_slot_end,
-                    Some(self.chained_merkle_root),
-                    self.next_shred_index,
-                    self.next_code_index,
-                    &self.reed_solomon_cache,
-                    process_stats,
-                )
-                .inspect(|shred| {
-                    process_stats.record_shred(shred);
-                    let next_index = match shred.shred_type() {
-                        ShredType::Code => &mut self.next_code_index,
-                        ShredType::Data => &mut self.next_shred_index,
-                    };
-                    *next_index = (*next_index).max(shred.index() + 1);
-                })
-                .collect();
-        if let Some(shred) = shreds.iter().max_by_key(|shred| shred.fec_set_index()) {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
-        }
-        if self.next_shred_index > max_data_shreds_per_slot {
-            return Err(BroadcastError::TooManyShreds);
-        }
-        if self.next_code_index > max_code_shreds_per_slot {
-            return Err(BroadcastError::TooManyShreds);
-        }
-        Ok(shreds)
+        let entries = components
+            .iter()
+            .filter(|c| c.is_entry_batch())
+            .flat_map(|c| c.entry_batch())
+            .cloned()
+            .collect_vec();
+
+        self.entries_to_shreds(
+            keypair,
+            &entries,
+            reference_tick,
+            is_slot_end,
+            process_stats,
+            max_data_shreds_per_slot,
+            max_code_shreds_per_slot,
+        )
+
+        // let shreds: Vec<_> =
+        //     Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
+        //         .unwrap()
+        //         .make_merkle_shreds_from_components(
+        //             keypair,
+        //             components,
+        //             is_slot_end,
+        //             Some(self.chained_merkle_root),
+        //             self.next_shred_index,
+        //             self.next_code_index,
+        //             &self.reed_solomon_cache,
+        //             process_stats,
+        //         )
+        //         .inspect(|shred| {
+        //             process_stats.record_shred(shred);
+        //             let next_index = match shred.shred_type() {
+        //                 ShredType::Code => &mut self.next_code_index,
+        //                 ShredType::Data => &mut self.next_shred_index,
+        //             };
+        //             *next_index = (*next_index).max(shred.index() + 1);
+        //         })
+        //         .collect();
+        // if let Some(shred) = shreds.iter().max_by_key(|shred| shred.fec_set_index()) {
+        //     self.chained_merkle_root = shred.merkle_root().unwrap();
+        // }
+        // if self.next_shred_index > max_data_shreds_per_slot {
+        //     return Err(BroadcastError::TooManyShreds);
+        // }
+        // if self.next_code_index > max_code_shreds_per_slot {
+        //     return Err(BroadcastError::TooManyShreds);
+        // }
+        // Ok(shreds)
     }
 
     #[allow(dead_code)]

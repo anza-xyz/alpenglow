@@ -129,16 +129,11 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 && self.recent_blockhash.is_some()
             {
                 // Extract the last entry and second-to-last entry from components
-                error!(
-                    "DEBUG: Before popping last component, receive_results.components.len() = {}",
-                    receive_results.components.len()
-                );
                 let (original_last_entry, prev_entry_hash) = if let Some(last_component) =
                     receive_results.components.pop()
                 {
                     match last_component {
                         BlockComponent::EntryBatch(mut entries) => {
-                            error!("DEBUG: Popped EntryBatch with {} entries", entries.len());
                             // Get the last entry from the batch (should be the final tick)
                             let last_entry = entries.pop().expect("EntryBatch should not be empty");
 
@@ -203,11 +198,6 @@ impl BroadcastRun for BroadcastDuplicatesRun {
 
                     Some((original_last_entry, vec![new_extra_entry, new_last_entry]))
                 } else {
-                    error!(
-                        "DEBUG: prev_entry_hash is None! Not creating duplicates. \
-                         receive_results.components.len() = {}",
-                        receive_results.components.len()
-                    );
                     None
                 }
             } else {
@@ -236,14 +226,6 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.shred_version,
         )
         .expect("Expected to create a new shredder");
-
-        error!(
-            "DEBUG: About to shred components. slot={}, components.len()={}, \
-             last_entries.is_some()={}",
-            bank.slot(),
-            receive_results.components.len(),
-            last_entries.is_some()
-        );
 
         let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
