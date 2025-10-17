@@ -1102,7 +1102,7 @@ impl Validator {
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks);
 
         let max_slots = Arc::new(MaxSlots::default());
-        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::new());
+        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
 
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
 

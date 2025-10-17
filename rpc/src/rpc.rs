@@ -1180,7 +1180,7 @@ impl JsonRpcRequestProcessor {
                     self.alpenglow_last_voted
                         .as_ref()
                         .and_then(|alpenglow_last_voted| {
-                            alpenglow_last_voted.get_last_voted(&vote_pubkey)
+                            alpenglow_last_voted.get_last_voted(vote_pubkey)
                         })
                         .unwrap_or(0)
                 });

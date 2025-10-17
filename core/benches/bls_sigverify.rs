@@ -105,7 +105,7 @@ fn setup_environment() -> BenchEnvironment {
         verified_votes_s,
         consensus_msg_s,
         consensus_metrics_sender,
-        Arc::new(AlpenglowLastVoted::new()),
+        Arc::new(AlpenglowLastVoted::default()),
     );
 
     BenchEnvironment {

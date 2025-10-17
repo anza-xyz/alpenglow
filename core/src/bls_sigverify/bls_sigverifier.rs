@@ -686,7 +686,7 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::new());
+        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
         (
             validator_keypairs,
             BLSSigVerifier::new(
@@ -1489,7 +1489,7 @@ mod tests {
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
-            Arc::new(AlpenglowLastVoted::new()),
+            Arc::new(AlpenglowLastVoted::default()),
         );
 
         let vote = Vote::new_skip_vote(2);
