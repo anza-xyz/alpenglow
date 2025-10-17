@@ -3,7 +3,7 @@ use {
     bincode::serialized_size,
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
@@ -21,9 +21,21 @@ use {
 const ENTRY_COALESCE_DURATION: Duration = Duration::from_millis(200);
 
 pub(super) struct ReceiveResults {
-    pub entries: Vec<Entry>,
+    pub components: Vec<BlockComponent>,
     pub bank: Arc<Bank>,
     pub last_tick_height: u64,
+}
+
+impl ReceiveResults {
+    pub fn entries(&self) -> impl Iterator<Item = &Entry> {
+        self.components
+            .iter()
+            .filter_map(|component| match component {
+                BlockComponent::EntryBatch(entries) => Some(entries),
+                _ => None,
+            })
+            .flatten()
+    }
 }
 
 const fn get_target_batch_bytes_default() -> u64 {
@@ -83,12 +95,12 @@ pub(super) fn recv_slot_entries(
     let recv_start = Instant::now();
 
     // If there is a carryover entry, use it. Else, see if there is a new entry.
-    let (mut bank, (entry, mut last_tick_height)) = match carryover_entry.take() {
+    let (mut bank, (entry_marker, mut last_tick_height)) = match carryover_entry.take() {
         Some((bank, (entry, tick_height))) => (bank, (entry, tick_height)),
         None => receiver.recv_timeout(Duration::new(1, 0))?,
     };
     assert!(last_tick_height <= bank.max_tick_height());
-    let mut entries = vec![entry];
+    let mut components: Vec<BlockComponent> = vec![entry_marker.into()];
 
     // Drain the channel of entries.
     while last_tick_height != bank.max_tick_height() {
@@ -99,15 +111,35 @@ pub(super) fn recv_slot_entries(
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            entries.clear();
+            components.clear();
             bank = try_bank;
         }
         last_tick_height = tick_height;
-        entries.push(entry);
+
+        // Fuse entry batches together when possible - otherwise, create a new BlockComponent.
+        let component = entry.into();
+
+        if let Some(last_component) = components.last_mut() {
+            if let Some(component) = last_component.try_fuse(component) {
+                components.push(component);
+            }
+        } else {
+            components.push(component);
+        }
+
         assert!(last_tick_height <= bank.max_tick_height());
     }
 
-    let mut serialized_batch_byte_count = serialized_size(&entries)?;
+    let mut serialized_batch_byte_count = 0_u64;
+
+    for component in components.iter() {
+        serialized_batch_byte_count += component.serialized_size().map_err(|_| {
+            Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
+                "Couldn't serialize BlockComponent: {component:?}",
+            ))))
+        })?;
+    }
+
     let next_full_batch_byte_count = serialized_batch_byte_count
         .div_ceil(get_data_shred_bytes_per_batch_typical())
         .saturating_mul(get_data_shred_bytes_per_batch_typical());
@@ -125,7 +157,7 @@ pub(super) fn recv_slot_entries(
         max_batch_byte_count,
         process_stats,
     ) {
-        let Ok((try_bank, (entry, tick_height))) = receiver.recv_deadline(
+        let Ok((try_bank, (entry_marker, tick_height))) = receiver.recv_deadline(
             coalesce_start + max_coalesce_time(serialized_batch_byte_count, max_batch_byte_count),
         ) else {
             process_stats.coalesce_exited_rcv_timeout += 1;
@@ -135,31 +167,43 @@ pub(super) fn recv_slot_entries(
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            entries.clear();
+            components.clear();
             serialized_batch_byte_count = 8; // Vec len
             bank = try_bank.clone();
             coalesce_start = Instant::now();
         }
         last_tick_height = tick_height;
 
-        let entry_bytes = serialized_size(&entry)?;
+        let component: BlockComponent = entry_marker.into();
+
+        let entry_bytes = match &component {
+            BlockComponent::EntryBatch(items) if components.last().is_some() => {
+                serialized_size(&items[0])?
+            }
+            _ => component.serialized_size().map_err(|e| {
+                Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
+                    "Couldn't serialize BlockComponent: {e:?}",
+                ))))
+            })?,
+        };
+
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
             // the next batch.
-            *carryover_entry = Some((try_bank, (entry, tick_height)));
+            *carryover_entry = Some((try_bank, (component.into(), tick_height)));
             process_stats.coalesce_exited_hit_max += 1;
             break;
         }
 
         // Add the entry to the batch.
         serialized_batch_byte_count += entry_bytes;
-        entries.push(entry);
+        components.push(component);
         assert!(last_tick_height <= bank.max_tick_height());
     }
     process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
     process_stats.coalesce_elapsed = coalesce_start.elapsed().as_micros() as u64;
     Ok(ReceiveResults {
-        entries,
+        components,
         bank,
         last_tick_height,
     })
@@ -214,6 +258,7 @@ mod tests {
     use {
         super::*,
         crossbeam_channel::unbounded,
+        solana_entry::entry_marker::EntryMarker,
         solana_genesis_config::GenesisConfig,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
         solana_pubkey::Pubkey,
@@ -251,20 +296,30 @@ mod tests {
             .map(|i| {
                 let entry = Entry::new(&last_hash, 1, vec![tx.clone()]);
                 last_hash = entry.hash;
-                s.send((bank1.clone(), (entry.clone(), i))).unwrap();
+                s.send((bank1.clone(), (EntryMarker::Entry(entry.clone()), i)))
+                    .unwrap();
                 entry
             })
             .collect();
 
-        let mut res_entries = vec![];
+        let mut res_components = vec![];
         let mut last_tick_height = 0;
         while let Ok(result) = recv_slot_entries(&r, &mut None, &mut ProcessShredsStats::default())
         {
             assert_eq!(result.bank.slot(), bank1.slot());
             last_tick_height = result.last_tick_height;
-            res_entries.extend(result.entries);
+            res_components.extend(result.components);
         }
         assert_eq!(last_tick_height, bank1.max_tick_height());
+
+        // Extract entries from components and compare
+        let res_entries: Vec<Entry> = res_components
+            .into_iter()
+            .flat_map(|component| match component {
+                BlockComponent::EntryBatch(entries) => entries,
+                _ => vec![],
+            })
+            .collect();
         assert_eq!(res_entries, entries);
     }
 
@@ -286,11 +341,15 @@ mod tests {
                 last_hash = entry.hash;
                 // Interrupt slot 1 right before the last tick
                 if tick_height == expected_last_height {
-                    s.send((bank2.clone(), (entry.clone(), tick_height)))
-                        .unwrap();
+                    s.send((
+                        bank2.clone(),
+                        (EntryMarker::Entry(entry.clone()), tick_height),
+                    ))
+                    .unwrap();
                     Some(entry)
                 } else {
-                    s.send((bank1.clone(), (entry, tick_height))).unwrap();
+                    s.send((bank1.clone(), (EntryMarker::Entry(entry), tick_height)))
+                        .unwrap();
                     None
                 }
             })
@@ -298,17 +357,26 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let mut res_entries = vec![];
+        let mut res_components = vec![];
         let mut last_tick_height = 0;
         let mut bank_slot = 0;
         while let Ok(result) = recv_slot_entries(&r, &mut None, &mut ProcessShredsStats::default())
         {
             bank_slot = result.bank.slot();
             last_tick_height = result.last_tick_height;
-            res_entries = result.entries;
+            res_components = result.components;
         }
         assert_eq!(bank_slot, bank2.slot());
         assert_eq!(last_tick_height, expected_last_height);
+
+        // Extract entries from components and compare
+        let res_entries: Vec<Entry> = res_components
+            .into_iter()
+            .flat_map(|component| match component {
+                BlockComponent::EntryBatch(entries) => entries,
+                _ => vec![],
+            })
+            .collect();
         assert_eq!(res_entries, vec![last_entry]);
     }
 }

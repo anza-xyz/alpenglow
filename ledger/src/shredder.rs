@@ -6,7 +6,7 @@ use {
     rayon::ThreadPool,
     reed_solomon_erasure::{galois_8::ReedSolomon, Error::TooFewDataShards},
     solana_clock::Slot,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_rayon_threadlimit::get_thread_count,
@@ -61,6 +61,60 @@ impl Shredder {
                 version,
             })
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_merkle_shreds_from_components(
+        &self,
+        keypair: &Keypair,
+        components: &[BlockComponent],
+        is_last_in_slot: bool,
+        chained_merkle_root: Option<Hash>,
+        next_shred_index: u32,
+        next_code_index: u32,
+        reed_solomon_cache: &ReedSolomonCache,
+        stats: &mut ProcessShredsStats,
+    ) -> impl Iterator<Item = Shred> {
+        let mut all_shreds = Vec::new();
+        let mut current_shred_index = next_shred_index;
+        let mut current_code_index = next_code_index;
+
+        for (ix, component) in components.iter().enumerate() {
+            let now = Instant::now();
+            let data = component.to_bytes().unwrap();
+            stats.serialize_elapsed += now.elapsed().as_micros() as u64;
+
+            let is_last_component = ix == components.len() - 1;
+            let mut data_shred_count = 0;
+            let mut code_shred_count = 0;
+
+            let shred_iter = Self::make_shreds_from_data_slice(
+                self,
+                keypair,
+                &data,
+                is_last_component && is_last_in_slot,
+                chained_merkle_root,
+                current_shred_index,
+                current_code_index,
+                reed_solomon_cache,
+                stats,
+            )
+            .unwrap();
+
+            shred_iter.for_each(|shred| {
+                if shred.is_data() {
+                    data_shred_count += 1;
+                } else {
+                    code_shred_count += 1;
+                }
+                all_shreds.push(shred);
+            });
+
+            current_shred_index += data_shred_count;
+            current_code_index += code_shred_count;
+        }
+
+        all_shreds.into_iter()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -121,6 +175,34 @@ impl Shredder {
             stats,
         )?;
         Ok(shreds.into_iter().map(Shred::from))
+    }
+
+    #[allow(dead_code)]
+    pub fn components_to_merkle_shreds_for_tests(
+        &self,
+        keypair: &Keypair,
+        components: &[BlockComponent],
+        is_last_in_slot: bool,
+        chained_merkle_root: Option<Hash>,
+        next_shred_index: u32,
+        next_code_index: u32,
+        reed_solomon_cache: &ReedSolomonCache,
+        stats: &mut ProcessShredsStats,
+    ) -> (
+        Vec<Shred>, // data shreds
+        Vec<Shred>, // coding shreds
+    ) {
+        self.make_merkle_shreds_from_components(
+            keypair,
+            components,
+            is_last_in_slot,
+            chained_merkle_root,
+            next_shred_index,
+            next_code_index,
+            reed_solomon_cache,
+            stats,
+        )
+        .partition(Shred::is_data)
     }
 
     pub fn entries_to_merkle_shreds_for_tests(

@@ -61,7 +61,13 @@ impl TpuEntryNotifier {
         current_index: &mut usize,
         current_transaction_index: &mut usize,
     ) -> Result<(), RecvTimeoutError> {
-        let (bank, (entry, tick_height)) = entry_receiver.recv_timeout(Duration::from_secs(1))?;
+        let (bank, (entry_marker, tick_height)) =
+            entry_receiver.recv_timeout(Duration::from_secs(1))?;
+
+        let Some(entry) = entry_marker.as_entry() else {
+            return Ok(());
+        };
+
         let slot = bank.slot();
         let index = if slot != *current_slot {
             *current_index = 0;
@@ -91,7 +97,7 @@ impl TpuEntryNotifier {
         }
         *current_transaction_index += entry.transactions.len();
 
-        if let Err(err) = broadcast_entry_sender.send((bank, (entry, tick_height))) {
+        if let Err(err) = broadcast_entry_sender.send((bank, (entry_marker, tick_height))) {
             warn!(
                 "Failed to send slot {slot:?} entry {index:?} from Tpu to BroadcastStage, error \
                  {err:?}",

@@ -1,6 +1,7 @@
 use {
     super::*,
     crate::cluster_nodes::ClusterNodesCache,
+    solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
@@ -86,9 +87,25 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         // in the slot to make verification fail on validators
         let last_entries = {
             if last_tick_height == bank.max_tick_height() && bank.slot() < NUM_BAD_SLOTS {
-                let good_last_entry = receive_results.entries.pop().unwrap();
-                let mut bad_last_entry = good_last_entry.clone();
-                bad_last_entry.hash = Hash::default();
+                // Find the first EntryBatch component iterating backwards and corrupt its final entry
+                let (good_last_entry, bad_last_entry) = receive_results
+                    .components
+                    .iter_mut()
+                    .rev()
+                    .find_map(|component| {
+                        if let BlockComponent::EntryBatch(entries) = component {
+                            entries.last_mut().map(|last_entry| {
+                                let good = last_entry.clone();
+                                last_entry.hash = Hash::default();
+                                let bad = last_entry.clone();
+                                (good, bad)
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("Expected to find an EntryBatch component");
+
                 Some((good_last_entry, bad_last_entry))
             } else {
                 None
@@ -103,9 +120,9 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
+        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
-            &receive_results.entries,
+            &receive_results.components,
             last_tick_height == bank.max_tick_height() && last_entries.is_none(),
             Some(self.chained_merkle_root),
             self.next_shred_index,

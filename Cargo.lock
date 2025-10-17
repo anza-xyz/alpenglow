@@ -7055,6 +7055,7 @@ dependencies = [
  "solana-client",
  "solana-compute-budget-interface",
  "solana-core",
+ "solana-entry",
  "solana-gossip",
  "solana-hash",
  "solana-keypair",

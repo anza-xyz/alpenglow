@@ -70,7 +70,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             }
         };
 
-        let num_entries = receive_results.entries.len();
+        let num_entries = receive_results.components.len();
 
         let shredder = Shredder::new(
             bank.slot(),
@@ -80,9 +80,9 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
+        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
-            &receive_results.entries,
+            &receive_results.components,
             last_tick_height == bank.max_tick_height(),
             Some(chained_merkle_root),
             next_shred_index,

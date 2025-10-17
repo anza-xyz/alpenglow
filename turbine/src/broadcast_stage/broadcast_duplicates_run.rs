@@ -3,7 +3,7 @@ use {
     crate::cluster_nodes::ClusterNodesCache,
     crossbeam_channel::Sender,
     itertools::Itertools,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
@@ -108,12 +108,12 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.num_slots_broadcasted += 1;
         }
 
-        if receive_results.entries.is_empty() {
+        if receive_results.components.is_empty() {
             return Ok(());
         }
 
         // Update the recent blockhash based on transactions in the entries
-        for entry in &receive_results.entries {
+        for entry in receive_results.entries() {
             if !entry.transactions.is_empty() {
                 self.recent_blockhash = Some(*entry.transactions[0].message.recent_blockhash());
                 break;
@@ -128,21 +128,61 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 && self.num_slots_broadcasted % DUPLICATE_RATE == 0
                 && self.recent_blockhash.is_some()
             {
-                let entry_batch_len = receive_results.entries.len();
-                let prev_entry_hash =
-                    // Try to get second-to-last entry before last tick
-                    if entry_batch_len > 1 {
-                        Some(receive_results.entries[entry_batch_len - 2].hash)
-                    } else {
-                        self.prev_entry_hash
-                    };
+                // Extract the last entry and second-to-last entry from components
+                error!(
+                    "DEBUG: Before popping last component, receive_results.components.len() = {}",
+                    receive_results.components.len()
+                );
+                let (original_last_entry, prev_entry_hash) = if let Some(last_component) =
+                    receive_results.components.pop()
+                {
+                    match last_component {
+                        BlockComponent::EntryBatch(mut entries) => {
+                            error!("DEBUG: Popped EntryBatch with {} entries", entries.len());
+                            // Get the last entry from the batch (should be the final tick)
+                            let last_entry = entries.pop().expect("EntryBatch should not be empty");
+
+                            // Try to get the second-to-last entry from this batch
+                            let prev_hash = if let Some(second_last) = entries.last() {
+                                Some(second_last.hash)
+                            } else {
+                                // No second-to-last entry in this batch, search previous components
+                                receive_results
+                                    .components
+                                    .iter()
+                                    .rev()
+                                    .find_map(|component| match component {
+                                        BlockComponent::EntryBatch(entries) => {
+                                            entries.last().map(|e| e.hash)
+                                        }
+                                        BlockComponent::BlockMarker(_) => None,
+                                    })
+                            }
+                            .or(self.prev_entry_hash);
+
+                            // If there are remaining entries, push them back
+                            if !entries.is_empty() {
+                                receive_results
+                                    .components
+                                    .push(BlockComponent::EntryBatch(entries));
+                            }
+
+                            (last_entry, prev_hash)
+                        }
+                        BlockComponent::BlockMarker(_) => {
+                            panic!(
+                                "Expected last component to be an EntryBatch, found BlockMarker"
+                            );
+                        }
+                    }
+                } else {
+                    panic!("Expected at least one component");
+                };
+
+                // Last entry has to be a tick
+                assert!(original_last_entry.is_tick());
 
                 if let Some(prev_entry_hash) = prev_entry_hash {
-                    let original_last_entry = receive_results.entries.pop().unwrap();
-
-                    // Last entry has to be a tick
-                    assert!(original_last_entry.is_tick());
-
                     // Inject an extra entry before the last tick
                     let extra_tx = system_transaction::transfer(
                         keypair,
@@ -163,6 +203,11 @@ impl BroadcastRun for BroadcastDuplicatesRun {
 
                     Some((original_last_entry, vec![new_extra_entry, new_last_entry]))
                 } else {
+                    error!(
+                        "DEBUG: prev_entry_hash is None! Not creating duplicates. \
+                         receive_results.components.len() = {}",
+                        receive_results.components.len()
+                    );
                     None
                 }
             } else {
@@ -173,7 +218,16 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         self.prev_entry_hash = last_entries
             .as_ref()
             .map(|(original_last_entry, _)| original_last_entry.hash)
-            .or_else(|| Some(receive_results.entries.last().unwrap().hash));
+            .or_else(|| {
+                receive_results
+                    .components
+                    .iter()
+                    .rev()
+                    .find_map(|component| match component {
+                        BlockComponent::EntryBatch(entries) => entries.last().map(|e| e.hash),
+                        BlockComponent::BlockMarker(_) => None,
+                    })
+            });
 
         let shredder = Shredder::new(
             bank.slot(),
@@ -183,9 +237,17 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
+        error!(
+            "DEBUG: About to shred components. slot={}, components.len()={}, \
+             last_entries.is_some()={}",
+            bank.slot(),
+            receive_results.components.len(),
+            last_entries.is_some()
+        );
+
+        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
-            &receive_results.entries,
+            &receive_results.components,
             last_tick_height == bank.max_tick_height() && last_entries.is_none(),
             Some(self.chained_merkle_root),
             self.next_shred_index,
@@ -202,9 +264,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         }
         let last_shreds =
             last_entries.map(|(original_last_entry, duplicate_extra_last_entries)| {
-                let (original_last_data_shred, _) = shredder.entries_to_merkle_shreds_for_tests(
+                let (original_last_data_shred, _) = shredder.components_to_merkle_shreds_for_tests(
                     keypair,
-                    &[original_last_entry],
+                    &[BlockComponent::EntryBatch(vec![original_last_entry])],
                     true,
                     Some(self.chained_merkle_root),
                     self.next_shred_index,
@@ -215,16 +277,17 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 // Don't mark the last shred as last so that validators won't
                 // know that they've gotten all the shreds, and will continue
                 // trying to repair.
-                let (partition_last_data_shred, _) = shredder.entries_to_merkle_shreds_for_tests(
-                    keypair,
-                    &duplicate_extra_last_entries,
-                    true,
-                    Some(self.chained_merkle_root),
-                    self.next_shred_index,
-                    self.next_code_index,
-                    &self.reed_solomon_cache,
-                    &mut stats,
-                );
+                let (partition_last_data_shred, _) = shredder
+                    .components_to_merkle_shreds_for_tests(
+                        keypair,
+                        &[BlockComponent::EntryBatch(duplicate_extra_last_entries)],
+                        true,
+                        Some(self.chained_merkle_root),
+                        self.next_shred_index,
+                        self.next_code_index,
+                        &self.reed_solomon_cache,
+                        &mut stats,
+                    );
                 let sigs: Vec<_> = partition_last_data_shred
                     .iter()
                     .map(|s| (s.signature(), s.index()))

@@ -13,6 +13,7 @@ use {
         banking_trace::{BankingTracer, Channels, BANKING_TRACE_DIR_DEFAULT_BYTE_LIMIT},
         validator::{BlockProductionMethod, TransactionStructure},
     },
+    solana_entry::entry_marker::EntryMarker,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
@@ -58,7 +59,8 @@ fn check_txs(
     let now = Instant::now();
     let mut no_bank = false;
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::from_millis(10))
+        if let Ok((_bank, (EntryMarker::Entry(entry), _tick_height))) =
+            receiver.recv_timeout(Duration::from_millis(10))
         {
             total += entry.transactions.len();
         }
