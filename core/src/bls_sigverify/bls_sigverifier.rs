@@ -7,7 +7,6 @@ use {
             bls_sigverify_service::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
-        consensus,
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
