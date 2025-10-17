@@ -3,25 +3,33 @@
 use {
     solana_clock::Slot,
     solana_pubkey::Pubkey,
-    std::{collections::HashMap, sync::RwLock, time::Instant},
+    std::{collections::HashMap, sync::RwLock},
 };
+
+// We should only have 50 nodes in test cluster. By the time we move to testnet we
+// will have the real thing implemented.
+const MAX_ENTRIES: usize = 2000;
 
 #[derive(Default)]
 pub struct AlpenglowLastVoted {
-    last_voted_map: RwLock<HashMap<Pubkey, (Slot, Instant)>>,
+    last_voted_map: RwLock<HashMap<Pubkey, Slot>>,
 }
 
 impl AlpenglowLastVoted {
     pub fn update_last_voted(&self, verified_votes_by_pubkey: &HashMap<Pubkey, Vec<Slot>>) {
-        let now = Instant::now();
         let mut map = self.last_voted_map.write().unwrap();
         for (pubkey, slots) in verified_votes_by_pubkey {
             let largest_slot = slots.iter().max().unwrap();
-            map.entry(*pubkey)
-                .and_modify(|entry| *entry = (entry.0.max(*largest_slot), now))
-                .or_insert((*largest_slot, now));
+            let Some(entry) = map.get_mut(pubkey) else {
+                if map.len() >= MAX_ENTRIES {
+                    warn!("AlpenglowLastVoted map reached max entries, removing oldest entry");
+                } else {
+                    map.insert(*pubkey, *largest_slot);
+                }
+                continue;
+            };
+            *entry = (*entry).max(*largest_slot);
         }
-        map.retain(|_, (_, time)| now.duration_since(*time).as_secs() <= 3600);
     }
 
     pub fn get_last_voted(&self, pubkey: &Pubkey) -> Option<Slot> {
@@ -29,7 +37,7 @@ impl AlpenglowLastVoted {
             .read()
             .unwrap()
             .get(pubkey)
-            .map(|(slot, _)| *slot)
+            .copied()
     }
 }
 
