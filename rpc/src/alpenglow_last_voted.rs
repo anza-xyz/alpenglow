@@ -23,9 +23,15 @@ impl AlpenglowLastVoted {
             let Some(entry) = map.get_mut(pubkey) else {
                 if map.len() >= MAX_ENTRIES {
                     warn!("AlpenglowLastVoted map reached max entries, removing oldest entry");
-                } else {
-                    map.insert(*pubkey, *largest_slot);
+                    let oldest_key = map
+                        .iter()
+                        .min_by_key(|(_, slot)| *slot)
+                        .map(|(k, _)| *k)
+                        .expect("Failed to find oldest entry in AlpenglowLastVoted map");
+
+                    map.remove(&oldest_key);
                 }
+                map.insert(*pubkey, *largest_slot);
                 continue;
             };
             *entry = (*entry).max(*largest_slot);
