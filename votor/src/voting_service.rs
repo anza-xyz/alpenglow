@@ -158,13 +158,15 @@ impl VotingService {
                     let Ok(bls_op) = bls_receiver.recv() else {
                         break;
                     };
-                    if let BLSOp::PushVote { slot, .. } = &bls_op {
-                        if slot > &my_last_voted {
-                            my_last_voted = *slot;
-                            alpenglow_last_voted.update_last_voted(&HashMap::from([(
-                                my_vote_pubkey,
-                                my_last_voted,
-                            )]));
+                    if let BLSOp::PushVote { slot, message, .. } = &bls_op {
+                        if let ConsensusMessage::Vote(vote_message) = message.as_ref() {
+                            if vote_message.vote.is_notarization_or_finalization()
+                                && slot > &my_last_voted
+                            {
+                                my_last_voted = *slot;
+                                alpenglow_last_voted
+                                    .update_last_voted(&HashMap::from([(my_vote_pubkey, *slot)]));
+                            }
                         }
                     }
                     Self::handle_bls_op(
