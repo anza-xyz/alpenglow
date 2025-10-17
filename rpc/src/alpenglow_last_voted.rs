@@ -39,11 +39,7 @@ impl AlpenglowLastVoted {
     }
 
     pub fn get_last_voted(&self, pubkey: &Pubkey) -> Option<Slot> {
-        self.last_voted_map
-            .read()
-            .unwrap()
-            .get(pubkey)
-            .copied()
+        self.last_voted_map.read().unwrap().get(pubkey).copied()
     }
 }
 
