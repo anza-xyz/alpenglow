@@ -169,11 +169,8 @@ impl BLSSigVerifier {
 
                     // Capture votes received metrics before old messages are potentially discarded below.
                     let slot = vote_message.vote.slot();
-                    if let Some(existing_slot) = last_voted_slots.get_mut(solana_pubkey) {
-                        *existing_slot = (*existing_slot).max(slot);
-                    } else {
-                        last_voted_slots.insert(*solana_pubkey, slot);
-                    }
+                    let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
+                    *existing_slot = (*existing_slot).max(slot);
                     consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
                         id: *solana_pubkey,
                         vote: vote_message.vote,
