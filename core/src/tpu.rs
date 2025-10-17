@@ -43,6 +43,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_rpc::{
+        alpenglow_last_voted::AlpenglowLastVoted,
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions,
     },
@@ -171,6 +172,7 @@ impl Tpu {
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -345,6 +347,7 @@ impl Tpu {
                 verified_vote_sender.clone(),
                 verified_consensus_message_sender,
                 consensus_metrics_sender,
+                alpenglow_last_voted,
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };

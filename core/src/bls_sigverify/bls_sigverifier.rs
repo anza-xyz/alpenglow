@@ -21,6 +21,7 @@ use {
     solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
+    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
@@ -94,6 +95,7 @@ pub struct BLSSigVerifier {
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
+    alpenglow_last_voted: Arc<AlpenglowLastVoted>,
 }
 
 impl BLSSigVerifier {
@@ -238,6 +240,7 @@ impl BLSSigVerifier {
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -248,6 +251,7 @@ impl BLSSigVerifier {
             vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,
+            alpenglow_last_voted,
         }
     }
 
@@ -290,6 +294,10 @@ impl BLSSigVerifier {
                 }
             }
         }
+
+        // Send to RPC service for last voted tracking
+        self.alpenglow_last_voted
+            .update_last_voted(&verified_votes_by_pubkey);
 
         // Send votes
         for (pubkey, slots) in verified_votes_by_pubkey {
@@ -678,6 +686,7 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::new());
         (
             validator_keypairs,
             BLSSigVerifier::new(
@@ -685,6 +694,7 @@ mod tests {
                 verified_vote_sender,
                 message_sender,
                 consensus_metrics_sender,
+                alpenglow_last_voted,
             ),
         )
     }
@@ -1479,6 +1489,7 @@ mod tests {
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            Arc::new(AlpenglowLastVoted::new()),
         );
 
         let vote = Vote::new_skip_vote(2);
