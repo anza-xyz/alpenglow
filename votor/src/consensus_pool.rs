@@ -15,6 +15,7 @@ use {
         },
         event::VotorEvent,
     },
+    consensus_rewards::ConsensusRewards,
     log::{error, trace},
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
@@ -35,6 +36,7 @@ use {
     thiserror::Error,
 };
 
+pub mod consensus_rewards;
 pub mod parent_ready_tracker;
 mod slot_stake_counters;
 mod stats;
@@ -119,10 +121,15 @@ pub struct ConsensusPool {
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
+    consensus_rewards: ConsensusRewards,
 }
 
 impl ConsensusPool {
-    pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
+    pub fn new_from_root_bank(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        consensus_rewards: ConsensusRewards,
+    ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
         let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
@@ -137,6 +144,7 @@ impl ConsensusPool {
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
+            consensus_rewards,
         }
     }
 
@@ -235,6 +243,10 @@ impl ConsensusPool {
                     };
                 }
             });
+
+            self.consensus_rewards
+                .maybe_add_builder(cert_id, &vote_certificate_builder);
+
             let new_cert = Arc::new(vote_certificate_builder.build()?);
             self.insert_certificate(cert_id, new_cert.clone(), events);
             self.stats
@@ -678,7 +690,9 @@ mod tests {
             VerifiableSignature,
         },
         solana_clock::Slot,
+        solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
         solana_hash::Hash,
+        solana_ledger::leader_schedule_cache::LeaderScheduleCache,
         solana_runtime::{
             bank::{Bank, NewBankOptions},
             bank_forks::BankForks,
@@ -687,6 +701,7 @@ mod tests {
             },
         },
         solana_signer::Signer,
+        solana_streamer::socket::SocketAddrSpace,
         solana_votor_messages::consensus_message::{
             CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
@@ -732,10 +747,21 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
+        let contact_info =
+            ContactInfo::new_localhost(&validator_keypairs[0].node_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(validator_keypairs[0].node_keypair.insecure_clone()),
+            SocketAddrSpace::Unspecified,
+        ));
         let root_bank = bank_forks.read().unwrap().root_bank();
+        let consensus_rewards = ConsensusRewards::new(leader_schedule_cache, cluster_info);
         (
             validator_keypairs,
-            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank),
+            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank, consensus_rewards),
             bank_forks,
         )
     }
@@ -1861,9 +1887,21 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let bank_forks = create_bank_forks(&validator_keypairs);
+        let leader_schedule_cache = Arc::new(LeaderScheduleCache::new_from_bank(
+            &bank_forks.read().unwrap().root_bank(),
+        ));
+        let contact_info =
+            ContactInfo::new_localhost(&validator_keypairs[0].node_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(validator_keypairs[0].node_keypair.insecure_clone()),
+            SocketAddrSpace::Unspecified,
+        ));
+        let consensus_rewards = ConsensusRewards::new(leader_schedule_cache, cluster_info);
         let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
+            consensus_rewards,
         );
 
         let root_bank = bank_forks.read().unwrap().root_bank();

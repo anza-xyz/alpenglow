@@ -8,7 +8,8 @@ use {
         commitment::{update_commitment_cache, CommitmentAggregationData, CommitmentType},
         common::DELTA_STANDSTILL,
         consensus_pool::{
-            parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
+            consensus_rewards::ConsensusRewards, parent_ready_tracker::BlockProductionParent,
+            AddVoteError, ConsensusPool,
         },
         event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
         voting_service::BLSOp,
@@ -182,7 +183,10 @@ impl ConsensusPoolService {
         let mut events = vec![];
         let mut my_pubkey = ctx.cluster_info.id();
         let root_bank = ctx.sharable_banks.root();
-        let mut consensus_pool = ConsensusPool::new_from_root_bank(my_pubkey, &root_bank);
+        let consensus_rewards =
+            ConsensusRewards::new(ctx.leader_schedule_cache.clone(), ctx.cluster_info.clone());
+        let mut consensus_pool =
+            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, consensus_rewards);
 
         // Wait until migration has completed
         info!("{}: Certificate pool loop initialized", &my_pubkey);
