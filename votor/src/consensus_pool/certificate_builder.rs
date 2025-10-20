@@ -23,6 +23,8 @@ pub enum AggregateError {
     Bls(#[from] BlsError),
     #[error("Validator does not exist for given rank: {0}")]
     ValidatorDoesNotExist(u16),
+    #[error("validator already included")]
+    ValidatorAlreadyIncluded,
 }
 
 /// Different types of errors that can be returned from the [`CertificateBuilder::build()`] function.
@@ -69,18 +71,30 @@ fn build_cert_from_bitmaps(
     signature: SignatureProjective,
     mut bitmap0: BitVec<u8, Lsb0>,
     mut bitmap1: BitVec<u8, Lsb0>,
-) -> Result<CertificateMessage, BuildError> {
+) -> Result<CertificateMessage, EncodeError> {
     let last_one_0 = bitmap0.last_one().map_or(0, |i| i.saturating_add(1));
     let last_one_1 = bitmap1.last_one().map_or(0, |i| i.saturating_add(1));
     let new_length = last_one_0.max(last_one_1);
     bitmap0.resize(new_length, false);
     bitmap1.resize(new_length, false);
-    let bitmap = encode_base3(&bitmap0, &bitmap1).map_err(BuildError::Encode)?;
+    let bitmap = encode_base3(&bitmap0, &bitmap1)?;
     Ok(CertificateMessage {
         certificate,
         signature: signature.into(),
         bitmap,
     })
+}
+
+/// Looks up the bit at `rank` in `bitmap` and sets it to true.
+fn try_set_bitmap(bitmap: &mut BitVec<u8, Lsb0>, rank: u16) -> Result<(), AggregateError> {
+    let mut ptr = bitmap
+        .get_mut(rank as usize)
+        .ok_or(AggregateError::ValidatorDoesNotExist(rank))?;
+    if *ptr {
+        return Err(AggregateError::ValidatorAlreadyIncluded);
+    }
+    *ptr = true;
+    Ok(())
 }
 
 /// Internal builder for creating [`CertificateMessage`] by using BLS signature aggregation.
@@ -139,27 +153,22 @@ impl BuilderType {
         msgs: &[VoteMessage],
     ) -> Result<(), AggregateError> {
         let vote_types = certificate_limits_and_vote_types(certificate).1;
-        assert_eq!(vote_types.len(), 2);
         match self {
             Self::Skip {
                 signature0,
                 bitmap0,
                 sig_and_bitmap1,
             } => {
+                assert_eq!(vote_types.len(), 2);
                 for msg in msgs {
-                    let rank = msg.rank as usize;
-                    if MAXIMUM_VALIDATORS <= rank {
-                        return Err(AggregateError::ValidatorDoesNotExist(msg.rank));
-                    }
                     let vote_type = VoteType::get_type(&msg.vote);
                     if vote_type == vote_types[0] {
-                        bitmap0.set(rank, true);
+                        try_set_bitmap(bitmap0, msg.rank)?;
                     } else {
                         assert_eq!(vote_type, vote_types[1]);
-                        sig_and_bitmap1
-                            .get_or_insert((SignatureProjective::identity(), default_bitvec()))
-                            .1
-                            .set(rank, true);
+                        let (_, bitmap) = sig_and_bitmap1
+                            .get_or_insert((SignatureProjective::identity(), default_bitvec()));
+                        try_set_bitmap(bitmap, msg.rank)?;
                     }
                 }
                 signature0.aggregate_with(msgs.iter().filter_map(|msg| {
@@ -183,31 +192,26 @@ impl BuilderType {
                 bitmap0,
                 bitmap1,
             } => {
+                assert_eq!(vote_types.len(), 2);
                 for msg in msgs {
-                    let rank = msg.rank as usize;
-                    if MAXIMUM_VALIDATORS <= rank {
-                        return Err(AggregateError::ValidatorDoesNotExist(msg.rank));
-                    }
                     let vote_type = VoteType::get_type(&msg.vote);
                     if vote_type == vote_types[0] {
-                        bitmap0.set(rank, true);
+                        try_set_bitmap(bitmap0, msg.rank)?;
                     } else {
                         assert_eq!(vote_type, vote_types[1]);
-                        bitmap1.get_or_insert(default_bitvec()).set(rank, true);
+                        let bitmap = bitmap1.get_or_insert(default_bitvec());
+                        try_set_bitmap(bitmap, msg.rank)?;
                     }
                 }
                 Ok(signature.aggregate_with(msgs.iter().map(|m| &m.signature))?)
             }
 
             Self::SingleVote { signature, bitmap } => {
+                assert_eq!(vote_types.len(), 1);
                 for msg in msgs {
-                    let rank = msg.rank as usize;
-                    if MAXIMUM_VALIDATORS <= rank {
-                        return Err(AggregateError::ValidatorDoesNotExist(msg.rank));
-                    }
                     let vote_type = VoteType::get_type(&msg.vote);
                     assert_eq!(vote_type, vote_types[0]);
-                    bitmap.set(rank, true);
+                    try_set_bitmap(bitmap, msg.rank)?;
                 }
                 Ok(signature.aggregate_with(msgs.iter().map(|m| &m.signature))?)
             }
@@ -230,6 +234,7 @@ impl BuilderType {
                 Some((signature1, bitmap1)) => {
                     signature0.aggregate_with([signature1].iter())?;
                     build_cert_from_bitmaps(certificate, signature0, bitmap0, bitmap1)
+                        .map_err(BuildError::Encode)
                 }
             },
             Self::NotarFallback {
@@ -239,7 +244,8 @@ impl BuilderType {
             } => match bitmap1 {
                 None => build_cert_from_bitmap(certificate, signature, bitmap0)
                     .map_err(BuildError::Encode),
-                Some(bitmap1) => build_cert_from_bitmaps(certificate, signature, bitmap0, bitmap1),
+                Some(bitmap1) => build_cert_from_bitmaps(certificate, signature, bitmap0, bitmap1)
+                    .map_err(BuildError::Encode),
             },
         }
     }
