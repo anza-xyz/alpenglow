@@ -21,6 +21,7 @@ use {
     solana_measure::measure::Measure,
     solana_perf::packet::PacketRefMut,
     solana_pubkey::Pubkey,
+    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
@@ -94,6 +95,7 @@ pub struct BLSSigVerifier {
     vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
+    alpenglow_last_voted: Arc<AlpenglowLastVoted>,
 }
 
 impl BLSSigVerifier {
@@ -107,6 +109,7 @@ impl BLSSigVerifier {
         let mut votes_to_verify = Vec::new();
         let mut certs_to_verify = Vec::new();
         let mut consensus_metrics_to_send = Vec::new();
+        let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
 
         let root_bank = self.sharable_banks.root();
         if self.last_checked_root_slot < root_bank.slot() {
@@ -164,6 +167,11 @@ impl BLSSigVerifier {
                     };
 
                     // Capture votes received metrics before old messages are potentially discarded below.
+                    let slot = vote_message.vote.slot();
+                    if vote_message.vote.is_notarization_or_finalization() {
+                        let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
+                        *existing_slot = (*existing_slot).max(slot);
+                    }
                     consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
                         id: *solana_pubkey,
                         vote: vote_message.vote,
@@ -218,6 +226,11 @@ impl BLSSigVerifier {
         votes_result?;
         certs_result?;
 
+        // Send to RPC service for last voted tracking
+        self.alpenglow_last_voted
+            .update_last_voted(&last_voted_slots);
+
+        // Send to metrics service for metrics aggregation
         if self
             .consensus_metrics_sender
             .send((Instant::now(), consensus_metrics_to_send))
@@ -238,6 +251,7 @@ impl BLSSigVerifier {
         verified_votes_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -248,6 +262,7 @@ impl BLSSigVerifier {
             vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,
+            alpenglow_last_voted,
         }
     }
 
@@ -674,6 +689,7 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
         (
             validator_keypairs,
             BLSSigVerifier::new(
@@ -681,6 +697,7 @@ mod tests {
                 verified_vote_sender,
                 message_sender,
                 consensus_metrics_sender,
+                alpenglow_last_voted,
             ),
         )
     }
@@ -1472,6 +1489,7 @@ mod tests {
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            Arc::new(AlpenglowLastVoted::default()),
         );
 
         let vote = Vote::new_skip_vote(2);

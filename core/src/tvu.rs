@@ -40,7 +40,8 @@ use {
     solana_poh::{poh_controller::PohController, poh_recorder::PohRecorder},
     solana_pubkey::Pubkey,
     solana_rpc::{
-        max_slots::MaxSlots, optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
+        alpenglow_last_voted::AlpenglowLastVoted, max_slots::MaxSlots,
+        optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier,
     },
     solana_runtime::{
@@ -197,6 +198,7 @@ impl Tvu {
         votor_event_receiver: VotorEventReceiver,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         consensus_metrics_receiver: ConsensusMetricsEventReceiver,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     ) -> Result<Self, String> {
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -404,6 +406,8 @@ impl Tvu {
             alpenglow_connection_cache,
             bank_forks.clone(),
             voting_service_test_override,
+            alpenglow_last_voted,
+            *vote_account,
         );
 
         let warm_quic_cache_service = create_cache_warmer_if_needed(
@@ -684,6 +688,7 @@ pub mod tests {
             votor_event_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
+            Arc::new(AlpenglowLastVoted::default()),
         )
         .expect("assume success");
         if enable_wen_restart {

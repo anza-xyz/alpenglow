@@ -8,6 +8,7 @@ use {
     solana_hash::Hash,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
+    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{
         bank::Bank,
         bank_forks::BankForks,
@@ -104,6 +105,7 @@ fn setup_environment() -> BenchEnvironment {
         verified_votes_s,
         consensus_msg_s,
         consensus_metrics_sender,
+        Arc::new(AlpenglowLastVoted::default()),
     );
 
     BenchEnvironment {

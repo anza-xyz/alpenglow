@@ -1,5 +1,5 @@
 use {
-    crate::common::{certificate_limits_and_vote_types, VoteType},
+    crate::common::certificate_limits_and_vote_types,
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{encode_base2, encode_base3, EncodeError},
@@ -161,7 +161,7 @@ impl BuilderType {
             } => {
                 assert_eq!(vote_types.len(), 2);
                 for msg in msgs {
-                    let vote_type = VoteType::get_type(&msg.vote);
+                    let vote_type = msg.vote.get_type();
                     if vote_type == vote_types[0] {
                         try_set_bitmap(bitmap0, msg.rank)?;
                     } else {
@@ -172,15 +172,13 @@ impl BuilderType {
                     }
                 }
                 signature0.aggregate_with(msgs.iter().filter_map(|msg| {
-                    let vote_type = VoteType::get_type(&msg.vote);
-                    (vote_type == vote_types[0]).then_some(&msg.signature)
+                    (msg.vote.get_type() == vote_types[0]).then_some(&msg.signature)
                 }))?;
                 sig_and_bitmap1
                     .as_mut()
                     .map(|(signature, _)| {
                         signature.aggregate_with(msgs.iter().filter_map(|msg| {
-                            let vote_type = VoteType::get_type(&msg.vote);
-                            (vote_type == vote_types[1]).then_some(&msg.signature)
+                            (msg.vote.get_type() == vote_types[1]).then_some(&msg.signature)
                         }))
                     })
                     .unwrap_or(Ok(()))?;
@@ -194,7 +192,7 @@ impl BuilderType {
             } => {
                 assert_eq!(vote_types.len(), 2);
                 for msg in msgs {
-                    let vote_type = VoteType::get_type(&msg.vote);
+                    let vote_type = msg.vote.get_type();
                     if vote_type == vote_types[0] {
                         try_set_bitmap(bitmap0, msg.rank)?;
                     } else {
@@ -209,8 +207,7 @@ impl BuilderType {
             Self::SingleVote { signature, bitmap } => {
                 assert_eq!(vote_types.len(), 1);
                 for msg in msgs {
-                    let vote_type = VoteType::get_type(&msg.vote);
-                    assert_eq!(vote_type, vote_types[0]);
+                    assert_eq!(msg.vote.get_type(), vote_types[0]);
                     try_set_bitmap(bitmap, msg.rank)?;
                 }
                 Ok(signature.aggregate_with(msgs.iter().map(|m| &m.signature))?)
