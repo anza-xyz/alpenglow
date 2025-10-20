@@ -1,8 +1,8 @@
 use {
-    crate::{common::VoteType, event::VotorEvent, voting_service::BLSOp},
+    crate::{event::VotorEvent, voting_service::BLSOp},
     solana_clock::Slot,
     solana_metrics::datapoint_info,
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, vote::VoteType},
     std::{
         collections::{BTreeMap, HashMap},
         time::{Duration, Instant},
@@ -188,7 +188,7 @@ impl EventHandlerStats {
                 warn!("Unexpected BLS message type: {message:?}");
                 return;
             };
-            let vote_type = VoteType::get_type(&vote.vote);
+            let vote_type = vote.vote.get_type();
             let entry = self.sent_votes.entry(vote_type).or_insert(0);
             *entry = entry.saturating_add(1);
             if vote_type == VoteType::Notarize {

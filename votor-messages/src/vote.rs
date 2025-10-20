@@ -28,6 +28,23 @@ pub enum Vote {
     Genesis(GenesisVote),
 }
 
+/// Enum of different types of [`Vote`]s.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VoteType {
+    /// Finalize vote.
+    Finalize,
+    /// Notarize vote.
+    Notarize,
+    /// Notarize fallback vote.
+    NotarizeFallback,
+    /// Skip vote
+    Skip,
+    /// Skip fallback vote.
+    SkipFallback,
+    /// Genesis vote.
+    Genesis,
+}
+
 impl Vote {
     /// Create a new notarization vote
     pub fn new_notarization_vote(slot: Slot, block_id: Hash) -> Self {
@@ -114,6 +131,18 @@ impl Vote {
     /// Whether the vote is a notarization or finalization
     pub fn is_notarization_or_finalization(&self) -> bool {
         matches!(self, Self::Notarize(_) | Self::Finalize(_))
+    }
+
+    /// Returns the [`VoteType`] for the vote.
+    pub fn get_type(&self) -> VoteType {
+        match self {
+            Vote::Notarize(_) => VoteType::Notarize,
+            Vote::NotarizeFallback(_) => VoteType::NotarizeFallback,
+            Vote::Skip(_) => VoteType::Skip,
+            Vote::SkipFallback(_) => VoteType::SkipFallback,
+            Vote::Finalize(_) => VoteType::Finalize,
+            Vote::Genesis(_) => VoteType::Genesis,
+        }
     }
 }
 

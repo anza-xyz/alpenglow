@@ -1,7 +1,6 @@
 use {
-    crate::common::VoteType,
     solana_metrics::datapoint_info,
-    solana_votor_messages::consensus_message::CertificateType,
+    solana_votor_messages::{consensus_message::CertificateType, vote::VoteType},
     std::time::{Duration, Instant},
 };
 

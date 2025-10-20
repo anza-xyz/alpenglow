@@ -1,35 +1,14 @@
 use {
     solana_votor_messages::{
-        consensus_message::Certificate, migration::GENESIS_VOTE_THRESHOLD, vote::Vote,
+        consensus_message::Certificate,
+        migration::GENESIS_VOTE_THRESHOLD,
+        vote::{Vote, VoteType},
     },
     std::time::Duration,
 };
 
 // Core consensus types and constants
 pub type Stake = u64;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum VoteType {
-    Finalize,
-    Notarize,
-    NotarizeFallback,
-    Skip,
-    SkipFallback,
-    Genesis,
-}
-
-impl VoteType {
-    pub fn get_type(vote: &Vote) -> VoteType {
-        match vote {
-            Vote::Notarize(_) => VoteType::Notarize,
-            Vote::NotarizeFallback(_) => VoteType::NotarizeFallback,
-            Vote::Skip(_) => VoteType::Skip,
-            Vote::SkipFallback(_) => VoteType::SkipFallback,
-            Vote::Finalize(_) => VoteType::Finalize,
-            Vote::Genesis(_) => VoteType::Genesis,
-        }
-    }
-}
 
 pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
     match vote_type {

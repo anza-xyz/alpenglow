@@ -1,5 +1,5 @@
 use {
-    crate::common::{certificate_limits_and_vote_types, VoteType},
+    crate::common::certificate_limits_and_vote_types,
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{encode_base2, encode_base3, DecodeError, EncodeError},
@@ -60,7 +60,7 @@ impl VoteCertificateBuilder {
                 return Err(CertificateError::ValidatorDoesNotExist(vote_message.rank));
             }
 
-            let vote_type = VoteType::get_type(&vote_message.vote);
+            let vote_type = vote_message.vote.get_type();
             if vote_type == vote_types[0] {
                 self.bitmap_0.set(rank, true);
             } else {

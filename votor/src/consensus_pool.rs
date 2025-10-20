@@ -3,8 +3,7 @@ use {
         commitment::CommitmentError,
         common::{
             certificate_limits_and_vote_types, conflicting_types, vote_to_certificate_ids, Stake,
-            VoteType, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
@@ -25,7 +24,7 @@ use {
         consensus_message::{
             Block, Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
-        vote::Vote,
+        vote::{Vote, VoteType},
     },
     std::{
         cmp::Ordering,
@@ -421,7 +420,7 @@ impl ConsensusPool {
             }
             *block_id
         });
-        let vote_type = VoteType::get_type(vote);
+        let vote_type = vote.get_type();
         if let Some(conflicting_type) =
             self.has_conflicting_vote(vote_slot, vote_type, &validator_vote_key, &block_id)
         {
