@@ -644,7 +644,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_signer_store::encode_base2,
-        solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
+        solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
         solana_votor_messages::{
             consensus_message::{
                 Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
@@ -705,7 +705,7 @@ mod tests {
         certificate: Certificate,
         ranks: &[usize],
     ) -> CertificateMessage {
-        let mut builder = VoteCertificateBuilder::new(certificate);
+        let mut builder = CertificateBuilder::new(certificate);
         // Assumes Base2 encoding (single vote type) for simplicity in this helper.
         let vote = certificate.to_source_vote();
         let vote_messages: Vec<VoteMessage> = ranks
@@ -1282,7 +1282,7 @@ mod tests {
             ))
         });
         let certificate = Certificate::NotarizeFallback(slot, block_hash);
-        let mut builder = VoteCertificateBuilder::new(certificate);
+        let mut builder = CertificateBuilder::new(certificate);
         builder
             .aggregate(&all_vote_messages)
             .expect("Failed to aggregate votes");
@@ -1387,10 +1387,7 @@ mod tests {
                 }
             })
             .collect();
-        let mut builder =
-            solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder::new(
-                certificate,
-            );
+        let mut builder = CertificateBuilder::new(certificate);
         builder
             .aggregate(&cert_vote_messages)
             .expect("Failed to aggregate votes for certificate");
@@ -1543,7 +1540,7 @@ mod tests {
             })
             .collect();
 
-        let mut builder1 = VoteCertificateBuilder::new(certificate);
+        let mut builder1 = CertificateBuilder::new(certificate);
         builder1
             .aggregate(&vote_messages)
             .expect("Failed to aggregate votes");
@@ -1561,7 +1558,7 @@ mod tests {
         assert_eq!(verifier.stats.received_verified.load(Ordering::Relaxed), 0);
 
         vote_messages.pop(); // Remove one signature
-        let mut builder2 = VoteCertificateBuilder::new(certificate);
+        let mut builder2 = CertificateBuilder::new(certificate);
         builder2
             .aggregate(&vote_messages)
             .expect("Failed to aggregate votes");

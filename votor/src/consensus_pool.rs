@@ -35,11 +35,10 @@ use {
     thiserror::Error,
 };
 
-mod certificate_builder;
+pub mod certificate_builder;
 pub mod parent_ready_tracker;
 mod slot_stake_counters;
 mod stats;
-pub mod vote_certificate_builder;
 mod vote_pool;
 
 pub type PoolId = (Slot, VoteType);
