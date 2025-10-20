@@ -15,7 +15,7 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
-    solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
+    solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
     solana_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         vote::Vote,
@@ -135,7 +135,7 @@ fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         })
         .collect();
 
-    let mut builder = VoteCertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(certificate);
     builder.aggregate(&vote_messages).unwrap();
     let cert_message = builder.build().unwrap();
     ConsensusMessage::Certificate(cert_message)
@@ -174,7 +174,7 @@ fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         });
     }
 
-    let mut builder = VoteCertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(certificate);
     builder.aggregate(&all_vote_messages).unwrap();
     let cert_message = builder.build().unwrap();
     ConsensusMessage::Certificate(cert_message)
