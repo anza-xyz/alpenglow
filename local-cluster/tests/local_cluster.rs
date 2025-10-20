@@ -7033,14 +7033,14 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                                 }
                             }
                         }
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Stage 3: Verify continued liveness after partition resolution
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage == Stage::ObserveLiveness
-                                && [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                    .contains(&cert_message.certificate.certificate_type())
+                                && (matches!(cert_type, CertificateType::Finalize(_))
+                                    || matches!(cert_type, CertificateType::FinalizeFast(_, _)))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
                                     exit.store(true, Ordering::Relaxed);
@@ -7371,17 +7371,17 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                             );
                         }
 
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Wait until the final stage before looking for finalization certificates.
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage != Stage::ObserveLiveness {
                                 continue;
                             }
                             // Observing finalization certificates to ensure liveness.
-                            if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                .contains(&cert_message.certificate.certificate_type())
+                            if matches!(cert_type, CertificateType::Finalize(_))
+                                || matches!(cert_type, CertificateType::FinalizeFast(_, _))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
                                     exit.store(true, Ordering::Relaxed);
@@ -7667,17 +7667,17 @@ fn test_alpenglow_add_missing_parent_ready() {
                             experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
                         }
 
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Wait until the final stage before looking for finalization certificates.
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage != Stage::ObserveLiveness {
                                 continue;
                             }
                             // Observing finalization certificates to ensure liveness.
-                            if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                .contains(&cert_message.certificate.certificate_type())
+                            if matches!(cert_type, CertificateType::Finalize(_))
+                                || matches!(cert_type, CertificateType::FinalizeFast(_, _))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
                             }
                         }
                     }

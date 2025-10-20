@@ -14,7 +14,7 @@ use {
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::bank_forks::BankForks,
     solana_transaction_error::TransportError,
-    solana_votor_messages::consensus_message::{CertificateMessage, ConsensusMessage},
+    solana_votor_messages::consensus_message::{Certificate, ConsensusMessage},
     std::{
         collections::HashMap,
         net::SocketAddr,
@@ -44,7 +44,7 @@ pub enum BLSOp {
         saved_vote_history: SavedVoteHistoryVersions,
     },
     PushCertificate {
-        certificate: Arc<CertificateMessage>,
+        certificate: Arc<Certificate>,
     },
 }
 
@@ -247,7 +247,7 @@ impl VotingService {
                 );
             }
             BLSOp::PushCertificate { certificate } => {
-                let vote_slot = certificate.certificate.slot();
+                let vote_slot = certificate.cert_type.slot();
                 let message = ConsensusMessage::Certificate((*certificate).clone());
                 Self::broadcast_consensus_message(
                     vote_slot,
@@ -290,9 +290,7 @@ mod tests {
             streamer::StakedNodes,
         },
         solana_votor_messages::{
-            consensus_message::{
-                Certificate, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
-            },
+            consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
             vote::Vote,
         },
         std::{
@@ -363,13 +361,13 @@ mod tests {
         rank: 1,
     }))]
     #[test_case(BLSOp::PushCertificate {
-        certificate: Arc::new(CertificateMessage {
-            certificate: Certificate::new(CertificateType::Skip, 5, None),
+        certificate: Arc::new(Certificate {
+            cert_type: CertificateType::Skip(5),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         }),
-    }, ConsensusMessage::Certificate(CertificateMessage {
-        certificate: Certificate::new(CertificateType::Skip, 5, None),
+    }, ConsensusMessage::Certificate(Certificate {
+        cert_type: CertificateType::Skip(5),
         signature: BLSSignature::default(),
         bitmap: Vec::new(),
     }))]

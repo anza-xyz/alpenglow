@@ -6,7 +6,44 @@ use {
 
 const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
-#[derive(Debug)]
+#[derive(Default)]
+struct CertificateStats {
+    finalize: u64,
+    finalize_fast: u64,
+    notarize: u64,
+    notarize_fallback: u64,
+    skip: u64,
+    genesis: u64,
+}
+
+impl CertificateStats {
+    fn increment(&mut self, certificate: &CertificateType) {
+        match certificate {
+            CertificateType::Finalize(_) => self.finalize = self.finalize.saturating_add(1),
+            CertificateType::FinalizeFast(_, _) => {
+                self.finalize_fast = self.finalize_fast.saturating_add(1)
+            }
+            CertificateType::Notarize(_, _) => self.notarize = self.notarize.saturating_add(1),
+            CertificateType::NotarizeFallback(_, _) => {
+                self.notarize_fallback = self.notarize_fallback.saturating_add(1)
+            }
+            CertificateType::Skip(_) => self.skip = self.skip.saturating_add(1),
+            CertificateType::Genesis(_, _) => self.genesis = self.genesis.saturating_add(1),
+        }
+    }
+
+    fn record(&self, header: &'static str) {
+        datapoint_info!(
+            header,
+            ("finalize", self.finalize, i64),
+            ("finalize_fast", self.finalize_fast, i64),
+            ("notarize", self.notarize, i64),
+            ("notarize_fallback", self.notarize_fallback, i64),
+            ("skip", self.skip, i64),
+        )
+    }
+}
+
 pub(crate) struct ConsensusPoolStats {
     pub(crate) conflicting_votes: u32,
     pub(crate) event_safe_to_notarize: u32,
@@ -18,8 +55,8 @@ pub(crate) struct ConsensusPoolStats {
     pub(crate) out_of_range_certs: u32,
     pub(crate) out_of_range_votes: u32,
 
-    pub(crate) new_certs_generated: Vec<u32>,
-    pub(crate) new_certs_ingested: Vec<u32>,
+    new_certs_generated: CertificateStats,
+    new_certs_ingested: CertificateStats,
     pub(crate) ingested_votes: Vec<u32>,
 
     pub(crate) last_request_time: Instant,
@@ -34,7 +71,6 @@ impl Default for ConsensusPoolStats {
 impl ConsensusPoolStats {
     pub fn new() -> Self {
         let num_vote_types = (VoteType::Genesis as usize).saturating_add(1);
-        let num_cert_types = (CertificateType::Genesis as usize).saturating_add(1);
         Self {
             conflicting_votes: 0,
             event_safe_to_notarize: 0,
@@ -46,8 +82,8 @@ impl ConsensusPoolStats {
             out_of_range_certs: 0,
             out_of_range_votes: 0,
 
-            new_certs_ingested: vec![0; num_cert_types],
-            new_certs_generated: vec![0; num_cert_types],
+            new_certs_ingested: CertificateStats::default(),
+            new_certs_generated: CertificateStats::default(),
             ingested_votes: vec![0; num_vote_types],
 
             last_request_time: Instant::now(),
@@ -60,15 +96,12 @@ impl ConsensusPoolStats {
         self.ingested_votes[index] = self.ingested_votes[index].saturating_add(1);
     }
 
-    pub fn incr_cert_type(&mut self, cert_type: CertificateType, is_generated: bool) {
-        let index = cert_type as usize;
-        let array = if is_generated {
-            &mut self.new_certs_generated
+    pub fn incr_cert_type(&mut self, certificate: &CertificateType, is_generated: bool) {
+        if is_generated {
+            self.new_certs_generated.increment(certificate);
         } else {
-            &mut self.new_certs_ingested
-        };
-
-        array[index] = array[index].saturating_add(1);
+            self.new_certs_ingested.increment(certificate);
+        }
     }
 
     fn report(&self) {
@@ -130,93 +163,10 @@ impl ConsensusPoolStats {
             ),
         );
 
-        datapoint_info!(
-            "certfificate_pool_ingested_certs",
-            (
-                "finalize",
-                *self
-                    .new_certs_ingested
-                    .get(CertificateType::Finalize as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "finalize_fast",
-                *self
-                    .new_certs_ingested
-                    .get(CertificateType::FinalizeFast as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "notarize",
-                *self
-                    .new_certs_ingested
-                    .get(CertificateType::Notarize as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "notarize_fallback",
-                *self
-                    .new_certs_ingested
-                    .get(CertificateType::NotarizeFallback as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "skip",
-                *self
-                    .new_certs_ingested
-                    .get(CertificateType::Skip as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-        );
-
-        datapoint_info!(
-            "consensus_pool_generated_certs",
-            (
-                "finalize",
-                *self
-                    .new_certs_generated
-                    .get(CertificateType::Finalize as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "finalize_fast",
-                *self
-                    .new_certs_generated
-                    .get(CertificateType::FinalizeFast as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "notarize",
-                *self
-                    .new_certs_generated
-                    .get(CertificateType::Notarize as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "notarize_fallback",
-                *self
-                    .new_certs_generated
-                    .get(CertificateType::NotarizeFallback as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-            (
-                "skip",
-                *self
-                    .new_certs_generated
-                    .get(CertificateType::Skip as usize)
-                    .unwrap() as i64,
-                i64
-            ),
-        );
+        self.new_certs_ingested
+            .record("consensus_pool_ingested_certs");
+        self.new_certs_generated
+            .record("consensus_pool_generated_certs");
     }
 
     pub fn maybe_report(&mut self) {
