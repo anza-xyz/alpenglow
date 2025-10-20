@@ -21,8 +21,8 @@ const MAXIMUM_VALIDATORS: usize = 4096;
 pub enum AggregateError {
     #[error("BLS error: {0}")]
     Bls(#[from] BlsError),
-    #[error("Validator does not exist for given rank: {0}")]
-    ValidatorDoesNotExist(u16),
+    #[error("rank {0} is invalid")]
+    InvalidRank(u16),
     #[error("validator already included")]
     ValidatorAlreadyIncluded,
 }
@@ -89,7 +89,7 @@ fn build_cert_from_bitmaps(
 fn try_set_bitmap(bitmap: &mut BitVec<u8, Lsb0>, rank: u16) -> Result<(), AggregateError> {
     let mut ptr = bitmap
         .get_mut(rank as usize)
-        .ok_or(AggregateError::ValidatorDoesNotExist(rank))?;
+        .ok_or(AggregateError::InvalidRank(rank))?;
     if *ptr {
         return Err(AggregateError::ValidatorAlreadyIncluded);
     }
@@ -445,9 +445,7 @@ mod tests {
         };
         assert_eq!(
             builder.aggregate(&[message_out_of_bounds]),
-            Err(AggregateError::ValidatorDoesNotExist(
-                rank_out_of_bounds as u16
-            ))
+            Err(AggregateError::InvalidRank(rank_out_of_bounds as u16))
         );
 
         // Test bls error
