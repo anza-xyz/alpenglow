@@ -25,10 +25,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{
-        consensus_message::Block,
-        vote::{NotarizationFallbackVote, Vote},
-    },
+    solana_votor_messages::{consensus_message::Block, vote::Vote},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
