@@ -7,24 +7,10 @@ use {
     std::collections::{HashMap, HashSet},
 };
 
-#[derive(Debug)]
-pub(crate) struct VoteEntry {
-    pub(crate) vote_messages: Vec<VoteMessage>,
-    pub(crate) total_stake_by_key: Stake,
-}
-
-impl VoteEntry {
-    pub fn new() -> Self {
-        Self {
-            vote_messages: Vec::new(),
-            total_stake_by_key: 0,
-        }
-    }
-}
-
-pub(crate) trait VotePool {
-    fn total_stake(&self) -> Stake;
-    fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool;
+#[derive(Default)]
+struct VoteEntry {
+    vote_messages: Vec<VoteMessage>,
+    total_stake_by_key: Stake,
 }
 
 /// There are two types of vote pools:
@@ -32,26 +18,26 @@ pub(crate) trait VotePool {
 /// - DuplicateBlockVotePool: Tracks all votes of a specfic vote type made by validators for some slot N,
 ///   but allows votes for different blocks by the same validator. Only relevant for VotePool's that are of type
 ///   Notarization or NotarizationFallback
-pub(crate) enum VotePoolType {
+pub(super) enum VotePool {
     SimpleVotePool(SimpleVotePool),
     DuplicateBlockVotePool(DuplicateBlockVotePool),
 }
 
-pub(crate) struct SimpleVotePool {
+pub(super) struct SimpleVotePool {
     /// Tracks all votes of a specfic vote type made by validators for some slot N.
-    pub(crate) vote_entry: VoteEntry,
+    vote_entry: VoteEntry,
     prev_voted_validators: HashSet<Pubkey>,
 }
 
 impl SimpleVotePool {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            vote_entry: VoteEntry::new(),
+            vote_entry: VoteEntry::default(),
             prev_voted_validators: HashSet::new(),
         }
     }
 
-    pub fn add_vote(
+    pub(super) fn add_vote(
         &mut self,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
@@ -69,31 +55,30 @@ impl SimpleVotePool {
         Some(self.vote_entry.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, output: &mut CertificateBuilder) {
+    pub(super) fn add_to_certificate(&self, output: &mut CertificateBuilder) {
         output
             .aggregate(&self.vote_entry.vote_messages)
             .expect("Incoming vote message signatures are assumed to be valid")
     }
-}
 
-impl VotePool for SimpleVotePool {
-    fn total_stake(&self) -> Stake {
+    pub(super) fn total_stake(&self) -> Stake {
         self.vote_entry.total_stake_by_key
     }
-    fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool {
+
+    pub(super) fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool {
         self.prev_voted_validators.contains(validator_vote_key)
     }
 }
 
-pub(crate) struct DuplicateBlockVotePool {
+pub(super) struct DuplicateBlockVotePool {
     max_entries_per_pubkey: usize,
-    pub(crate) votes: HashMap<Hash, VoteEntry>,
+    votes: HashMap<Hash, VoteEntry>,
     total_stake: Stake,
     prev_voted_block_ids: HashMap<Pubkey, Vec<Hash>>,
 }
 
 impl DuplicateBlockVotePool {
-    pub fn new(max_entries_per_pubkey: usize) -> Self {
+    pub(super) fn new(max_entries_per_pubkey: usize) -> Self {
         Self {
             max_entries_per_pubkey,
             votes: HashMap::new(),
@@ -102,7 +87,7 @@ impl DuplicateBlockVotePool {
         }
     }
 
-    pub fn add_vote(
+    pub(super) fn add_vote(
         &mut self,
         validator_vote_key: &Pubkey,
         voted_block_id: Hash,
@@ -124,10 +109,7 @@ impl DuplicateBlockVotePool {
         }
         prev_voted_block_ids.push(voted_block_id);
 
-        let vote_entry = self
-            .votes
-            .entry(voted_block_id)
-            .or_insert_with(VoteEntry::new);
+        let vote_entry = self.votes.entry(voted_block_id).or_default();
         vote_entry.vote_messages.push(vote_message);
         vote_entry.total_stake_by_key = vote_entry
             .total_stake_by_key
@@ -139,13 +121,13 @@ impl DuplicateBlockVotePool {
         Some(vote_entry.total_stake_by_key)
     }
 
-    pub fn total_stake_by_block_id(&self, block_id: &Hash) -> Stake {
+    pub(super) fn total_stake_by_block_id(&self, block_id: &Hash) -> Stake {
         self.votes
             .get(block_id)
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut CertificateBuilder) {
+    pub(super) fn add_to_certificate(&self, block_id: &Hash, output: &mut CertificateBuilder) {
         if let Some(vote_entries) = self.votes.get(block_id) {
             output
                 .aggregate(&vote_entries.vote_messages)
@@ -153,7 +135,7 @@ impl DuplicateBlockVotePool {
         }
     }
 
-    pub fn has_prev_validator_vote_for_block(
+    pub(super) fn has_prev_validator_vote_for_block(
         &self,
         validator_vote_key: &Pubkey,
         block_id: &Hash,
@@ -162,13 +144,13 @@ impl DuplicateBlockVotePool {
             .get(validator_vote_key)
             .is_some_and(|vs| vs.contains(block_id))
     }
-}
 
-impl VotePool for DuplicateBlockVotePool {
-    fn total_stake(&self) -> Stake {
+    #[cfg(test)]
+    pub(super) fn total_stake(&self) -> Stake {
         self.total_stake
     }
-    fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool {
+
+    pub(super) fn has_prev_validator_vote(&self, validator_vote_key: &Pubkey) -> bool {
         self.prev_voted_block_ids.contains_key(validator_vote_key)
     }
 }

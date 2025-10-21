@@ -9,7 +9,7 @@ use {
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
             stats::ConsensusPoolStats,
-            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
+            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool},
         },
         event::VotorEvent,
     },
@@ -100,7 +100,7 @@ fn get_key_and_stakes(
 pub struct ConsensusPool {
     my_pubkey: Pubkey,
     // Vote pools to do bean counting for votes.
-    vote_pools: BTreeMap<PoolId, VotePoolType>,
+    vote_pools: BTreeMap<PoolId, VotePool>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateType, Arc<Certificate>>,
     /// Tracks slots which have reached the parent ready condition:
@@ -137,15 +137,15 @@ impl ConsensusPool {
         }
     }
 
-    fn new_vote_pool(vote_type: VoteType) -> VotePoolType {
+    fn new_vote_pool(vote_type: VoteType) -> VotePool {
         match vote_type {
-            VoteType::NotarizeFallback => VotePoolType::DuplicateBlockVotePool(
+            VoteType::NotarizeFallback => VotePool::DuplicateBlockVotePool(
                 DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
             ),
-            VoteType::Notarize => VotePoolType::DuplicateBlockVotePool(
-                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
-            ),
-            _ => VotePoolType::SimpleVotePool(SimpleVotePool::new()),
+            VoteType::Notarize => VotePool::DuplicateBlockVotePool(DuplicateBlockVotePool::new(
+                MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            )),
+            _ => VotePool::SimpleVotePool(SimpleVotePool::new()),
         }
     }
 
@@ -163,10 +163,10 @@ impl ConsensusPool {
             .entry((slot, vote_type))
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
-            VotePoolType::SimpleVotePool(pool) => {
+            VotePool::SimpleVotePool(pool) => {
                 pool.add_vote(validator_vote_key, validator_stake, vote_message)
             }
-            VotePoolType::DuplicateBlockVotePool(pool) => pool.add_vote(
+            VotePool::DuplicateBlockVotePool(pool) => pool.add_vote(
                 validator_vote_key,
                 block_id.expect("Duplicate block pool expects a block id"),
                 vote_message,
@@ -202,8 +202,8 @@ impl ConsensusPool {
                 .iter()
                 .filter_map(|vote_type| {
                     Some(match self.vote_pools.get(&(slot, *vote_type))? {
-                        VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
-                        VotePoolType::DuplicateBlockVotePool(pool) => {
+                        VotePool::SimpleVotePool(pool) => pool.total_stake(),
+                        VotePool::DuplicateBlockVotePool(pool) => {
                             pool.total_stake_by_block_id(block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
                                  certificate {cert_type:?}",
@@ -219,10 +219,10 @@ impl ConsensusPool {
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match vote_pool {
-                        VotePoolType::SimpleVotePool(pool) => {
+                        VotePool::SimpleVotePool(pool) => {
                             pool.add_to_certificate(&mut certificate_builder)
                         }
-                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
+                        VotePool::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
                             block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
                                  certificate {cert_type:?}",
@@ -251,14 +251,14 @@ impl ConsensusPool {
             if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
                 let is_conflicting = match pool {
                     // In a simple vote pool, just check if the validator previously voted at all. If so, that's a conflict
-                    VotePoolType::SimpleVotePool(pool) => {
+                    VotePool::SimpleVotePool(pool) => {
                         pool.has_prev_validator_vote(validator_vote_key)
                     }
                     // In a duplicate block vote pool, because some conflicts between things like Notarize and NotarizeFallback
                     // for different blocks are allowed, we need a more specific check.
                     // TODO: This can be made much cleaner/safer if VoteType carried the bank hash, block id so we
                     // could check which exact VoteType(blockid, bankhash) was the source of the conflict.
-                    VotePoolType::DuplicateBlockVotePool(pool) => {
+                    VotePool::DuplicateBlockVotePool(pool) => {
                         if let Some(block_id) = &block_id {
                             // Reject votes for the same block with a conflicting type, i.e.
                             // a NotarizeFallback vote for the same block as a Notarize vote.
