@@ -66,6 +66,7 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
         votor::LeaderWindowNotifier,
     },
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -212,6 +213,7 @@ impl Tvu {
         staked_nodes: Arc<RwLock<StakedNodes>>,
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -439,6 +441,7 @@ impl Tvu {
             leader_window_notifier,
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
+            migration_status,
         };
 
         let voting_service = VotingService::new(
@@ -743,6 +746,7 @@ pub mod tests {
             Arc::new(RwLock::new(StakedNodes::default())),
             Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),
+            Arc::new(MigrationStatus::default()),
         )
         .expect("assume success");
         if enable_wen_restart {
