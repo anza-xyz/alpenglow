@@ -179,12 +179,12 @@ impl ConsensusMessage {
 
     /// Create a new certificate.
     pub fn new_certificate(
-        certificate: CertificateType,
+        cert_type: CertificateType,
         bitmap: Vec<u8>,
         signature: BLSSignature,
     ) -> Self {
         Self::Certificate(Certificate {
-            cert_type: certificate,
+            cert_type,
             signature,
             bitmap,
         })

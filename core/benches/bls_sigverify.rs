@@ -122,8 +122,8 @@ fn message_to_packet(msg: &ConsensusMessage) -> Packet {
 
 fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> ConsensusMessage {
     let num_signers = (NUM_VALIDATORS * 67) / 100; // 67% quorum
-    let certificate = CertificateType::Notarize(slot, hash);
-    let original_vote = certificate.to_source_vote();
+    let cert_type = CertificateType::Notarize(slot, hash);
+    let original_vote = cert_type.to_source_vote();
     let payload = bincode::serialize(&original_vote).unwrap();
 
     let vote_messages: Vec<VoteMessage> = (0..num_signers)
@@ -137,14 +137,14 @@ fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         })
         .collect();
 
-    let mut builder = CertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(cert_type);
     builder.aggregate(&vote_messages).unwrap();
-    let cert_message = builder.build().unwrap();
-    ConsensusMessage::Certificate(cert_message)
+    let cert = builder.build().unwrap();
+    ConsensusMessage::Certificate(cert)
 }
 
 fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> ConsensusMessage {
-    let certificate = CertificateType::NotarizeFallback(slot, hash);
+    let cert_type = CertificateType::NotarizeFallback(slot, hash);
 
     let vote1 = Vote::new_notarization_vote(slot, hash);
     let payload1 = bincode::serialize(&vote1).unwrap();
@@ -176,10 +176,10 @@ fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         });
     }
 
-    let mut builder = CertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(cert_type);
     builder.aggregate(&all_vote_messages).unwrap();
-    let cert_message = builder.build().unwrap();
-    ConsensusMessage::Certificate(cert_message)
+    let cert = builder.build().unwrap();
+    ConsensusMessage::Certificate(cert)
 }
 
 // Scenario 1: One batch with two votes.

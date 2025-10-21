@@ -2,7 +2,7 @@ use {
     crate::{
         commitment::CommitmentError,
         common::{
-            certificate_limits_and_vote_types, conflicting_types, vote_to_certificate_ids, Stake,
+            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Stake,
             MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
@@ -191,13 +191,13 @@ impl ConsensusPool {
     ) -> Result<Vec<Arc<Certificate>>, AddVoteError> {
         let slot = vote.slot();
         let mut new_certificates_to_send = Vec::new();
-        for cert_id in vote_to_certificate_ids(vote) {
+        for cert_type in vote_to_cert_types(vote) {
             // If the certificate is already complete, skip it
-            if self.completed_certificates.contains_key(&cert_id) {
+            if self.completed_certificates.contains_key(&cert_type) {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_id);
+            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_type);
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
@@ -206,7 +206,7 @@ impl ConsensusPool {
                         VotePoolType::DuplicateBlockVotePool(pool) => {
                             pool.total_stake_by_block_id(block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
-                                 certificate {cert_id:?}",
+                                 certificate {cert_type:?}",
                             ))
                         }
                     })
@@ -215,7 +215,7 @@ impl ConsensusPool {
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
-            let mut certificate_builder = CertificateBuilder::new(cert_id);
+            let mut certificate_builder = CertificateBuilder::new(cert_type);
             vote_types.iter().for_each(|vote_type| {
                 if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match vote_pool {
@@ -225,7 +225,7 @@ impl ConsensusPool {
                         VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
                             block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
-                                 certificate {cert_id:?}",
+                                 certificate {cert_type:?}",
                             ),
                             &mut certificate_builder,
                         ),
@@ -233,7 +233,7 @@ impl ConsensusPool {
                 }
             });
             let new_cert = Arc::new(certificate_builder.build()?);
-            self.insert_certificate(cert_id, new_cert.clone(), events);
+            self.insert_certificate(cert_type, new_cert.clone(), events);
             self.stats.incr_cert_type(&new_cert.cert_type, true);
             new_certificates_to_send.push(new_cert);
         }
@@ -278,13 +278,13 @@ impl ConsensusPool {
 
     fn insert_certificate(
         &mut self,
-        cert_id: CertificateType,
+        cert_type: CertificateType,
         cert: Arc<Certificate>,
         events: &mut Vec<VotorEvent>,
     ) {
-        trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_id);
-        self.completed_certificates.insert(cert_id, cert);
-        match cert_id {
+        trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_type);
+        self.completed_certificates.insert(cert_type, cert);
+        match cert_type {
             CertificateType::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
@@ -342,7 +342,7 @@ impl ConsensusPool {
         }
     }
 
-    /// Adds the new vote the the certificate pool. If a new certificate is created
+    /// Adds the new vote the the consensus pool. If a new certificate is created
     /// as a result of this, send it via the `self.certificate_sender`
     ///
     /// Any new votor events that are a result of adding this new vote will be added
@@ -369,9 +369,7 @@ impl ConsensusPool {
                 vote_message,
                 events,
             )?,
-            ConsensusMessage::Certificate(certificate_message) => {
-                self.add_certificate(root_slot, certificate_message, events)?
-            }
+            ConsensusMessage::Certificate(cert) => self.add_certificate(root_slot, cert, events)?,
         };
         // If we have a new highest finalized slot, return it
         let new_finalized_slot = if self.highest_finalized_slot > current_highest_finalized_slot {
@@ -464,32 +462,32 @@ impl ConsensusPool {
     fn add_certificate(
         &mut self,
         root_slot: Slot,
-        certificate_message: Certificate,
+        cert: Certificate,
         events: &mut Vec<VotorEvent>,
     ) -> Result<Vec<Arc<Certificate>>, AddVoteError> {
-        let certificate_id = certificate_message.cert_type;
+        let cert_type = cert.cert_type;
         self.stats.incoming_certs = self.stats.incoming_certs.saturating_add(1);
-        if certificate_id.slot() < root_slot {
+        if cert_type.slot() < root_slot {
             self.stats.out_of_range_certs = self.stats.out_of_range_certs.saturating_add(1);
             return Err(AddVoteError::UnrootedSlot);
         }
-        if self.completed_certificates.contains_key(&certificate_id) {
+        if self.completed_certificates.contains_key(&cert_type) {
             self.stats.exist_certs = self.stats.exist_certs.saturating_add(1);
             return Ok(vec![]);
         }
-        let new_certificate = Arc::new(certificate_message.clone());
-        self.insert_certificate(certificate_id, new_certificate.clone(), events);
+        let cert = Arc::new(cert);
+        self.insert_certificate(cert_type, cert.clone(), events);
 
-        self.stats.incr_cert_type(&certificate_id, false);
+        self.stats.incr_cert_type(&cert_type, false);
 
-        Ok(vec![new_certificate])
+        Ok(vec![cert])
     }
 
     /// Get the notarized block in `slot`
     pub fn get_notarized_block(&self, slot: Slot) -> Option<Block> {
         self.completed_certificates
             .iter()
-            .find_map(|(cert_id, _)| match cert_id {
+            .find_map(|(cert_type, _)| match cert_type {
                 CertificateType::Notarize(s, block_id) if slot == *s => Some((*s, *block_id)),
                 _ => None,
             })
@@ -500,7 +498,7 @@ impl ConsensusPool {
         // Return the max of CertificateType::Notarize and CertificateType::NotarizeFallback
         self.completed_certificates
             .iter()
-            .filter_map(|(cert_id, _)| match cert_id {
+            .filter_map(|(cert_type, _)| match cert_type {
                 CertificateType::Notarize(s, _) => Some(s),
                 CertificateType::NotarizeFallback(s, _) => Some(s),
                 _ => None,
@@ -514,7 +512,7 @@ impl ConsensusPool {
     fn highest_skip_slot(&self) -> Slot {
         self.completed_certificates
             .iter()
-            .filter_map(|(cert_id, _)| match cert_id {
+            .filter_map(|(cert_type, _)| match cert_type {
                 CertificateType::Skip(s) => Some(s),
                 _ => None,
             })
@@ -526,7 +524,7 @@ impl ConsensusPool {
     pub fn highest_finalized_slot(&self) -> Slot {
         self.completed_certificates
             .iter()
-            .filter_map(|(cert_id, _)| match cert_id {
+            .filter_map(|(cert_type, _)| match cert_type {
                 CertificateType::Finalize(s) => Some(s),
                 CertificateType::FinalizeFast(s, _) => Some(s),
                 _ => None,
@@ -538,8 +536,8 @@ impl ConsensusPool {
 
     /// Checks if any block in the slot `s` is finalized
     pub fn is_finalized(&self, slot: Slot) -> bool {
-        self.completed_certificates.keys().any(|cert_id| {
-            matches!(cert_id, CertificateType::Finalize(s) | CertificateType::FinalizeFast(s, _) if *s == slot)
+        self.completed_certificates.keys().any(|cert_type| {
+            matches!(cert_type, CertificateType::Finalize(s) | CertificateType::FinalizeFast(s, _) if *s == slot)
         })
     }
 
@@ -548,7 +546,7 @@ impl ConsensusPool {
     #[cfg(test)]
     pub fn slot_has_notarized_fallback(&self, slot: Slot) -> bool {
         self.completed_certificates.iter().any(
-            |(cert_id, _)| matches!(cert_id, CertificateType::NotarizeFallback(s,_) if *s == slot),
+            |(cert_type, _)| matches!(cert_type, CertificateType::NotarizeFallback(s,_) if *s == slot),
         )
     }
 
@@ -571,9 +569,9 @@ impl ConsensusPool {
         first_alpenglow_slot: Slot,
     ) -> bool {
         // TODO: for GCE tests we WFSM on 1 so slot 1 is exempt
-        let needs_notarization_certificate = parent_slot >= first_alpenglow_slot && parent_slot > 1;
+        let needs_notar_cert = parent_slot >= first_alpenglow_slot && parent_slot > 1;
 
-        if needs_notarization_certificate
+        if needs_notar_cert
             && !self.slot_has_notarized_fallback(parent_slot)
             && !self.is_finalized(parent_slot)
         {
@@ -581,13 +579,13 @@ impl ConsensusPool {
             return false;
         }
 
-        let needs_skip_certificate =
+        let needs_skip_cert =
             // handles cases where we are entering the alpenglow epoch, where the first
             // slot in the epoch will pass my_leader_slot == parent_slot
             my_leader_slot != first_alpenglow_slot &&
             my_leader_slot != parent_slot.saturating_add(1);
 
-        if needs_skip_certificate {
+        if needs_skip_cert {
             let begin_skip_slot = first_alpenglow_slot.max(parent_slot.saturating_add(1));
             for slot in begin_skip_slot..my_leader_slot {
                 if !self.skip_certified(slot) {
@@ -607,7 +605,7 @@ impl ConsensusPool {
     pub fn prune_old_state(&mut self, root_slot: Slot) {
         // `completed_certificates`` now only contains entries >= `slot`
         self.completed_certificates
-            .retain(|cert_id, _| match cert_id {
+            .retain(|cert_type, _| match cert_type {
                 CertificateType::Finalize(s)
                 | CertificateType::FinalizeFast(s, _)
                 | CertificateType::Notarize(s, _)
@@ -637,12 +635,10 @@ impl ConsensusPool {
             self.highest_finalized_with_notarize.unwrap_or((0, false));
         self.completed_certificates
             .iter()
-            .filter_map(|(certificate, cert)| {
+            .filter_map(|(cert_type, cert)| {
                 let cert_to_send = match (
-                    certificate
-                        .slot()
-                        .cmp(&highest_finalized_with_notarize_slot),
-                    certificate,
+                    cert_type.slot().cmp(&highest_finalized_with_notarize_slot),
+                    cert_type,
                     has_fast_finalize,
                 ) {
                     (Ordering::Greater, _, _)
@@ -660,11 +656,7 @@ impl ConsensusPool {
                     _ => None,
                 };
                 if cert_to_send.is_some() {
-                    trace!(
-                        "{}: Refreshing certificate {:?}",
-                        self.my_pubkey,
-                        certificate
-                    );
+                    trace!("{}: Refreshing certificate {:?}", self.my_pubkey, cert_type);
                 }
                 cert_to_send
             })
@@ -1059,7 +1051,7 @@ mod tests {
     #[test_case(Vote::new_skip_fallback_vote(9), vec![CertificateType::Skip(9)])]
     fn test_add_vote_and_create_new_certificate_with_types(
         vote: Vote,
-        expected_certificates: Vec<CertificateType>,
+        expected_cert_types: Vec<CertificateType>,
     ) {
         let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
         let my_validator_ix = 5;
@@ -1126,9 +1118,9 @@ mod tests {
             assert!(new_finalized_slot.is_none());
         }
         // Assert certs_to_send contains the expected certificate types
-        for expected_certificate in expected_certificates {
+        for expected_cert_type in expected_cert_types {
             assert!(certs_to_send.iter().any(|cert| {
-                cert.cert_type == expected_certificate && cert.cert_type.slot() == slot
+                cert.cert_type == expected_cert_type && cert.cert_type.slot() == slot
             }));
         }
         assert_eq!(highest_slot_fn(&pool), slot);
@@ -1166,13 +1158,13 @@ mod tests {
     fn test_add_certificate_with_types(cert_type: CertificateType, vote: Vote) {
         let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
 
-        let certificate_message = Certificate {
+        let cert = Certificate {
             cert_type,
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
-        let message = ConsensusMessage::Certificate(certificate_message.clone());
+        let message = ConsensusMessage::Certificate(cert.clone());
         // Add the certificate to the pool
         let (new_finalized_slot, certs_to_send) = pool
             .add_message(
@@ -1193,7 +1185,7 @@ mod tests {
             assert!(new_finalized_slot.is_none());
         }
         assert_eq!(certs_to_send.len(), 1);
-        assert_eq!(*certs_to_send[0], certificate_message);
+        assert_eq!(*certs_to_send[0], cert);
 
         // Adding the cert again will not trigger another send
         let (new_finalized_slot, certs_to_send) = pool
@@ -1924,9 +1916,9 @@ mod tests {
             .is_err());
 
         // Send a cert on slot 2, it should be rejected
-        let certificate = CertificateType::Notarize(2, Hash::new_unique());
+        let cert_type = CertificateType::Notarize(2, Hash::new_unique());
         let cert = ConsensusMessage::Certificate(Certificate {
-            cert_type: certificate,
+            cert_type,
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         });

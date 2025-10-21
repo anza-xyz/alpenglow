@@ -34,7 +34,7 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
 /// Lookup from `CertificateId` to the `VoteType`s that contribute,
 /// as well as the stake fraction required for certificate completion.
 ///
-/// Must be in sync with `vote_to_certificate_ids`
+/// Must be in sync with `vote_to_cert_types`
 pub const fn certificate_limits_and_vote_types(
     cert_type: &CertificateType,
 ) -> (f64, &'static [VoteType]) {
@@ -53,7 +53,7 @@ pub const fn certificate_limits_and_vote_types(
 /// Lookup from `Vote` to the `CertificateId`s the vote accounts for
 ///
 /// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
-pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<CertificateType> {
+pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
     match vote {
         Vote::Notarize(vote) => vec![
             CertificateType::Notarize(vote.slot(), *vote.block_id()),
