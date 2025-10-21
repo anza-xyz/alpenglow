@@ -27,9 +27,7 @@ use {
         system_monitor_service::{
             verify_net_stats_access, SystemMonitorService, SystemMonitorStatsReportConfig,
         },
-        tpu::{
-            ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE, MAX_ALPENGLOW_PACKET_NUM,
-        },
+        tpu::{ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE},
         tvu::{Tvu, TvuConfig, TvuSockets},
     },
     anyhow::{anyhow, Context, Result},
@@ -953,8 +951,6 @@ impl Validator {
         );
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
-        let (bls_verified_message_sender, bls_verified_message_receiver) =
-            bounded(MAX_ALPENGLOW_PACKET_NUM);
 
         // block min prioritization fee cache should be readable by RPC, and writable by validator
         // (by both replay stage and banking stage)
@@ -1622,12 +1618,11 @@ impl Validator {
             } else {
                 (None, None)
             };
-
-        let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
-
+        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
+            identity_keypair.clone(),
             &bank_forks,
             &cluster_info,
             TvuSockets {
@@ -1635,6 +1630,7 @@ impl Validator {
                 retransmit: node.sockets.retransmit_sockets,
                 fetch: node.sockets.tvu,
                 ancestor_hashes_requests: node.sockets.ancestor_hashes_requests,
+                alpenglow_quic: node.sockets.alpenglow,
             },
             blockstore.clone(),
             ledger_signal_receiver,
@@ -1654,13 +1650,12 @@ impl Validator {
             vote_tracker.clone(),
             retransmit_slots_sender,
             gossip_verified_vote_hash_receiver,
+            verified_vote_sender.clone(),
             verified_vote_receiver,
             replay_vote_sender.clone(),
             completed_data_sets_sender,
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
-            bls_verified_message_sender.clone(),
-            bls_verified_message_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 shred_version: node.info.shred_version(),
@@ -1697,8 +1692,9 @@ impl Validator {
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
-            consensus_metrics_sender.clone(),
-            consensus_metrics_receiver,
+            alpenglow_quic_server_config,
+            staked_nodes.clone(),
+            key_notifiers.clone(),
             alpenglow_last_voted.clone(),
         )
         .map_err(ValidatorError::Other)?;
@@ -1723,7 +1719,6 @@ impl Validator {
             return Err(ValidatorError::WenRestartFinished.into());
         }
 
-        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
         let forwarding_tpu_client = if let Some(connection_cache) = &connection_cache {
             ForwardingClientOption::ConnectionCache(connection_cache.clone())
         } else {
@@ -1755,7 +1750,6 @@ impl Validator {
                 vote_quic: node.sockets.tpu_vote_quic,
                 vote_forwarding_client: node.sockets.tpu_vote_forwarding_client,
                 vortexor_receivers: node.sockets.vortexor_receivers,
-                alpenglow_quic: node.sockets.alpenglow,
             },
             rpc_subscriptions.clone(),
             transaction_status_sender,
@@ -1775,7 +1769,6 @@ impl Validator {
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
             forwarding_tpu_client,
-            bls_verified_message_sender,
             turbine_quic_endpoint_sender,
             votor_event_sender.clone(),
             &identity_keypair,
@@ -1788,7 +1781,6 @@ impl Validator {
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
-            alpenglow_quic_server_config,
             &prioritization_fee_cache,
             config.block_production_method.clone(),
             config.block_production_num_workers,
@@ -1796,8 +1788,6 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
-            consensus_metrics_sender,
-            alpenglow_last_voted,
         );
 
         datapoint_info!(

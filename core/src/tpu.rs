@@ -9,9 +9,6 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
-        bls_sigverify::{
-            bls_sigverifier::BLSSigVerifier, bls_sigverify_service::BLSSigverifyService,
-        },
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
             VerifiedVoteSender, VoteTracker,
@@ -28,7 +25,7 @@ use {
         vortexor_receiver_adapter::VortexorReceiverAdapter,
     },
     bytes::Bytes,
-    crossbeam_channel::{bounded, unbounded, Receiver, Sender},
+    crossbeam_channel::{bounded, unbounded, Receiver},
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_keypair::Keypair,
@@ -43,7 +40,6 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_rpc::{
-        alpenglow_last_voted::AlpenglowLastVoted,
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
         rpc_subscriptions::RpcSubscriptions,
     },
@@ -60,8 +56,7 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
         xdp::XdpSender,
     },
-    solana_votor::{consensus_metrics::ConsensusMetricsEventSender, event::VotorEventSender},
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor::event::VotorEventSender,
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -72,9 +67,6 @@ use {
     },
     tokio::sync::mpsc::Sender as AsyncSender,
 };
-
-// The maximum number of alpenglow packets that can be processed in a single batch
-pub const MAX_ALPENGLOW_PACKET_NUM: usize = 10000;
 
 pub struct TpuSockets {
     pub transactions: Vec<UdpSocket>,
@@ -87,7 +79,6 @@ pub struct TpuSockets {
     /// Client-side socket for the forwarding votes.
     pub vote_forwarding_client: UdpSocket,
     pub vortexor_receivers: Option<Vec<UdpSocket>>,
-    pub alpenglow_quic: UdpSocket,
 }
 
 /// The `SigVerifier` enum is used to determine whether to use a local or remote signature verifier.
@@ -109,7 +100,6 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sig_verifier: SigVerifier,
     vote_sigverify_stage: SigVerifyStage,
-    alpenglow_sigverify_service: BLSSigverifyService,
     banking_stage: Arc<RwLock<Option<BankingStage>>>,
     forwarding_stage: JoinHandle<()>,
     cluster_info_vote_listener: ClusterInfoVoteListener,
@@ -120,7 +110,6 @@ pub struct Tpu {
     staked_nodes_updater_service: StakedNodesUpdaterService,
     tracer_thread_hdl: TracerThread,
     tpu_vote_quic_t: thread::JoinHandle<()>,
-    alpenglow_quic_t: thread::JoinHandle<()>,
 }
 
 impl Tpu {
@@ -150,7 +139,6 @@ impl Tpu {
         tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         client: ForwardingClientOption,
-        verified_consensus_message_sender: Sender<ConsensusMessage>,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
         votor_event_sender: VotorEventSender,
         keypair: &Keypair,
@@ -163,7 +151,6 @@ impl Tpu {
         tpu_quic_server_config: QuicServerParams,
         tpu_fwd_quic_server_config: QuicServerParams,
         vote_quic_server_config: QuicServerParams,
-        alpenglow_quic_server_config: QuicServerParams,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         block_production_method: BlockProductionMethod,
         block_production_num_workers: NonZeroUsize,
@@ -171,8 +158,6 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
-        consensus_metrics_sender: ConsensusMetricsEventSender,
-        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -184,13 +169,11 @@ impl Tpu {
             vote_quic: tpu_vote_quic_sockets,
             vote_forwarding_client: vote_forwarding_client_socket,
             vortexor_receivers,
-            alpenglow_quic: alpenglow_quic_socket,
         } = sockets;
 
         let (packet_sender, packet_receiver) = unbounded();
         let (vote_packet_sender, vote_packet_receiver) = unbounded();
         let (forwarded_packet_sender, forwarded_packet_receiver) = unbounded();
-        let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
         let fetch_stage = FetchStage::new_with_sender(
             transactions_sockets,
             tpu_forwards_sockets,
@@ -236,23 +219,6 @@ impl Tpu {
             exit.clone(),
             staked_nodes.clone(),
             vote_quic_server_config,
-        )
-        .unwrap();
-
-        // Streamer for Alpenglow
-        let SpawnServerResult {
-            endpoints: _,
-            thread: alpenglow_quic_t,
-            key_updater: alpenglow_stream_key_updater,
-        } = spawn_server(
-            "solQuicAlpglw",
-            "quic_streamer_alpenglow",
-            vec![alpenglow_quic_socket],
-            keypair,
-            bls_packet_sender.clone(),
-            exit.clone(),
-            staked_nodes.clone(),
-            alpenglow_quic_server_config,
         )
         .unwrap();
 
@@ -340,18 +306,6 @@ impl Tpu {
             )
         };
 
-        let alpenglow_sigverify_service = {
-            let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-            let verifier = BLSSigVerifier::new(
-                sharable_banks,
-                verified_vote_sender.clone(),
-                verified_consensus_message_sender,
-                consensus_metrics_sender,
-                alpenglow_last_voted,
-            );
-            BLSSigverifyService::new(bls_packet_receiver, verifier)
-        };
-
         let cluster_info_vote_listener = ClusterInfoVoteListener::new(
             exit.clone(),
             cluster_info.clone(),
@@ -433,13 +387,11 @@ impl Tpu {
         key_notifiers.add(KeyUpdaterType::TpuVote, vote_streamer_key_updater);
 
         key_notifiers.add(KeyUpdaterType::Forward, client_updater);
-        key_notifiers.add(KeyUpdaterType::TpuAlpenglow, alpenglow_stream_key_updater);
 
         Self {
             fetch_stage,
             sig_verifier,
             vote_sigverify_stage,
-            alpenglow_sigverify_service,
             banking_stage: Arc::new(RwLock::new(Some(banking_stage))),
             forwarding_stage,
             cluster_info_vote_listener,
@@ -450,7 +402,6 @@ impl Tpu {
             staked_nodes_updater_service,
             tracer_thread_hdl,
             tpu_vote_quic_t,
-            alpenglow_quic_t,
         }
     }
 
@@ -463,7 +414,6 @@ impl Tpu {
             self.fetch_stage.join(),
             self.sig_verifier.join(),
             self.vote_sigverify_stage.join(),
-            self.alpenglow_sigverify_service.join(),
             self.cluster_info_vote_listener.join(),
             self.banking_stage
                 .write()
@@ -476,7 +426,6 @@ impl Tpu {
             self.tpu_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_forwards_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_vote_quic_t.join(),
-            self.alpenglow_quic_t.join(),
         ];
         let broadcast_result = self.broadcast_stage.join();
         for result in results {
