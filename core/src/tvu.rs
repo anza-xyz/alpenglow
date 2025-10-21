@@ -66,7 +66,7 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
         votor::LeaderWindowNotifier,
     },
-    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
