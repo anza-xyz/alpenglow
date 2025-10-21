@@ -167,6 +167,7 @@ impl RecordSender {
 /// A receiver for receiving [`Record`]s in PohService.
 /// The receiver can shutdown the channel, preventing any further sends,
 /// and can restart the channel for a new slot, re-enabling sends.
+#[derive(Clone)]
 pub struct RecordReceiver {
     capacity: u64,
     active_senders: Arc<AtomicU64>,

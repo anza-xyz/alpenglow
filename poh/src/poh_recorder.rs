@@ -99,7 +99,6 @@ pub struct WorkingBank {
     pub start: Arc<Instant>,
     pub min_tick_height: u64,
     pub max_tick_height: u64,
-    pub contains_valid_certificate: Arc<AtomicBool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -439,7 +438,6 @@ impl PohRecorder {
             max_tick_height: bank.max_tick_height(),
             bank,
             start: Arc::new(Instant::now()),
-            contains_valid_certificate: Arc::new(AtomicBool::new(false)),
         };
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());

@@ -179,16 +179,16 @@ impl PohService {
                 // leaders call `set_bank()`, otherwise, the old PoH
                 // tick producer will still tick in that alpenglow bank
                 //
-                // TODO: Can essentailly replace this with no ticks
+                // TODO: Can essentially replace this with no ticks
                 // once we properly remove poh/entry verification in replay
                 {
                     let mut w_poh_recorder = poh_recorder.write().unwrap();
                     w_poh_recorder.enable_alpenglow();
                 }
+                info!("Starting alpenglow block creation loop");
                 migration_status
                     .block_creation_loop_started
                     .store(true, Ordering::Release);
-                info!("Starting alpenglow block creation loop");
                 block_creation_loop();
                 poh_exit.store(true, Ordering::Relaxed);
             })
@@ -224,7 +224,7 @@ impl PohService {
         if should_shutdown_for_test_producers {
             record_receiver.shutdown();
         }
-        while !poh_exit.load(Ordering::Relaxed) {
+        while !poh_exit.load(Ordering::Relaxed) && !shutdown_poh.load(Ordering::Relaxed) {
             let service_message =
                 Self::check_for_service_message(&poh_service_receiver, &mut record_receiver);
             loop {
@@ -290,11 +290,6 @@ impl PohService {
                 Duration::ZERO,
                 ticks_per_slot,
             );
-
-            if shutdown_poh.load(Ordering::Relaxed) {
-                info!("Shutting down tick producer because Alpenglow has started");
-                break;
-            }
         }
     }
 
@@ -559,14 +554,11 @@ impl PohService {
             // We should **not** however process any service messages once we have detected
             // the exit signal.
             should_exit |= poh_exit.load(Ordering::Relaxed); // once set, stay set.
+            should_exit |= shutdown_poh.load(Ordering::Relaxed);
             if should_exit {
                 record_receiver.shutdown();
             }
 
-            if shutdown_poh.load(Ordering::Relaxed) {
-                info!("Shutting down tick producer because Alpenglow has started");
-                break;
-            }
             let service_message =
                 Self::check_for_service_message(&poh_service_receiver, &mut record_receiver);
             loop {
