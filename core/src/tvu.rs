@@ -642,7 +642,6 @@ pub mod tests {
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
         let (_, gossip_confirmed_slots_receiver) = unbounded();
-        let (bls_verified_message_sender, bls_verified_message_receiver) = unbounded();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
         let ignored_prioritization_fee_cache = Arc::new(PrioritizationFeeCache::new(0u64));
         let outstanding_repair_requests = Arc::<RwLock<OutstandingShredRepairs>>::default();
@@ -681,7 +680,7 @@ pub mod tests {
                     retransmit: target1.sockets.retransmit_sockets,
                     fetch: target1.sockets.tvu,
                     ancestor_hashes_requests: target1.sockets.ancestor_hashes_requests,
-                    alpenglow_quic: target1.sockets.alpenglow_quic,
+                    alpenglow_quic: target1.sockets.alpenglow,
                 }
             },
             blockstore,
@@ -714,8 +713,6 @@ pub mod tests {
             /*completed_data_sets_sender:*/ None,
             None,
             gossip_confirmed_slots_receiver,
-            bls_verified_message_sender,
-            bls_verified_message_receiver,
             TvuConfig::default(),
             &Arc::new(MaxSlots::default()),
             None,
@@ -741,9 +738,10 @@ pub mod tests {
             Arc::new(LeaderWindowNotifier::default()),
             None,
             votor_event_sender,
+            votor_event_receiver,
             QuicServerParams::default_for_tests(),
             Arc::new(RwLock::new(StakedNodes::default())),
-            key_notifiers: Arc::new(RwLock::new(KeyUpdaters::default())),
+            Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),
         )
         .expect("assume success");
