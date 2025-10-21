@@ -393,6 +393,7 @@ mod tests {
         assert_matches::assert_matches,
         itertools::Itertools,
         rand::Rng,
+        solana_entry::block_component::BlockComponent,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
         solana_sha256_hasher::hash,
@@ -705,6 +706,109 @@ mod tests {
             .iter()
             .chain(coding_shreds.iter())
             .any(|s| s.version() != version));
+    }
+
+    #[test_matrix([true, false])]
+    fn test_components_single_entry_batch_matches_entries(is_last_in_slot: bool) {
+        let keypair = Keypair::new();
+        let shredder = Shredder::new(100, 95, 5, 42).unwrap();
+
+        let entries = (0..10)
+            .map(|_| {
+                let keypair0 = Keypair::new();
+                let keypair1 = Keypair::new();
+                let tx0 =
+                    system_transaction::transfer(&keypair0, &keypair1.pubkey(), 1, Hash::default());
+                Entry::new(&Hash::default(), 1, vec![tx0])
+            })
+            .collect_vec();
+
+        let chained_merkle_root = Some(Hash::new_from_array(rand::thread_rng().gen()));
+        let next_shred_index = 10;
+        let next_code_index = 5;
+
+        // Shred using entries directly
+        let (data_shreds_entries, coding_shreds_entries) = shredder
+            .entries_to_merkle_shreds_for_tests(
+                &keypair,
+                &entries,
+                is_last_in_slot,
+                chained_merkle_root,
+                next_shred_index,
+                next_code_index,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            );
+
+        // Shred using components with a single EntryBatch
+        let components = vec![BlockComponent::EntryBatch(entries.clone())];
+        let result = shredder.make_merkle_shreds_from_components(
+            &keypair,
+            &components,
+            is_last_in_slot,
+            chained_merkle_root,
+            next_shred_index,
+            next_code_index,
+            &ReedSolomonCache::default(),
+            &mut ProcessShredsStats::default(),
+        );
+
+        let (data_shreds_components, coding_shreds_components): (Vec<_>, Vec<_>) =
+            result.shreds.into_iter().partition(Shred::is_data);
+
+        // Verify shreds are identical
+        assert_eq!(data_shreds_entries.len(), data_shreds_components.len());
+        assert_eq!(coding_shreds_entries.len(), coding_shreds_components.len());
+
+        for (e, c) in data_shreds_entries
+            .iter()
+            .zip(data_shreds_components.iter())
+        {
+            assert_eq!(e.payload(), c.payload());
+        }
+
+        for (e, c) in coding_shreds_entries
+            .iter()
+            .zip(coding_shreds_components.iter())
+        {
+            assert_eq!(e.payload(), c.payload());
+        }
+
+        // Verify result indices
+        let expected_next_shred = data_shreds_entries.last().unwrap().index() + 1;
+        let expected_next_code = coding_shreds_entries.last().unwrap().index() + 1;
+        assert_eq!(result.next_shred_index, expected_next_shred);
+        assert_eq!(result.next_code_index, expected_next_code);
+    }
+
+    #[test]
+    fn test_components_empty_slice() {
+        let keypair = Keypair::new();
+        let shredder = Shredder::new(500, 495, 25, 400).unwrap();
+
+        let components = vec![];
+        let initial_merkle_root = Hash::new_from_array(rand::thread_rng().gen());
+
+        let result = shredder.make_merkle_shreds_from_components(
+            &keypair,
+            &components,
+            false,
+            Some(initial_merkle_root),
+            10,
+            5,
+            &ReedSolomonCache::default(),
+            &mut ProcessShredsStats::default(),
+        );
+
+        // Verify empty result
+        assert!(result.shreds.is_empty());
+
+        // Verify indices didn't change
+        assert_eq!(result.next_shred_index, 10);
+        assert_eq!(result.next_code_index, 5);
+
+        // Verify merkle root didn't change
+        assert_eq!(result.chained_merkle_root, Some(initial_merkle_root));
     }
 
     #[test_matrix([true, false])]
