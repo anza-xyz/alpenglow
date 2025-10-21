@@ -683,6 +683,7 @@ impl ReplayStage {
             consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
+            migration_status: migration_status.clone(),
         };
         let votor = Votor::new(votor_config);
 

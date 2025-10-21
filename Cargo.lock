@@ -11879,6 +11879,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor",
  "solana-votor-messages",
  "test-case",
  "thiserror 2.0.16",

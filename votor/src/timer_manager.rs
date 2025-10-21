@@ -1,6 +1,5 @@
 //! Controls the queueing and firing of skip timer events for use
 //! in the event loop.
-// TODO: Make this mockable in event_handler for tests
 
 mod stats;
 mod timers;
@@ -13,6 +12,7 @@ use {
     crossbeam_channel::Sender,
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -32,7 +32,11 @@ pub(crate) struct TimerManager {
 }
 
 impl TimerManager {
-    pub(crate) fn new(event_sender: Sender<VotorEvent>, exit: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        event_sender: Sender<VotorEvent>,
+        exit: Arc<AtomicBool>,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
         let timers = Arc::new(PlRwLock::new(Timers::new(
             DELTA_TIMEOUT,
             DELTA_BLOCK,
@@ -41,6 +45,7 @@ impl TimerManager {
         let handle = {
             let timers = Arc::clone(&timers);
             thread::spawn(move || {
+                let _ = migration_status.wait_for_migration_or_exit(exit.as_ref());
                 while !exit.load(Ordering::Relaxed) {
                     let duration = match timers.write().progress(Instant::now()) {
                         None => {
@@ -81,7 +86,11 @@ mod tests {
     fn test_timer_manager() {
         let (event_sender, event_receiver) = unbounded();
         let exit = Arc::new(AtomicBool::new(false));
-        let timer_manager = TimerManager::new(event_sender, exit.clone());
+        let timer_manager = TimerManager::new(
+            event_sender,
+            exit.clone(),
+            Arc::new(MigrationStatus::post_migration_status()),
+        );
         let slot = 52;
         let start = Instant::now();
         timer_manager.set_timeouts(slot);
