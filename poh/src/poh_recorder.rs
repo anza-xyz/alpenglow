@@ -57,7 +57,7 @@ pub enum PohRecorderError {
     MinHeightNotReached,
 
     #[error("send WorkingBankEntry error")]
-    SendError(#[from] SendError<WorkingBankEntry>),
+    SendError(#[from] SendError<WorkingBankEntryMarker>),
 
     #[error("channel full")]
     ChannelFull,
@@ -68,7 +68,7 @@ pub enum PohRecorderError {
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
 
-pub type WorkingBankEntry = (Arc<Bank>, (EntryMarker, u64));
+pub type WorkingBankEntryMarker = (Arc<Bank>, (EntryMarker, u64));
 
 #[derive(Debug)]
 pub struct RecordSummary {
@@ -180,7 +180,7 @@ pub struct PohRecorder {
     /// schduler or any other metadata. It MUST be kept consistent with
     /// the `working_bank` field of this struct.
     shared_working_bank: SharedWorkingBank,
-    working_bank_sender: Sender<WorkingBankEntry>,
+    working_bank_sender: Sender<WorkingBankEntryMarker>,
     leader_first_tick_height: SharedLeaderFirstTickHeight,
     leader_last_tick_height: u64, // zero if none
     grace_ticks: u64,
@@ -216,7 +216,7 @@ impl PohRecorder {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         poh_config: &PohConfig,
         is_exited: Arc<AtomicBool>,
-    ) -> (Self, Receiver<WorkingBankEntry>) {
+    ) -> (Self, Receiver<WorkingBankEntryMarker>) {
         let delay_leader_block_for_pending_fork = false;
         Self::new_with_clear_signal(
             tick_height,
@@ -246,7 +246,7 @@ impl PohRecorder {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         poh_config: &PohConfig,
         is_exited: Arc<AtomicBool>,
-    ) -> (Self, Receiver<WorkingBankEntry>) {
+    ) -> (Self, Receiver<WorkingBankEntryMarker>) {
         let tick_number = 0;
         let poh = Arc::new(Mutex::new(Poh::new_with_slot_info(
             last_entry_hash,
@@ -560,7 +560,7 @@ impl PohRecorder {
             .iter()
             .take_while(|x| x.1 <= working_bank.max_tick_height)
             .count();
-        let mut send_result: std::result::Result<(), SendError<WorkingBankEntry>> = Ok(());
+        let mut send_result: std::result::Result<(), SendError<WorkingBankEntryMarker>> = Ok(());
 
         if entry_count > 0 {
             trace!(
@@ -957,7 +957,7 @@ fn do_create_test_recorder(
     PohController,
     TransactionRecorder,
     PohService,
-    Receiver<WorkingBankEntry>,
+    Receiver<WorkingBankEntryMarker>,
 ) {
     let leader_schedule_cache = match leader_schedule_cache {
         Some(provided_cache) => provided_cache,
@@ -1021,7 +1021,7 @@ pub fn create_test_recorder(
     PohController,
     TransactionRecorder,
     PohService,
-    Receiver<WorkingBankEntry>,
+    Receiver<WorkingBankEntryMarker>,
 ) {
     do_create_test_recorder(bank, blockstore, poh_config, leader_schedule_cache, false)
 }

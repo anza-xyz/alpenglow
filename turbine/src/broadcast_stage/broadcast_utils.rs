@@ -9,7 +9,7 @@ use {
         blockstore::Blockstore,
         shred::{self, get_data_shred_bytes_per_batch_typical, ProcessShredsStats},
     },
-    solana_poh::poh_recorder::WorkingBankEntry,
+    solana_poh::poh_recorder::WorkingBankEntryMarker,
     solana_runtime::bank::Bank,
     solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
     std::{
@@ -88,8 +88,8 @@ fn max_coalesce_time(serialized_batch_byte_count: u64, max_batch_byte_count: u64
 }
 
 pub(super) fn recv_slot_entries(
-    receiver: &Receiver<WorkingBankEntry>,
-    carryover_entry: &mut Option<WorkingBankEntry>,
+    receiver: &Receiver<WorkingBankEntryMarker>,
+    carryover_entry: &mut Option<WorkingBankEntryMarker>,
     process_stats: &mut ProcessShredsStats,
 ) -> Result<ReceiveResults> {
     let recv_start = Instant::now();

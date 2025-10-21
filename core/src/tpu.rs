@@ -35,7 +35,7 @@ use {
     },
     solana_perf::data_budget::DataBudget,
     solana_poh::{
-        poh_recorder::{PohRecorder, WorkingBankEntry},
+        poh_recorder::{PohRecorder, WorkingBankEntryMarker},
         transaction_recorder::TransactionRecorder,
     },
     solana_pubkey::Pubkey,
@@ -118,7 +118,7 @@ impl Tpu {
         cluster_info: &Arc<ClusterInfo>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
         transaction_recorder: TransactionRecorder,
-        entry_receiver: Receiver<WorkingBankEntry>,
+        entry_receiver: Receiver<WorkingBankEntryMarker>,
         retransmit_slots_receiver: Receiver<Slot>,
         sockets: TpuSockets,
         subscriptions: Option<Arc<RpcSubscriptions>>,
