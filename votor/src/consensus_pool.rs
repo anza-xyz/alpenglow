@@ -159,33 +159,28 @@ impl ConsensusPool {
             VoteType::Notarize => VotePool::DuplicateBlockVotePool(DuplicateBlockVotePool::new(
                 MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
             )),
-            _ => VotePool::SimpleVotePool(SimpleVotePool::new()),
+            _ => VotePool::SimpleVotePool(SimpleVotePool::default()),
         }
     }
 
     fn update_vote_pool(
         &mut self,
-        slot: Slot,
-        vote_type: VoteType,
-        block_id: Option<Hash>,
-        vote_message: VoteMessage,
-        validator_vote_key: &Pubkey,
+        msg: VoteMessage,
+        validator_vote_key: Pubkey,
         validator_stake: Stake,
     ) -> Option<Stake> {
+        let vote_type = msg.vote.get_type();
         let pool = self
             .vote_pools
-            .entry((slot, vote_type))
+            .entry((msg.vote.slot(), vote_type))
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
             VotePool::SimpleVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, vote_message)
+                pool.add_vote(validator_vote_key, validator_stake, msg)
             }
-            VotePool::DuplicateBlockVotePool(pool) => pool.add_vote(
-                validator_vote_key,
-                block_id.expect("Duplicate block pool expects a block id"),
-                vote_message,
-                validator_stake,
-            ),
+            VotePool::DuplicateBlockVotePool(pool) => {
+                pool.add_vote(validator_vote_key, msg, validator_stake)
+            }
         }
     }
 
@@ -229,24 +224,22 @@ impl ConsensusPool {
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
-            let mut certificate_builder = CertificateBuilder::new(cert_type);
+            let mut cert_builder = CertificateBuilder::new(cert_type);
             vote_types.iter().for_each(|vote_type| {
-                if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                    match vote_pool {
+                if let Some(pool) = self.vote_pools.get(&(slot, *vote_type)) {
+                    match pool {
                         VotePool::SimpleVotePool(pool) => {
-                            pool.add_to_certificate(&mut certificate_builder)
+                            cert_builder.aggregate(pool.messages()).unwrap();
                         }
-                        VotePool::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
-                            block_id.as_ref().expect(
-                                "Duplicate block pool for {vote_type:?} expects a block id for \
-                                 certificate {cert_type:?}",
-                            ),
-                            &mut certificate_builder,
-                        ),
+                        VotePool::DuplicateBlockVotePool(pool) => {
+                            if let Some(msgs) = pool.messages(block_id.as_ref().unwrap()) {
+                                cert_builder.aggregate(msgs).unwrap();
+                            }
+                        }
                     };
                 }
             });
-            let new_cert = Arc::new(certificate_builder.build()?);
+            let new_cert = Arc::new(cert_builder.build()?);
             self.insert_certificate(cert_type, new_cert.clone(), events);
             self.stats.incr_cert_type(&new_cert.cert_type, true);
             new_certificates_to_send.push(new_cert);
@@ -444,14 +437,7 @@ impl ConsensusPool {
                 validator_vote_key,
             ));
         }
-        match self.update_vote_pool(
-            vote_slot,
-            vote_type,
-            block_id,
-            vote_message,
-            &validator_vote_key,
-            validator_stake,
-        ) {
+        match self.update_vote_pool(vote_message, validator_vote_key, validator_stake) {
             None => {
                 // No new vote pool entry was created, just return empty vec
                 self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
