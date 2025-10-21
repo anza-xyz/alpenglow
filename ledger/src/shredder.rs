@@ -18,6 +18,14 @@ use {
     },
 };
 
+/// Result of shredding components, including the shreds and updated state.
+pub struct ShredderComponentsResult {
+    pub shreds: Vec<Shred>,
+    pub next_shred_index: u32,
+    pub next_code_index: u32,
+    pub chained_merkle_root: Option<Hash>,
+}
+
 static PAR_THREAD_POOL: std::sync::LazyLock<ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(get_thread_count())
@@ -104,7 +112,7 @@ impl Shredder {
         next_code_index: u32,
         reed_solomon_cache: &ReedSolomonCache,
         stats: &mut ProcessShredsStats,
-    ) -> impl Iterator<Item = Shred> {
+    ) -> ShredderComponentsResult {
         let mut all_shreds = Vec::new();
         let mut current_chained_merkle_root = chained_merkle_root;
         let mut current_shred_index = next_shred_index;
@@ -155,7 +163,12 @@ impl Shredder {
             }
         }
 
-        all_shreds.into_iter()
+        ShredderComponentsResult {
+            shreds: all_shreds,
+            next_shred_index: current_shred_index,
+            next_code_index: current_code_index,
+            chained_merkle_root: current_chained_merkle_root,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -259,7 +272,7 @@ impl Shredder {
         Vec<Shred>, // data shreds
         Vec<Shred>, // coding shreds
     ) {
-        self.make_merkle_shreds_from_components(
+        let batch = self.make_merkle_shreds_from_components(
             keypair,
             components,
             is_last_in_slot,
@@ -268,8 +281,8 @@ impl Shredder {
             next_code_index,
             reed_solomon_cache,
             stats,
-        )
-        .partition(Shred::is_data)
+        );
+        batch.shreds.into_iter().partition(Shred::is_data)
     }
 
     /// Combines all shreds to recreate the original buffer

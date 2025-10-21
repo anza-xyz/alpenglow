@@ -60,7 +60,7 @@ pub use {
         shred_data::ShredData,
         stats::{ProcessShredsStats, ShredFetchStats},
     },
-    crate::shredder::{ReedSolomonCache, Shredder},
+    crate::shredder::{ReedSolomonCache, Shredder, ShredderComponentsResult},
 };
 use {
     self::{shred_code::ShredCode, traits::Shred as _},

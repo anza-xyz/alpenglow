@@ -121,57 +121,40 @@ impl StandardBroadcastRun {
         max_data_shreds_per_slot: u32,
         max_code_shreds_per_slot: u32,
     ) -> std::result::Result<Vec<Shred>, BroadcastError> {
-        let mut all_shreds = vec![];
+        let shredder =
+            Shredder::new(self.slot, self.parent, reference_tick, self.shred_version).unwrap();
 
-        for (ix, component) in components.iter().enumerate() {
-            let is_last_in_slot = is_slot_end && ix == components.len() - 1;
+        let shredder_result = shredder.make_merkle_shreds_from_components(
+            keypair,
+            components,
+            is_slot_end,
+            Some(self.chained_merkle_root),
+            self.next_shred_index,
+            self.next_code_index,
+            &self.reed_solomon_cache,
+            process_stats,
+        );
 
-            let shreds = Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
-                .unwrap()
-                .make_merkle_shreds_from_component(
-                    keypair,
-                    component,
-                    is_last_in_slot,
-                    Some(self.chained_merkle_root),
-                    self.next_shred_index,
-                    self.next_code_index,
-                    &self.reed_solomon_cache,
-                    process_stats,
-                )
-                .inspect(|shred| {
-                    process_stats.record_shred(shred);
-                    let next_index = match shred.shred_type() {
-                        ShredType::Code => &mut self.next_code_index,
-                        ShredType::Data => &mut self.next_shred_index,
-                    };
-                    *next_index = (*next_index).max(shred.index() + 1);
-                });
-
-            let mut max_fec_set_shred = None;
-            for shred in shreds {
-                let fec_set_index = shred.fec_set_index();
-                max_fec_set_shred = match max_fec_set_shred {
-                    None => Some((fec_set_index, shred.merkle_root())),
-                    Some((max_fec, _)) if fec_set_index > max_fec => {
-                        Some((fec_set_index, shred.merkle_root()))
-                    }
-                    _ => max_fec_set_shred,
-                };
-                all_shreds.push(shred);
-            }
-
-            if let Some((_, merkle_root)) = max_fec_set_shred {
-                self.chained_merkle_root = merkle_root.unwrap();
-            }
-            if self.next_shred_index > max_data_shreds_per_slot {
-                return Err(BroadcastError::TooManyShreds);
-            }
-            if self.next_code_index > max_code_shreds_per_slot {
-                return Err(BroadcastError::TooManyShreds);
-            }
+        // Record stats for each shred
+        for shred in &shredder_result.shreds {
+            process_stats.record_shred(shred);
         }
 
-        Ok(all_shreds)
+        // Update state from the batch
+        self.next_shred_index = shredder_result.next_shred_index;
+        self.next_code_index = shredder_result.next_code_index;
+
+        if let Some(merkle_root) = shredder_result.chained_merkle_root {
+            self.chained_merkle_root = merkle_root;
+        }
+        if self.next_shred_index > max_data_shreds_per_slot {
+            return Err(BroadcastError::TooManyShreds);
+        }
+        if self.next_code_index > max_code_shreds_per_slot {
+            return Err(BroadcastError::TooManyShreds);
+        }
+
+        Ok(shredder_result.shreds)
     }
 
     #[allow(dead_code)]
