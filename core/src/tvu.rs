@@ -258,6 +258,7 @@ impl Tvu {
             slot_status_notifier.clone(),
             tvu_config.xdp_sender,
             votor_event_sender.clone(),
+            migration_status.clone(),
         );
 
         let (ancestor_duplicate_slots_sender, ancestor_duplicate_slots_receiver) = unbounded();
@@ -309,6 +310,7 @@ impl Tvu {
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
+                migration_status.clone(),
             )
         };
 

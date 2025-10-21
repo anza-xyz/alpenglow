@@ -74,6 +74,11 @@ impl CertificateType {
         matches!(self, Self::Skip(_))
     }
 
+    /// Is this a genesis certificate?
+    pub fn is_genesis(&self) -> bool {
+        matches!(self, Self::Genesis(_, _))
+    }
+
     /// Gets the block associated with this certificate, if present
     pub fn to_block(self) -> Option<Block> {
         match self {

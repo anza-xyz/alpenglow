@@ -67,7 +67,7 @@ declare_process_instruction!(Entrypoint, DEFAULT_COMPUTE_UNITS, |invoke_context|
     }
 
     // Determine the target vote state version to use for all operations.
-    let target_version = vote_state::TEMP_HARDCODED_TARGET_VERSION;
+    let target_version = *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap();
 
     let signers = instruction_context.get_signers()?;
     match limited_deserialize(data, solana_packet::PACKET_DATA_SIZE as u64)? {

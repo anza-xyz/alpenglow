@@ -61,7 +61,7 @@ use {
         xdp::XdpSender,
     },
     solana_votor::{consensus_metrics::ConsensusMetricsEventSender, event::VotorEventSender},
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
@@ -173,6 +173,7 @@ impl Tpu {
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -348,6 +349,7 @@ impl Tpu {
                 verified_consensus_message_sender,
                 consensus_metrics_sender,
                 alpenglow_last_voted,
+                migration_status.clone(),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
@@ -365,6 +367,7 @@ impl Tpu {
             blockstore.clone(),
             bank_notification_sender,
             duplicate_confirmed_slot_sender,
+            migration_status.clone(),
         );
 
         let banking_stage = BankingStage::new_num_threads(
@@ -421,6 +424,7 @@ impl Tpu {
             turbine_quic_endpoint_sender,
             xdp_sender,
             votor_event_sender,
+            migration_status,
         );
 
         let mut key_notifiers = key_notifiers.write().unwrap();
