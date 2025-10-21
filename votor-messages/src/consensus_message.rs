@@ -107,16 +107,14 @@ impl CertificateType {
     /// vote type (e.g., exclusively from `Notarize` or `Skip` votes). For
     /// certificates formed from a mix of two vote types, use the `to_source_votes`
     /// function.
-    pub fn to_source_vote(&self) -> Vote {
+    pub fn to_source_vote(self) -> Vote {
         match self {
-            CertificateType::Notarize(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-            CertificateType::FinalizeFast(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-            CertificateType::Finalize(slot) => Vote::new_finalization_vote(*slot),
-            CertificateType::NotarizeFallback(slot, hash) => {
-                Vote::new_notarization_vote(*slot, *hash)
-            }
-            CertificateType::Skip(slot) => Vote::new_skip_vote(*slot),
-            CertificateType::Genesis(slot, hash) => Vote::new_genesis_vote(*slot, *hash),
+            Self::Notarize(slot, block_id)
+            | Self::FinalizeFast(slot, block_id)
+            | Self::NotarizeFallback(slot, block_id) => Vote::new_notarization_vote(slot, block_id),
+            Self::Finalize(slot) => Vote::new_finalization_vote(slot),
+            Self::Skip(slot) => Vote::new_skip_vote(slot),
+            Self::Genesis(slot, block_id) => Vote::new_genesis_vote(slot, block_id),
         }
     }
 
@@ -128,16 +126,16 @@ impl CertificateType {
     ///
     /// It reconstructs both potential message payloads that were signed by validators, which
     /// the verifier uses to check the single aggregate signature.
-    pub fn to_source_votes(&self) -> Option<(Vote, Vote)> {
+    pub fn to_source_votes(self) -> Option<(Vote, Vote)> {
         match self {
-            CertificateType::NotarizeFallback(slot, hash) => {
-                let vote1 = Vote::new_notarization_vote(*slot, *hash);
-                let vote2 = Vote::new_notarization_fallback_vote(*slot, *hash);
+            Self::NotarizeFallback(slot, block_id) => {
+                let vote1 = Vote::new_notarization_vote(slot, block_id);
+                let vote2 = Vote::new_notarization_fallback_vote(slot, block_id);
                 Some((vote1, vote2))
             }
-            CertificateType::Skip(slot) => {
-                let vote1 = Vote::new_skip_vote(*slot);
-                let vote2 = Vote::new_skip_fallback_vote(*slot);
+            Self::Skip(slot) => {
+                let vote1 = Vote::new_skip_vote(slot);
+                let vote2 = Vote::new_skip_fallback_vote(slot);
                 Some((vote1, vote2))
             }
             // Other certificate types do not use Base3 encoding.

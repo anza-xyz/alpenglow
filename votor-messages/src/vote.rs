@@ -48,52 +48,54 @@ pub enum VoteType {
 impl Vote {
     /// Create a new notarization vote
     pub fn new_notarization_vote(slot: Slot, block_id: Hash) -> Self {
-        Self::from(NotarizationVote::new(slot, block_id))
+        Self::from(NotarizationVote { slot, block_id })
     }
 
     /// Create a new finalization vote
     pub fn new_finalization_vote(slot: Slot) -> Self {
-        Self::from(FinalizationVote::new(slot))
+        Self::from(FinalizationVote { slot })
     }
 
     /// Create a new skip vote
     pub fn new_skip_vote(slot: Slot) -> Self {
-        Self::from(SkipVote::new(slot))
+        Self::from(SkipVote { slot })
     }
 
     /// Create a new notarization fallback vote
     pub fn new_notarization_fallback_vote(slot: Slot, block_id: Hash) -> Self {
-        Self::from(NotarizationFallbackVote::new(slot, block_id))
+        Self::from(NotarizationFallbackVote { slot, block_id })
     }
 
     /// Create a new skip fallback vote
     pub fn new_skip_fallback_vote(slot: Slot) -> Self {
-        Self::from(SkipFallbackVote::new(slot))
+        Self::from(SkipFallbackVote { slot })
     }
 
     /// Create a new genesis vote
     pub fn new_genesis_vote(slot: Slot, block_id: Hash) -> Self {
-        Self::from(GenesisVote::new(slot, block_id))
+        Self::from(GenesisVote { slot, block_id })
     }
+}
 
+impl Vote {
     /// The slot which was voted for
     pub fn slot(&self) -> Slot {
         match self {
-            Self::Notarize(vote) => vote.slot(),
-            Self::Finalize(vote) => vote.slot(),
-            Self::Skip(vote) => vote.slot(),
-            Self::NotarizeFallback(vote) => vote.slot(),
-            Self::SkipFallback(vote) => vote.slot(),
-            Self::Genesis(vote) => vote.slot(),
+            Self::Notarize(vote) => vote.slot,
+            Self::Finalize(vote) => vote.slot,
+            Self::Skip(vote) => vote.slot,
+            Self::NotarizeFallback(vote) => vote.slot,
+            Self::SkipFallback(vote) => vote.slot,
+            Self::Genesis(vote) => vote.slot,
         }
     }
 
     /// The block id associated with the block which was voted for
     pub fn block_id(&self) -> Option<&Hash> {
         match self {
-            Self::Notarize(vote) => Some(vote.block_id()),
-            Self::NotarizeFallback(vote) => Some(vote.block_id()),
-            Self::Genesis(vote) => Some(vote.block_id()),
+            Self::Notarize(vote) => Some(&vote.block_id),
+            Self::NotarizeFallback(vote) => Some(&vote.block_id),
+            Self::Genesis(vote) => Some(&vote.block_id),
             Self::Finalize(_) | Self::Skip(_) | Self::SkipFallback(_) => None,
         }
     }
@@ -190,25 +192,10 @@ impl From<GenesisVote> for Vote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct NotarizationVote {
-    slot: Slot,
-    block_id: Hash,
-}
-
-impl NotarizationVote {
-    /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash) -> Self {
-        Self { slot, block_id }
-    }
-
-    /// The slot to notarize
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
-
-    /// The block_id of the notarization slot
-    pub fn block_id(&self) -> &Hash {
-        &self.block_id
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
+    /// Block id for the vote.
+    pub block_id: Hash,
 }
 
 /// A finalization vote
@@ -219,19 +206,8 @@ impl NotarizationVote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct FinalizationVote {
-    slot: Slot,
-}
-
-impl FinalizationVote {
-    /// Construct a finalization vote for `slot`
-    pub fn new(slot: Slot) -> Self {
-        Self { slot }
-    }
-
-    /// The slot to finalize
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
 }
 
 /// A skip vote
@@ -244,19 +220,8 @@ impl FinalizationVote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct SkipVote {
-    pub(crate) slot: Slot,
-}
-
-impl SkipVote {
-    /// Construct a skip vote for `slot`
-    pub fn new(slot: Slot) -> Self {
-        Self { slot }
-    }
-
-    /// The slot to skip
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
 }
 
 /// A notarization fallback vote
@@ -267,25 +232,10 @@ impl SkipVote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct NotarizationFallbackVote {
-    slot: Slot,
-    block_id: Hash,
-}
-
-impl NotarizationFallbackVote {
-    /// Construct a notarization vote for `slot`
-    pub fn new(slot: Slot, block_id: Hash) -> Self {
-        Self { slot, block_id }
-    }
-
-    /// The slot to notarize
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
-
-    /// The block_id of the notarization slot
-    pub fn block_id(&self) -> &Hash {
-        &self.block_id
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
+    /// Block id for the vote.
+    pub block_id: Hash,
 }
 
 /// A skip fallback vote
@@ -296,19 +246,8 @@ impl NotarizationFallbackVote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct SkipFallbackVote {
-    pub(crate) slot: Slot,
-}
-
-impl SkipFallbackVote {
-    /// Construct a skip fallback vote for `slot`
-    pub fn new(slot: Slot) -> Self {
-        Self { slot }
-    }
-
-    /// The slot to skip
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
 }
 
 /// A genesis vote. Only used during the migration from TowerBFT
@@ -319,23 +258,8 @@ impl SkipFallbackVote {
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct GenesisVote {
-    slot: Slot,
-    block_id: Hash,
-}
-
-impl GenesisVote {
-    /// Construct a genesis vote for the given slot and block ID
-    pub fn new(slot: Slot, block_id: Hash) -> Self {
-        Self { slot, block_id }
-    }
-
-    /// The slot for the genesis vote
-    pub fn slot(&self) -> Slot {
-        self.slot
-    }
-
-    /// The block ID for the genesis vote
-    pub fn block_id(&self) -> &Hash {
-        &self.block_id
-    }
+    /// Slot for the vote.
+    pub slot: Slot,
+    /// Block id for the vote.
+    pub block_id: Hash,
 }
