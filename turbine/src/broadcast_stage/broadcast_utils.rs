@@ -20,6 +20,18 @@ use {
 
 const ENTRY_COALESCE_DURATION: Duration = Duration::from_millis(200);
 
+/// Push a component to the components vector, fusing with the last component if possible.
+fn fuse_or_push(components: &mut Vec<BlockComponent>, component: BlockComponent) {
+    let should_push = match components.last_mut() {
+        Some(last) => last.try_fuse(component),
+        None => Some(component),
+    };
+
+    if let Some(component) = should_push {
+        components.push(component);
+    }
+}
+
 pub(super) struct ReceiveResults {
     pub components: Vec<BlockComponent>,
     pub bank: Arc<Bank>,
@@ -117,15 +129,7 @@ pub(super) fn recv_slot_entries(
         last_tick_height = tick_height;
 
         // Fuse entry batches together when possible - otherwise, create a new BlockComponent.
-        let component = entry.into();
-
-        if let Some(last_component) = components.last_mut() {
-            if let Some(component) = last_component.try_fuse(component) {
-                components.push(component);
-            }
-        } else {
-            components.push(component);
-        }
+        fuse_or_push(&mut components, entry.into());
 
         assert!(last_tick_height <= bank.max_tick_height());
     }
@@ -201,14 +205,7 @@ pub(super) fn recv_slot_entries(
 
         // Add the entry to the batch.
         serialized_batch_byte_count += entry_bytes;
-
-        if let Some(last_component) = components.last_mut() {
-            if let Some(component) = last_component.try_fuse(component) {
-                components.push(component);
-            }
-        } else {
-            components.push(component);
-        }
+        fuse_or_push(&mut components, component);
 
         assert!(last_tick_height <= bank.max_tick_height());
     }
