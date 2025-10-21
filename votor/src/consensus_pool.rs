@@ -165,21 +165,21 @@ impl ConsensusPool {
 
     fn update_vote_pool(
         &mut self,
-        msg: VoteMessage,
+        vote: VoteMessage,
         validator_vote_key: Pubkey,
         validator_stake: Stake,
     ) -> Option<Stake> {
-        let vote_type = msg.vote.get_type();
+        let vote_type = vote.vote.get_type();
         let pool = self
             .vote_pools
-            .entry((msg.vote.slot(), vote_type))
+            .entry((vote.vote.slot(), vote_type))
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
             VotePool::SimpleVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, msg)
+                pool.add_vote(validator_vote_key, validator_stake, vote)
             }
             VotePool::DuplicateBlockVotePool(pool) => {
-                pool.add_vote(validator_vote_key, msg, validator_stake)
+                pool.add_vote(validator_vote_key, validator_stake, vote)
             }
         }
     }
@@ -229,11 +229,11 @@ impl ConsensusPool {
                 if let Some(pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match pool {
                         VotePool::SimpleVotePool(pool) => {
-                            cert_builder.aggregate(pool.messages()).unwrap();
+                            cert_builder.aggregate(pool.votes()).unwrap();
                         }
                         VotePool::DuplicateBlockVotePool(pool) => {
-                            if let Some(msgs) = pool.messages(block_id.as_ref().unwrap()) {
-                                cert_builder.aggregate(msgs).unwrap();
+                            if let Some(votes) = pool.votes(block_id.as_ref().unwrap()) {
+                                cert_builder.aggregate(votes).unwrap();
                             }
                         }
                     };
