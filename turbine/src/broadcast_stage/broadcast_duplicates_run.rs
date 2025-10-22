@@ -228,17 +228,16 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 // Don't mark the last shred as last so that validators won't
                 // know that they've gotten all the shreds, and will continue
                 // trying to repair.
-                let (partition_last_data_shred, _) = shredder
-                    .component_to_merkle_shreds_for_tests(
-                        keypair,
-                        &BlockComponent::EntryBatch(duplicate_extra_last_entries),
-                        true,
-                        Some(self.chained_merkle_root),
-                        self.next_shred_index,
-                        self.next_code_index,
-                        &self.reed_solomon_cache,
-                        &mut stats,
-                    );
+                let (partition_last_data_shred, _) = shredder.component_to_merkle_shreds_for_tests(
+                    keypair,
+                    &BlockComponent::EntryBatch(duplicate_extra_last_entries),
+                    true,
+                    Some(self.chained_merkle_root),
+                    self.next_shred_index,
+                    self.next_code_index,
+                    &self.reed_solomon_cache,
+                    &mut stats,
+                );
                 let sigs: Vec<_> = partition_last_data_shred
                     .iter()
                     .map(|s| (s.signature(), s.index()))
