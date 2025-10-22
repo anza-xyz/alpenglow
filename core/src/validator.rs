@@ -89,6 +89,7 @@ use {
         poh_controller::PohController,
         poh_recorder::PohRecorder,
         poh_service::{self, PohService},
+        record_channels::record_channels,
         transaction_recorder::TransactionRecorder,
     },
     solana_pubkey::Pubkey,
@@ -148,6 +149,7 @@ use {
         voting_service::VotingServiceOverride,
         votor::LeaderWindowNotifier,
     },
+    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -961,16 +963,8 @@ impl Validator {
         let prioritization_fee_cache = Arc::new(PrioritizationFeeCache::default());
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
-        let (mut poh_recorder, entry_receiver) = {
+        let (poh_recorder, entry_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
-            let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
-            let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
-                hfb.feature_set
-                    .activated_slot(&agave_feature_set::alpenglow::id())
-            });
-            let is_alpenglow_enabled = highest_frozen_bank
-                .zip(first_alpenglow_slot)
-                .is_some_and(|(hfs, fas)| hfs.slot() >= fas);
             PohRecorder::new_with_clear_signal(
                 bank.tick_height(),
                 bank.last_blockhash(),
@@ -983,15 +977,10 @@ impl Validator {
                 &leader_schedule_cache,
                 &genesis_config.poh_config,
                 exit.clone(),
-                is_alpenglow_enabled,
             )
         };
-        if transaction_status_sender.is_some() {
-            poh_recorder.track_transaction_indexes();
-        }
-        let (record_sender, record_receiver) = unbounded();
-        let transaction_recorder =
-            TransactionRecorder::new(record_sender, poh_recorder.is_exited.clone());
+        let (record_sender, record_receiver) = record_channels(transaction_status_sender.is_some());
+        let transaction_recorder = TransactionRecorder::new(record_sender);
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let (poh_controller, poh_service_message_receiver) = PohController::new();
 
@@ -1420,6 +1409,7 @@ impl Validator {
         let wait_for_vote_to_start_leader =
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
+        let migration_status = Arc::new(MigrationStatus::new(cluster_info.id()));
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
         let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
         let block_creation_loop_config = BlockCreationLoopConfig {
@@ -1449,6 +1439,7 @@ impl Validator {
             config.poh_hashes_per_batch,
             record_receiver,
             poh_service_message_receiver,
+            migration_status.clone(),
             block_creation_loop,
         );
         assert_eq!(
@@ -1567,10 +1558,11 @@ impl Validator {
                     vote_history
                 }
                 Err(e) => {
+                    // TODO(ashwin): we need to be viligant about this and add a CLI option to panic here.
                     warn!(
                         "Unable to retrieve vote history: {e:?} creating default vote history...."
                     );
-                    VoteHistory::default()
+                    VoteHistory::new(identity_keypair.pubkey(), 0)
                 }
             };
             (Tower::default(), vote_history)
@@ -1585,7 +1577,7 @@ impl Validator {
                     Tower::default()
                 }
             };
-            (tower, VoteHistory::default())
+            (tower, VoteHistory::new(identity_keypair.pubkey(), 0))
         };
 
         let last_vote = tower.last_vote();
@@ -1700,6 +1692,7 @@ impl Validator {
             consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
             alpenglow_last_voted.clone(),
+            migration_status.clone(),
         )
         .map_err(ValidatorError::Other)?;
 

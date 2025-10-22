@@ -2931,7 +2931,6 @@ fn test_oc_bad_signatures() {
     let client = cluster
         .build_validator_tpu_quic_client(cluster.entry_point_info.pubkey())
         .unwrap();
-    let cluster_funding_keypair = cluster.funding_keypair.insecure_clone();
     let voter_thread_sleep_ms: usize = 100;
     let num_votes_simulated = Arc::new(AtomicUsize::new(0));
     let gossip_voter = cluster_tests::start_gossip_voter(
@@ -2974,7 +2973,7 @@ fn test_oc_bad_signatures() {
                 );
                 LocalCluster::send_transaction_with_retries(
                     &client,
-                    &[&cluster_funding_keypair, &bad_authorized_signer_keypair],
+                    &[&node_keypair, &bad_authorized_signer_keypair],
                     &mut vote_tx,
                     5,
                 )

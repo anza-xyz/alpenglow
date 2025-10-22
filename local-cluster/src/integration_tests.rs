@@ -68,8 +68,9 @@ pub const RUST_LOG_FILTER: &str =
 
 pub const AG_DEBUG_LOG_FILTER: &str =
     "error,solana_core::replay_stage=info,solana_local_cluster=info,local_cluster=info,\
-     solana_core::block_creation_loop=trace,solana_votor=trace,\
-     solana_votor::vote_history_storage=info,solana_core::validator=info";
+     solana_core::block_creation_loop=trace,solana_votor=trace,solana_votor::voting_service=info,\
+     solana_votor::vote_history_storage=info,solana_core::validator=info,\
+     solana_votor::consensus_metrics=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {
@@ -404,7 +405,7 @@ pub fn run_cluster_partition<C>(
     additional_accounts: Vec<(Pubkey, AccountSharedData)>,
     is_alpenglow: bool,
 ) {
-    solana_logger::setup_with_default(RUST_LOG_FILTER);
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     info!("PARTITION_TEST!");
     let num_nodes = partitions.len();
     let node_stakes: Vec<_> = partitions

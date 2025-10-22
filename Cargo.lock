@@ -9489,6 +9489,7 @@ dependencies = [
  "log",
  "qualifier_attr",
  "rand 0.8.5",
+ "shuttle",
  "solana-clock",
  "solana-entry",
  "solana-hash",
@@ -9507,6 +9508,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
+ "solana-votor-messages",
  "thiserror 2.0.16",
  "tikv-jemallocator",
 ]
@@ -11878,6 +11880,7 @@ dependencies = [
  "solana-transaction-error",
  "solana-vote",
  "solana-vote-program",
+ "solana-votor",
  "solana-votor-messages",
  "test-case",
  "thiserror 2.0.16",
@@ -11901,6 +11904,7 @@ dependencies = [
  "solana-logger",
  "solana-program",
  "solana-vote-interface",
+ "solana-votor-messages",
  "spl-pod",
 ]
 

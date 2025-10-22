@@ -22,6 +22,7 @@ use {
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
         consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        migration::MigrationStatus,
         vote::{Vote, VoteType},
     },
     std::{
@@ -116,9 +117,21 @@ pub struct ConsensusPool {
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
+    /// Stores details about the genesis vote during the migration
+    migration_status: Option<Arc<MigrationStatus>>,
 }
 
 impl ConsensusPool {
+    pub fn new_from_root_bank_pre_migration(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
+        let mut pool = Self::new_from_root_bank(my_pubkey, bank);
+        pool.migration_status = Some(migration_status);
+        pool
+    }
+
     pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
@@ -134,6 +147,7 @@ impl ConsensusPool {
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
+            migration_status: None,
         }
     }
 
@@ -283,7 +297,7 @@ impl ConsensusPool {
         events: &mut Vec<VotorEvent>,
     ) {
         trace!("{}: Inserting certificate {:?}", self.my_pubkey, cert_type);
-        self.completed_certificates.insert(cert_type, cert);
+        self.completed_certificates.insert(cert_type, cert.clone());
         match cert_type {
             CertificateType::NotarizeFallback(slot, block_id) => {
                 self.parent_ready_tracker
@@ -335,6 +349,9 @@ impl ConsensusPool {
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
+                if let Some(ref migration_status) = self.migration_status {
+                    migration_status.set_genesis_certificate(cert);
+                }
                 // The genesis block is automatically certified
                 self.parent_ready_tracker
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
