@@ -833,6 +833,9 @@ pub enum BlockstoreProcessorError {
 
     #[error("non consecutive leader slot for bank {0} parent {1}")]
     NonConsecutiveLeaderSlot(Slot, Slot),
+
+    #[error("user transactions found in vote only mode bank at slot {0}")]
+    UserTransactionsInVoteOnlyBank(Slot),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1673,14 +1676,30 @@ fn confirm_slot_entries(
         .expect("Transaction verification generates entries");
 
     let mut replay_timer = Measure::start("replay_elapsed");
+    let is_vote_only_bank = bank.vote_only_bank();
     let replay_entries: Vec<_> = entries
         .into_iter()
         .zip(entry_tx_starting_indexes)
-        .map(|(entry, tx_starting_index)| ReplayEntry {
-            entry,
-            starting_index: tx_starting_index,
+        .map(|(entry, tx_starting_index)| {
+            // If bank is in vote-only mode, validate that entries contain only vote transactions
+            if let EntryType::Transactions(ref transactions) = entry {
+                if is_vote_only_bank
+                    && transactions
+                        .iter()
+                        .any(|tx| !tx.is_simple_vote_transaction())
+                {
+                    return Err(BlockstoreProcessorError::UserTransactionsInVoteOnlyBank(
+                        bank.slot(),
+                    ));
+                }
+            }
+            Ok(ReplayEntry {
+                entry,
+                starting_index: tx_starting_index,
+            })
         })
-        .collect();
+        .collect::<result::Result<Vec<_>, _>>()?;
+
     let process_result = process_entries(
         bank,
         replay_tx_thread_pool,
