@@ -89,7 +89,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let mut stats = ProcessShredsStats::default();
-        let mut receive_results =
+        let receive_results =
             broadcast_utils::recv_slot_entries(receiver, &mut self.carryover_entry, &mut stats)?;
         let bank = receive_results.bank.clone();
         let last_tick_height = receive_results.last_tick_height;
@@ -108,7 +108,8 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.num_slots_broadcasted += 1;
         }
 
-        if receive_results.components.is_empty() {
+        // Check if we have a marker - if so, nothing to duplicate
+        if matches!(receive_results.component, BlockComponent::BlockMarker(_)) {
             return Ok(());
         }
 
@@ -122,57 +123,28 @@ impl BroadcastRun for BroadcastDuplicatesRun {
 
         // 2) Convert entries to shreds + generate coding shreds. Set a garbage PoH on the last entry
         // in the slot to make verification fail on validators
-        let last_entries = {
+        let (component, last_entries) = {
             if last_tick_height == bank.max_tick_height()
                 && bank.slot() > MINIMUM_DUPLICATE_SLOT
                 && self.num_slots_broadcasted % DUPLICATE_RATE == 0
                 && self.recent_blockhash.is_some()
             {
-                // Extract the last entry and second-to-last entry from components
-                let (original_last_entry, prev_entry_hash) = if let Some(last_component) =
-                    receive_results.components.pop()
-                {
-                    match last_component {
-                        BlockComponent::EntryBatch(mut entries) => {
-                            // Get the last entry from the batch (should be the final tick)
-                            let last_entry = entries.pop().expect("EntryBatch should not be empty");
+                // Extract the last entry from the component
+                let (original_last_entry, prev_entry_hash, component) =
+                    if let BlockComponent::EntryBatch(mut entries) = receive_results.component {
+                        // Get the last entry from the batch (should be the final tick)
+                        let last_entry = entries.pop().expect("EntryBatch should not be empty");
 
-                            // Try to get the second-to-last entry from this batch
-                            let prev_hash = if let Some(second_last) = entries.last() {
-                                Some(second_last.hash)
-                            } else {
-                                // No second-to-last entry in this batch, search previous components
-                                receive_results
-                                    .components
-                                    .iter()
-                                    .rev()
-                                    .find_map(|component| match component {
-                                        BlockComponent::EntryBatch(entries) => {
-                                            entries.last().map(|e| e.hash)
-                                        }
-                                        BlockComponent::BlockMarker(_) => None,
-                                    })
-                            }
-                            .or(self.prev_entry_hash);
+                        // Try to get the second-to-last entry from this batch
+                        let prev_hash = entries.last().map(|e| e.hash).or(self.prev_entry_hash);
 
-                            // If there are remaining entries, push them back
-                            if !entries.is_empty() {
-                                receive_results
-                                    .components
-                                    .push(BlockComponent::EntryBatch(entries));
-                            }
+                        // Create component with remaining entries
+                        let component = BlockComponent::EntryBatch(entries);
 
-                            (last_entry, prev_hash)
-                        }
-                        BlockComponent::BlockMarker(_) => {
-                            panic!(
-                                "Expected last component to be an EntryBatch, found BlockMarker"
-                            );
-                        }
-                    }
-                } else {
-                    panic!("Expected at least one component");
-                };
+                        (last_entry, prev_hash, component)
+                    } else {
+                        panic!("Expected EntryBatch, found BlockMarker");
+                    };
 
                 // Last entry has to be a tick
                 assert!(original_last_entry.is_tick());
@@ -196,27 +168,24 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                         vec![],
                     );
 
-                    Some((original_last_entry, vec![new_extra_entry, new_last_entry]))
+                    (
+                        component,
+                        Some((original_last_entry, vec![new_extra_entry, new_last_entry])),
+                    )
                 } else {
-                    None
+                    (component, None)
                 }
             } else {
-                None
+                (receive_results.component, None)
             }
         };
 
         self.prev_entry_hash = last_entries
             .as_ref()
             .map(|(original_last_entry, _)| original_last_entry.hash)
-            .or_else(|| {
-                receive_results
-                    .components
-                    .iter()
-                    .rev()
-                    .find_map(|component| match component {
-                        BlockComponent::EntryBatch(entries) => entries.last().map(|e| e.hash),
-                        BlockComponent::BlockMarker(_) => None,
-                    })
+            .or_else(|| match &component {
+                BlockComponent::EntryBatch(entries) => entries.last().map(|e| e.hash),
+                BlockComponent::BlockMarker(_) => None,
             });
 
         let shredder = Shredder::new(
@@ -229,7 +198,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
 
         let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
-            &receive_results.components,
+            std::slice::from_ref(&component),
             last_tick_height == bank.max_tick_height() && last_entries.is_none(),
             Some(self.chained_merkle_root),
             self.next_shred_index,

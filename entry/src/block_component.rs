@@ -401,7 +401,7 @@ impl BlockComponent {
     }
 
     /// Get entries if this is an entry batch.
-    pub fn as_entry_batch(&self) -> Option<&Vec<Entry>> {
+    pub fn as_entry_batch(&self) -> Option<&[Entry]> {
         match self {
             Self::EntryBatch(entries) => Some(entries),
             _ => None,

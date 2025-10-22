@@ -20,33 +20,20 @@ use {
 
 const ENTRY_COALESCE_DURATION: Duration = Duration::from_millis(200);
 
-/// Push a component to the components vector, fusing with the last component if possible.
-fn fuse_or_push(components: &mut Vec<BlockComponent>, component: BlockComponent) {
-    let should_push = match components.last_mut() {
-        Some(last) => last.try_fuse(component),
-        None => Some(component),
-    };
-
-    if let Some(component) = should_push {
-        components.push(component);
-    }
-}
-
 pub(super) struct ReceiveResults {
-    pub components: Vec<BlockComponent>,
+    pub component: BlockComponent,
     pub bank: Arc<Bank>,
     pub last_tick_height: u64,
 }
 
 impl ReceiveResults {
     pub fn entries(&self) -> impl Iterator<Item = &Entry> {
-        self.components
-            .iter()
-            .filter_map(|component| match component {
-                BlockComponent::EntryBatch(entries) => Some(entries),
-                _ => None,
-            })
-            .flatten()
+        match &self.component {
+            BlockComponent::EntryBatch(entries) => Some(entries.iter()),
+            _ => None,
+        }
+        .into_iter()
+        .flatten()
     }
 }
 
@@ -112,41 +99,52 @@ pub(super) fn recv_slot_entries(
         None => receiver.recv_timeout(Duration::new(1, 0))?,
     };
     assert!(last_tick_height <= bank.max_tick_height());
-    let mut components: Vec<BlockComponent> = vec![entry_marker.into()];
 
-    // Drain the channel of entries.
+    // If the first thing is a block marker, return it immediately
+    if let Some(marker) = entry_marker.as_marker().cloned() {
+        process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
+        return Ok(ReceiveResults {
+            component: BlockComponent::BlockMarker(marker),
+            bank,
+            last_tick_height,
+        });
+    }
+
+    // Otherwise, drain entries into a batch
+    let mut entries = vec![entry_marker
+        .into_entry()
+        .expect("entry_marker must be Entry if not Marker")];
+
+    // Drain the channel of entries until we hit a marker or the slot ends
     while last_tick_height != bank.max_tick_height() {
-        let Ok((try_bank, (entry, tick_height))) = receiver.try_recv() else {
+        let Ok((try_bank, (next_marker, tick_height))) = receiver.try_recv() else {
             break;
         };
         // If the bank changed, that implies the previous slot was interrupted and we do not have to
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            components.clear();
-            bank = try_bank;
+            entries.clear();
+            bank = try_bank.clone();
         }
         last_tick_height = tick_height;
 
-        // Fuse entry batches together when possible - otherwise, create a new BlockComponent.
-        fuse_or_push(&mut components, entry.into());
+        // If we hit a block marker, save it for next time and stop draining
+        if next_marker.as_marker().is_some() {
+            *carryover_entry = Some((try_bank, (next_marker, tick_height)));
+            break;
+        }
 
+        // Add the entry to our batch
+        entries.push(next_marker.into_entry().expect("must be Entry"));
         assert!(last_tick_height <= bank.max_tick_height());
     }
 
-    // For now, we should only ever have one component, since we're not sending around markers yet.
-    // Remove this once we start sending around markers.
-    assert_eq!(1, components.len());
-
-    let mut serialized_batch_byte_count = 0_u64;
-
-    for component in components.iter() {
-        serialized_batch_byte_count += component.serialized_size().map_err(|_| {
-            Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
-                "Couldn't serialize BlockComponent: {component:?}",
-            ))))
-        })?;
-    }
+    let mut serialized_batch_byte_count = bincode::serialized_size(&entries).map_err(|e| {
+        Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
+            "Couldn't serialize entry batch: {e:?}",
+        ))))
+    })?;
 
     let next_full_batch_byte_count = serialized_batch_byte_count
         .div_ceil(get_data_shred_bytes_per_batch_typical())
@@ -157,6 +155,7 @@ pub(super) fn recv_slot_entries(
     // 1. We ticked through the entire slot.
     // 2. We hit the timeout.
     // 3. We're over the max data target.
+    // 4. We hit a block marker.
     let mut coalesce_start = Instant::now();
     while keep_coalescing_entries(
         last_tick_height,
@@ -175,47 +174,40 @@ pub(super) fn recv_slot_entries(
         // broadcast its entries.
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
-            components.clear();
+            entries.clear();
             serialized_batch_byte_count = 8; // Vec len
             bank = try_bank.clone();
             coalesce_start = Instant::now();
         }
         last_tick_height = tick_height;
 
-        let component: BlockComponent = entry_marker.into();
+        // If we hit a block marker, save it for next time and stop coalescing
+        if entry_marker.as_marker().is_some() {
+            *carryover_entry = Some((try_bank, (entry_marker, tick_height)));
+            break;
+        }
 
-        let entry_bytes = match &component {
-            BlockComponent::EntryBatch(items) if components.last().is_some() => {
-                serialized_size(&items[0])?
-            }
-            _ => component.serialized_size().map_err(|e| {
-                Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
-                    "Couldn't serialize BlockComponent: {e:?}",
-                ))))
-            })?,
-        };
+        let entry = entry_marker.into_entry().expect("must be Entry");
+        let entry_bytes = serialized_size(&entry)?;
 
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
             // the next batch.
-            //
-            // Unwrapping is safe here, since component is guaranteed to have at most one Entry,
-            // given that component was first constructed from an EntryMarker.
-            *carryover_entry = Some((try_bank, (component.try_into().unwrap(), tick_height)));
+            *carryover_entry = Some((try_bank, (entry.into(), tick_height)));
             process_stats.coalesce_exited_hit_max += 1;
             break;
         }
 
         // Add the entry to the batch.
         serialized_batch_byte_count += entry_bytes;
-        fuse_or_push(&mut components, component);
+        entries.push(entry);
 
         assert!(last_tick_height <= bank.max_tick_height());
     }
     process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
     process_stats.coalesce_elapsed = coalesce_start.elapsed().as_micros() as u64;
     Ok(ReceiveResults {
-        components,
+        component: BlockComponent::EntryBatch(entries),
         bank,
         last_tick_height,
     })
@@ -314,24 +306,17 @@ mod tests {
             })
             .collect();
 
-        let mut res_components = vec![];
+        let mut res_entries = vec![];
         let mut last_tick_height = 0;
         while let Ok(result) = recv_slot_entries(&r, &mut None, &mut ProcessShredsStats::default())
         {
             assert_eq!(result.bank.slot(), bank1.slot());
             last_tick_height = result.last_tick_height;
-            res_components.extend(result.components);
+            if let BlockComponent::EntryBatch(entries) = result.component {
+                res_entries.extend(entries);
+            }
         }
         assert_eq!(last_tick_height, bank1.max_tick_height());
-
-        // Extract entries from components and compare
-        let res_entries: Vec<Entry> = res_components
-            .into_iter()
-            .flat_map(|component| match component {
-                BlockComponent::EntryBatch(entries) => entries,
-                _ => vec![],
-            })
-            .collect();
         assert_eq!(res_entries, entries);
     }
 
@@ -369,26 +354,19 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let mut res_components = vec![];
+        let mut res_entries = vec![];
         let mut last_tick_height = 0;
         let mut bank_slot = 0;
         while let Ok(result) = recv_slot_entries(&r, &mut None, &mut ProcessShredsStats::default())
         {
             bank_slot = result.bank.slot();
             last_tick_height = result.last_tick_height;
-            res_components = result.components;
+            if let BlockComponent::EntryBatch(entries) = result.component {
+                res_entries = entries;
+            }
         }
         assert_eq!(bank_slot, bank2.slot());
         assert_eq!(last_tick_height, expected_last_height);
-
-        // Extract entries from components and compare
-        let res_entries: Vec<Entry> = res_components
-            .into_iter()
-            .flat_map(|component| match component {
-                BlockComponent::EntryBatch(entries) => entries,
-                _ => vec![],
-            })
-            .collect();
         assert_eq!(res_entries, vec![last_entry]);
     }
 }

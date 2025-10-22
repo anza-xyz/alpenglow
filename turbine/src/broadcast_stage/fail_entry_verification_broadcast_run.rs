@@ -58,7 +58,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let mut stats = ProcessShredsStats::default();
-        let mut receive_results =
+        let receive_results =
             broadcast_utils::recv_slot_entries(receiver, &mut self.carryover_entry, &mut stats)?;
         let bank = receive_results.bank.clone();
         let last_tick_height = receive_results.last_tick_height;
@@ -85,30 +85,23 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
 
         // 3) Convert entries to shreds + generate coding shreds. Set a garbage PoH on the last entry
         // in the slot to make verification fail on validators
-        let last_entries = {
+        let (component, last_entries) = {
             if last_tick_height == bank.max_tick_height() && bank.slot() < NUM_BAD_SLOTS {
-                // Find the first EntryBatch component iterating backwards and corrupt its final entry
-                let (good_last_entry, bad_last_entry) = receive_results
-                    .components
-                    .iter_mut()
-                    .rev()
-                    .find_map(|component| {
-                        if let BlockComponent::EntryBatch(entries) = component {
-                            entries.last_mut().map(|last_entry| {
-                                let good = last_entry.clone();
-                                last_entry.hash = Hash::default();
-                                let bad = last_entry.clone();
-                                (good, bad)
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .expect("Expected to find an EntryBatch component");
+                // Corrupt the final entry in the component
+                let (good_last_entry, bad_last_entry, component) =
+                    if let BlockComponent::EntryBatch(mut entries) = receive_results.component {
+                        let last_entry = entries.last_mut().expect("Expected at least one entry");
+                        let good = last_entry.clone();
+                        last_entry.hash = Hash::default();
+                        let bad = last_entry.clone();
+                        (good, bad, BlockComponent::EntryBatch(entries))
+                    } else {
+                        panic!("Expected EntryBatch component");
+                    };
 
-                Some((good_last_entry, bad_last_entry))
+                (component, Some((good_last_entry, bad_last_entry)))
             } else {
-                None
+                (receive_results.component, None)
             }
         };
 
@@ -122,7 +115,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
 
         let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             keypair,
-            &receive_results.components,
+            std::slice::from_ref(&component),
             last_tick_height == bank.max_tick_height() && last_entries.is_none(),
             Some(self.chained_merkle_root),
             self.next_shred_index,

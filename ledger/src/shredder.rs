@@ -83,11 +83,11 @@ impl Shredder {
         next_code_index: u32,
         reed_solomon_cache: &ReedSolomonCache,
         stats: &mut ProcessShredsStats,
-    ) -> impl Iterator<Item = Shred> {
+    ) -> ShredderComponentsResult {
         let now = Instant::now();
         let bytes = component.to_bytes().unwrap();
         stats.serialize_elapsed += now.elapsed().as_micros() as u64;
-        Self::make_shreds_from_data_slice(
+        let shreds: Vec<Shred> = Self::make_shreds_from_data_slice(
             self,
             keypair,
             &bytes,
@@ -99,75 +99,41 @@ impl Shredder {
             stats,
         )
         .unwrap()
-    }
+        .collect();
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn make_merkle_shreds_from_components(
-        &self,
-        keypair: &Keypair,
-        components: &[BlockComponent],
-        is_last_in_slot: bool,
-        chained_merkle_root: Option<Hash>,
-        next_shred_index: u32,
-        next_code_index: u32,
-        reed_solomon_cache: &ReedSolomonCache,
-        stats: &mut ProcessShredsStats,
-    ) -> ShredderComponentsResult {
-        let mut all_shreds = Vec::new();
-        let mut current_chained_merkle_root = chained_merkle_root;
         let mut current_shred_index = next_shred_index;
         let mut current_code_index = next_code_index;
+        let mut max_fec_set_shred = None;
 
-        for (ix, component) in components.iter().enumerate() {
-            let is_last_in_slot = is_last_in_slot && ix == components.len() - 1;
-
-            let shreds = self.make_merkle_shreds_from_component(
-                keypair,
-                component,
-                is_last_in_slot,
-                current_chained_merkle_root,
-                current_shred_index,
-                current_code_index,
-                reed_solomon_cache,
-                stats,
-            );
-
-            let mut max_fec_set_shred = None;
-            for shred in shreds {
-                // Update indices for next component
-                match shred.shred_type() {
-                    ShredType::Code => {
-                        current_code_index = current_code_index.max(shred.index() + 1);
-                    }
-                    ShredType::Data => {
-                        current_shred_index = current_shred_index.max(shred.index() + 1);
-                    }
+        for shred in &shreds {
+            // Update indices
+            match shred.shred_type() {
+                ShredType::Code => {
+                    current_code_index = current_code_index.max(shred.index() + 1);
                 }
-
-                // Track the shred with the maximum fec_set_index
-                let fec_set_index = shred.fec_set_index();
-                max_fec_set_shred = match max_fec_set_shred {
-                    None => Some((fec_set_index, shred.merkle_root())),
-                    Some((max_fec, _)) if fec_set_index > max_fec => {
-                        Some((fec_set_index, shred.merkle_root()))
-                    }
-                    _ => max_fec_set_shred,
-                };
-
-                all_shreds.push(shred);
+                ShredType::Data => {
+                    current_shred_index = current_shred_index.max(shred.index() + 1);
+                }
             }
 
-            // Update chained merkle root for next component
-            if let Some((_, merkle_root)) = max_fec_set_shred {
-                current_chained_merkle_root = Some(merkle_root.unwrap());
-            }
+            // Track the shred with the maximum fec_set_index
+            let fec_set_index = shred.fec_set_index();
+            max_fec_set_shred = match max_fec_set_shred {
+                None => Some((fec_set_index, shred.merkle_root())),
+                Some((max_fec, _)) if fec_set_index > max_fec => {
+                    Some((fec_set_index, shred.merkle_root()))
+                }
+                _ => max_fec_set_shred,
+            };
         }
 
+        let chained_merkle_root = max_fec_set_shred.and_then(|(_, root)| root.ok());
+
         ShredderComponentsResult {
-            shreds: all_shreds,
+            shreds,
             next_shred_index: current_shred_index,
             next_code_index: current_code_index,
-            chained_merkle_root: current_chained_merkle_root,
+            chained_merkle_root,
         }
     }
 
@@ -272,17 +238,31 @@ impl Shredder {
         Vec<Shred>, // data shreds
         Vec<Shred>, // coding shreds
     ) {
-        let batch = self.make_merkle_shreds_from_components(
-            keypair,
-            components,
-            is_last_in_slot,
-            chained_merkle_root,
-            next_shred_index,
-            next_code_index,
-            reed_solomon_cache,
-            stats,
-        );
-        batch.shreds.into_iter().partition(Shred::is_data)
+        let mut all_shreds = Vec::new();
+        let mut current_chained_merkle_root = chained_merkle_root;
+        let mut current_shred_index = next_shred_index;
+        let mut current_code_index = next_code_index;
+
+        for (ix, component) in components.iter().enumerate() {
+            let is_last = is_last_in_slot && ix == components.len() - 1;
+            let result = self.make_merkle_shreds_from_component(
+                keypair,
+                component,
+                is_last,
+                current_chained_merkle_root,
+                current_shred_index,
+                current_code_index,
+                reed_solomon_cache,
+                stats,
+            );
+
+            all_shreds.extend(result.shreds);
+            current_shred_index = result.next_shred_index;
+            current_code_index = result.next_code_index;
+            current_chained_merkle_root = result.chained_merkle_root;
+        }
+
+        all_shreds.into_iter().partition(Shred::is_data)
     }
 
     /// Combines all shreds to recreate the original buffer
@@ -742,19 +722,17 @@ mod tests {
 
         // Shred using components with a single EntryBatch
         let components = vec![BlockComponent::EntryBatch(entries.clone())];
-        let result = shredder.make_merkle_shreds_from_components(
-            &keypair,
-            &components,
-            is_last_in_slot,
-            chained_merkle_root,
-            next_shred_index,
-            next_code_index,
-            &ReedSolomonCache::default(),
-            &mut ProcessShredsStats::default(),
-        );
-
-        let (data_shreds_components, coding_shreds_components): (Vec<_>, Vec<_>) =
-            result.shreds.into_iter().partition(Shred::is_data);
+        let (data_shreds_components, coding_shreds_components) = shredder
+            .components_to_merkle_shreds_for_tests(
+                &keypair,
+                &components,
+                is_last_in_slot,
+                chained_merkle_root,
+                next_shred_index,
+                next_code_index,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            );
 
         // Verify shreds are identical
         assert_eq!(data_shreds_entries.len(), data_shreds_components.len());
@@ -773,12 +751,6 @@ mod tests {
         {
             assert_eq!(e.payload(), c.payload());
         }
-
-        // Verify result indices
-        let expected_next_shred = data_shreds_entries.last().unwrap().index() + 1;
-        let expected_next_code = coding_shreds_entries.last().unwrap().index() + 1;
-        assert_eq!(result.next_shred_index, expected_next_shred);
-        assert_eq!(result.next_code_index, expected_next_code);
     }
 
     #[test]
@@ -789,7 +761,7 @@ mod tests {
         let components = vec![];
         let initial_merkle_root = Hash::new_from_array(rand::thread_rng().gen());
 
-        let result = shredder.make_merkle_shreds_from_components(
+        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
             &keypair,
             &components,
             false,
@@ -801,14 +773,8 @@ mod tests {
         );
 
         // Verify empty result
-        assert!(result.shreds.is_empty());
-
-        // Verify indices didn't change
-        assert_eq!(result.next_shred_index, 10);
-        assert_eq!(result.next_code_index, 5);
-
-        // Verify merkle root didn't change
-        assert_eq!(result.chained_merkle_root, Some(initial_merkle_root));
+        assert!(data_shreds.is_empty());
+        assert!(coding_shreds.is_empty());
     }
 
     #[test_matrix([true, false])]
