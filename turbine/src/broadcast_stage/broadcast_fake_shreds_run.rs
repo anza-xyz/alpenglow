@@ -83,9 +83,9 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
+        let (data_shreds, coding_shreds) = shredder.component_to_merkle_shreds_for_tests(
             keypair,
-            std::slice::from_ref(&receive_results.component),
+            &receive_results.component,
             last_tick_height == bank.max_tick_height(),
             Some(chained_merkle_root),
             next_shred_index,

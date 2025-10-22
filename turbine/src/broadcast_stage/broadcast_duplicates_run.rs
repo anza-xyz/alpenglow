@@ -196,9 +196,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
+        let (data_shreds, coding_shreds) = shredder.component_to_merkle_shreds_for_tests(
             keypair,
-            std::slice::from_ref(&component),
+            &component,
             last_tick_height == bank.max_tick_height() && last_entries.is_none(),
             Some(self.chained_merkle_root),
             self.next_shred_index,
@@ -215,9 +215,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         }
         let last_shreds =
             last_entries.map(|(original_last_entry, duplicate_extra_last_entries)| {
-                let (original_last_data_shred, _) = shredder.components_to_merkle_shreds_for_tests(
+                let (original_last_data_shred, _) = shredder.component_to_merkle_shreds_for_tests(
                     keypair,
-                    &[BlockComponent::EntryBatch(vec![original_last_entry])],
+                    &BlockComponent::EntryBatch(vec![original_last_entry]),
                     true,
                     Some(self.chained_merkle_root),
                     self.next_shred_index,
@@ -229,9 +229,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 // know that they've gotten all the shreds, and will continue
                 // trying to repair.
                 let (partition_last_data_shred, _) = shredder
-                    .components_to_merkle_shreds_for_tests(
+                    .component_to_merkle_shreds_for_tests(
                         keypair,
-                        &[BlockComponent::EntryBatch(duplicate_extra_last_entries)],
+                        &BlockComponent::EntryBatch(duplicate_extra_last_entries),
                         true,
                         Some(self.chained_merkle_root),
                         self.next_shred_index,

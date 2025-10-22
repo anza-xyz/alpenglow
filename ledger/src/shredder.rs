@@ -224,10 +224,10 @@ impl Shredder {
         .partition(Shred::is_data)
     }
 
-    pub fn components_to_merkle_shreds_for_tests(
+    pub fn component_to_merkle_shreds_for_tests(
         &self,
         keypair: &Keypair,
-        components: &[BlockComponent],
+        component: &BlockComponent,
         is_last_in_slot: bool,
         chained_merkle_root: Option<Hash>,
         next_shred_index: u32,
@@ -238,31 +238,18 @@ impl Shredder {
         Vec<Shred>, // data shreds
         Vec<Shred>, // coding shreds
     ) {
-        let mut all_shreds = Vec::new();
-        let mut current_chained_merkle_root = chained_merkle_root;
-        let mut current_shred_index = next_shred_index;
-        let mut current_code_index = next_code_index;
+        let result = self.make_merkle_shreds_from_component(
+            keypair,
+            component,
+            is_last_in_slot,
+            chained_merkle_root,
+            next_shred_index,
+            next_code_index,
+            reed_solomon_cache,
+            stats,
+        );
 
-        for (ix, component) in components.iter().enumerate() {
-            let is_last = is_last_in_slot && ix == components.len() - 1;
-            let result = self.make_merkle_shreds_from_component(
-                keypair,
-                component,
-                is_last,
-                current_chained_merkle_root,
-                current_shred_index,
-                current_code_index,
-                reed_solomon_cache,
-                stats,
-            );
-
-            all_shreds.extend(result.shreds);
-            current_shred_index = result.next_shred_index;
-            current_code_index = result.next_code_index;
-            current_chained_merkle_root = result.chained_merkle_root;
-        }
-
-        all_shreds.into_iter().partition(Shred::is_data)
+        result.shreds.into_iter().partition(Shred::is_data)
     }
 
     /// Combines all shreds to recreate the original buffer
@@ -720,12 +707,12 @@ mod tests {
                 &mut ProcessShredsStats::default(),
             );
 
-        // Shred using components with a single EntryBatch
-        let components = vec![BlockComponent::EntryBatch(entries.clone())];
+        // Shred using component with EntryBatch
+        let component = BlockComponent::EntryBatch(entries.clone());
         let (data_shreds_components, coding_shreds_components) = shredder
-            .components_to_merkle_shreds_for_tests(
+            .component_to_merkle_shreds_for_tests(
                 &keypair,
-                &components,
+                &component,
                 is_last_in_slot,
                 chained_merkle_root,
                 next_shred_index,
@@ -754,16 +741,16 @@ mod tests {
     }
 
     #[test]
-    fn test_components_empty_slice() {
+    fn test_component_empty_entry_batch() {
         let keypair = Keypair::new();
         let shredder = Shredder::new(500, 495, 25, 400).unwrap();
 
-        let components = vec![];
+        let component = BlockComponent::EntryBatch(vec![]);
         let initial_merkle_root = Hash::new_from_array(rand::thread_rng().gen());
 
-        let (data_shreds, coding_shreds) = shredder.components_to_merkle_shreds_for_tests(
+        let (data_shreds, coding_shreds) = shredder.component_to_merkle_shreds_for_tests(
             &keypair,
-            &components,
+            &component,
             false,
             Some(initial_merkle_root),
             10,
@@ -772,9 +759,9 @@ mod tests {
             &mut ProcessShredsStats::default(),
         );
 
-        // Verify empty result
-        assert!(data_shreds.is_empty());
-        assert!(coding_shreds.is_empty());
+        // Verify we still get shreds even with empty entry batch
+        assert!(!data_shreds.is_empty());
+        assert!(!coding_shreds.is_empty());
     }
 
     #[test_matrix([true, false])]
