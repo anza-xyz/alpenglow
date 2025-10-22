@@ -75,9 +75,7 @@ impl Vote {
     pub fn new_genesis_vote(slot: Slot, block_id: Hash) -> Self {
         Self::from(GenesisVote { slot, block_id })
     }
-}
 
-impl Vote {
     /// The slot which was voted for
     pub fn slot(&self) -> Slot {
         match self {
