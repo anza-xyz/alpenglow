@@ -13,7 +13,7 @@ pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
 /// Block, a (slot, hash) tuple
 pub type Block = (Slot, Hash);
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// BLS vote message, we need rank to look up pubkey
 pub struct VoteMessage {
     /// The vote
