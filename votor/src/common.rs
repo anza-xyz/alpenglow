@@ -56,20 +56,17 @@ pub const fn certificate_limits_and_vote_types(
 pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
     match vote {
         Vote::Notarize(vote) => vec![
-            CertificateType::Notarize(vote.slot(), *vote.block_id()),
-            CertificateType::NotarizeFallback(vote.slot(), *vote.block_id()),
-            CertificateType::FinalizeFast(vote.slot(), *vote.block_id()),
+            CertificateType::Notarize(vote.slot, vote.block_id),
+            CertificateType::NotarizeFallback(vote.slot, vote.block_id),
+            CertificateType::FinalizeFast(vote.slot, vote.block_id),
         ],
         Vote::NotarizeFallback(vote) => {
-            vec![CertificateType::NotarizeFallback(
-                vote.slot(),
-                *vote.block_id(),
-            )]
+            vec![CertificateType::NotarizeFallback(vote.slot, vote.block_id)]
         }
-        Vote::Finalize(vote) => vec![CertificateType::Finalize(vote.slot())],
-        Vote::Skip(vote) => vec![CertificateType::Skip(vote.slot())],
-        Vote::SkipFallback(vote) => vec![CertificateType::Skip(vote.slot())],
-        Vote::Genesis(vote) => vec![CertificateType::Genesis(vote.slot(), *vote.block_id())],
+        Vote::Finalize(vote) => vec![CertificateType::Finalize(vote.slot)],
+        Vote::Skip(vote) => vec![CertificateType::Skip(vote.slot)],
+        Vote::SkipFallback(vote) => vec![CertificateType::Skip(vote.slot)],
+        Vote::Genesis(vote) => vec![CertificateType::Genesis(vote.slot, vote.block_id)],
     }
 }
 

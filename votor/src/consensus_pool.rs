@@ -9,7 +9,7 @@ use {
             parent_ready_tracker::ParentReadyTracker,
             slot_stake_counters::SlotStakeCounters,
             stats::ConsensusPoolStats,
-            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool, VotePoolType},
+            vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool},
         },
         event::VotorEvent,
     },
@@ -101,7 +101,7 @@ fn get_key_and_stakes(
 pub struct ConsensusPool {
     my_pubkey: Pubkey,
     // Vote pools to do bean counting for votes.
-    vote_pools: BTreeMap<PoolId, VotePoolType>,
+    vote_pools: BTreeMap<PoolId, VotePool>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateType, Arc<Certificate>>,
     /// Tracks slots which have reached the parent ready condition:
@@ -151,41 +151,36 @@ impl ConsensusPool {
         }
     }
 
-    fn new_vote_pool(vote_type: VoteType) -> VotePoolType {
+    fn new_vote_pool(vote_type: VoteType) -> VotePool {
         match vote_type {
-            VoteType::NotarizeFallback => VotePoolType::DuplicateBlockVotePool(
+            VoteType::NotarizeFallback => VotePool::DuplicateBlockVotePool(
                 DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE),
             ),
-            VoteType::Notarize => VotePoolType::DuplicateBlockVotePool(
-                DuplicateBlockVotePool::new(MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES),
-            ),
-            _ => VotePoolType::SimpleVotePool(SimpleVotePool::new()),
+            VoteType::Notarize => VotePool::DuplicateBlockVotePool(DuplicateBlockVotePool::new(
+                MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            )),
+            _ => VotePool::SimpleVotePool(SimpleVotePool::default()),
         }
     }
 
     fn update_vote_pool(
         &mut self,
-        slot: Slot,
-        vote_type: VoteType,
-        block_id: Option<Hash>,
-        vote_message: VoteMessage,
-        validator_vote_key: &Pubkey,
+        vote: VoteMessage,
+        validator_vote_key: Pubkey,
         validator_stake: Stake,
     ) -> Option<Stake> {
+        let vote_type = vote.vote.get_type();
         let pool = self
             .vote_pools
-            .entry((slot, vote_type))
+            .entry((vote.vote.slot(), vote_type))
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
-            VotePoolType::SimpleVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, vote_message)
+            VotePool::SimpleVotePool(pool) => {
+                pool.add_vote(validator_vote_key, validator_stake, vote)
             }
-            VotePoolType::DuplicateBlockVotePool(pool) => pool.add_vote(
-                validator_vote_key,
-                block_id.expect("Duplicate block pool expects a block id"),
-                vote_message,
-                validator_stake,
-            ),
+            VotePool::DuplicateBlockVotePool(pool) => {
+                pool.add_vote(validator_vote_key, validator_stake, vote)
+            }
         }
     }
 
@@ -216,8 +211,8 @@ impl ConsensusPool {
                 .iter()
                 .filter_map(|vote_type| {
                     Some(match self.vote_pools.get(&(slot, *vote_type))? {
-                        VotePoolType::SimpleVotePool(pool) => pool.total_stake(),
-                        VotePoolType::DuplicateBlockVotePool(pool) => {
+                        VotePool::SimpleVotePool(pool) => pool.total_stake(),
+                        VotePool::DuplicateBlockVotePool(pool) => {
                             pool.total_stake_by_block_id(block_id.as_ref().expect(
                                 "Duplicate block pool for {vote_type:?} expects a block id for \
                                  certificate {cert_type:?}",
@@ -229,24 +224,22 @@ impl ConsensusPool {
             if accumulated_stake as f64 / (total_stake as f64) < limit {
                 continue;
             }
-            let mut certificate_builder = CertificateBuilder::new(cert_type);
+            let mut cert_builder = CertificateBuilder::new(cert_type);
             vote_types.iter().for_each(|vote_type| {
-                if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                    match vote_pool {
-                        VotePoolType::SimpleVotePool(pool) => {
-                            pool.add_to_certificate(&mut certificate_builder)
+                if let Some(pool) = self.vote_pools.get(&(slot, *vote_type)) {
+                    match pool {
+                        VotePool::SimpleVotePool(pool) => {
+                            cert_builder.aggregate(pool.votes()).unwrap();
                         }
-                        VotePoolType::DuplicateBlockVotePool(pool) => pool.add_to_certificate(
-                            block_id.as_ref().expect(
-                                "Duplicate block pool for {vote_type:?} expects a block id for \
-                                 certificate {cert_type:?}",
-                            ),
-                            &mut certificate_builder,
-                        ),
+                        VotePool::DuplicateBlockVotePool(pool) => {
+                            if let Some(votes) = pool.votes(block_id.as_ref().unwrap()) {
+                                cert_builder.aggregate(votes).unwrap();
+                            }
+                        }
                     };
                 }
             });
-            let new_cert = Arc::new(certificate_builder.build()?);
+            let new_cert = Arc::new(cert_builder.build()?);
             self.insert_certificate(cert_type, new_cert.clone(), events);
             self.stats.incr_cert_type(&new_cert.cert_type, true);
             new_certificates_to_send.push(new_cert);
@@ -265,14 +258,14 @@ impl ConsensusPool {
             if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
                 let is_conflicting = match pool {
                     // In a simple vote pool, just check if the validator previously voted at all. If so, that's a conflict
-                    VotePoolType::SimpleVotePool(pool) => {
+                    VotePool::SimpleVotePool(pool) => {
                         pool.has_prev_validator_vote(validator_vote_key)
                     }
                     // In a duplicate block vote pool, because some conflicts between things like Notarize and NotarizeFallback
                     // for different blocks are allowed, we need a more specific check.
                     // TODO: This can be made much cleaner/safer if VoteType carried the bank hash, block id so we
                     // could check which exact VoteType(blockid, bankhash) was the source of the conflict.
-                    VotePoolType::DuplicateBlockVotePool(pool) => {
+                    VotePool::DuplicateBlockVotePool(pool) => {
                         if let Some(block_id) = &block_id {
                             // Reject votes for the same block with a conflicting type, i.e.
                             // a NotarizeFallback vote for the same block as a Notarize vote.
@@ -444,14 +437,7 @@ impl ConsensusPool {
                 validator_vote_key,
             ));
         }
-        match self.update_vote_pool(
-            vote_slot,
-            vote_type,
-            block_id,
-            vote_message,
-            &validator_vote_key,
-            validator_stake,
-        ) {
+        match self.update_vote_pool(vote_message, validator_vote_key, validator_stake) {
             None => {
                 // No new vote pool entry was created, just return empty vec
                 self.stats.exist_votes = self.stats.exist_votes.saturating_add(1);
@@ -779,11 +765,11 @@ mod tests {
             )
             .is_ok());
         match vote {
-            Vote::Notarize(vote) => assert_eq!(pool.highest_notarized_slot(), vote.slot()),
-            Vote::NotarizeFallback(vote) => assert_eq!(pool.highest_notarized_slot(), vote.slot()),
-            Vote::Skip(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
-            Vote::SkipFallback(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot()),
-            Vote::Finalize(vote) => assert_eq!(pool.highest_finalized_slot(), vote.slot()),
+            Vote::Notarize(vote) => assert_eq!(pool.highest_notarized_slot(), vote.slot),
+            Vote::NotarizeFallback(vote) => assert_eq!(pool.highest_notarized_slot(), vote.slot),
+            Vote::Skip(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot),
+            Vote::SkipFallback(vote) => assert_eq!(pool.highest_skip_slot(), vote.slot),
+            Vote::Finalize(vote) => assert_eq!(pool.highest_finalized_slot(), vote.slot),
             Vote::Genesis(_genesis_vote) => (),
         }
     }
