@@ -231,8 +231,8 @@ impl ConsensusPool {
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
             vote_types.iter().for_each(|vote_type| {
-                if let Some(vote_pool) = self.vote_pools.get(&(slot, *vote_type)) {
-                    match vote_pool {
+                if let Some(pool) = self.vote_pools.get(&(slot, *vote_type)) {
+                    match pool {
                         VotePool::SimpleVotePool(pool) => {
                             cert_builder.aggregate(pool.votes()).unwrap();
                         }
