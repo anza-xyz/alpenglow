@@ -198,7 +198,10 @@ pub(super) fn recv_slot_entries(
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
             // the next batch.
-            *carryover_entry = Some((try_bank, (component.into(), tick_height)));
+            //
+            // Unwrapping is safe here, since component is guaranteed to have at most one Entry,
+            // given that component was first constructed from an EntryMarker.
+            *carryover_entry = Some((try_bank, (component.try_into().unwrap(), tick_height)));
             process_stats.coalesce_exited_hit_max += 1;
             break;
         }

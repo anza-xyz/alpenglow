@@ -64,19 +64,19 @@ impl TpuEntryNotifier {
         let (bank, (entry_marker, tick_height)) =
             entry_receiver.recv_timeout(Duration::from_secs(1))?;
 
+        // TODO(ksn): make this more idiomatic / rustic
         let slot = bank.slot();
+        let index = if slot != *current_slot {
+            *current_index = 0;
+            *current_transaction_index = 0;
+            *current_slot = slot;
+            0
+        } else {
+            *current_index += 1;
+            *current_index
+        };
 
         if let Some(entry) = entry_marker.as_entry() {
-            let index = if slot != *current_slot {
-                *current_index = 0;
-                *current_transaction_index = 0;
-                *current_slot = slot;
-                0
-            } else {
-                *current_index += 1;
-                *current_index
-            };
-
             let entry_summary = EntrySummary {
                 num_hashes: entry.num_hashes,
                 hash: entry.hash,

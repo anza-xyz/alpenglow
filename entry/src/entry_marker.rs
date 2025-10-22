@@ -1,15 +1,23 @@
-//! Entry marker types for the POH recording pipeline.
+//! Entry marker types for the PoH recording pipeline.
 //!
 //! This module defines `EntryMarker`, a wrapper type that allows both regular entries and block
-//! markers (headers, footers) to flow through the same POH recording channel.
+//! markers (headers, footers) to flow through the same PoH recording channel.
 use crate::{
     block_component::{BlockComponent, VersionedBlockMarker},
     entry::Entry,
 };
 
+/// Errors that can occur when converting to EntryMarker
+#[derive(Debug, thiserror::Error)]
+pub enum EntryMarkerError {
+    /// Attempted to convert an EntryBatch with multiple entries to EntryMarker
+    #[error("BlockComponent::EntryBatch must contain exactly one entry, found {0}")]
+    MultipleEntries(usize),
+}
+
 /// Wraps either a regular entry or a block metadata marker.
 ///
-/// The POH recorder uses this type to stream both transaction-containing entries and block markers
+/// The PoH recorder uses this type to stream both transaction-containing entries and block markers
 /// through a unified channel to downstream consumers, e.g., broadcast stage.
 #[derive(Clone, Debug)]
 pub enum EntryMarker {
@@ -87,20 +95,22 @@ impl From<VersionedBlockMarker> for EntryMarker {
 
 /// Converts a BlockComponent into an EntryMarker.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the BlockComponent is an EntryBatch containing more than one entry,
-/// as EntryMarker can only wrap a single entry.
-impl From<BlockComponent> for EntryMarker {
-    fn from(component: BlockComponent) -> Self {
+/// Returns `EntryMarkerError::MultipleEntries` if the BlockComponent is an EntryBatch
+/// containing more than one entry, as EntryMarker can only wrap a single entry.
+impl TryFrom<BlockComponent> for EntryMarker {
+    type Error = EntryMarkerError;
+
+    fn try_from(component: BlockComponent) -> Result<Self, Self::Error> {
         match component {
             BlockComponent::EntryBatch(entries) => {
                 if entries.len() != 1 {
-                    panic!("BlockComponent::EntryBatch must contain exactly one entry");
+                    return Err(EntryMarkerError::MultipleEntries(entries.len()));
                 }
-                EntryMarker::Entry(entries[0].clone())
+                Ok(EntryMarker::Entry(entries[0].clone()))
             }
-            BlockComponent::BlockMarker(marker) => EntryMarker::Marker(marker),
+            BlockComponent::BlockMarker(marker) => Ok(EntryMarker::Marker(marker)),
         }
     }
 }

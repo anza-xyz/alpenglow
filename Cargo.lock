@@ -8397,6 +8397,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-transaction-error",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
