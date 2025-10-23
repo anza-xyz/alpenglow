@@ -554,14 +554,6 @@ impl BlockComponent {
         Self::infer_is_entry_batch(data).map(|is_entry_batch| !is_entry_batch)
     }
 
-    /// Get marker if this is a block marker.
-    pub fn as_versioned_block_marker(&self) -> Option<&VersionedBlockMarker> {
-        match self {
-            Self::BlockMarker(marker) => Some(marker),
-            _ => None,
-        }
-    }
-
     /// Returns the serialized size in bytes without actually serializing.
     ///
     /// # Errors
@@ -3282,7 +3274,7 @@ mod tests {
 
         assert!(entry_component.as_entry_batch().is_some());
         assert_eq!(entry_component.as_entry_batch().unwrap(), &entries);
-        assert!(entry_component.as_versioned_block_marker().is_none());
+        assert!(entry_component.as_marker().is_none());
 
         // Test as_versioned_block_marker
         let footer = BlockFooterV1 {
@@ -3294,11 +3286,8 @@ mod tests {
         ));
         let marker_component = BlockComponent::new_block_marker(marker.clone());
 
-        assert!(marker_component.as_versioned_block_marker().is_some());
-        assert_eq!(
-            marker_component.as_versioned_block_marker().unwrap(),
-            &marker
-        );
+        assert!(marker_component.as_marker().is_some());
+        assert_eq!(marker_component.as_marker().unwrap(), &marker);
         assert!(marker_component.as_entry_batch().is_none());
     }
 
