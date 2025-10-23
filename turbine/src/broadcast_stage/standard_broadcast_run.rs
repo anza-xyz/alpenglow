@@ -121,60 +121,12 @@ impl StandardBroadcastRun {
         max_data_shreds_per_slot: u32,
         max_code_shreds_per_slot: u32,
     ) -> std::result::Result<Vec<Shred>, BroadcastError> {
-        let shredder =
-            Shredder::new(self.slot, self.parent, reference_tick, self.shred_version).unwrap();
-
-        let shredder_result = shredder.make_merkle_shreds_from_component(
-            keypair,
-            component,
-            is_slot_end,
-            Some(self.chained_merkle_root),
-            self.next_shred_index,
-            self.next_code_index,
-            &self.reed_solomon_cache,
-            process_stats,
-        );
-
-        // Record stats for each shred
-        for shred in &shredder_result.shreds {
-            process_stats.record_shred(shred);
-        }
-
-        // Update state from the batch
-        self.next_shred_index = shredder_result.next_shred_index;
-        self.next_code_index = shredder_result.next_code_index;
-
-        if let Some(merkle_root) = shredder_result.chained_merkle_root {
-            self.chained_merkle_root = merkle_root;
-        }
-        if self.next_shred_index > max_data_shreds_per_slot {
-            return Err(BroadcastError::TooManyShreds);
-        }
-        if self.next_code_index > max_code_shreds_per_slot {
-            return Err(BroadcastError::TooManyShreds);
-        }
-
-        Ok(shredder_result.shreds)
-    }
-
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
-    fn entries_to_shreds(
-        &mut self,
-        keypair: &Keypair,
-        entries: &[Entry],
-        reference_tick: u8,
-        is_slot_end: bool,
-        process_stats: &mut ProcessShredsStats,
-        max_data_shreds_per_slot: u32,
-        max_code_shreds_per_slot: u32,
-    ) -> std::result::Result<Vec<Shred>, BroadcastError> {
         let shreds: Vec<_> =
             Shredder::new(self.slot, self.parent, reference_tick, self.shred_version)
                 .unwrap()
-                .make_merkle_shreds_from_entries(
+                .make_merkle_shreds_from_component(
                     keypair,
-                    entries,
+                    component,
                     is_slot_end,
                     Some(self.chained_merkle_root),
                     self.next_shred_index,
@@ -900,9 +852,9 @@ mod test {
         let mut stats = ProcessShredsStats::default();
 
         let (data, coding) = bs
-            .entries_to_shreds(
+            .component_to_shreds(
                 &keypair,
-                &entries[0..entries.len() - 2],
+                &BlockComponent::EntryBatch(entries[0..entries.len() - 2].to_vec()),
                 0,
                 false,
                 &mut stats,
@@ -916,7 +868,15 @@ mod test {
         assert!(!data.is_empty());
         assert!(!coding.is_empty());
 
-        let r = bs.entries_to_shreds(&keypair, &entries, 0, false, &mut stats, 10, 10);
+        let r = bs.component_to_shreds(
+            &keypair,
+            &BlockComponent::EntryBatch(entries),
+            0,
+            false,
+            &mut stats,
+            10,
+            10,
+        );
         info!("{r:?}");
         assert_matches!(r, Err(BroadcastError::TooManyShreds));
     }

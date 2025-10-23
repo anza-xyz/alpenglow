@@ -1,7 +1,6 @@
 use {
     crate::shred::{
-        self, Error, ProcessShredsStats, Shred, ShredData, ShredFlags, ShredType,
-        DATA_SHREDS_PER_FEC_BLOCK,
+        self, Error, ProcessShredsStats, Shred, ShredData, ShredFlags, DATA_SHREDS_PER_FEC_BLOCK,
     },
     lazy_lru::LruCache,
     rayon::ThreadPool,
@@ -83,11 +82,11 @@ impl Shredder {
         next_code_index: u32,
         reed_solomon_cache: &ReedSolomonCache,
         stats: &mut ProcessShredsStats,
-    ) -> ShredderComponentsResult {
+    ) -> impl Iterator<Item = Shred> {
         let now = Instant::now();
         let bytes = component.to_bytes().unwrap();
         stats.serialize_elapsed += now.elapsed().as_micros() as u64;
-        let shreds: Vec<Shred> = Self::make_shreds_from_data_slice(
+        Self::make_shreds_from_data_slice(
             self,
             keypair,
             &bytes,
@@ -99,42 +98,6 @@ impl Shredder {
             stats,
         )
         .unwrap()
-        .collect();
-
-        let mut current_shred_index = next_shred_index;
-        let mut current_code_index = next_code_index;
-        let mut max_fec_set_shred = None;
-
-        for shred in &shreds {
-            // Update indices
-            match shred.shred_type() {
-                ShredType::Code => {
-                    current_code_index = current_code_index.max(shred.index() + 1);
-                }
-                ShredType::Data => {
-                    current_shred_index = current_shred_index.max(shred.index() + 1);
-                }
-            }
-
-            // Track the shred with the maximum fec_set_index
-            let fec_set_index = shred.fec_set_index();
-            max_fec_set_shred = match max_fec_set_shred {
-                None => Some((fec_set_index, shred.merkle_root())),
-                Some((max_fec, _)) if fec_set_index > max_fec => {
-                    Some((fec_set_index, shred.merkle_root()))
-                }
-                _ => max_fec_set_shred,
-            };
-        }
-
-        let chained_merkle_root = max_fec_set_shred.and_then(|(_, root)| root.ok());
-
-        ShredderComponentsResult {
-            shreds,
-            next_shred_index: current_shred_index,
-            next_code_index: current_code_index,
-            chained_merkle_root,
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -238,7 +201,7 @@ impl Shredder {
         Vec<Shred>, // data shreds
         Vec<Shred>, // coding shreds
     ) {
-        let result = self.make_merkle_shreds_from_component(
+        self.make_merkle_shreds_from_component(
             keypair,
             component,
             is_last_in_slot,
@@ -247,9 +210,8 @@ impl Shredder {
             next_code_index,
             reed_solomon_cache,
             stats,
-        );
-
-        result.shreds.into_iter().partition(Shred::is_data)
+        )
+        .partition(Shred::is_data)
     }
 
     /// Combines all shreds to recreate the original buffer

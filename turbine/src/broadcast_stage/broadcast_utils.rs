@@ -1,6 +1,5 @@
 use {
     super::{Error, Result},
-    bincode::serialized_size,
     crossbeam_channel::Receiver,
     solana_clock::Slot,
     solana_entry::{block_component::BlockComponent, entry::Entry},
@@ -101,10 +100,11 @@ pub(super) fn recv_slot_entries(
     assert!(last_tick_height <= bank.max_tick_height());
 
     // If the first thing is a block marker, return it immediately
-    if let Some(marker) = entry_marker.as_marker().cloned() {
+    if entry_marker.as_marker().is_some() {
         process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
+
         return Ok(ReceiveResults {
-            component: BlockComponent::BlockMarker(marker),
+            component: BlockComponent::BlockMarker(entry_marker.into_marker().unwrap()),
             bank,
             last_tick_height,
         });
@@ -140,11 +140,7 @@ pub(super) fn recv_slot_entries(
         assert!(last_tick_height <= bank.max_tick_height());
     }
 
-    let mut serialized_batch_byte_count = bincode::serialized_size(&entries).map_err(|e| {
-        Error::Serialize(Box::new(bincode::ErrorKind::Custom(format!(
-            "Couldn't serialize entry batch: {e:?}",
-        ))))
-    })?;
+    let mut serialized_batch_byte_count = bincode::serialized_size(&entries)?;
 
     let next_full_batch_byte_count = serialized_batch_byte_count
         .div_ceil(get_data_shred_bytes_per_batch_typical())
@@ -188,7 +184,7 @@ pub(super) fn recv_slot_entries(
         }
 
         let entry = entry_marker.into_entry().expect("must be Entry");
-        let entry_bytes = serialized_size(&entry)?;
+        let entry_bytes = bincode::serialized_size(&entry)?;
 
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
