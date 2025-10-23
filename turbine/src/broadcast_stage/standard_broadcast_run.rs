@@ -7,7 +7,7 @@ use {
     },
     crate::cluster_nodes::ClusterNodesCache,
     crossbeam_channel::Sender,
-    solana_entry::{block_component::BlockComponent, entry::Entry},
+    solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{
