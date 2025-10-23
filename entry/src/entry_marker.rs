@@ -2,10 +2,7 @@
 //!
 //! This module defines `EntryMarker`, a wrapper type that allows both regular entries and block
 //! markers (headers, footers) to flow through the same PoH recording channel.
-use crate::{
-    block_component::{BlockComponent, VersionedBlockMarker},
-    entry::Entry,
-};
+use crate::{block_component::VersionedBlockMarker, entry::Entry};
 
 /// Errors that can occur when converting to EntryMarker
 #[derive(Debug, thiserror::Error)]
@@ -90,40 +87,5 @@ impl From<Entry> for EntryMarker {
 impl From<VersionedBlockMarker> for EntryMarker {
     fn from(marker: VersionedBlockMarker) -> Self {
         EntryMarker::Marker(marker)
-    }
-}
-
-/// Converts a BlockComponent into an EntryMarker.
-///
-/// # Errors
-///
-/// Returns `EntryMarkerError::MultipleEntries` if the BlockComponent is an EntryBatch
-/// containing more than one entry, as EntryMarker can only wrap a single entry.
-impl TryFrom<BlockComponent> for EntryMarker {
-    type Error = EntryMarkerError;
-
-    fn try_from(component: BlockComponent) -> Result<Self, Self::Error> {
-        match component {
-            BlockComponent::EntryBatch(entries) => {
-                if entries.len() != 1 {
-                    return Err(EntryMarkerError::MultipleEntries(entries.len()));
-                }
-                Ok(EntryMarker::Entry(entries[0].clone()))
-            }
-            BlockComponent::BlockMarker(marker) => Ok(EntryMarker::Marker(marker)),
-        }
-    }
-}
-
-/// Converts an EntryMarker into a BlockComponent.
-///
-/// Entry variants become single-element EntryBatch components.
-/// Marker variants become BlockMarker components.
-impl From<EntryMarker> for BlockComponent {
-    fn from(entry_marker: EntryMarker) -> Self {
-        match entry_marker {
-            EntryMarker::Entry(entry) => BlockComponent::EntryBatch(vec![entry]),
-            EntryMarker::Marker(marker) => BlockComponent::BlockMarker(marker),
-        }
     }
 }

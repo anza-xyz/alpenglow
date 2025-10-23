@@ -421,19 +421,6 @@ impl BlockComponent {
         matches!(self, Self::BlockMarker(_))
     }
 
-    /// Fuses another BlockComponent into this one if both are entry batches.
-    ///
-    /// Returns None if fusion occurred, Some(other) if no fusion was possible.
-    pub fn try_fuse(&mut self, other: Self) -> Option<Self> {
-        match (self, &other) {
-            (Self::EntryBatch(self_entries), Self::EntryBatch(other_entries)) => {
-                self_entries.extend_from_slice(other_entries);
-                None
-            }
-            _ => Some(other),
-        }
-    }
-
     /// Validates that the entries length is within bounds.
     fn validate_entry_batch_length(len: usize) -> Result<(), BlockComponentError> {
         if len >= Self::MAX_ENTRIES {
@@ -3404,67 +3391,6 @@ mod tests {
 
         // Round-trip equality
         assert_eq!(components, deserialized);
-    }
-
-    #[test]
-    fn test_try_fuse_entry_batches() {
-        // Fusing two entry batches should succeed and combine entries
-        let mut batch1 = BlockComponent::new_entry_batch(create_mock_entry_batch(3)).unwrap();
-        let batch2 = BlockComponent::new_entry_batch(create_mock_entry_batch(2)).unwrap();
-        assert!(batch1.try_fuse(batch2).is_none());
-        assert_eq!(batch1.entry_batch().len(), 5);
-
-        // Multiple fusions should work
-        for _ in 0..3 {
-            let batch = BlockComponent::new_entry_batch(create_mock_entry_batch(1)).unwrap();
-            assert!(batch1.try_fuse(batch).is_none());
-        }
-        assert_eq!(batch1.entry_batch().len(), 8);
-
-        // Large batches should fuse correctly
-        let mut large1 = BlockComponent::new_entry_batch(create_mock_entry_batch(100)).unwrap();
-        let large2 = BlockComponent::new_entry_batch(create_mock_entry_batch(150)).unwrap();
-        assert!(large1.try_fuse(large2).is_none());
-        assert_eq!(large1.entry_batch().len(), 250);
-    }
-
-    #[test]
-    fn test_try_fuse_with_markers() {
-        // Entry batch + marker should not fuse, returning the marker
-        let mut batch = BlockComponent::new_entry_batch(create_mock_entry_batch(3)).unwrap();
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 12345,
-            block_user_agent: b"test".to_vec(),
-        };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
-        let marker_component = BlockComponent::new_block_marker(marker.clone());
-        let result = batch.try_fuse(marker_component);
-        assert!(result.is_some() && result.as_ref().unwrap().is_marker());
-        assert_eq!(batch.entry_batch().len(), 3); // unchanged
-
-        // Marker + entry batch should not fuse, returning the batch
-        let mut marker_comp = BlockComponent::new_block_marker(marker.clone());
-        let batch_comp = BlockComponent::new_entry_batch(create_mock_entry_batch(2)).unwrap();
-        let result = marker_comp.try_fuse(batch_comp);
-        assert!(result.is_some() && result.as_ref().unwrap().is_entry_batch());
-        assert_eq!(result.unwrap().entry_batch().len(), 2);
-        assert!(marker_comp.is_marker()); // unchanged
-
-        // Marker + marker should not fuse, returning the second marker
-        let mut marker1 = BlockComponent::new_block_marker(marker.clone());
-        let header = BlockHeaderV1 {
-            parent_slot: 67890,
-            parent_block_id: Hash::new_unique(),
-        };
-        let marker2 = VersionedBlockMarker::new(BlockMarkerV1::BlockHeader(
-            VersionedBlockHeader::new(header),
-        ));
-        let marker2_comp = BlockComponent::new_block_marker(marker2.clone());
-        let result = marker1.try_fuse(marker2_comp);
-        assert!(result.is_some() && result.as_ref().unwrap().is_marker());
-        assert_eq!(result.unwrap().as_marker(), Some(&marker2));
     }
 
     #[test]
