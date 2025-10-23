@@ -45,7 +45,7 @@ impl CertificateStats {
 }
 
 pub(crate) struct ConsensusPoolStats {
-    pub(crate) conflicting_votes: u32,
+    pub(super) slashable_behavior: u32,
     pub(crate) event_safe_to_notarize: u32,
     pub(crate) event_safe_to_skip: u32,
     pub(crate) exist_certs: u32,
@@ -72,7 +72,7 @@ impl ConsensusPoolStats {
     pub fn new() -> Self {
         let num_vote_types = (VoteType::Genesis as usize).saturating_add(1);
         Self {
-            conflicting_votes: 0,
+            slashable_behavior: 0,
             event_safe_to_notarize: 0,
             event_safe_to_skip: 0,
             exist_certs: 0,
@@ -107,7 +107,7 @@ impl ConsensusPoolStats {
     fn report(&self) {
         datapoint_info!(
             "consensus_pool_stats",
-            ("conflicting_votes", self.conflicting_votes as i64, i64),
+            ("slashable_behavior", self.slashable_behavior as i64, i64),
             ("event_safe_to_skip", self.event_safe_to_skip as i64, i64),
             (
                 "event_safe_to_notarize",
