@@ -35,13 +35,13 @@ impl SlotStakeCounters {
 
     pub fn add_vote(
         &mut self,
-        vote: &Vote,
+        vote: Vote,
         entry_stake: Stake,
         is_my_own_vote: bool,
         events: &mut Vec<VotorEvent>,
         stats: &mut ConsensusPoolStats,
     ) {
-        match vote {
+        match &vote {
             Vote::Skip(_) => self.skip_total = entry_stake,
             Vote::Notarize(vote) => {
                 let old_entry_stake = self
@@ -57,7 +57,7 @@ impl SlotStakeCounters {
             _ => return, // Not interested in other vote types
         }
         if self.my_first_vote.is_none() && is_my_own_vote {
-            self.my_first_vote = Some(*vote);
+            self.my_first_vote = Some(vote);
         }
         if self.my_first_vote.is_none() {
             // We have not voted yet, no need to check safe to notarize or skip
@@ -136,19 +136,13 @@ mod tests {
         let mut stats = ConsensusPoolStats::default();
         let slot = 2;
         // I voted for skip
-        counters.add_vote(
-            &Vote::new_skip_vote(slot),
-            10,
-            true,
-            &mut events,
-            &mut stats,
-        );
+        counters.add_vote(Vote::new_skip_vote(slot), 10, true, &mut events, &mut stats);
         assert!(events.is_empty());
         assert_eq!(stats.event_safe_to_notarize, 0);
 
         // 40% of stake holders voted notarize
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, Hash::default()),
+            Vote::new_notarization_vote(slot, Hash::default()),
             40,
             false,
             &mut events,
@@ -163,7 +157,7 @@ mod tests {
 
         // Adding more notarizations does not trigger more events
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, Hash::default()),
+            Vote::new_notarization_vote(slot, Hash::default()),
             20,
             false,
             &mut events,
@@ -180,7 +174,7 @@ mod tests {
         // I voted for notarize b
         let hash_1 = Hash::new_unique();
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
+            Vote::new_notarization_vote(slot, hash_1),
             1,
             true,
             &mut events,
@@ -192,7 +186,7 @@ mod tests {
         // 25% of stake holders voted notarize b'
         let hash_2 = Hash::new_unique();
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_2),
+            Vote::new_notarization_vote(slot, hash_2),
             25,
             false,
             &mut events,
@@ -203,7 +197,7 @@ mod tests {
 
         // 35% more of stake holders voted skip
         counters.add_vote(
-            &Vote::new_skip_vote(slot),
+            Vote::new_skip_vote(slot),
             35,
             false,
             &mut events,
@@ -225,7 +219,7 @@ mod tests {
         let slot = 2;
         // I voted for notarize b
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, Hash::default()),
+            Vote::new_notarization_vote(slot, Hash::default()),
             10,
             true,
             &mut events,
@@ -236,7 +230,7 @@ mod tests {
 
         // 40% of stake holders voted skip
         counters.add_vote(
-            &Vote::new_skip_vote(slot),
+            Vote::new_skip_vote(slot),
             40,
             false,
             &mut events,
@@ -249,7 +243,7 @@ mod tests {
 
         // Adding more skips does not trigger more events
         counters.add_vote(
-            &Vote::new_skip_vote(slot),
+            Vote::new_skip_vote(slot),
             20,
             false,
             &mut events,
@@ -266,7 +260,7 @@ mod tests {
         // I voted for notarize b, 10% of stake holders voted with me
         let hash_1 = Hash::new_unique();
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
+            Vote::new_notarization_vote(slot, hash_1),
             10,
             true,
             &mut events,
@@ -275,7 +269,7 @@ mod tests {
         // 20% of stake holders voted a different notarization b'
         let hash_2 = Hash::new_unique();
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_2),
+            Vote::new_notarization_vote(slot, hash_2),
             20,
             false,
             &mut events,
@@ -283,7 +277,7 @@ mod tests {
         );
         // 30% of stake holders voted skip
         counters.add_vote(
-            &Vote::new_skip_vote(slot),
+            Vote::new_skip_vote(slot),
             30,
             false,
             &mut events,
@@ -296,7 +290,7 @@ mod tests {
 
         // Adding more notarization on b does not trigger more events
         counters.add_vote(
-            &Vote::new_notarization_vote(slot, hash_1),
+            Vote::new_notarization_vote(slot, hash_1),
             10,
             false,
             &mut events,

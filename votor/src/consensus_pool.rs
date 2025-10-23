@@ -225,7 +225,7 @@ impl ConsensusPool {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
-            vote_types.iter().for_each(|vote_type| {
+            for vote_type in vote_types {
                 if let Some(pool) = self.vote_pools.get(&(slot, *vote_type)) {
                     match pool {
                         VotePool::SimpleVotePool(pool) => {
@@ -238,7 +238,7 @@ impl ConsensusPool {
                         }
                     };
                 }
-            });
+            }
             let new_cert = Arc::new(cert_builder.build()?);
             self.insert_certificate(cert_type, new_cert.clone(), events);
             self.stats.incr_cert_type(&new_cert.cert_type, true);
@@ -399,7 +399,7 @@ impl ConsensusPool {
         vote_message: VoteMessage,
         events: &mut Vec<VotorEvent>,
     ) -> Result<Vec<Arc<Certificate>>, AddVoteError> {
-        let vote = &vote_message.vote;
+        let vote = vote_message.vote;
         let rank = vote_message.rank;
         let vote_slot = vote.slot();
         let (validator_vote_key, validator_stake, total_stake) =
@@ -457,9 +457,8 @@ impl ConsensusPool {
                 );
             }
         }
-        self.stats.incr_ingested_vote_type(vote_type);
-
-        self.update_certificates(vote, block_id, events, total_stake)
+        self.stats.incr_ingested_vote(&vote);
+        self.update_certificates(&vote, block_id, events, total_stake)
     }
 
     fn add_certificate(
