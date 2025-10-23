@@ -213,6 +213,15 @@ pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
 
+const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
+
+// Minimum balance for an identity account to be considered for Alpenglow VAT.
+#[cfg(not(feature = "dev-context-only-utils"))]
+const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1_600_000_000; // 1.6 SOL
+
+#[cfg(feature = "dev-context-only-utils")]
+const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1; // For tests only require 1 lamport
+
 pub type BankStatusCache = StatusCache<Result<()>>;
 #[cfg_attr(
     feature = "frozen-abi",
@@ -1156,7 +1165,7 @@ impl Bank {
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
         {
-            let stakes = bank.stakes_cache.stakes().clone();
+            let stakes = bank.get_top_epoch_stakes();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             for epoch in 0..=bank.get_leader_schedule_epoch(bank.slot) {
                 bank.epoch_stakes
@@ -2190,7 +2199,7 @@ impl Bank {
             self.epoch_stakes.retain(|&epoch, _| {
                 epoch >= leader_schedule_epoch.saturating_sub(MAX_LEADER_SCHEDULE_STAKES)
             });
-            let stakes = self.stakes_cache.stakes().clone();
+            let stakes = self.get_top_epoch_stakes();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             let new_epoch_stakes = VersionedEpochStakes::new(stakes, leader_schedule_epoch);
             info!(
@@ -2198,6 +2207,16 @@ impl Bank {
                 leader_schedule_epoch,
                 new_epoch_stakes.total_stake(),
             );
+            // Burn VAT only if Alpenglow features are enabled.
+            if self
+                .feature_set
+                .is_active(&agave_feature_set::alpenglow::id())
+                && self
+                    .feature_set
+                    .is_active(&agave_feature_set::alpenglow_vat_and_limit_validators::id())
+            {
+                self.burn_vat_from_staked_accounts(&new_epoch_stakes);
+            }
 
             // It is expensive to log the details of epoch stakes. Only log them at "trace"
             // level for debugging purpose.
@@ -2214,6 +2233,24 @@ impl Bank {
             self.epoch_stakes
                 .insert(leader_schedule_epoch, new_epoch_stakes);
         }
+    }
+
+    fn burn_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
+        let mut total_vat = 0;
+        for identity_pubkey in epoch_stakes
+            .stakes()
+            .vote_accounts()
+            .identity_accounts_for_staked_nodes()
+        {
+            // burn VAT from each staked vote account's identity
+            let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
+            let mut account = self.get_account(identity_pubkey).unwrap();
+            total_vat += vat;
+            account.set_lamports(account.lamports().saturating_sub(vat));
+            self.store_account(identity_pubkey, &account);
+        }
+        info!("BURNED total VAT of {total_vat} lamports from staked accounts");
+        self.capitalization.fetch_sub(total_vat, Relaxed);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -5676,6 +5713,34 @@ impl Bank {
     /// Return total transaction fee collected
     pub fn get_collector_fee_details(&self) -> CollectorFeeDetails {
         self.collector_fee_details.read().unwrap().clone()
+    }
+
+    pub fn get_top_epoch_stakes(&self) -> Stakes<StakeAccount<Delegation>> {
+        let stakes = if self
+            .feature_set
+            .is_active(&feature_set::alpenglow_vat_and_limit_validators::id())
+        {
+            let identity_balances = self.get_all_identity_account_balances();
+            self.stakes_cache.stakes().clone_and_filter_for_alpenglow(
+                MAX_ALPENGLOW_VOTE_ACCOUNTS,
+                ALPENGLOW_VAT_TO_BURN_PER_EPOCH,
+                &identity_balances,
+            )
+        } else {
+            self.stakes_cache.stakes().clone()
+        };
+        stakes
+    }
+
+    fn get_all_identity_account_balances(&self) -> HashMap<Pubkey, u64> {
+        self.vote_accounts()
+            .iter()
+            .map(|(_, (_, account))| {
+                let identity = account.node_pubkey();
+                let balance = self.get_balance(identity);
+                (*identity, balance)
+            })
+            .collect::<HashMap<_, _>>()
     }
 }
 
