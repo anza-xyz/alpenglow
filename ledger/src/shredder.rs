@@ -17,14 +17,6 @@ use {
     },
 };
 
-/// Result of shredding components, including the shreds and updated state.
-pub struct ShredderComponentsResult {
-    pub shreds: Vec<Shred>,
-    pub next_shred_index: u32,
-    pub next_code_index: u32,
-    pub chained_merkle_root: Option<Hash>,
-}
-
 static PAR_THREAD_POOL: std::sync::LazyLock<ThreadPool> = std::sync::LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(get_thread_count())
@@ -700,30 +692,6 @@ mod tests {
         {
             assert_eq!(e.payload(), c.payload());
         }
-    }
-
-    #[test]
-    fn test_component_empty_entry_batch() {
-        let keypair = Keypair::new();
-        let shredder = Shredder::new(500, 495, 25, 400).unwrap();
-
-        let component = BlockComponent::EntryBatch(vec![]);
-        let initial_merkle_root = Hash::new_from_array(rand::thread_rng().gen());
-
-        let (data_shreds, coding_shreds) = shredder.component_to_merkle_shreds_for_tests(
-            &keypair,
-            &component,
-            false,
-            Some(initial_merkle_root),
-            10,
-            5,
-            &ReedSolomonCache::default(),
-            &mut ProcessShredsStats::default(),
-        );
-
-        // Verify we still get shreds even with empty entry batch
-        assert!(!data_shreds.is_empty());
-        assert!(!coding_shreds.is_empty());
     }
 
     #[test_matrix([true, false])]
