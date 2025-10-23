@@ -10,7 +10,7 @@ use {
     thiserror::Error,
 };
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Error)]
 pub(super) enum AddVoteError {
     #[error("duplicate vote")]
     Duplicate,
@@ -29,7 +29,7 @@ struct Votes {
     finalize: BTreeMap<Pubkey, VoteMessage>,
     /// Notar votes are stored in map indexed by validator.
     notar: BTreeMap<Pubkey, VoteMessage>,
-    /// A validator can vote notar fallback on multiple blocks.
+    /// A validator can vote notar fallback on upto 3 blocks.
     ///
     /// Per validator, we store a map of which block ids the validator has voted notar fallback on.
     notar_fallback: BTreeMap<Pubkey, BTreeMap<Hash, VoteMessage>>,
@@ -72,10 +72,15 @@ impl Votes {
                     }
                     Entry::Occupied(mut e) => {
                         let map = e.get_mut();
+                        let len = map.len();
                         match map.entry(nf.block_id) {
                             Entry::Vacant(map_e) => {
-                                map_e.insert(vote);
-                                Ok(())
+                                if len == 3 {
+                                    Err(AddVoteError::Slash)
+                                } else {
+                                    map_e.insert(vote);
+                                    Ok(())
+                                }
                             }
                             Entry::Occupied(_) => Err(AddVoteError::Duplicate),
                         }
@@ -111,9 +116,8 @@ impl Votes {
                     return Err(AddVoteError::Slash);
                 }
                 if let Some(map) = self.notar_fallback.get(&voter) {
-                    if !map.is_empty() {
-                        return Err(AddVoteError::Slash);
-                    }
+                    assert!(!map.is_empty());
+                    return Err(AddVoteError::Slash);
                 }
                 match self.finalize.entry(voter) {
                     Entry::Occupied(_) => Err(AddVoteError::Duplicate),
@@ -132,6 +136,8 @@ impl Votes {
     /// Get votes for the corresponding [`VoteType`] and block id.
     ///
     /// Depending on the type of of vote, block_id is expected to be Some().
+    //
+    // TODO: figure out how to return an iterator here instead which would require `CertificateBuilder::aggregate()` to accept an iterator.
     fn get_votes(&self, vote_type: VoteType, block_id: Option<&Hash>) -> Vec<VoteMessage> {
         match vote_type {
             VoteType::Finalize => self.finalize.values().cloned().collect(),
@@ -167,18 +173,19 @@ struct Stakes {
     finalize: Stake,
     /// Stake that has voted notar.
     ///
-    /// Different validators may vote notar for different block ids, so this tracks stake per block id.
+    /// Different validators may vote notar for different blocks, so this tracks stake per block id.
     notar: BTreeMap<Hash, Stake>,
     /// Stake that has voted notar fallback.
     ///
-    /// Different validators may vote notar fallback for different block ids, so this tracks stake per block id.
+    /// A single validator may vote for upto 3 blocks and different validators can vote for different blocks.
+    /// Hence, this tracks stake per block id.
     notar_fallback: BTreeMap<Hash, Stake>,
 }
 
 impl Stakes {
     /// Updates the corresponding stake after a vote has been successfully added to the pool.
     ///
-    /// Returns the total stake of the corresponding type after the update.
+    /// Returns the total stake of the corresponding type (and block id in case of notar or notar-fallback) after the update.
     fn add_stake(&mut self, voter_stake: Stake, vote: &Vote) -> Stake {
         match vote {
             Vote::Notarize(notar) => {

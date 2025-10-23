@@ -92,7 +92,7 @@ fn get_key_and_stakes(
 
 pub struct ConsensusPool {
     my_pubkey: Pubkey,
-    // Vote pools to do bean counting for votes.
+    /// Vote pools to do bean counting for votes.
     vote_pools: BTreeMap<Slot, VotePool>,
     /// Completed certificates
     completed_certificates: BTreeMap<CertificateType, Arc<Certificate>>,
