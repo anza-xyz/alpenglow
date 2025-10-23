@@ -546,8 +546,11 @@ impl ClusterInfoVoteListener {
                     new_optimistic_confirmed_slots.push((slot, hash));
                     // Notify subscribers about new optimistic confirmation
                     if let Some(sender) = bank_notification_sender {
-                        // We do not report OC during the migration period. Post genesis, "OC" is faked by votor
-                        if migration_status.migration_slot().is_none_or(|ms| slot < ms) {
+                        // We do not report OC during the Alpenglow migration period. Post Alpenglow genesis, "OC" is faked by votor
+                        if migration_status
+                            .migration_slot()
+                            .is_none_or(|migration_slot| slot < migration_slot)
+                        {
                             let dependency_work = sender
                                 .dependency_tracker
                                 .as_ref()
