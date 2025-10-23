@@ -10,6 +10,9 @@ use {
         replay_stage::{Finalizer, ReplayStage},
     },
     solana_clock::Slot,
+    solana_entry::block_component::{
+        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
         blockstore::Blockstore,
@@ -27,6 +30,7 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
+    solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -34,7 +38,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -104,6 +108,23 @@ enum StartLeaderError {
         /* parent ready slot */ Slot,
         /* leader slot */ Slot,
     ),
+}
+
+fn produce_block_footer() -> VersionedBlockMarker {
+    let block_producer_time_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+
+    let footer = BlockFooterV1 {
+        block_producer_time_nanos,
+        block_user_agent: format!("agave/{}", version!()).into_bytes(),
+    };
+
+    let footer = VersionedBlockFooter::Current(footer);
+    let footer = BlockMarkerV1::BlockFooter(footer);
+
+    VersionedBlockMarker::Current(footer)
 }
 
 /// The block creation loop.
@@ -317,10 +338,12 @@ fn record_and_complete_block(
         )?;
     }
 
-    // TODO: insert block footer
+    // Construct and send the block footer
+    let footer = produce_block_footer();
+    let mut w_poh_recorder = poh_recorder.write().unwrap();
+    w_poh_recorder.send_marker(footer)?;
 
     // Alpentick and clear bank
-    let mut w_poh_recorder = poh_recorder.write().unwrap();
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
@@ -512,8 +535,6 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
     let tpu_bank = ctx.bank_forks.write().unwrap().insert(tpu_bank);
     ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
     ctx.record_receiver.restart(slot);
-
-    // TODO: fill in the block header
 
     info!(
         "{}: new fork:{} parent:{} (leader) root:{}",
