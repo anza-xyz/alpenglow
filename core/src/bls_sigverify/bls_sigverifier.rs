@@ -26,6 +26,7 @@ use {
     solana_votor::consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        migration::MigrationStatus,
         vote::Vote,
     },
     std::{
@@ -92,6 +93,7 @@ pub struct BLSSigVerifier {
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BLSSigVerifier {
@@ -120,6 +122,8 @@ impl BLSSigVerifier {
                 .retain(|vote, _| vote.slot() > root_bank.slot());
         }
 
+        let genesis_slot = self.migration_status.genesis_slot().unwrap_or(Slot::MAX);
+
         for mut packet in batches.iter_mut().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
             if packet.meta().discard() {
@@ -142,6 +146,24 @@ impl BLSSigVerifier {
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
+                    let slot = vote_message.vote.slot();
+
+                    // Only allow genesis votes before the alpenglow genesis
+                    if vote_message.vote.is_genesis_vote() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_vote
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow regular alpenglow votes past genesis
+                    if !vote_message.vote.is_genesis_vote() && slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Missing epoch states
                     let Some(key_to_rank_map) =
                         get_key_to_rank_map(&root_bank, vote_message.vote.slot())
@@ -186,8 +208,26 @@ impl BLSSigVerifier {
                     });
                 }
                 ConsensusMessage::Certificate(cert) => {
+                    let slot = cert.cert_type.slot();
+
+                    // Only allow genesis certs before the alpenglow genesis
+                    if cert.cert_type.is_genesis() && slot > genesis_slot {
+                        self.stats
+                            .received_invalid_genesis_cert
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    // Only allow regular alpenglow certs past genesis
+                    if !cert.cert_type.is_genesis() && slot <= genesis_slot {
+                        self.stats
+                            .received_pre_migration_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     // Only need certs newer than root slot
-                    if cert.cert_type.slot() <= root_bank.slot() {
+                    if slot <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -248,6 +288,7 @@ impl BLSSigVerifier {
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -259,6 +300,7 @@ impl BLSSigVerifier {
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
+            migration_status,
         }
     }
 
@@ -687,6 +729,7 @@ mod tests {
                 message_sender,
                 consensus_metrics_sender,
                 alpenglow_last_voted,
+                Arc::new(MigrationStatus::post_migration_status()),
             ),
         )
     }
@@ -1478,6 +1521,7 @@ mod tests {
             message_sender,
             consensus_metrics_sender,
             Arc::new(AlpenglowLastVoted::default()),
+            Arc::new(MigrationStatus::post_migration_status()),
         );
 
         let vote = Vote::new_skip_vote(2);
