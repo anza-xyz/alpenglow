@@ -38,7 +38,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -110,12 +110,7 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer() -> VersionedBlockMarker {
-    let block_producer_time_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-
+fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker {
     let footer = BlockFooterV1 {
         block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
@@ -339,8 +334,15 @@ fn record_and_complete_block(
     }
 
     // Construct and send the block footer
-    let footer = produce_block_footer();
     let mut w_poh_recorder = poh_recorder.write().unwrap();
+    let block_producer_time_nanos = w_poh_recorder
+        .working_bank()
+        .unwrap()
+        .start
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    let footer = produce_block_footer(block_producer_time_nanos);
     w_poh_recorder.send_marker(footer)?;
 
     // Alpentick and clear bank

@@ -41,7 +41,7 @@ use {
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, RwLock,
         },
-        time::Instant,
+        time::{Instant, SystemTime},
     },
     thiserror::Error,
 };
@@ -98,7 +98,7 @@ impl Record {
 
 pub struct WorkingBank {
     pub bank: BankWithScheduler,
-    pub start: Arc<Instant>,
+    pub start: Arc<SystemTime>,
     pub min_tick_height: u64,
     pub max_tick_height: u64,
 }
@@ -457,7 +457,7 @@ impl PohRecorder {
             min_tick_height: bank.tick_height(),
             max_tick_height: bank.max_tick_height(),
             bank,
-            start: Arc::new(Instant::now()),
+            start: Arc::new(SystemTime::now()),
         };
         trace!("new working bank");
         assert_eq!(working_bank.bank.ticks_per_slot(), self.ticks_per_slot());
@@ -507,7 +507,12 @@ impl PohRecorder {
             datapoint_info!(
                 "leader-slot-start-to-cleared-elapsed-ms",
                 ("slot", bank.slot(), i64),
-                ("elapsed", start.elapsed().as_millis(), i64),
+                (
+                    "elapsed",
+                    // This errors if the clock drifts backwards, in which case we just return 0.
+                    start.elapsed().map(|dur| dur.as_millis()).unwrap_or(0),
+                    i64
+                ),
             );
         }
 
@@ -692,6 +697,10 @@ impl PohRecorder {
 
     pub fn ticks_per_slot(&self) -> u64 {
         self.ticks_per_slot
+    }
+
+    pub fn working_bank(&self) -> Option<&WorkingBank> {
+        self.working_bank.as_ref()
     }
 
     /// Returns a shared reference to the working bank, if it exists.
