@@ -12,6 +12,7 @@ use {
     agave_votor::{common::block_timeout, event::LeaderWindowInfo},
     crossbeam_channel::Receiver,
     solana_clock::Slot,
+    solana_entry::block_component::{BlockFooterV1, VersionedBlockMarker},
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
@@ -27,6 +28,7 @@ use {
         bank_forks::BankForks,
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
+    solana_version::version,
     stats::{LoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -131,6 +133,19 @@ enum StartLeaderError {
         /* parent ready slot */ Slot,
         /* leader slot */ Slot,
     ),
+}
+
+fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker {
+    let footer = BlockFooterV1 {
+        bank_hash: Hash::default(),
+        block_producer_time_nanos,
+        block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        final_cert: None,
+        skip_reward_cert: None,
+        notar_reward_cert: None,
+    };
+
+    VersionedBlockMarker::new_block_footer(footer)
 }
 
 /// The block creation loop.
@@ -341,6 +356,7 @@ fn produce_window(
 /// Afterwards:
 /// - Shutdown the record receiver
 /// - Clear any inflight records
+/// - Insert the block footer
 /// - Insert the alpentick
 /// - Clear the working bank
 fn record_and_complete_block(
@@ -374,8 +390,13 @@ fn record_and_complete_block(
         )?;
     }
 
-    // Alpentick and clear bank
+    // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
+    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
+    let footer = produce_block_footer(block_producer_time_nanos);
+    w_poh_recorder.send_marker(footer)?;
+
+    // Alpentick and clear bank
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
