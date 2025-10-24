@@ -670,9 +670,10 @@ mod test {
                 &quic_endpoint_sender,
             )
             .unwrap();
+        // Since this is a new slot, it includes both header shreds and component shreds
         assert_eq!(
             standard_broadcast_run.next_shred_index as u64,
-            num_shreds_per_slot
+            2 * num_shreds_per_slot
         );
         assert_eq!(standard_broadcast_run.slot, 0);
         assert_eq!(standard_broadcast_run.parent, 0);
@@ -704,8 +705,11 @@ mod test {
         );
         // Try to fetch ticks from blockstore, nothing should break
         assert_eq!(blockstore.get_slot_entries(0, 0).unwrap(), ticks0);
+        // Now with block headers, we have 2x shreds, so fetch from 2 * num_shreds_per_slot
         assert_eq!(
-            blockstore.get_slot_entries(0, num_shreds_per_slot).unwrap(),
+            blockstore
+                .get_slot_entries(0, 2 * num_shreds_per_slot)
+                .unwrap(),
             vec![],
         );
 
@@ -740,9 +744,10 @@ mod test {
 
         // The shred index should have reset to 0, which makes it possible for the
         // index < the previous shred index for slot 0
+        // Since this is a new slot, it includes both header shreds and component shreds
         assert_eq!(
             standard_broadcast_run.next_shred_index as usize,
-            DATA_SHREDS_PER_FEC_BLOCK
+            2 * DATA_SHREDS_PER_FEC_BLOCK
         );
         assert_eq!(standard_broadcast_run.slot, 2);
         assert_eq!(standard_broadcast_run.parent, 0);
