@@ -2,7 +2,7 @@
 use {
     crate::{
         blockstore::error::Result,
-        blockstore_meta::{self},
+        blockstore_meta::{self, BlockLocation},
     },
     serde::{de::DeserializeOwned, Serialize},
     solana_clock::{Slot, UnixTimestamp},
@@ -278,6 +278,9 @@ pub mod columns {
     /// * index type: `u64` (see [`SlotColumn`])
     /// * value type: [`blockstore_meta::SlotCertificates`]
     pub struct SlotCertificates;
+
+    #[derive(Debug)]
+    pub struct ParentMeta;
 }
 
 macro_rules! convert_column_index_to_key_bytes {
@@ -1058,4 +1061,58 @@ impl ColumnName for columns::AlternateMerkleRootMeta {
 }
 impl TypedColumn for columns::AlternateMerkleRootMeta {
     type Type = blockstore_meta::MerkleRootMeta;
+}
+
+impl Column for columns::ParentMeta {
+    type Index = (Slot, BlockLocation);
+    // Key size: Slot (8 bytes) + discriminator (1 byte) + optional Hash (32 bytes)
+    // Maximum size when BlockLocation::Alternate
+    type Key = [u8; std::mem::size_of::<Slot>() + 1 + HASH_BYTES];
+
+    #[inline]
+    fn key((slot, location): &Self::Index) -> Self::Key {
+        let mut key = [0u8; std::mem::size_of::<Slot>() + 1 + HASH_BYTES];
+        key[..8].copy_from_slice(&slot.to_le_bytes());
+
+        match location {
+            BlockLocation::Original => {
+                key[8] = 0; // discriminator for Original
+                            // Rest of the key remains zeros
+            }
+            BlockLocation::Alternate { block_id } => {
+                key[8] = 1; // discriminator for Alternate
+                key[9..41].copy_from_slice(&block_id.to_bytes());
+            }
+        }
+        key
+    }
+
+    fn index(key: &[u8]) -> Self::Index {
+        let slot = Slot::from_le_bytes(key[0..8].try_into().unwrap());
+        let location = match key[8] {
+            0 => BlockLocation::Original,
+            1 => {
+                let block_id = Hash::new_from_array(key[9..41].try_into().unwrap());
+                BlockLocation::Alternate { block_id }
+            }
+            _ => panic!("Invalid BlockLocation discriminator"),
+        };
+        (slot, location)
+    }
+
+    fn as_index(slot: Slot) -> Self::Index {
+        (slot, BlockLocation::Original)
+    }
+
+    fn slot((slot, _location): Self::Index) -> Slot {
+        slot
+    }
+}
+
+impl ColumnName for columns::ParentMeta {
+    const NAME: &'static str = "parent_meta";
+}
+
+impl TypedColumn for columns::ParentMeta {
+    type Type = blockstore_meta::ParentMeta;
 }
