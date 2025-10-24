@@ -94,7 +94,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         let bank = receive_results.bank.clone();
         let last_tick_height = receive_results.last_tick_height;
 
-        if bank.slot() != self.current_slot {
+        let send_header = if bank.slot() != self.current_slot {
             self.chained_merkle_root = broadcast_utils::get_chained_merkle_root_from_parent(
                 bank.slot(),
                 bank.parent_slot(),
@@ -106,7 +106,11 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.current_slot = bank.slot();
             self.prev_entry_hash = None;
             self.num_slots_broadcasted += 1;
-        }
+
+            true
+        } else {
+            false
+        };
 
         // Check if we have a marker - if so, nothing to duplicate
         if matches!(receive_results.component, BlockComponent::BlockMarker(_)) {
@@ -196,23 +200,57 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.component_to_merkle_shreds_for_tests(
-            keypair,
-            &component,
-            last_tick_height == bank.max_tick_height() && last_entries.is_none(),
-            Some(self.chained_merkle_root),
-            self.next_shred_index,
-            self.next_code_index,
-            &self.reed_solomon_cache,
-            &mut stats,
-        );
-        if let Some(shred) = data_shreds.iter().max_by_key(|shred| shred.index()) {
+        let (header_data_shreds, header_coding_shreds) = if send_header {
+            let header = produce_block_header(bank.parent_slot(), self.chained_merkle_root);
+
+            shredder.component_to_merkle_shreds_for_tests(
+                keypair,
+                &BlockComponent::BlockMarker(header),
+                false,
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            )
+        } else {
+            (vec![], vec![])
+        };
+        if let Some(shred) = header_data_shreds.iter().max_by_key(|shred| shred.index()) {
             self.chained_merkle_root = shred.merkle_root().unwrap();
         }
-        self.next_shred_index += data_shreds.len() as u32;
-        if let Some(index) = coding_shreds.iter().map(Shred::index).max() {
+        self.next_shred_index += header_data_shreds.len() as u32;
+        if let Some(index) = header_coding_shreds.iter().map(Shred::index).max() {
             self.next_code_index = index + 1;
         }
+
+        let (component_data_shreds, component_coding_shreds) = shredder
+            .component_to_merkle_shreds_for_tests(
+                keypair,
+                &component,
+                last_tick_height == bank.max_tick_height() && last_entries.is_none(),
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            );
+        if let Some(shred) = component_data_shreds
+            .iter()
+            .max_by_key(|shred| shred.index())
+        {
+            self.chained_merkle_root = shred.merkle_root().unwrap();
+        }
+        self.next_shred_index += component_data_shreds.len() as u32;
+        if let Some(index) = component_coding_shreds.iter().map(Shred::index).max() {
+            self.next_code_index = index + 1;
+        }
+
+        let data_shreds = header_data_shreds
+            .into_iter()
+            .chain(component_data_shreds)
+            .collect_vec();
+
         let last_shreds =
             last_entries.map(|(original_last_entry, duplicate_extra_last_entries)| {
                 let (original_last_data_shred, _) = shredder.component_to_merkle_shreds_for_tests(
