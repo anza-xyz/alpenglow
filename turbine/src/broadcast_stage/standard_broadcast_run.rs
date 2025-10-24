@@ -210,7 +210,7 @@ impl StandardBroadcastRun {
 
         let mut to_shreds_time = Measure::start("broadcast_to_shreds");
 
-        if self.slot != bank.slot() {
+        let send_header = if self.slot != bank.slot() {
             // Finish previous slot if it was interrupted.
             if !self.completed {
                 let shreds =
@@ -266,7 +266,11 @@ impl StandardBroadcastRun {
             self.num_batches = 0;
             process_stats.receive_elapsed = 0;
             process_stats.coalesce_elapsed = 0;
-        }
+
+            true
+        } else {
+            false
+        };
 
         // 2) Convert entries to shreds and coding shreds
         let is_last_in_slot = last_tick_height == bank.max_tick_height();
@@ -275,7 +279,24 @@ impl StandardBroadcastRun {
         let reference_tick = last_tick_height
             .saturating_add(bank.ticks_per_slot())
             .saturating_sub(bank.max_tick_height());
-        let shreds = self
+
+        let mut header_shreds = if send_header {
+            let header = produce_block_header(self.parent, self.chained_merkle_root);
+            self.component_to_shreds(
+                keypair,
+                &BlockComponent::BlockMarker(header),
+                reference_tick as u8,
+                false,
+                process_stats,
+                MAX_DATA_SHREDS_PER_SLOT as u32,
+                MAX_CODE_SHREDS_PER_SLOT as u32,
+            )
+            .unwrap()
+        } else {
+            vec![]
+        };
+
+        let component_shreds = self
             .component_to_shreds(
                 keypair,
                 &receive_results.component,
@@ -286,6 +307,14 @@ impl StandardBroadcastRun {
                 MAX_CODE_SHREDS_PER_SLOT as u32,
             )
             .unwrap();
+
+        let shreds = if send_header {
+            header_shreds.extend_from_slice(&component_shreds);
+            header_shreds
+        } else {
+            component_shreds
+        };
+
         // Insert the first data shred synchronously so that blockstore stores
         // that the leader started this block. This must be done before the
         // blocks are sent out over the wire, so that the slots we have already

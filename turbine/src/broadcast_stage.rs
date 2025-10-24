@@ -16,10 +16,14 @@ use {
     crossbeam_channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender},
     itertools::{Either, Itertools},
     solana_clock::Slot,
+    solana_entry::block_component::{
+        BlockHeaderV1, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
+    },
     solana_gossip::{
         cluster_info::{ClusterInfo, ClusterInfoError},
         contact_info::Protocol,
     },
+    solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{blockstore::Blockstore, shred::Shred},
     solana_measure::measure::Measure,
@@ -183,6 +187,18 @@ impl BroadcastStageType {
             ),
         }
     }
+}
+
+pub fn produce_block_header(parent_slot: Slot, parent_block_id: Hash) -> VersionedBlockMarker {
+    let header = BlockHeaderV1 {
+        parent_slot,
+        parent_block_id,
+    };
+
+    let header = VersionedBlockHeader::Current(header);
+    let header = BlockMarkerV1::BlockHeader(header);
+
+    VersionedBlockMarker::Current(header)
 }
 
 trait BroadcastRun {
