@@ -38,7 +38,7 @@ use {
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
-        time::{Duration, Instant, UNIX_EPOCH},
+        time::{Duration, Instant},
     },
     thiserror::Error,
 };
@@ -294,7 +294,7 @@ fn produce_window(
 /// Afterwards:
 /// - Shutdown the record receiver
 /// - Clear any inflight records
-/// - TODO: insert the block footer
+/// - Insert the block footer
 /// - Insert the alpentick
 /// - Clear the working bank
 fn record_and_complete_block(
@@ -335,13 +335,7 @@ fn record_and_complete_block(
 
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
-    let block_producer_time_nanos = w_poh_recorder
-        .working_bank()
-        .unwrap()
-        .start
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
+    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
     let footer = produce_block_footer(block_producer_time_nanos);
     w_poh_recorder.send_marker(footer)?;
 

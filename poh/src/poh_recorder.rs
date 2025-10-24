@@ -41,7 +41,7 @@ use {
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, RwLock,
         },
-        time::{Instant, SystemTime},
+        time::{Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -504,13 +504,18 @@ impl PohRecorder {
                 .store(leader_first_tick_height);
             self.leader_last_tick_height = leader_last_tick_height;
 
+            let elapsed_time = start.elapsed().map(|dur| dur.as_millis());
+            if let Err(err) = elapsed_time.as_ref() {
+                error!("Likely misconfigured system clock. Error: {err:?}");
+            }
+
             datapoint_info!(
                 "leader-slot-start-to-cleared-elapsed-ms",
                 ("slot", bank.slot(), i64),
                 (
                     "elapsed",
                     // This errors if the clock drifts backwards, in which case we just return 0.
-                    start.elapsed().map(|dur| dur.as_millis()).unwrap_or(0),
+                    elapsed_time.unwrap_or(0),
                     i64
                 ),
             );
@@ -927,6 +932,15 @@ impl PohRecorder {
     #[cfg(feature = "dev-context-only-utils")]
     pub fn clear_bank_for_test(&mut self) {
         self.clear_bank();
+    }
+
+    pub fn working_bank_block_producer_time_nanos(&self) -> u64 {
+        self.working_bank()
+            .unwrap()
+            .start
+            .duration_since(UNIX_EPOCH)
+            .expect("Misconfigured system clock; couldn't measure block producer time.")
+            .as_nanos() as u64
     }
 
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
