@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_minimization_get_vote_accounts() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let bootstrap_validator_pubkey = solana_pubkey::new_rand();
         let bootstrap_validator_stake_lamports = 30;
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_minimization_get_stake_accounts() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let bootstrap_validator_pubkey = solana_pubkey::new_rand();
         let bootstrap_validator_stake_lamports = 30;
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_minimization_get_owner_accounts() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let (genesis_config, _) = create_genesis_config(1_000_000);
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_minimization_add_programdata_accounts() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let (genesis_config, _) = create_genesis_config(1_000_000);
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_minimize_accounts_db() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let (genesis_config, _) = create_genesis_config(1_000_000);
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));

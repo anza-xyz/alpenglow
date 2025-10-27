@@ -1060,7 +1060,7 @@ mod tests {
     #[test_case(true ; "last_in_slot")]
     #[test_case(false ; "not_last_in_slot")]
     fn test_should_discard_shred(is_last_in_slot: bool) {
-        solana_logger::setup();
+        agave_logger::setup();
         let mut rng = rand::thread_rng();
         let slot = 18_291;
         let shreds = make_merkle_shreds_for_tests(

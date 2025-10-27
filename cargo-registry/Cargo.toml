@@ -16,6 +16,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 dev-context-only-utils = []
 
 [dependencies]
+agave-logger = { workspace = true }
 clap = { workspace = true }
 flate2 = { workspace = true }
 hex = { workspace = true }
@@ -31,7 +32,6 @@ solana-cli-config = { workspace = true }
 solana-cli-output = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-keypair = { workspace = true }
-solana-logger = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-remote-wallet = { workspace = true, features = ["default"] }
 solana-rpc-client = { workspace = true, features = ["default"] }

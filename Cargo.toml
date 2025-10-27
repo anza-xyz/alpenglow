@@ -53,6 +53,7 @@ members = [
     "ledger",
     "ledger-tool",
     "local-cluster",
+    "logger",
     "low-pass-filter",
     "measure",
     "memory-management",
@@ -182,6 +183,7 @@ agave-cargo-registry = { path = "cargo-registry", version = "=3.1.0" }
 agave-feature-set = { path = "feature-set", version = "=3.1.0" }
 agave-geyser-plugin-interface = { path = "geyser-plugin-interface", version = "=3.1.0" }
 agave-io-uring = { path = "io-uring", version = "=3.1.0" }
+agave-logger = { path = "logger", version = "=3.1.0", features = ["agave-unstable-api"] }
 agave-low-pass-filter = { path = "low-pass-filter", version = "=3.1.0" }
 agave-precompiles = { path = "precompiles", version = "=3.1.0" }
 agave-reserved-account-keys = { path = "reserved-account-keys", version = "=3.1.0" }
@@ -379,7 +381,7 @@ smallvec = { version = "1.15.1", default-features = false, features = ["union"] 
 smpl_jwt = "0.7.1"
 socket2 = "0.6.0"
 soketto = "0.7"
-solana-account = "3.0.0"
+solana-account = "3.1.0"
 solana-account-decoder = { path = "account-decoder", version = "=3.1.0" }
 solana-account-decoder-client-types = { path = "account-decoder-client-types", version = "=3.1.0" }
 solana-account-info = "3.0.0"
@@ -439,8 +441,8 @@ solana-fee = { path = "fee", version = "=3.1.0" }
 solana-fee-calculator = "3.0.0"
 solana-fee-structure = "3.0.0"
 solana-file-download = "3.0.0"
-solana-frozen-abi = "3.0.0"
-solana-frozen-abi-macro = "3.0.0"
+solana-frozen-abi = "3.0.1"
+solana-frozen-abi-macro = "3.0.1"
 solana-genesis = { path = "genesis", version = "=3.1.0" }
 solana-genesis-config = "3.0.0"
 solana-genesis-utils = { path = "genesis-utils", version = "=3.1.0" }
@@ -462,7 +464,6 @@ solana-loader-v3-interface = "6.1.0"
 solana-loader-v4-interface = "3.1.0"
 solana-loader-v4-program = { path = "programs/loader-v4", version = "=3.1.0" }
 solana-local-cluster = { path = "local-cluster", version = "=3.1.0" }
-solana-logger = "3.0.0"
 solana-measure = { path = "measure", version = "=3.1.0" }
 solana-merkle-tree = { path = "merkle-tree", version = "=3.1.0" }
 solana-message = "3.0.1"

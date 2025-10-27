@@ -776,7 +776,7 @@ mod tests {
     #[test]
     /// Test rewards computation and partitioned rewards distribution at the epoch boundary
     fn test_rewards_computation() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         // Delegations with sufficient stake to get rewards (2 SOL).
         let delegations_with_rewards = 100;
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn test_rewards_point_calculation() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let expected_num_delegations = 100;
         let RewardBank { bank, .. } =
@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn test_rewards_point_calculation_empty() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         // bank with no rewards to distribute
         let (genesis_config, _mint_keypair) = create_genesis_config(LAMPORTS_PER_SOL);
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_calculate_stake_vote_rewards() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let expected_num_delegations = 1;
         let RewardBank {

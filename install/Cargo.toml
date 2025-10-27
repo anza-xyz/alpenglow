@@ -13,6 +13,7 @@ edition = { workspace = true }
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
+agave-logger = { workspace = true }
 atty = { workspace = true }
 bincode = { workspace = true }
 bzip2 = { workspace = true }
@@ -35,7 +36,6 @@ solana-clap-utils = { workspace = true }
 solana-config-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-hash = "=3.0.0"
 solana-keypair = "=3.0.1"
-solana-logger = "=3.0.0"
 solana-message = "=3.0.1"
 solana-pubkey = { version = "=3.0.0", default-features = false }
 solana-rpc-client = { workspace = true }

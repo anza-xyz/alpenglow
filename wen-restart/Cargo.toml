@@ -17,6 +17,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 name = "solana_wen_restart"
 
 [dependencies]
+agave-logger = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
@@ -54,7 +55,6 @@ solana-accounts-db = { workspace = true }
 solana-entry = { workspace = true }
 solana-keypair = { workspace = true }
 solana-ledger = { workspace = true, features = ["dev-context-only-utils"] }
-solana-logger = { workspace = true }
 solana-runtime = { workspace = true, features = ["dev-context-only-utils"] }
 solana-signer = { workspace = true }
 solana-streamer = { workspace = true }

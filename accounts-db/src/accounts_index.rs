@@ -2815,7 +2815,7 @@ pub mod tests {
 
     #[test]
     fn test_update_new_slot() {
-        solana_logger::setup();
+        agave_logger::setup();
         let key = solana_pubkey::new_rand();
         let index = AccountsIndex::<bool, bool>::default_for_tests();
         let ancestors = vec![(0, 0)].into_iter().collect();
@@ -3192,7 +3192,7 @@ pub mod tests {
 
     #[test]
     fn test_reclaim_older_items_in_slot_list() {
-        solana_logger::setup();
+        agave_logger::setup();
         let key = solana_pubkey::new_rand();
         let index = AccountsIndex::<u64, u64>::default_for_tests();
         let mut gc = ReclaimsSlotList::new();
@@ -3284,7 +3284,7 @@ pub mod tests {
 
     #[test]
     fn test_reclaim_do_not_reclaim_cached_other_slot() {
-        solana_logger::setup();
+        agave_logger::setup();
         let key = solana_pubkey::new_rand();
         let index =
             AccountsIndex::<CacheableIndexValueTest, CacheableIndexValueTest>::default_for_tests();
@@ -3932,7 +3932,7 @@ pub mod tests {
 
     #[test]
     fn test_clean_rooted_entries_return() {
-        solana_logger::setup();
+        agave_logger::setup();
         let value = true;
         let key = solana_pubkey::new_rand();
         let key_unknown = solana_pubkey::new_rand();
