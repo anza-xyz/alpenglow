@@ -796,8 +796,8 @@ fn spawn_server_with_cancel_generic<Q, C>(
     keypair: &Keypair,
     packet_sender: Sender<PacketBatch>,
     quic_server_params: QuicStreamerConfig,
-    cancel: CancellationToken,
     qos: Arc<Q>,
+    cancel: CancellationToken,
 ) -> Result<SpawnServerResult, QuicServerError>
 where
     Q: QosController<C> + Send + Sync + 'static,
@@ -813,8 +813,8 @@ where
             keypair,
             packet_sender,
             quic_server_params,
-            cancel,
             qos,
+            cancel,
         )
     }?;
     let handle = thread::Builder::new()
@@ -865,8 +865,8 @@ pub fn spawn_server_with_cancel(
         keypair,
         packet_sender,
         quic_server_params,
-        cancel,
         swqos,
+        cancel,
     )
 }
 
@@ -901,8 +901,8 @@ pub fn spawn_simple_qos_server_with_cancel(
         keypair,
         packet_sender,
         quic_server_params,
-        cancel,
         simple_qos,
+        cancel,
     )
 }
 
