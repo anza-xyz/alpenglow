@@ -19,6 +19,7 @@ frozen-abi = [
 dev-context-only-utils = []
 
 [dependencies]
+agave-feature-set = { workspace = true }
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
 log = { workspace = true }
