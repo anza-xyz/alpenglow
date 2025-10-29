@@ -94,7 +94,7 @@ impl PohTiming {
 
 impl PohService {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<F>(
+    pub fn new(
         poh_recorder: Arc<RwLock<PohRecorder>>,
         poh_config: &PohConfig,
         poh_exit: Arc<AtomicBool>,
@@ -104,14 +104,7 @@ impl PohService {
         record_receiver: RecordReceiver,
         poh_service_receiver: PohServiceMessageReceiver,
         migration_status: Arc<MigrationStatus>,
-        block_creation_loop: F,
-    ) -> Self
-    where
-        // TODO: this weirdness is because solana_poh can't depend on solana_core
-        // Once we cleanup the prototype and separate alpenglow into it's own crate this
-        // can be fixed.
-        F: FnOnce() + std::marker::Send + 'static,
-    {
+    ) -> Self {
         let poh_config = poh_config.clone();
         let tick_producer = Builder::new()
             .name("solPohTickProd".to_string())
@@ -173,24 +166,19 @@ impl PohService {
                     }
                 }
 
-                // Start alpenglow
+                // Shutdown poh service, which lets the block creation loop start
                 //
                 // Important this is called *before* any new alpenglow
                 // leaders call `set_bank()`, otherwise, the old PoH
                 // tick producer will still tick in that alpenglow bank
-                //
-                // TODO: Can essentially replace this with no ticks
-                // once we properly remove poh/entry verification in replay
                 {
                     let mut w_poh_recorder = poh_recorder.write().unwrap();
                     w_poh_recorder.enable_alpenglow();
                 }
-                info!("Starting alpenglow block creation loop");
                 migration_status
                     .block_creation_loop_started
                     .store(true, Ordering::Release);
-                block_creation_loop();
-                poh_exit.store(true, Ordering::Relaxed);
+                info!("PohService shutdown");
             })
             .unwrap();
 
@@ -820,7 +808,6 @@ mod tests {
             record_receiver,
             poh_service_message_receiver,
             Arc::new(MigrationStatus::default()),
-            || {},
         );
         poh_recorder.write().unwrap().set_bank_for_test(bank);
 

@@ -765,7 +765,6 @@ impl BankingSimulator {
             record_receiver,
             poh_service_message_receiver,
             migration_status,
-            || {},
         );
 
         // Enable BankingTracer to approximate the real environment as close as possible because

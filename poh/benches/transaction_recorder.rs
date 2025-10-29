@@ -88,7 +88,6 @@ fn bench_record_transactions(c: &mut Criterion) {
         record_receiver,
         poh_service_receiver,
         migration_status,
-        || {},
     );
     poh_controller
         .set_bank_sync(BankWithScheduler::new_without_scheduler(bank.clone()))

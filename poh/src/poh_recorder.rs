@@ -1033,7 +1033,6 @@ fn do_create_test_recorder(
         record_receiver,
         poh_service_message_receiver,
         Arc::new(MigrationStatus::default()),
-        || {},
     );
 
     poh_controller

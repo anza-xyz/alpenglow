@@ -32,12 +32,14 @@ use {
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
+    solana_votor_messages::migration::MigrationStatus,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
+        thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
     },
     thiserror::Error,
@@ -45,8 +47,30 @@ use {
 
 mod stats;
 
+pub struct BlockCreationLoop {
+    thread: JoinHandle<()>,
+}
+
+impl BlockCreationLoop {
+    pub fn new(config: BlockCreationLoopConfig) -> Self {
+        let thread = Builder::new()
+            .name("solBlockCreationLoop".to_string())
+            .spawn(move || {
+                start_loop(config);
+            })
+            .unwrap();
+
+        Self { thread }
+    }
+
+    pub fn join(self) -> thread::Result<()> {
+        self.thread.join()
+    }
+}
+
 pub struct BlockCreationLoopConfig {
     pub exit: Arc<AtomicBool>,
+    pub migration_status: Arc<MigrationStatus>,
 
     // Shared state
     pub bank_forks: Arc<RwLock<BankForks>>,
@@ -127,7 +151,7 @@ fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker 
 /// The `votor::consensus_pool_service` tracks when it is our leader window, and
 /// communicates the skip timer and parent slot for our window. This loop takes the responsibility
 /// of creating our `NUM_CONSECUTIVE_LEADER_SLOTS` blocks and finishing them within the required timeout.
-pub fn start_loop(config: BlockCreationLoopConfig) {
+fn start_loop(config: BlockCreationLoopConfig) {
     let BlockCreationLoopConfig {
         exit,
         bank_forks,
@@ -141,6 +165,7 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         record_receiver,
         leader_window_notifier,
         replay_highest_frozen,
+        migration_status,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -165,6 +190,11 @@ pub fn start_loop(config: BlockCreationLoopConfig) {
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
     };
+
+    info!("{my_pubkey}: Block creation loop initialized");
+    // Wait for PohService to be shutdown
+    migration_status.wait_for_migration_or_exit(&ctx.exit);
+    info!("{my_pubkey}: Block creation loop starting");
 
     // Setup poh
     reset_poh_recorder(&ctx.bank_forks.read().unwrap().working_bank(), &ctx);
