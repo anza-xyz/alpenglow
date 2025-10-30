@@ -156,7 +156,7 @@ impl BroadcastStageType {
                 bank_forks,
                 quic_endpoint_sender,
                 votor_event_sender.clone(),
-                FailEntryVerificationBroadcastRun::new(shred_version),
+                FailEntryVerificationBroadcastRun::new(shred_version, migration_status),
                 xdp_sender,
             ),
 
@@ -170,7 +170,7 @@ impl BroadcastStageType {
                 bank_forks,
                 quic_endpoint_sender,
                 votor_event_sender.clone(),
-                BroadcastFakeShredsRun::new(0, shred_version),
+                BroadcastFakeShredsRun::new(0, shred_version, migration_status),
                 xdp_sender,
             ),
 
@@ -184,7 +184,7 @@ impl BroadcastStageType {
                 bank_forks,
                 quic_endpoint_sender,
                 votor_event_sender.clone(),
-                BroadcastDuplicatesRun::new(shred_version, config.clone()),
+                BroadcastDuplicatesRun::new(shred_version, config.clone(), migration_status),
                 xdp_sender,
             ),
         }

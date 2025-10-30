@@ -32,6 +32,7 @@ use {
         bank::{Bank, PreCommitResult, TransactionBalancesSet},
         bank_forks::{BankForks, SetRootError},
         bank_utils,
+        block_component_verifier::BlockComponentVerifierError,
         commitment::VOTE_THRESHOLD_SIZE,
         dependency_tracker::DependencyTracker,
         installed_scheduler_pool::BankWithScheduler,
@@ -837,6 +838,9 @@ pub enum BlockstoreProcessorError {
 
     #[error("user transactions found in vote only mode bank at slot {0}")]
     UserTransactionsInVoteOnlyBank(Slot),
+
+    #[error("block component verifier error: {0}")]
+    BlockComponentVerifier(#[from] BlockComponentVerifierError),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1492,10 +1496,10 @@ pub fn confirm_slot(
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
-    let slot_entries_load_result = {
+    let (slot_components, num_shreds, slot_full) = {
         let mut load_elapsed = Measure::start("load_elapsed");
         let load_result = blockstore
-            .get_slot_entries_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
+            .get_slot_components_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
             .map_err(BlockstoreProcessorError::FailedToLoadEntries);
         load_elapsed.stop();
         if load_result.is_err() {
@@ -1506,10 +1510,37 @@ pub fn confirm_slot(
         load_result
     }?;
 
+    // Process block component markers for Alpenglow slots. Note that we don't need to run migration
+    // checks here. Here's why:
+    //
+    // Post-Alpenglow migration - validators that have Alpenglow enabled can parse BlockComponents.
+    // Things just work.
+    //
+    // Pre-Alpenglow migration, suppose a validator receives a BlockMarker:
+    //
+    // (1) validators *incapable* of processing BlockMarkers will mark the slot as dead on shred
+    //     ingest in blockstore.
+    //
+    // (2) validators *capable* of processing BlockMarkers will store the BlockMarkers in shred
+    //     ingest, run through this verifying code here, and then error out when finish() is invoked
+    //     during replay, resulting in the slot being marked as dead.
+    if let Some(parent_bank) = bank.parent() {
+        let mut verifier = bank.block_component_verifier.write().unwrap();
+        for marker in slot_components.iter().filter_map(|bc| bc.as_marker()) {
+            verifier.on_marker(bank.clone_without_scheduler(), parent_bank.clone(), marker)?;
+        }
+    }
+
+    let slot_entries = slot_components
+        .into_iter()
+        .filter_map(|c| c.as_entry_batch_owned())
+        .flatten()
+        .collect_vec();
+
     confirm_slot_entries(
         bank,
         replay_tx_thread_pool,
-        slot_entries_load_result,
+        (slot_entries, num_shreds, slot_full),
         timing,
         progress,
         skip_verification,

@@ -10269,6 +10269,7 @@ dependencies = [
  "solana-cost-model",
  "solana-cpi",
  "solana-ed25519-program",
+ "solana-entry",
  "solana-epoch-info",
  "solana-epoch-rewards-hasher",
  "solana-epoch-schedule",

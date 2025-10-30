@@ -270,7 +270,7 @@ impl StandardBroadcastRun {
             process_stats.receive_elapsed = 0;
             process_stats.coalesce_elapsed = 0;
 
-            true
+            self.migration_status.is_alpenglow_enabled()
         } else {
             false
         };
@@ -562,6 +562,7 @@ mod test {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         std::{ops::Deref, sync::Arc, time::Duration},
+        test_case::test_case,
     };
 
     #[allow(clippy::type_complexity)]
@@ -607,10 +608,11 @@ mod test {
         )
     }
 
-    #[test]
-    fn test_interrupted_slot_last_shred() {
+    #[test_case(MigrationStatus::default(); "pre_migration")]
+    #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
+    fn test_interrupted_slot_last_shred(migration_status: MigrationStatus) {
         let keypair = Arc::new(Keypair::new());
-        let mut run = StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default()));
+        let mut run = StandardBroadcastRun::new(0, Arc::new(migration_status));
         assert!(run.completed);
 
         // Set up the slot to be interrupted
@@ -644,8 +646,9 @@ mod test {
         assert!(shred.verify(&keypair.pubkey()));
     }
 
-    #[test]
-    fn test_slot_interrupt() {
+    #[test_case(MigrationStatus::default(); "pre_migration")]
+    #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
+    fn test_slot_interrupt(migration_status: MigrationStatus) {
         // Setup
         let num_shreds_per_slot = DATA_SHREDS_PER_FEC_BLOCK as u64;
         let (blockstore, genesis_config, cluster_info, bank0, leader_keypair, socket, bank_forks) =
@@ -661,9 +664,15 @@ mod test {
             last_tick_height: (ticks0.len() - 1) as u64,
         };
 
+        let is_alpenglow_enabled = migration_status.is_alpenglow_enabled();
+        let block_header_shreds = if is_alpenglow_enabled {
+            DATA_SHREDS_PER_FEC_BLOCK as u64
+        } else {
+            0
+        };
+
         // Step 1: Make an incomplete transmission for slot 0
-        let mut standard_broadcast_run =
-            StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default()));
+        let mut standard_broadcast_run = StandardBroadcastRun::new(0, Arc::new(migration_status));
         standard_broadcast_run
             .test_process_receive_results(
                 &leader_keypair,
@@ -678,7 +687,7 @@ mod test {
         // Since this is a new slot, it includes both header shreds and component shreds
         assert_eq!(
             standard_broadcast_run.next_shred_index as u64,
-            2 * num_shreds_per_slot
+            num_shreds_per_slot + block_header_shreds
         );
         assert_eq!(standard_broadcast_run.slot, 0);
         assert_eq!(standard_broadcast_run.parent, 0);
@@ -710,10 +719,10 @@ mod test {
         );
         // Try to fetch ticks from blockstore, nothing should break
         assert_eq!(blockstore.get_slot_entries(0, 0).unwrap(), ticks0);
-        // Now with block headers, we have 2x shreds, so fetch from 2 * num_shreds_per_slot
+        // When alpenglow is enabled, include block header shreds
         assert_eq!(
             blockstore
-                .get_slot_entries(0, 2 * num_shreds_per_slot)
+                .get_slot_entries(0, num_shreds_per_slot + block_header_shreds)
                 .unwrap(),
             vec![],
         );
@@ -752,7 +761,12 @@ mod test {
         // Since this is a new slot, it includes both header shreds and component shreds
         assert_eq!(
             standard_broadcast_run.next_shred_index as usize,
-            2 * DATA_SHREDS_PER_FEC_BLOCK
+            DATA_SHREDS_PER_FEC_BLOCK
+                + if is_alpenglow_enabled {
+                    DATA_SHREDS_PER_FEC_BLOCK
+                } else {
+                    0
+                }
         );
         assert_eq!(standard_broadcast_run.slot, 2);
         assert_eq!(standard_broadcast_run.parent, 0);
@@ -793,8 +807,9 @@ mod test {
         ));
     }
 
-    #[test]
-    fn test_buffer_data_shreds() {
+    #[test_case(MigrationStatus::default(); "pre_migration")]
+    #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
+    fn test_buffer_data_shreds(migration_status: MigrationStatus) {
         let num_shreds_per_slot = 2;
         let (blockstore, genesis_config, _cluster_info, bank, leader_keypair, _socket, _bank_forks) =
             setup(num_shreds_per_slot);
@@ -802,8 +817,7 @@ mod test {
         let (ssend, _srecv) = unbounded();
         let (cbsend, _) = unbounded();
         let mut last_tick_height = 0;
-        let mut standard_broadcast_run =
-            StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default()));
+        let mut standard_broadcast_run = StandardBroadcastRun::new(0, Arc::new(migration_status));
         let mut process_ticks = |num_ticks| {
             let ticks = create_ticks(num_ticks, 0, genesis_config.hash());
             last_tick_height += (ticks.len() - 1) as u64;
@@ -848,8 +862,9 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_slot_finish() {
+    #[test_case(MigrationStatus::default(); "pre_migration")]
+    #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
+    fn test_slot_finish(migration_status: MigrationStatus) {
         // Setup
         let num_shreds_per_slot = 2;
         let (blockstore, genesis_config, cluster_info, bank0, leader_keypair, socket, bank_forks) =
@@ -865,8 +880,7 @@ mod test {
             last_tick_height: ticks.len() as u64,
         };
 
-        let mut standard_broadcast_run =
-            StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default()));
+        let mut standard_broadcast_run = StandardBroadcastRun::new(0, Arc::new(migration_status));
         standard_broadcast_run
             .test_process_receive_results(
                 &leader_keypair,
@@ -881,11 +895,12 @@ mod test {
         assert!(standard_broadcast_run.completed)
     }
 
-    #[test]
-    fn entries_to_shreds_max() {
+    #[test_case(MigrationStatus::default(); "pre_migration")]
+    #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
+    fn entries_to_shreds_max(migration_status: MigrationStatus) {
         solana_logger::setup();
         let keypair = Keypair::new();
-        let mut bs = StandardBroadcastRun::new(0, Arc::new(MigrationStatus::default()));
+        let mut bs = StandardBroadcastRun::new(0, Arc::new(migration_status));
         bs.slot = 1;
         bs.parent = 0;
         let entries = create_ticks(10_000, 1, solana_hash::Hash::default());

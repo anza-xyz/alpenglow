@@ -18,10 +18,15 @@ pub(super) struct BroadcastFakeShredsRun {
     next_shred_index: u32,
     next_code_index: u32,
     reed_solomon_cache: Arc<ReedSolomonCache>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BroadcastFakeShredsRun {
-    pub(super) fn new(partition: usize, shred_version: u16) -> Self {
+    pub(super) fn new(
+        partition: usize,
+        shred_version: u16,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
         Self {
             last_blockhash: Hash::default(),
             carryover_entry: None,
@@ -32,6 +37,7 @@ impl BroadcastFakeShredsRun {
             next_shred_index: 0,
             next_code_index: 0,
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
+            migration_status,
         }
     }
 }
@@ -66,7 +72,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             self.next_code_index = 0;
             self.current_slot = bank.slot();
 
-            true
+            self.migration_status.is_alpenglow_enabled()
         } else {
             false
         };
