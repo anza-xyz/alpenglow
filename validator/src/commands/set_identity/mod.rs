@@ -17,6 +17,7 @@ const COMMAND: &str = "set-identity";
 pub struct SetIdentityArgs {
     pub identity: Option<String>,
     pub require_tower: bool,
+    pub require_vote_history: bool,
 }
 
 impl FromClapArgMatches for SetIdentityArgs {
@@ -24,6 +25,7 @@ impl FromClapArgMatches for SetIdentityArgs {
         Ok(SetIdentityArgs {
             identity: value_t!(matches, "identity", String).ok(),
             require_tower: matches.is_present("require_tower"),
+            require_vote_history: !matches.is_present("do_not_require_vote_history"),
         })
     }
 }
@@ -45,6 +47,12 @@ pub fn command<'a>() -> App<'a, 'a> {
                 .takes_value(false)
                 .help("Refuse to set the validator identity if saved tower state is not found"),
         )
+        .arg(
+            clap::Arg::with_name("do_not_require_vote_history")
+                .long("do-not-require-vote-history")
+                .takes_value(false)
+                .help("Do not require saved vote history state for identity change"),
+        )
         .after_help(
             "Note: the new identity only applies to the currently running validator instance",
         )
@@ -54,6 +62,7 @@ pub fn execute(matches: &ArgMatches, ledger_path: &Path) -> Result<()> {
     let SetIdentityArgs {
         identity,
         require_tower,
+        require_vote_history,
     } = SetIdentityArgs::from_clap_arg_match(matches)?;
 
     if let Some(identity_keypair) = identity {
@@ -68,7 +77,11 @@ pub fn execute(matches: &ArgMatches, ledger_path: &Path) -> Result<()> {
         admin_rpc_service::runtime().block_on(async move {
             admin_client
                 .await?
-                .set_identity(identity_keypair.display().to_string(), require_tower)
+                .set_identity(
+                    identity_keypair.display().to_string(),
+                    require_tower,
+                    require_vote_history,
+                )
                 .await
         })?;
     } else {
@@ -81,7 +94,11 @@ pub fn execute(matches: &ArgMatches, ledger_path: &Path) -> Result<()> {
         admin_rpc_service::runtime().block_on(async move {
             admin_client
                 .await?
-                .set_identity_from_bytes(Vec::from(identity_keypair.to_bytes()), require_tower)
+                .set_identity_from_bytes(
+                    Vec::from(identity_keypair.to_bytes()),
+                    require_tower,
+                    require_vote_history,
+                )
                 .await
         })?;
     }
