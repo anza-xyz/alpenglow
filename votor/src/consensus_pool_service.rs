@@ -187,7 +187,7 @@ impl ConsensusPoolService {
 
         // Unlike the other votor threads, consensus pool starts even before alpenglow is enabled
         // As it is required to track the Genesis Vote.
-        let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
+        let mut consensus_pool = if ctx.migration_status.phase().is_alpenglow_enabled() {
             ConsensusPool::new_from_root_bank(my_pubkey, &root_bank)
         } else {
             ConsensusPool::new_from_root_bank_pre_migration(
@@ -220,11 +220,8 @@ impl ConsensusPoolService {
             // Kick off parent ready event, this either happens:
             // - When we first migrate to alpenglow from TowerBFT - kick off with genesis block
             // - If we startup post alpenglow migration - kick off with root block
-            if !kick_off_parent_ready && ctx.migration_status.is_alpenglow_enabled() {
-                let genesis_block = ctx
-                    .migration_status
-                    .genesis_block()
-                    .expect("Alpenglow enabled");
+            if !kick_off_parent_ready && ctx.migration_status.phase().is_alpenglow_enabled() {
+                let genesis_block = ctx.migration_status.genesis_block();
                 // can expect once we have block id in snapshots (SIMD-0333)
                 let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
                 let kick_off_block = genesis_block.max(root_block);

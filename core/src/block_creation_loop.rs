@@ -197,6 +197,16 @@ fn start_loop(config: BlockCreationLoopConfig) {
     info!("{my_pubkey}: Block creation loop starting");
 
     // Setup poh
+    // Important this is called *before* any new alpenglow
+    // leaders call `set_bank()`, otherwise, the old PoH
+    // tick producer will still tick in that alpenglow bank
+    // Since `wait_for_migration_or_exit` succeeded above we know that PohService has shutdown
+    // AND that replay no longer touches poh recorder. At this point BlockCreationLoop is the sole
+    // modifier of poh_recorder
+    {
+        let mut w_poh_recorder = ctx.poh_recorder.write().unwrap();
+        w_poh_recorder.enable_alpenglow();
+    }
     reset_poh_recorder(&ctx.bank_forks.read().unwrap().working_bank(), &ctx);
 
     while !ctx.exit.load(Ordering::Relaxed) {

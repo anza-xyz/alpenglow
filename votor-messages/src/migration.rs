@@ -165,7 +165,7 @@ impl MigrationPhase {
 
     /// Should we publish epoch slots for this slot?
     /// We publish epoch slots for all slots until we enable alpenglow.
-    /// Once alpenglow is enabled we should still be publishing for slots < alpenglow genesis
+    /// Once alpenglow is enabled in the mixed migration epoch we should still be publishing for TowerBFT slots
     pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool {
         match self {
             MigrationPhase::PreFeatureActivation
@@ -174,7 +174,7 @@ impl MigrationPhase {
             MigrationPhase::AlpenglowEnabled { genesis_cert } => {
                 slot <= genesis_cert.cert_type.slot()
             }
-            MigrationPhase::FullAlpenglowEpoch { genesis_cert, .. } => false,
+            MigrationPhase::FullAlpenglowEpoch { .. } => false,
         }
     }
 

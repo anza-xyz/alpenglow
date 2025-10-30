@@ -262,7 +262,9 @@ impl AncestorHashesService {
                 let mut last_stats_report = Instant::now();
                 let mut stats = AncestorHashesResponsesStats::default();
                 let mut packet_threshold = DynamicPacketToProcessThreshold::default();
-                while !exit.load(Ordering::Relaxed) && !migration_status.is_alpenglow_enabled() {
+                while !exit.load(Ordering::Relaxed)
+                    && !migration_status.phase().is_alpenglow_enabled()
+                {
                     let keypair = cluster_info.keypair().clone();
                     let result = Self::process_new_packets_from_channel(
                         &ancestor_hashes_request_statuses,
@@ -641,7 +643,7 @@ impl AncestorHashesService {
         Builder::new()
             .name("solManAncReqs".to_string())
             .spawn(move || loop {
-                if exit.load(Ordering::Relaxed) || migration_status.is_alpenglow_enabled() {
+                if exit.load(Ordering::Relaxed) || migration_status.phase().is_alpenglow_enabled() {
                     return;
                 }
                 Self::manage_ancestor_requests(

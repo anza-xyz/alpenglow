@@ -580,14 +580,18 @@ impl ServeRepair {
                     slot,
                 } => {
                     stats.ancestor_hashes += 1;
-                    if *slot > self.migration_status.genesis_slot().unwrap_or(Slot::MAX) {
-                        (None, "AncestorHashes")
-                    } else {
+                    if self
+                        .migration_status
+                        .phase()
+                        .should_respond_to_ancestor_hashes_requests(*slot)
+                    {
                         (
                             self.repair_handler
                                 .run_ancestor_hashes(recycler, from_addr, *slot, *nonce),
                             "AncestorHashes",
                         )
+                    } else {
+                        (None, "AncestorHashes")
                     }
                 }
                 RepairProtocol::Pong(pong) => {

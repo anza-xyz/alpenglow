@@ -109,74 +109,71 @@ impl PohService {
         let tick_producer = Builder::new()
             .name("solPohTickProd".to_string())
             .spawn(move || {
-                if !migration_status.shutdown_poh.load(Ordering::Acquire) {
-                    if poh_config.hashes_per_tick.is_none() {
-                        if poh_config.target_tick_count.is_none() {
-                            Self::low_power_tick_producer(
-                                poh_recorder.clone(),
-                                &poh_config,
-                                &poh_exit,
-                                record_receiver,
-                                poh_service_receiver,
-                                &migration_status.shutdown_poh,
-                                ticks_per_slot,
-                            );
-                        } else {
-                            Self::short_lived_low_power_tick_producer(
-                                poh_recorder.clone(),
-                                &poh_config,
-                                &poh_exit,
-                                record_receiver,
-                                poh_service_receiver,
-                                ticks_per_slot,
-                            );
-                        }
-                    } else {
-                        // PoH service runs in a tight loop, generating hashes as fast as possible.
-                        // Let's dedicate one of the CPU cores to this thread so that it can gain
-                        // from cache performance.
-                        if let Some(cores) = core_affinity::get_core_ids() {
-                            core_affinity::set_for_current(cores[pinned_cpu_core]);
-                        }
-                        let target_ns_per_tick = Self::target_ns_per_tick(
-                            ticks_per_slot,
-                            poh_config.target_tick_duration.as_nanos() as u64,
-                        );
-                        Self::tick_producer(
+                if migration_status.phase().is_alpenglow_enabled() {
+                    // We've started up post alpenglow migration. Don't bother starting PohService
+                    migration_status
+                        .is_poh_shutdown
+                        .store(true, Ordering::Release);
+                    return;
+                }
+                if poh_config.hashes_per_tick.is_none() {
+                    if poh_config.target_tick_count.is_none() {
+                        Self::low_power_tick_producer(
                             poh_recorder.clone(),
+                            &poh_config,
                             &poh_exit,
-                            ticks_per_slot,
-                            hashes_per_batch,
                             record_receiver,
                             poh_service_receiver,
-                            target_ns_per_tick,
                             &migration_status.shutdown_poh,
+                            ticks_per_slot,
+                        );
+                    } else {
+                        Self::short_lived_low_power_tick_producer(
+                            poh_recorder.clone(),
+                            &poh_config,
+                            &poh_exit,
+                            record_receiver,
+                            poh_service_receiver,
+                            ticks_per_slot,
                         );
                     }
-
-                    // Migrate to alpenglow PoH
-                    if !poh_exit.load(Ordering::Relaxed)
-                    // Should be set by replay_stage once the Alpenglow migration has completed
-                    && migration_status.shutdown_poh.load(Ordering::Acquire)
-                    {
-                        info!("Migrating poh service to alpenglow tick producer");
-                    } else {
-                        poh_exit.store(true, Ordering::Relaxed);
-                        return;
+                } else {
+                    // PoH service runs in a tight loop, generating hashes as fast as possible.
+                    // Let's dedicate one of the CPU cores to this thread so that it can gain
+                    // from cache performance.
+                    if let Some(cores) = core_affinity::get_core_ids() {
+                        core_affinity::set_for_current(cores[pinned_cpu_core]);
                     }
+                    let target_ns_per_tick = Self::target_ns_per_tick(
+                        ticks_per_slot,
+                        poh_config.target_tick_duration.as_nanos() as u64,
+                    );
+                    Self::tick_producer(
+                        poh_recorder.clone(),
+                        &poh_exit,
+                        ticks_per_slot,
+                        hashes_per_batch,
+                        record_receiver,
+                        poh_service_receiver,
+                        target_ns_per_tick,
+                        &migration_status.shutdown_poh,
+                    );
                 }
 
-                // Shutdown poh service, which lets the block creation loop start
-                //
-                // Important this is called *before* any new alpenglow
-                // leaders call `set_bank()`, otherwise, the old PoH
-                // tick producer will still tick in that alpenglow bank
+                // Migrate to alpenglow PoH
+                if !poh_exit.load(Ordering::Relaxed)
+                    // Should be set by migration status once we have progressed past the ReadyToEnable phase
+                    && migration_status.shutdown_poh.load(Ordering::Acquire)
                 {
-                    let mut w_poh_recorder = poh_recorder.write().unwrap();
-                    w_poh_recorder.enable_alpenglow();
+                    info!("Migrating poh service to alpenglow tick producer");
+                } else {
+                    poh_exit.store(true, Ordering::Relaxed);
+                    return;
                 }
+
+                // Notify that we have shutdown poh service, which lets the block creation loop and votor start
                 migration_status
-                    .block_creation_loop_started
+                    .is_poh_shutdown
                     .store(true, Ordering::Release);
                 info!("PohService shutdown");
             })
