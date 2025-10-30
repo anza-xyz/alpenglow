@@ -147,7 +147,7 @@ use {
         voting_service::VotingServiceOverride,
         votor::LeaderWindowNotifier,
     },
-    solana_votor_messages::migration::{MigrationPhase, MigrationStatus, MIGRATION_SLOT_OFFSET},
+    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -3059,39 +3059,13 @@ fn initialize_migration_status(my_pubkey: Pubkey, root_bank: Arc<Bank>) -> Migra
         .activated_slot(&agave_feature_set::alpenglow::id());
     let genesis_cert = root_bank.get_alpenglow_genesis_certificate();
 
-    let phase = match (genesis_cert, ff_activation_slot) {
-        (None, None) => {
-            // Pre feature activation
-            MigrationPhase::PreFeatureActivation
-        }
-        (None, Some(activation_slot)) => {
-            // In the mixed migration epoch yet to enable alpenglow
-            MigrationPhase::Migration {
-                migration_slot: activation_slot + MIGRATION_SLOT_OFFSET,
-                genesis_block: None,
-                genesis_cert: None,
-            }
-        }
-        (Some(cert), Some(activation_slot)) => {
-            // Alpenglow is active, check if we're still in the mixed migration epoch
-            let migration_epoch = epoch_schedule.get_epoch(activation_slot);
-            if root_epoch > migration_epoch {
-                MigrationPhase::FullAlpenglowEpoch {
-                    full_alpenglow_epoch: migration_epoch + 1,
-                    genesis_cert: Arc::new(cert),
-                }
-            } else {
-                MigrationPhase::AlpenglowEnabled {
-                    genesis_cert: Arc::new(cert),
-                }
-            }
-        }
-        (Some(_), None) => unreachable!("Cannot have reached alpenglow genesis pre FF activation"),
-    };
-
-    warn!("Initializing alpenglow migration {phase:?}");
-
-    MigrationStatus::new(my_pubkey, phase)
+    MigrationStatus::initialize(
+        my_pubkey,
+        root_epoch,
+        ff_activation_slot,
+        genesis_cert,
+        epoch_schedule,
+    )
 }
 
 #[cfg(test)]

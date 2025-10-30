@@ -743,7 +743,7 @@ impl RepairService {
             repair_metrics,
         );
 
-        if !migration_status.phase().is_alpenglow_enabled() {
+        if !migration_status.is_alpenglow_enabled() {
             Self::handle_popular_pruned_forks(
                 root_bank.clone(),
                 repair_weight,

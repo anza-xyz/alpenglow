@@ -546,10 +546,7 @@ impl ClusterInfoVoteListener {
                     new_optimistic_confirmed_slots.push((slot, hash));
                     // Notify subscribers about new optimistic confirmation
                     if let Some(sender) = bank_notification_sender {
-                        if migration_status
-                            .phase()
-                            .should_report_commitment_or_root(slot)
-                        {
+                        if migration_status.should_report_commitment_or_root(slot) {
                             let dependency_work = sender
                                 .dependency_tracker
                                 .as_ref()

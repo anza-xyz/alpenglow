@@ -167,7 +167,7 @@ fn run_check_duplicate(
             }
         };
 
-        if migration_status.phase().is_alpenglow_enabled() {
+        if migration_status.is_alpenglow_enabled() {
             // In alpenglow we store the duplicate block proofs for the purposes of slashing,
             // but we do not need to gossip or take any action on them.
             return Ok(());

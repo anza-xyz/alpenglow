@@ -8,7 +8,7 @@ use {
     solana_ledger::blockstore::Blockstore,
     solana_measure::measure::Measure,
     solana_runtime::bank_forks::BankForks,
-    solana_votor_messages::migration::{MigrationPhase, MigrationStatus},
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -96,7 +96,7 @@ impl ClusterSlotsService {
             // Once we are in a full Alpenglow epoch, we can fully shutdown the cluster slots service.
             // It is important to keep running while in the mixed migration epoch, as EpochSlots can
             // still be useful for the TowerBFT slots.
-            && !matches!(migration_status.phase(), MigrationPhase::FullAlpenglowEpoch { .. })
+            && !migration_status.is_full_alpenglow_epoch()
         {
             let slots = match cluster_slots_update_receiver.recv_timeout(Duration::from_millis(200))
             {

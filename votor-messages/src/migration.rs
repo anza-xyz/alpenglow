@@ -46,6 +46,7 @@ use {
     crate::consensus_message::{Block, Certificate, CertificateType},
     log::*,
     solana_clock::{Epoch, Slot},
+    solana_epoch_schedule::EpochSchedule,
     spl_pod::solana_pubkey::Pubkey,
     std::{
         sync::{
@@ -85,7 +86,7 @@ pub static GENESIS_CERTIFICATE_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {
 /// Tracks the phase of the migration we are currently in
 /// There are 5 phases of interest
 #[derive(Debug, Clone)]
-pub enum MigrationPhase {
+enum MigrationPhase {
     /// Pre Alpenglow feature flag activation
     PreFeatureActivation,
 
@@ -121,6 +122,7 @@ pub enum MigrationPhase {
     /// We have completed the mixed migration epoch and now all epochs only contain alpenglow blocks
     FullAlpenglowEpoch {
         /// The epoch number of the first full alpenglow epoch
+        #[allow(dead_code)]
         full_alpenglow_epoch: Epoch,
         /// The genesis certificate produced by the cluster
         genesis_cert: Arc<Certificate>,
@@ -130,7 +132,7 @@ pub enum MigrationPhase {
 impl MigrationPhase {
     /// Is alpenglow enabled. This can be either in the migration epoch after we have certified
     /// the Alpenglow genesis or in a future epoch.
-    pub fn is_alpenglow_enabled(&self) -> bool {
+    fn is_alpenglow_enabled(&self) -> bool {
         matches!(
             self,
             Self::AlpenglowEnabled { .. } | Self::FullAlpenglowEpoch { .. }
@@ -139,7 +141,7 @@ impl MigrationPhase {
 
     /// Should we create / replay this bank in VoM?
     /// During the migrationary period before genesis has been found, we must validate that banks are VoM
-    pub fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool {
+    fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool {
         match self {
             MigrationPhase::PreFeatureActivation => false,
             MigrationPhase::Migration { migration_slot, .. } => bank_slot >= *migration_slot,
@@ -153,7 +155,7 @@ impl MigrationPhase {
     /// Should we report commitment or root for this slot in solana-core?
     /// We do not report commitment or root during the Alpenglow migrationary period.
     /// Post Alpenglow genesis, "OC" is faked by votor, and commitment/rooting is handled by votor
-    pub fn should_report_commitment_or_root(&self, slot: Slot) -> bool {
+    fn should_report_commitment_or_root(&self, slot: Slot) -> bool {
         match self {
             MigrationPhase::PreFeatureActivation => true,
             MigrationPhase::Migration { migration_slot, .. } => slot < *migration_slot,
@@ -166,7 +168,7 @@ impl MigrationPhase {
     /// Should we publish epoch slots for this slot?
     /// We publish epoch slots for all slots until we enable alpenglow.
     /// Once alpenglow is enabled in the mixed migration epoch we should still be publishing for TowerBFT slots
-    pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool {
+    fn should_publish_epoch_slots(&self, slot: Slot) -> bool {
         match self {
             MigrationPhase::PreFeatureActivation
             | MigrationPhase::Migration { .. }
@@ -180,7 +182,7 @@ impl MigrationPhase {
 
     /// Should we send `VotorEvent`s for this slot?
     /// Only send events once alpenglow is enabled for slots > alpenglow genesis
-    pub fn should_send_votor_event(&self, slot: Slot) -> bool {
+    fn should_send_votor_event(&self, slot: Slot) -> bool {
         match self {
             MigrationPhase::PreFeatureActivation
             | MigrationPhase::Migration { .. }
@@ -193,9 +195,19 @@ impl MigrationPhase {
     }
 
     /// Should we respond to ancestor hashes repair requests  for this slot?
-    pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool {
+    fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool {
         // Same as epoch slots, while in the mixed migration epoch respond for tower bft slots
         self.should_publish_epoch_slots(slot)
+    }
+
+    /// Check if we are in the full alpenglow epoch
+    fn is_full_alpenglow_epoch(&self) -> bool {
+        matches!(self, MigrationPhase::FullAlpenglowEpoch { .. })
+    }
+
+    /// Check if we are still pre feature activation
+    fn is_pre_feature_activation(&self) -> bool {
+        matches!(self, MigrationPhase::PreFeatureActivation)
     }
 }
 
@@ -225,9 +237,22 @@ impl Default for MigrationStatus {
     }
 }
 
+/// Helper to forward invocations on [`MigrationStatus`] to [`MigrationPhase`]
+macro_rules! dispatch {
+    ($vis:vis fn $name:ident(&self $(, $arg:ident : $ty:ty)*) $(-> $out:ty)?) => {
+        #[doc = concat!("Pass-through method to [`MigrationPhase::", stringify!($name), "`]")]
+        #[inline]
+        $vis fn $name(&self $(, $arg:$ty)*) $(-> $out)? {
+            self.phase.read().unwrap().$name($($arg,)*)
+        }
+    };
+}
+
+use dispatch;
+
 impl MigrationStatus {
     /// Create a new MigrationStatus with the given pubkey at the appropriate phase
-    pub fn new(my_pubkey: Pubkey, phase: MigrationPhase) -> Self {
+    fn new(my_pubkey: Pubkey, phase: MigrationPhase) -> Self {
         let is_alpenglow_enabled = phase.is_alpenglow_enabled();
         Self {
             my_pubkey,
@@ -254,10 +279,58 @@ impl MigrationStatus {
         )
     }
 
-    /// The current phase of the migration
-    pub fn phase(&self) -> MigrationPhase {
-        self.phase.read().unwrap().clone()
+    /// Initialize migration status based on feature flag activation and genesis certificate
+    pub fn initialize(
+        my_pubkey: Pubkey,
+        root_epoch: Epoch,
+        ff_activation_slot: Option<Slot>,
+        genesis_cert: Option<Certificate>,
+        epoch_schedule: &EpochSchedule,
+    ) -> Self {
+        let phase = match (genesis_cert, ff_activation_slot) {
+            (None, None) => {
+                // Pre feature activation
+                MigrationPhase::PreFeatureActivation
+            }
+            (None, Some(activation_slot)) => {
+                // In the mixed migration epoch yet to enable alpenglow
+                MigrationPhase::Migration {
+                    migration_slot: activation_slot.saturating_add(MIGRATION_SLOT_OFFSET),
+                    genesis_block: None,
+                    genesis_cert: None,
+                }
+            }
+            (Some(cert), Some(activation_slot)) => {
+                // Alpenglow is active, check if we're still in the mixed migration epoch
+                let migration_epoch = epoch_schedule.get_epoch(activation_slot);
+                if root_epoch > migration_epoch {
+                    MigrationPhase::FullAlpenglowEpoch {
+                        full_alpenglow_epoch: migration_epoch.saturating_add(1),
+                        genesis_cert: Arc::new(cert),
+                    }
+                } else {
+                    MigrationPhase::AlpenglowEnabled {
+                        genesis_cert: Arc::new(cert),
+                    }
+                }
+            }
+            (Some(_), None) => {
+                unreachable!("Cannot have reached alpenglow genesis pre FF activation")
+            }
+        };
+
+        warn!("{my_pubkey}: Initializing alpenglow migration {phase:?}");
+        Self::new(my_pubkey, phase)
     }
+
+    dispatch!(pub fn is_alpenglow_enabled(&self) -> bool);
+    dispatch!(pub fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool);
+    dispatch!(pub fn should_report_commitment_or_root(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_send_votor_event(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
+    dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
+    dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
 
     /// The alpenglow feature flag has been activated in slot `slot`.
     /// This should only be called using the feature account of a *rooted* slot,

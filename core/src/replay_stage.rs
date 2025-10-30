@@ -91,10 +91,7 @@ use {
         voting_utils::GenerateVoteTxResult,
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::{
-        consensus_message::ConsensusMessage,
-        migration::{MigrationPhase, MigrationStatus},
-    },
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -701,7 +698,7 @@ impl ReplayStage {
                 // set-identity was called during the startup procedure, ensure the tower is consistent
                 // before starting the loop. further calls to set-identity will reload the tower in the loop
                 let my_old_pubkey = tower.node_pubkey;
-                if !migration_status.phase().is_alpenglow_enabled() {
+                if !migration_status.is_alpenglow_enabled() {
                     tower = match Self::load_tower(
                         tower_storage.as_ref(),
                         &my_pubkey,
@@ -783,7 +780,7 @@ impl ReplayStage {
                 .expect("new rayon threadpool");
 
             let shared_poh_bank = poh_recorder.read().unwrap().shared_working_bank();
-            if !migration_status.phase().is_alpenglow_enabled() {
+            if !migration_status.is_alpenglow_enabled() {
                 // This reset is handled in block creation loop for alpenglow
                 Self::reset_poh_recorder(
                     &my_pubkey,
@@ -850,12 +847,12 @@ impl ReplayStage {
                     &replay_tx_thread_pool,
                     &prioritization_fee_cache,
                     &mut purge_repair_slot_counter,
-                    (!migration_status.phase().is_alpenglow_enabled()).then_some(&mut tbft_structs),
+                    (!migration_status.is_alpenglow_enabled()).then_some(&mut tbft_structs),
                     migration_status.as_ref(),
                     &votor_event_sender,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
-                if migration_status.phase().is_alpenglow_enabled() {
+                if migration_status.is_alpenglow_enabled() {
                     if let Some(highest) = new_frozen_slots.iter().max() {
                         if *highest > highest_frozen_slot {
                             highest_frozen_slot = *highest;
@@ -874,7 +871,7 @@ impl ReplayStage {
                 replay_active_banks_time.stop();
 
                 let forks_root = bank_forks.read().unwrap().root();
-                let start_leader_time = if !migration_status.phase().is_alpenglow_enabled() {
+                let start_leader_time = if !migration_status.is_alpenglow_enabled() {
                     // TODO(ashwin): This will be moved to the event coordinator once we figure out
                     // migration
                     for _ in votor_event_receiver.try_iter() {}
@@ -2249,7 +2246,7 @@ impl ReplayStage {
         banking_tracer: &BankingTracer,
         migration_status: &MigrationStatus,
     ) -> bool {
-        assert!(!migration_status.phase().is_alpenglow_enabled());
+        assert!(!migration_status.is_alpenglow_enabled());
         let parent_slot = parent_bank.slot();
         if !Self::check_propagation_for_start_leader(my_leader_slot, parent_slot, progress_map) {
             let latest_unconfirmed_leader_slot = progress_map
@@ -2290,9 +2287,7 @@ impl ReplayStage {
 
         let root_distance = my_leader_slot - root_slot;
         let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY
-            || migration_status
-                .phase()
-                .should_bank_be_vote_only(my_leader_slot)
+            || migration_status.should_bank_be_vote_only(my_leader_slot)
         {
             info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
             datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
@@ -2595,16 +2590,14 @@ impl ReplayStage {
         migration_status: &MigrationStatus,
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
-        assert!(!migration_status.phase().is_alpenglow_enabled());
+        assert!(!migration_status.is_alpenglow_enabled());
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         trace!("handle votable bank {}", bank.slot());
         let new_root = tower.record_bank_vote(bank).filter(|root| {
             // We do not root during the migration - post genesis rooting is handled by votor
-            migration_status
-                .phase()
-                .should_report_commitment_or_root(*root)
+            migration_status.should_report_commitment_or_root(*root)
         });
 
         if let Some(new_root) = new_root {
@@ -2633,10 +2626,7 @@ impl ReplayStage {
             )?;
 
             // Check if we've rooted a bank that will tell us the migration slot
-            if matches!(
-                migration_status.phase(),
-                MigrationPhase::PreFeatureActivation
-            ) {
+            if migration_status.is_pre_feature_activation() {
                 if let Some(slot) = bank_forks
                     .read()
                     .unwrap()
@@ -3429,10 +3419,7 @@ impl ReplayStage {
                     r_replay_stats.batch_execute.totals
                 );
                 new_frozen_slots.push(bank.slot());
-                if migration_status
-                    .phase()
-                    .should_publish_epoch_slots(bank_slot)
-                {
+                if migration_status.should_publish_epoch_slots(bank_slot) {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
@@ -3528,9 +3515,7 @@ impl ReplayStage {
                 // 2) Shredding finishes before replay, we notify here
                 //
                 // For non leader banks (2) is always true, so notify here
-                if migration_status
-                    .phase()
-                    .should_send_votor_event(bank.slot())
+                if migration_status.should_send_votor_event(bank.slot())
                     && bank.block_id().is_some()
                 {
                     // Leader blocks will not have a block id, broadcast stage will

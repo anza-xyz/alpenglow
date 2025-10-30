@@ -582,7 +582,6 @@ impl ServeRepair {
                     stats.ancestor_hashes += 1;
                     if self
                         .migration_status
-                        .phase()
                         .should_respond_to_ancestor_hashes_requests(*slot)
                     {
                         (

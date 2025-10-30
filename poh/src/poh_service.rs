@@ -109,7 +109,7 @@ impl PohService {
         let tick_producer = Builder::new()
             .name("solPohTickProd".to_string())
             .spawn(move || {
-                if migration_status.phase().is_alpenglow_enabled() {
+                if migration_status.is_alpenglow_enabled() {
                     // We've started up post alpenglow migration. Don't bother starting PohService
                     migration_status
                         .is_poh_shutdown
