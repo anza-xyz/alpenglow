@@ -84,7 +84,6 @@ use {
         blockhash_queue::BlockhashQueue,
         storable_accounts::StorableAccounts,
     },
-    solana_bls_signatures::Signature as BLSSignature,
     solana_builtins::{BUILTINS, STATELESS_BUILTINS},
     solana_clock::{
         BankId, Epoch, Slot, SlotIndex, UnixTimestamp, INITIAL_RENT_EPOCH, MAX_PROCESSING_AGE,
@@ -115,12 +114,11 @@ use {
         invoke_context::BuiltinFunctionWithContext, loaded_programs::ProgramCacheEntry,
     },
     solana_pubkey::{Pubkey, PubkeyHasherBuilder},
-    solana_rent::Rent,
     solana_reward_info::RewardInfo,
     solana_runtime_transaction::{
         runtime_transaction::RuntimeTransaction, transaction_with_meta::TransactionWithMeta,
     },
-    solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader, system_program},
+    solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader},
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_slot_hashes::SlotHashes,
@@ -163,8 +161,7 @@ use {
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
-        migration::GENESIS_CERTIFICATE_ACCOUNT,
+        consensus_message::Certificate, migration::GENESIS_CERTIFICATE_ACCOUNT,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -1150,29 +1147,6 @@ impl Bank {
         bank.process_genesis_config(genesis_config, collector_id_for_tests, genesis_hash);
 
         bank.compute_and_apply_genesis_features();
-
-        if bank.cluster_type == Some(ClusterType::Development)
-            && bank
-                .feature_set
-                .is_active(&agave_feature_set::alpenglow::id())
-        {
-            // This is a dev cluster with alpenglow enabled at genesis.
-            // We do not intend to test the migration in this cluster, so fill in a fake
-            // genesis certificate instead.
-            let cert = Certificate {
-                cert_type: CertificateType::Genesis(0, Hash::default()),
-                signature: BLSSignature::default(),
-                bitmap: Vec::default(),
-            };
-            let cert_size = bincode::serialized_size(&cert).unwrap();
-            let lamports = Rent::default().minimum_balance(cert_size as usize);
-            let cert_account_data =
-                AccountSharedData::new_data(lamports, &cert, &system_program::ID).unwrap();
-            bank.store_account_and_update_capitalization(
-                &GENESIS_CERTIFICATE_ACCOUNT,
-                &cert_account_data,
-            );
-        }
 
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
