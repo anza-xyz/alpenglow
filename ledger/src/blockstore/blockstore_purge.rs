@@ -328,6 +328,10 @@ impl Blockstore {
             & self
                 .alt_merkle_root_meta_cf
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
+                .is_ok()
+            & self
+                .parent_meta_cf
+                .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok();
 
         match purge_type {
