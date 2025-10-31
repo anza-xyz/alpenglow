@@ -248,6 +248,7 @@ pub enum BlockMarkerV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedBlockFooter {
     V1(BlockFooterV1),
+    V2(BlockFooterV2),
     Current(BlockFooterV1),
 }
 
@@ -270,6 +271,29 @@ pub enum VersionedBlockFooter {
 pub struct BlockFooterV1 {
     pub block_producer_time_nanos: u64,
     pub block_user_agent: Vec<u8>,
+}
+
+/// Version 2 block footer containing production metadata with bank hash.
+///
+/// The user agent bytes are capped at 255 bytes during serialization to prevent
+/// unbounded growth while maintaining reasonable metadata storage.
+///
+/// # Serialization Format
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Producer Time Nanos          (8 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ User Agent Length            (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ User Agent Bytes          (0-255 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bank Hash                   (32 bytes)  │
+/// └─────────────────────────────────────────┘
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BlockFooterV2 {
+    pub inner: BlockFooterV1,
+    pub bank_hash: Hash,
 }
 
 // ============================================================================
@@ -623,16 +647,6 @@ impl VersionedBlockMarker {
     /// Size in bytes of the version field when serializing block markers.
     const VERSION_SIZE: usize = 2;
 
-    /// Creates a new versioned marker with V1 variant.
-    pub const fn new_v1(marker: BlockMarkerV1) -> Self {
-        Self::V1(marker)
-    }
-
-    /// Creates a new versioned marker with Current variant.
-    pub const fn new(marker: BlockMarkerV1) -> Self {
-        Self::Current(marker)
-    }
-
     /// Returns the version number for this marker.
     pub const fn version(&self) -> u16 {
         match self {
@@ -974,34 +988,76 @@ impl BlockFooterV1 {
     }
 }
 
+impl BlockFooterV2 {
+    /// Size in bytes of the hash field.
+    const HASH_SIZE: usize = 32;
+
+    /// Returns the version for this struct.
+    pub const fn version(&self) -> u8 {
+        2
+    }
+
+    /// Serializes to bytes with user agent length capping.
+    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+        // Serialize inner V1 footer first
+        let mut buffer = self.inner.to_bytes()?;
+
+        // Append bank hash
+        buffer.extend_from_slice(self.bank_hash.as_ref());
+
+        Ok(buffer)
+    }
+
+    /// Deserializes from bytes with validation.
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+        // Need at least enough data for a minimal V1 footer (timestamp + length) + hash
+        if data.len() < BlockFooterV1::HEADER_SIZE + Self::HASH_SIZE {
+            return Err(BlockComponentError::InsufficientData);
+        }
+
+        // Deserialize the V1 footer first
+        let inner = BlockFooterV1::from_bytes(data)?;
+        let v1_size = inner.serialized_size() as usize;
+
+        // Validate we have enough data for bank hash
+        if data.len() < v1_size + Self::HASH_SIZE {
+            return Err(BlockComponentError::InsufficientData);
+        }
+
+        // Read bank hash
+        let hash_bytes: [u8; 32] = data[v1_size..v1_size + Self::HASH_SIZE]
+            .try_into()
+            .map_err(|_| BlockComponentError::InsufficientData)?;
+        let bank_hash = Hash::new_from_array(hash_bytes);
+
+        Ok(Self { inner, bank_hash })
+    }
+
+    /// Returns the serialized size in bytes without actually serializing.
+    fn serialized_size(&self) -> u64 {
+        self.inner.serialized_size() + Self::HASH_SIZE as u64
+    }
+}
+
 impl VersionedBlockFooter {
     /// Size in bytes of the version field when serializing block footers.
     const VERSION_SIZE: u64 = 1;
-
-    /// Creates a new versioned block footer with V1 variant.
-    pub const fn new_v1(footer: BlockFooterV1) -> Self {
-        Self::V1(footer)
-    }
-
-    /// Creates a new versioned block footer with Current variant.
-    pub const fn new(footer: BlockFooterV1) -> Self {
-        Self::Current(footer)
-    }
 
     /// Returns the version number for this footer.
     pub const fn version(&self) -> u8 {
         match self {
             Self::V1(_) | Self::Current(_) => 1,
+            Self::V2(_) => 2,
         }
     }
 
     /// Serializes to bytes with version prefix.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        let footer = match self {
-            Self::V1(footer) | Self::Current(footer) => footer,
+        let footer_bytes = match self {
+            Self::V1(footer) | Self::Current(footer) => footer.to_bytes()?,
+            Self::V2(footer) => footer.to_bytes()?,
         };
 
-        let footer_bytes = footer.to_bytes()?;
         let mut buffer = Vec::with_capacity(1 + footer_bytes.len());
         buffer.push(self.version());
         buffer.extend_from_slice(&footer_bytes);
@@ -1009,22 +1065,34 @@ impl VersionedBlockFooter {
         Ok(buffer)
     }
 
-    /// Deserializes from bytes, always creating Current variant.
+    /// Deserializes from bytes, creating appropriate variant based on version.
     fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
-        let (_version, remaining) = data
+        let (version_byte, remaining) = data
             .split_first()
             .ok_or(BlockComponentError::InsufficientData)?;
 
-        let footer = BlockFooterV1::from_bytes(remaining)?;
-        Ok(Self::Current(footer))
+        match version_byte {
+            1 => {
+                let footer = BlockFooterV1::from_bytes(remaining)?;
+                Ok(Self::V1(footer))
+            }
+            2 => {
+                let footer = BlockFooterV2::from_bytes(remaining)?;
+                Ok(Self::V2(footer))
+            }
+            _ => Err(BlockComponentError::UnsupportedVersion {
+                version: *version_byte as u16,
+            }),
+        }
     }
 
     /// Returns the serialized size in bytes without actually serializing.
     fn serialized_size(&self) -> u64 {
-        let footer = match self {
-            Self::V1(footer) | Self::Current(footer) => footer,
+        let footer_size = match self {
+            Self::V1(footer) | Self::Current(footer) => footer.serialized_size(),
+            Self::V2(footer) => footer.serialized_size(),
         };
-        Self::VERSION_SIZE + footer.serialized_size()
+        Self::VERSION_SIZE + footer_size
     }
 }
 
@@ -1100,16 +1168,6 @@ impl BlockHeaderV1 {
 impl VersionedBlockHeader {
     /// Size in bytes of the version field when serializing block headers.
     const VERSION_SIZE: u64 = 1;
-
-    /// Creates a new versioned block header with V1 variant.
-    pub const fn new_v1(header: BlockHeaderV1) -> Self {
-        Self::V1(header)
-    }
-
-    /// Creates a new versioned block header with Current variant.
-    pub const fn new(header: BlockHeaderV1) -> Self {
-        Self::Current(header)
-    }
 
     /// Returns the version number for this header.
     pub const fn version(&self) -> u8 {
@@ -1223,16 +1281,6 @@ impl UpdateParentV1 {
 impl VersionedUpdateParent {
     /// Size in bytes of the version field when serializing parent updates.
     const VERSION_SIZE: u64 = 1;
-
-    /// Creates a new versioned parent ready update with V1 variant.
-    pub const fn new_v1(update: UpdateParentV1) -> Self {
-        Self::V1(update)
-    }
-
-    /// Creates a new versioned parent ready update with Current variant.
-    pub const fn new(update: UpdateParentV1) -> Self {
-        Self::Current(update)
-    }
 
     /// Returns the version number for this update.
     pub const fn version(&self) -> u8 {
@@ -1364,9 +1412,8 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let component = BlockComponent::new_block_marker(marker.clone());
 
         assert!(!component.is_entry_batch());
@@ -1454,20 +1501,6 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_block_footer_serialization() {
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 2468135790,
-            block_user_agent: b"node-v2.1.0".to_vec(),
-        };
-        let versioned = VersionedBlockFooter::new(footer);
-
-        let bytes = versioned.to_bytes().unwrap();
-        let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
-
-        assert_eq!(versioned, deserialized);
-    }
-
-    #[test]
     fn test_parent_ready_update_v1_serialization() {
         let update = UpdateParentV1 {
             new_parent_slot: 12345,
@@ -1486,7 +1519,7 @@ mod tests {
             new_parent_slot: 67890,
             new_parent_block_id: Hash::new_unique(),
         };
-        let versioned = VersionedUpdateParent::new(update);
+        let versioned = VersionedUpdateParent::Current(update);
 
         let bytes = versioned.to_bytes().unwrap();
         let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
@@ -1496,11 +1529,14 @@ mod tests {
 
     #[test]
     fn test_block_marker_v1_serialization() {
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 3692581470,
-            block_user_agent: b"validator-client".to_vec(),
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 3692581470,
+                block_user_agent: b"validator-client".to_vec(),
+            },
+            bank_hash: Hash::default(),
         };
-        let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
+        let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V2(footer));
 
         let bytes = marker.to_bytes().unwrap();
         let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
@@ -1514,7 +1550,7 @@ mod tests {
             parent_slot: 12345,
             parent_block_id: Hash::new_unique(),
         };
-        let marker = BlockMarkerV1::BlockHeader(VersionedBlockHeader::new(header));
+        let marker = BlockMarkerV1::BlockHeader(VersionedBlockHeader::Current(header));
 
         let bytes = marker.to_bytes().unwrap();
         let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
@@ -1528,7 +1564,7 @@ mod tests {
             new_parent_slot: 24681357,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker = BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(update));
+        let marker = BlockMarkerV1::UpdateParent(VersionedUpdateParent::Current(update));
 
         let bytes = marker.to_bytes().unwrap();
         let deserialized = BlockMarkerV1::from_bytes(&bytes).unwrap();
@@ -1542,8 +1578,27 @@ mod tests {
             block_producer_time_nanos: 9876543210,
             block_user_agent: b"my-node".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(footer),
+        ));
+
+        let bytes = marker.to_bytes().unwrap();
+        let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
+
+        assert_eq!(marker, deserialized);
+    }
+
+    #[test]
+    fn test_versioned_block_marker_v2_serialization() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 1234567890,
+                block_user_agent: b"my-node-v2".to_vec(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V2(footer),
         ));
 
         let bytes = marker.to_bytes().unwrap();
@@ -1558,8 +1613,8 @@ mod tests {
             parent_slot: 13579246,
             parent_block_id: Hash::new_unique(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockHeader(
-            VersionedBlockHeader::new(header),
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockHeader(
+            VersionedBlockHeader::Current(header),
         ));
 
         let bytes = marker.to_bytes().unwrap();
@@ -1582,12 +1637,15 @@ mod tests {
 
     #[test]
     fn test_block_component_marker_serialization() {
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 5432109876,
-            block_user_agent: b"blockchain-node-v3".to_vec(),
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 5432109876,
+                block_user_agent: b"blockchain-node-v3".to_vec(),
+            },
+            bank_hash: Hash::default(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V2(footer),
         ));
         let component = BlockComponent::new_block_marker(marker);
 
@@ -1611,12 +1669,15 @@ mod tests {
 
     #[test]
     fn test_block_component_serde_marker() {
-        let footer = BlockFooterV1 {
-            block_producer_time_nanos: 1122334455,
-            block_user_agent: b"serde-test".to_vec(),
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 1122334455,
+                block_user_agent: b"serde-test".to_vec(),
+            },
+            bank_hash: Hash::default(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V2(footer),
         ));
         let component = BlockComponent::new_block_marker(marker);
 
@@ -1645,17 +1706,34 @@ mod tests {
 
     #[test]
     fn test_versioned_block_footer_version_upgrade() {
-        let footer = BlockFooterV1 {
+        // V1 should stay as V1, not auto-upgrade
+        let footer_v1 = BlockFooterV1 {
             block_producer_time_nanos: 7788990011,
             block_user_agent: b"footer-upgrade".to_vec(),
         };
-        let v1_footer = VersionedBlockFooter::V1(footer.clone());
+        let v1_footer = VersionedBlockFooter::V1(footer_v1.clone());
 
         let bytes = v1_footer.to_bytes().unwrap();
         let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
 
-        // Should deserialize to Current variant
-        assert!(matches!(deserialized, VersionedBlockFooter::Current(_)));
+        // V1 should stay as V1
+        assert!(matches!(deserialized, VersionedBlockFooter::V1(_)));
+
+        // V2 should stay as V2
+        let footer_v2 = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 8899001122,
+                block_user_agent: b"v2-upgrade".to_vec(),
+            },
+            bank_hash: Hash::default(),
+        };
+        let v2_footer = VersionedBlockFooter::V2(footer_v2.clone());
+
+        let bytes = v2_footer.to_bytes().unwrap();
+        let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
+
+        // V2 should stay as V2
+        assert!(matches!(deserialized, VersionedBlockFooter::V2(_)));
     }
 
     #[test]
@@ -1685,9 +1763,8 @@ mod tests {
             block_producer_time_nanos: 123456,
             block_user_agent: b"bad-data".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let component2 = BlockComponent::new_block_marker(marker);
         bytes.extend_from_slice(&component2.to_bytes().unwrap());
 
@@ -1918,6 +1995,204 @@ mod tests {
     }
 
     #[test]
+    fn test_block_footer_v2_serialization() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 1234567890,
+                block_user_agent: b"my-validator-v2.0".to_vec(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+
+        assert_eq!(footer, deserialized);
+    }
+
+    #[test]
+    fn test_block_footer_v2_empty_user_agent() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 9876543210,
+                block_user_agent: Vec::new(),
+            },
+            bank_hash: Hash::default(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+
+        assert_eq!(footer, deserialized);
+    }
+
+    #[test]
+    fn test_block_footer_v2_max_user_agent() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 5555555555,
+                block_user_agent: vec![b'x'; 255],
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+
+        assert_eq!(footer, deserialized);
+    }
+
+    #[test]
+    fn test_block_footer_v2_oversized_user_agent_truncation() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 7777777777,
+                block_user_agent: vec![b'y'; 300], // Over 255 limit
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+
+        // Should be truncated to 255 bytes
+        assert_eq!(deserialized.inner.block_producer_time_nanos, 7777777777);
+        assert_eq!(deserialized.inner.block_user_agent.len(), 255);
+        assert_eq!(deserialized.inner.block_user_agent, vec![b'y'; 255]);
+    }
+
+    #[test]
+    fn test_block_footer_v2_binary_user_agent() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 1111111111,
+                block_user_agent: vec![0x00, 0xFF, 0x7F, 0x80, 0x01, 0xFE],
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+
+        assert_eq!(footer, deserialized);
+    }
+
+    #[test]
+    fn test_block_footer_v2_invalid_data() {
+        // Too short data
+        assert!(BlockFooterV2::from_bytes(&[0u8; 7]).is_err());
+
+        // Missing user agent data
+        let mut data = vec![0u8; 9];
+        data[8] = 5; // Claims 5 bytes but no data follows
+        assert!(BlockFooterV2::from_bytes(&data).is_err());
+
+        // Missing bank hash
+        let mut data = vec![0u8; 20];
+        data[8] = 5; // 5 bytes user agent
+        assert!(BlockFooterV2::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_versioned_block_footer_v2_serialization() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 2468135790,
+                block_user_agent: b"node-v2.1.0".to_vec(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+        let versioned = VersionedBlockFooter::V2(footer);
+
+        let bytes = versioned.to_bytes().unwrap();
+        let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(versioned, deserialized);
+    }
+
+    #[test]
+    fn test_block_footer_v2_edge_cases() {
+        // Test with maximum timestamp value
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: u64::MAX,
+                block_user_agent: b"max-time".to_vec(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+        assert_eq!(footer, deserialized);
+
+        // Test with minimum timestamp value
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 0,
+                block_user_agent: b"min-time".to_vec(),
+            },
+            bank_hash: Hash::default(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+        assert_eq!(footer, deserialized);
+
+        // Test with exactly 255 byte user agent
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 12345,
+                block_user_agent: (0..=254).collect::<Vec<u8>>(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV2::from_bytes(&bytes).unwrap();
+        assert_eq!(footer, deserialized);
+        assert_eq!(deserialized.inner.block_user_agent.len(), 255);
+    }
+
+    #[test]
+    fn test_versioned_block_footer_v1_stays_v1() {
+        let footer = BlockFooterV1 {
+            block_producer_time_nanos: 1234567890,
+            block_user_agent: b"v1-footer".to_vec(),
+        };
+        let versioned = VersionedBlockFooter::V1(footer.clone());
+
+        let bytes = versioned.to_bytes().unwrap();
+        let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
+
+        // V1 should deserialize back to V1, not upgrade to Current
+        assert!(matches!(deserialized, VersionedBlockFooter::V1(_)));
+        if let VersionedBlockFooter::V1(deserialized_footer) = deserialized {
+            assert_eq!(footer, deserialized_footer);
+        }
+    }
+
+    #[test]
+    fn test_versioned_block_footer_v2_to_current() {
+        let footer = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 1234567890,
+                block_user_agent: b"v2-footer".to_vec(),
+            },
+            bank_hash: Hash::new_unique(),
+        };
+        let versioned = VersionedBlockFooter::V2(footer.clone());
+
+        let bytes = versioned.to_bytes().unwrap();
+        let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
+
+        // V2 should stay as V2
+        assert!(matches!(deserialized, VersionedBlockFooter::V2(_)));
+        if let VersionedBlockFooter::V2(deserialized_footer) = deserialized {
+            assert_eq!(footer, deserialized_footer);
+        }
+    }
+
+    #[test]
     fn test_block_header_v1_serialization() {
         let header = BlockHeaderV1 {
             parent_slot: 12345,
@@ -1936,7 +2211,7 @@ mod tests {
             parent_slot: 67890,
             parent_block_id: Hash::new_unique(),
         };
-        let versioned = VersionedBlockHeader::new(header);
+        let versioned = VersionedBlockHeader::Current(header);
 
         let bytes = versioned.to_bytes().unwrap();
         let deserialized = VersionedBlockHeader::from_bytes(&bytes).unwrap();
@@ -2007,7 +2282,7 @@ mod tests {
             parent_slot: 255,
             parent_block_id: Hash::new_unique(),
         };
-        let versioned_header = VersionedBlockHeader::new_v1(original_data.clone());
+        let versioned_header = VersionedBlockHeader::V1(original_data.clone());
 
         let bytes = versioned_header.to_bytes().unwrap();
         let deserialized = VersionedBlockHeader::from_bytes(&bytes).unwrap();
@@ -2123,7 +2398,7 @@ mod tests {
         };
         assert_eq!(footer.version(), 1);
 
-        let versioned_footer = VersionedBlockFooter::new(footer);
+        let versioned_footer = VersionedBlockFooter::V1(footer);
         assert_eq!(versioned_footer.version(), 1);
 
         let header = BlockHeaderV1 {
@@ -2132,7 +2407,7 @@ mod tests {
         };
         assert_eq!(header.version(), 1);
 
-        let versioned_header = VersionedBlockHeader::new(header);
+        let versioned_header = VersionedBlockHeader::V1(header);
         assert_eq!(versioned_header.version(), 1);
 
         let update = UpdateParentV1 {
@@ -2141,16 +2416,16 @@ mod tests {
         };
         assert_eq!(update.version(), 1);
 
-        let versioned_update = VersionedUpdateParent::new(update);
+        let versioned_update = VersionedUpdateParent::V1(update);
         assert_eq!(versioned_update.version(), 1);
 
         let marker_footer = BlockMarkerV1::BlockFooter(versioned_footer);
         let marker_header = BlockMarkerV1::BlockHeader(versioned_header);
         let marker_update = BlockMarkerV1::UpdateParent(versioned_update);
 
-        let versioned_marker_footer = VersionedBlockMarker::new(marker_footer);
-        let versioned_marker_header = VersionedBlockMarker::new(marker_header);
-        let versioned_marker_update = VersionedBlockMarker::new(marker_update);
+        let versioned_marker_footer = VersionedBlockMarker::V1(marker_footer);
+        let versioned_marker_header = VersionedBlockMarker::V1(marker_header);
+        let versioned_marker_update = VersionedBlockMarker::V1(marker_update);
 
         assert_eq!(versioned_marker_footer.version(), 1);
         assert_eq!(versioned_marker_header.version(), 1);
@@ -2164,7 +2439,7 @@ mod tests {
             block_producer_time_nanos: 987654321,
             block_user_agent: b"serde-test-agent".to_vec(),
         };
-        let versioned_footer = VersionedBlockFooter::new(footer);
+        let versioned_footer = VersionedBlockFooter::V1(footer);
 
         // Manual serialization
         let manual_bytes = versioned_footer.to_bytes().unwrap();
@@ -2195,23 +2470,45 @@ mod tests {
 
     #[test]
     fn test_cross_version_compatibility() {
-        // Test that V1 data can be read as Current and vice versa
-        let footer = BlockFooterV1 {
+        // Test that V1 data stays as V1 when deserialized
+        let footer_v1 = BlockFooterV1 {
             block_producer_time_nanos: 999999999,
             block_user_agent: b"cross-version".to_vec(),
         };
 
         // Serialize as V1
-        let v1_footer = VersionedBlockFooter::V1(footer.clone());
+        let v1_footer = VersionedBlockFooter::V1(footer_v1.clone());
         let v1_bytes = v1_footer.to_bytes().unwrap();
 
-        // Should deserialize as Current
+        // Should deserialize as V1 (not upgraded)
         let deserialized = VersionedBlockFooter::from_bytes(&v1_bytes).unwrap();
-        assert!(matches!(deserialized, VersionedBlockFooter::Current(_)));
+        assert!(matches!(deserialized, VersionedBlockFooter::V1(_)));
 
         // Data should be identical
-        if let VersionedBlockFooter::Current(deserialized_footer) = deserialized {
-            assert_eq!(footer, deserialized_footer);
+        if let VersionedBlockFooter::V1(deserialized_footer) = deserialized {
+            assert_eq!(footer_v1, deserialized_footer);
+        }
+
+        // Test that V2 data deserializes as Current
+        let footer_v2 = BlockFooterV2 {
+            inner: BlockFooterV1 {
+                block_producer_time_nanos: 888888888,
+                block_user_agent: b"v2-version".to_vec(),
+            },
+            bank_hash: Hash::default(),
+        };
+
+        // Serialize as V2
+        let v2_footer = VersionedBlockFooter::V2(footer_v2.clone());
+        let v2_bytes = v2_footer.to_bytes().unwrap();
+
+        // Should deserialize as V2
+        let deserialized = VersionedBlockFooter::from_bytes(&v2_bytes).unwrap();
+        assert!(matches!(deserialized, VersionedBlockFooter::V2(_)));
+
+        // Data should be identical
+        if let VersionedBlockFooter::V2(deserialized_footer) = deserialized {
+            assert_eq!(footer_v2, deserialized_footer);
         }
     }
 
@@ -2366,9 +2663,8 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let batch = BlockComponent::new_block_marker(marker);
         assert!(batch.as_marker().is_some());
     }
@@ -2408,9 +2704,8 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let batch = BlockComponent::new_block_marker(marker);
 
         // Test serialization
@@ -2455,7 +2750,7 @@ mod tests {
     #[test]
     fn test_block_component_empty_entries_with_special() {
         let update = VersionedUpdateParent::Current(create_parent_ready_update());
-        let special = VersionedBlockMarker::new(BlockMarkerV1::UpdateParent(update));
+        let special = VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(update));
         let batch = BlockComponent::BlockMarker(special);
 
         let bytes = batch.to_bytes().unwrap();
@@ -2512,7 +2807,7 @@ mod tests {
     #[test]
     fn test_versioned_parent_ready_update_v1_variant() {
         let original_data = create_parent_ready_update_with_data(255, Hash::new_unique());
-        let versioned_update = VersionedUpdateParent::new_v1(original_data.clone());
+        let versioned_update = VersionedUpdateParent::V1(original_data.clone());
 
         let bytes = versioned_update.to_bytes().unwrap();
         let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
@@ -2530,7 +2825,7 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
+        let entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer));
 
         let bytes = entry.to_bytes().unwrap();
         assert!(!bytes.is_empty());
@@ -2554,8 +2849,8 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
-        let versioned_entry = VersionedBlockMarker::new(special_entry);
+        let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer));
+        let versioned_entry = VersionedBlockMarker::V1(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         assert!(bytes.len() >= 2);
@@ -2570,12 +2865,12 @@ mod tests {
 
     #[test]
     fn test_versioned_special_entry_with_update_parent() {
-        let versioned_update = VersionedUpdateParent::new(create_parent_ready_update_with_data(
+        let versioned_update = VersionedUpdateParent::V1(create_parent_ready_update_with_data(
             12345,
             Hash::new_unique(),
         ));
         let special_entry = BlockMarkerV1::UpdateParent(versioned_update);
-        let versioned_entry = VersionedBlockMarker::new(special_entry);
+        let versioned_entry = VersionedBlockMarker::V1(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
@@ -2607,8 +2902,8 @@ mod tests {
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
-        let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
-        let versioned_entry = VersionedBlockMarker::new_v1(special_entry);
+        let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer));
+        let versioned_entry = VersionedBlockMarker::V1(special_entry);
 
         let bytes = versioned_entry.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
@@ -2622,9 +2917,9 @@ mod tests {
     fn test_full_block_component_with_complex_special_data() {
         let complex_hash = Hash::new_unique();
         let parent_update = create_parent_ready_update_with_data(u64::MAX, complex_hash);
-        let versioned_parent_update = VersionedUpdateParent::new(parent_update);
+        let versioned_parent_update = VersionedUpdateParent::V1(parent_update);
         let special_entry = BlockMarkerV1::UpdateParent(versioned_parent_update);
-        let versioned_special = VersionedBlockMarker::new(special_entry);
+        let versioned_special = VersionedBlockMarker::V1(special_entry);
 
         let batch = BlockComponent::new_block_marker(versioned_special);
 
@@ -2668,9 +2963,9 @@ mod tests {
     #[test]
     fn test_all_variant_combinations() {
         let v1_parent = create_parent_ready_update();
-        let v1_versioned = VersionedUpdateParent::new_v1(v1_parent);
+        let v1_versioned = VersionedUpdateParent::V1(v1_parent);
         let v1_special = BlockMarkerV1::UpdateParent(v1_versioned);
-        let v1_versioned_special = VersionedBlockMarker::new_v1(v1_special);
+        let v1_versioned_special = VersionedBlockMarker::V1(v1_special);
 
         let bytes = v1_versioned_special.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
@@ -2689,7 +2984,7 @@ mod tests {
     #[test]
     fn test_boundary_values() {
         let boundary_update = create_parent_ready_update_with_data(0, Hash::default());
-        let boundary_versioned = VersionedUpdateParent::new(boundary_update.clone());
+        let boundary_versioned = VersionedUpdateParent::V1(boundary_update.clone());
 
         let bytes = boundary_versioned.to_bytes().unwrap();
         let deserialized = VersionedUpdateParent::from_bytes(&bytes).unwrap();
@@ -2704,9 +2999,9 @@ mod tests {
     #[test]
     fn test_serialization_deterministic() {
         let update = create_parent_ready_update();
-        let versioned_parent = VersionedUpdateParent::new(update);
+        let versioned_parent = VersionedUpdateParent::V1(update);
         let special_entry = BlockMarkerV1::UpdateParent(versioned_parent);
-        let versioned_special = VersionedBlockMarker::new(special_entry);
+        let versioned_special = VersionedBlockMarker::V1(special_entry);
         let batch = BlockComponent::new_block_marker(versioned_special);
 
         let bytes1 = batch.to_bytes().unwrap();
@@ -2720,9 +3015,9 @@ mod tests {
     #[test]
     fn test_large_slot_values() {
         let parent_update = create_parent_ready_update_with_data(u64::MAX, Hash::new_unique());
-        let versioned_parent = VersionedUpdateParent::new(parent_update);
+        let versioned_parent = VersionedUpdateParent::V1(parent_update);
         let special_entry = BlockMarkerV1::UpdateParent(versioned_parent);
-        let large_versioned = VersionedBlockMarker::new(special_entry);
+        let large_versioned = VersionedBlockMarker::V1(special_entry);
 
         let bytes = large_versioned.to_bytes().unwrap();
         let deserialized = VersionedBlockMarker::from_bytes(&bytes).unwrap();
@@ -2756,7 +3051,7 @@ mod tests {
             block_producer_time_nanos: 123456789,
             block_user_agent: b"test-validator".to_vec(),
         };
-        let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
+        let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer));
 
         let bytes = marker_v1.to_bytes().unwrap();
         // Check that byte length is included
@@ -2774,7 +3069,7 @@ mod tests {
             parent_slot: 987654321,
             parent_block_id: Hash::new_unique(),
         };
-        let marker_header = BlockMarkerV1::BlockHeader(VersionedBlockHeader::new(header));
+        let marker_header = BlockMarkerV1::BlockHeader(VersionedBlockHeader::Current(header));
         let bytes = marker_header.to_bytes().unwrap();
 
         // Check that byte length is included
@@ -2792,7 +3087,7 @@ mod tests {
             new_parent_slot: 987654321,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker_update = BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(update));
+        let marker_update = BlockMarkerV1::UpdateParent(VersionedUpdateParent::Current(update));
         let bytes = marker_update.to_bytes().unwrap();
 
         // Check that byte length is included
@@ -2814,7 +3109,7 @@ mod tests {
             block_producer_time_nanos: u64::MAX,
             block_user_agent: large_user_agent,
         };
-        let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
+        let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer));
 
         let bytes = marker.to_bytes().unwrap();
         let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
@@ -2833,7 +3128,7 @@ mod tests {
             block_producer_time_nanos: 0,
             block_user_agent: vec![],
         };
-        let min_marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(min_footer));
+        let min_marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(min_footer));
 
         let bytes = min_marker.to_bytes().unwrap();
         let byte_length = u16::from_le_bytes([bytes[1], bytes[2]]);
@@ -2883,8 +3178,8 @@ mod tests {
             block_producer_time_nanos: 987654321,
             block_user_agent: b"multi-component-test".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
+        let marker = VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(footer),
         ));
         let component2 = BlockComponent::new_block_marker(marker);
 
@@ -2963,8 +3258,8 @@ mod tests {
             new_parent_slot: 12345,
             new_parent_block_id: Hash::new_unique(),
         };
-        let parent_marker = VersionedBlockMarker::new(BlockMarkerV1::UpdateParent(
-            VersionedUpdateParent::new(parent_update.clone()),
+        let parent_marker = VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(
+            VersionedUpdateParent::V1(parent_update.clone()),
         ));
         let parent_component = BlockComponent::new_block_marker(parent_marker);
 
@@ -2977,8 +3272,8 @@ mod tests {
             block_producer_time_nanos: 987654321,
             block_user_agent: b"test-validator-v2.0".to_vec(),
         };
-        let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer.clone()),
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(footer.clone()),
         ));
         let footer_component = BlockComponent::new_block_marker(footer_marker);
 
@@ -3020,11 +3315,11 @@ mod tests {
         let marker2 = deserialized[3].as_marker().unwrap();
         assert_eq!(marker2.version(), 1);
         if let VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(footer_ver)) = marker2 {
-            if let VersionedBlockFooter::Current(data) = footer_ver {
+            if let VersionedBlockFooter::V1(data) = footer_ver {
                 assert_eq!(data.block_producer_time_nanos, 987654321);
                 assert_eq!(data.block_user_agent, b"test-validator-v2.0");
             } else {
-                panic!("Expected Current footer variant");
+                panic!("Expected V1 footer variant");
             }
         } else {
             panic!("Expected Current BlockFooter");
@@ -3040,9 +3335,8 @@ mod tests {
             block_producer_time_nanos: 11111,
             block_user_agent: b"node-1".to_vec(),
         };
-        let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let footer_marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let footer_component = BlockComponent::new_block_marker(footer_marker);
 
         // Create UpdateParent
@@ -3050,8 +3344,8 @@ mod tests {
             new_parent_slot: 22222,
             new_parent_block_id: Hash::new_unique(),
         };
-        let parent_marker = VersionedBlockMarker::new(BlockMarkerV1::UpdateParent(
-            VersionedUpdateParent::new(parent),
+        let parent_marker = VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(
+            VersionedUpdateParent::V1(parent),
         ));
         let parent_component = BlockComponent::new_block_marker(parent_marker);
 
@@ -3060,9 +3354,8 @@ mod tests {
             parent_slot: 33333,
             parent_block_id: Hash::new_unique(),
         };
-        let header_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockHeader(
-            VersionedBlockHeader::new(header),
-        ));
+        let header_marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(VersionedBlockHeader::V1(header)));
         let header_component = BlockComponent::new_block_marker(header_marker);
 
         // Serialize all
@@ -3098,8 +3391,8 @@ mod tests {
                 block_producer_time_nanos: i as u64 * 1000,
                 block_user_agent: format!("node-{i}").into_bytes(),
             };
-            let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-                VersionedBlockFooter::new(footer),
+            let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+                VersionedBlockFooter::V1(footer),
             ));
             let footer_component = BlockComponent::new_block_marker(footer_marker);
             bytes.extend_from_slice(&footer_component.to_bytes().unwrap());
@@ -3121,7 +3414,7 @@ mod tests {
             // Check footer component
             assert!(deserialized[footer_idx].is_marker());
             if let Some(VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
-                VersionedBlockFooter::Current(footer),
+                VersionedBlockFooter::V1(footer),
             ))) = deserialized[footer_idx].as_marker()
             {
                 assert_eq!(footer.block_producer_time_nanos, i as u64 * 1000);
@@ -3145,9 +3438,8 @@ mod tests {
             block_producer_time_nanos: 555,
             block_user_agent: b"test".to_vec(),
         };
-        let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let footer_marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let footer_component = BlockComponent::new_block_marker(footer_marker);
 
         let entries2 = vec![Entry::default(), Entry::default()];
@@ -3202,8 +3494,8 @@ mod tests {
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"agave/2.0.0".to_vec(),
         };
-        let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer.clone()),
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(footer.clone()),
         ));
         let footer_component = BlockComponent::new_block_marker(footer_marker);
         bytes.extend_from_slice(&footer_component.to_bytes().unwrap());
@@ -3220,7 +3512,7 @@ mod tests {
         // Verify footer
         assert!(deserialized[3].is_marker());
         if let Some(VersionedBlockMarker::Current(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::Current(f),
+            VersionedBlockFooter::V1(f),
         ))) = deserialized[3].as_marker()
         {
             assert_eq!(f.block_producer_time_nanos, 1234567890);
@@ -3245,9 +3537,8 @@ mod tests {
             block_producer_time_nanos: 123,
             block_user_agent: b"test".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let marker_component = BlockComponent::new_block_marker(marker);
         let marker_bytes = marker_component.to_bytes().unwrap();
 
@@ -3281,9 +3572,8 @@ mod tests {
             block_producer_time_nanos: 456,
             block_user_agent: b"marker-test".to_vec(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-            VersionedBlockFooter::new(footer),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(footer)));
         let marker_component = BlockComponent::new_block_marker(marker.clone());
 
         assert!(marker_component.as_marker().is_some());
@@ -3323,19 +3613,19 @@ mod tests {
     fn test_to_bytes_multiple_markers() {
         // Multiple markers
         let components = vec![
-            BlockComponent::new_block_marker(VersionedBlockMarker::new(
-                BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
+            BlockComponent::new_block_marker(VersionedBlockMarker::Current(
+                BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(BlockFooterV1 {
                     block_producer_time_nanos: 111,
                     block_user_agent: b"node1".to_vec(),
                 })),
             )),
-            BlockComponent::new_block_marker(VersionedBlockMarker::new(
-                BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(
+            BlockComponent::new_block_marker(VersionedBlockMarker::Current(
+                BlockMarkerV1::UpdateParent(VersionedUpdateParent::Current(
                     create_parent_ready_update_with_data(42, Hash::new_unique()),
                 )),
             )),
-            BlockComponent::new_block_marker(VersionedBlockMarker::new(
-                BlockMarkerV1::BlockHeader(VersionedBlockHeader::new(BlockHeaderV1 {
+            BlockComponent::new_block_marker(VersionedBlockMarker::Current(
+                BlockMarkerV1::BlockHeader(VersionedBlockHeader::Current(BlockHeaderV1 {
                     parent_slot: 100,
                     parent_block_id: Hash::new_unique(),
                 })),
@@ -3355,14 +3645,14 @@ mod tests {
         // Mixed: entries and markers
         let components = vec![
             BlockComponent::new_entry_batch(create_mock_entry_batch(4)).unwrap(),
-            BlockComponent::new_block_marker(VersionedBlockMarker::new(
-                BlockMarkerV1::UpdateParent(VersionedUpdateParent::new(
+            BlockComponent::new_block_marker(VersionedBlockMarker::Current(
+                BlockMarkerV1::UpdateParent(VersionedUpdateParent::Current(
                     create_parent_ready_update(),
                 )),
             )),
             BlockComponent::new_entry_batch(create_mock_entry_batch(1)).unwrap(),
-            BlockComponent::new_block_marker(VersionedBlockMarker::new(
-                BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
+            BlockComponent::new_block_marker(VersionedBlockMarker::Current(
+                BlockMarkerV1::BlockFooter(VersionedBlockFooter::V1(BlockFooterV1 {
                     block_producer_time_nanos: 999,
                     block_user_agent: b"test".to_vec(),
                 })),
@@ -3399,8 +3689,8 @@ mod tests {
                 block_producer_time_nanos: 123456789,
                 block_user_agent: vec![b'x'; user_agent_len],
             };
-            let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
-                VersionedBlockFooter::new(footer),
+            let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+                VersionedBlockFooter::V1(footer),
             ));
             let component = BlockComponent::new_block_marker(marker);
             let actual_bytes = component.to_bytes().unwrap();
@@ -3413,9 +3703,8 @@ mod tests {
             parent_slot: 98765,
             parent_block_id: Hash::new_unique(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockHeader(
-            VersionedBlockHeader::new(header),
-        ));
+        let marker =
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(VersionedBlockHeader::V1(header)));
         let component = BlockComponent::new_block_marker(marker);
         let actual_bytes = component.to_bytes().unwrap();
         let calculated_size = component.serialized_size().unwrap();
@@ -3426,8 +3715,8 @@ mod tests {
             new_parent_slot: 54321,
             new_parent_block_id: Hash::new_unique(),
         };
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::UpdateParent(
-            VersionedUpdateParent::new(update),
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(
+            VersionedUpdateParent::V1(update),
         ));
         let component = BlockComponent::new_block_marker(marker);
         let actual_bytes = component.to_bytes().unwrap();
