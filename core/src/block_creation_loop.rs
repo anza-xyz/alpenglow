@@ -15,6 +15,7 @@ use {
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
     },
     solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
@@ -135,8 +136,9 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker {
+fn produce_block_footer(bank_hash: Hash, block_producer_time_nanos: u64) -> VersionedBlockMarker {
     let footer = BlockFooterV1 {
+        bank_hash,
         block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
     };
@@ -385,14 +387,16 @@ fn record_and_complete_block(
 
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
-    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let footer = produce_block_footer(block_producer_time_nanos);
-    w_poh_recorder.send_marker(footer)?;
-
-    // Alpentick and clear bank
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
+
+    let bank_hash = bank.hash();
+    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
+    let footer = produce_block_footer(bank_hash, block_producer_time_nanos);
+    w_poh_recorder.send_marker(footer)?;
+
+    // Alpentick and clear bank
     trace!(
         "{}: bank {} has reached block timeout, ticking",
         bank.collector_id(),
