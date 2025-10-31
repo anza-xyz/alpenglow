@@ -6,7 +6,7 @@ use {
         admin_rpc_post_init::{AdminRpcRequestMetadataPostInit, KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{self, BankingTracer, TraceError},
-        block_creation_loop::ReplayHighestFrozen,
+        block_creation_loop::{BlockCreationLoop, BlockCreationLoopConfig, ReplayHighestFrozen},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
         consensus::{
@@ -589,6 +589,7 @@ pub struct Validator {
     snapshot_packager_service: Option<SnapshotPackagerService>,
     poh_recorder: Arc<RwLock<PohRecorder>>,
     poh_service: PohService,
+    block_creation_loop: BlockCreationLoop,
     tpu: Tpu,
     tvu: Tvu,
     ip_echo_server: Option<solana_net_utils::IpEchoServer>,
@@ -1421,6 +1422,23 @@ impl Validator {
             migration_status.clone(),
         );
 
+        let block_creation_loop_config = BlockCreationLoopConfig {
+            exit: exit.clone(),
+            migration_status: migration_status.clone(),
+            bank_forks: bank_forks.clone(),
+            blockstore: blockstore.clone(),
+            cluster_info: cluster_info.clone(),
+            poh_recorder: poh_recorder.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            rpc_subscriptions: rpc_subscriptions.clone(),
+            banking_tracer: banking_tracer.clone(),
+            slot_status_notifier: slot_status_notifier.clone(),
+            record_receiver: record_receiver.clone(),
+            leader_window_notifier: leader_window_notifier.clone(),
+            replay_highest_frozen: replay_highest_frozen.clone(),
+        };
+        let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
+
         assert_eq!(
             blockstore.get_new_shred_signals_len(),
             1,
@@ -1765,12 +1783,6 @@ impl Validator {
             config.generator_config.clone(),
             key_notifiers.clone(),
             migration_status.clone(),
-            leader_schedule_cache.clone(),
-            slot_status_notifier,
-            record_receiver,
-            leader_window_notifier.clone(),
-            replay_highest_frozen.clone(),
-            banking_tracer.clone(),
         );
 
         datapoint_info!(
@@ -1826,6 +1838,7 @@ impl Validator {
             tpu,
             tvu,
             poh_service,
+            block_creation_loop,
             poh_recorder,
             ip_echo_server,
             validator_exit: config.validator_exit.clone(),
@@ -1893,6 +1906,9 @@ impl Validator {
         drop(self.cluster_info);
 
         self.poh_service.join().expect("poh_service");
+        self.block_creation_loop
+            .join()
+            .expect("block_creation_loop");
         drop(self.poh_recorder);
 
         if let Some(json_rpc_service) = self.json_rpc_service {

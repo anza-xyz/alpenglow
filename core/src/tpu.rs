@@ -9,7 +9,6 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{Channels, TracerThread},
-        block_creation_loop::{BlockCreationLoop, BlockCreationLoopConfig, ReplayHighestFrozen},
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, DuplicateConfirmedSlotsSender, GossipVerifiedVoteHashSender,
             VerifiedVoteSender, VoteTracker,
@@ -32,18 +31,17 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         blockstore::Blockstore, blockstore_processor::TransactionStatusSender,
-        entry_notifier_service::EntryNotifierSender, leader_schedule_cache::LeaderScheduleCache,
+        entry_notifier_service::EntryNotifierSender,
     },
     solana_perf::data_budget::DataBudget,
     solana_poh::{
         poh_recorder::{PohRecorder, WorkingBankEntryMarker},
-        record_channels::RecordReceiver,
         transaction_recorder::TransactionRecorder,
     },
     solana_pubkey::Pubkey,
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSenderConfig,
-        rpc_subscriptions::RpcSubscriptions, slot_status_notifier::SlotStatusNotifier,
+        rpc_subscriptions::RpcSubscriptions,
     },
     solana_runtime::{
         bank_forks::BankForks,
@@ -58,7 +56,7 @@ use {
         broadcast_stage::{BroadcastStage, BroadcastStageType},
         xdp::XdpSender,
     },
-    solana_votor::{event::VotorEventSender, votor::LeaderWindowNotifier},
+    solana_votor::event::VotorEventSender,
     solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::HashMap,
@@ -113,7 +111,6 @@ pub struct Tpu {
     staked_nodes_updater_service: StakedNodesUpdaterService,
     tracer_thread_hdl: TracerThread,
     tpu_vote_quic_t: thread::JoinHandle<()>,
-    block_creation_loop: BlockCreationLoop,
 }
 
 impl Tpu {
@@ -163,12 +160,6 @@ impl Tpu {
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         migration_status: Arc<MigrationStatus>,
-        leader_schedule_cache: Arc<LeaderScheduleCache>,
-        slot_status_notifier: Option<SlotStatusNotifier>,
-        record_receiver: RecordReceiver,
-        leader_window_notifier: Arc<LeaderWindowNotifier>,
-        replay_highest_frozen: Arc<ReplayHighestFrozen>,
-        banking_tracer: Arc<crate::banking_trace::BankingTracer>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -389,23 +380,6 @@ impl Tpu {
             votor_event_sender,
         );
 
-        let block_creation_loop_config = BlockCreationLoopConfig {
-            exit: exit.clone(),
-            migration_status: migration_status.clone(),
-            bank_forks: bank_forks.clone(),
-            blockstore,
-            cluster_info: cluster_info.clone(),
-            poh_recorder: poh_recorder.clone(),
-            leader_schedule_cache,
-            rpc_subscriptions: subscriptions,
-            banking_tracer,
-            slot_status_notifier,
-            record_receiver,
-            leader_window_notifier,
-            replay_highest_frozen,
-        };
-        let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
-
         let mut key_notifiers = key_notifiers.write().unwrap();
         if let Some(key_updater) = key_updater {
             key_notifiers.add(KeyUpdaterType::Tpu, key_updater);
@@ -431,7 +405,6 @@ impl Tpu {
             staked_nodes_updater_service,
             tracer_thread_hdl,
             tpu_vote_quic_t,
-            block_creation_loop,
         }
     }
 
@@ -456,7 +429,6 @@ impl Tpu {
             self.tpu_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_forwards_quic_t.map_or(Ok(()), |t| t.join()),
             self.tpu_vote_quic_t.join(),
-            self.block_creation_loop.join(),
         ];
         let broadcast_result = self.broadcast_stage.join();
         for result in results {
