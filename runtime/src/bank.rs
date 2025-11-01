@@ -84,7 +84,6 @@ use {
         blockhash_queue::BlockhashQueue,
         storable_accounts::StorableAccounts,
     },
-    solana_bls_signatures::Signature as BLSSignature,
     solana_builtins::{BUILTINS, STATELESS_BUILTINS},
     solana_clock::{
         BankId, Epoch, Slot, SlotIndex, UnixTimestamp, INITIAL_RENT_EPOCH, MAX_PROCESSING_AGE,
@@ -161,7 +160,9 @@ use {
     solana_transaction_context::{transaction_accounts::TransactionAccount, TransactionReturnData},
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
-    solana_votor_messages::consensus_message::{Block, Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::Certificate, migration::GENESIS_CERTIFICATE_ACCOUNT,
+    },
     std::{
         collections::{HashMap, HashSet},
         fmt,
@@ -528,7 +529,6 @@ impl PartialEq for Bank {
             #[cfg(feature = "dev-context-only-utils")]
             hash_overrides,
             accounts_lt_hash,
-            alpenglow_genesis,
             // TODO: Confirm if all these fields are intentionally ignored!
             rewards: _,
             cluster_type: _,
@@ -594,7 +594,6 @@ impl PartialEq for Bank {
                 *hash_overrides.lock().unwrap() == *other.hash_overrides.lock().unwrap())
             && *accounts_lt_hash.lock().unwrap() == *other.accounts_lt_hash.lock().unwrap()
             && *block_id.read().unwrap() == *other.block_id.read().unwrap()
-            && *alpenglow_genesis == other.alpenglow_genesis
     }
 }
 
@@ -904,9 +903,6 @@ pub struct Bank {
     /// This is used to avoid recalculating the same epoch rewards at epoch boundary.
     /// The hashmap is keyed by parent_hash.
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
-
-    /// The alpenglow genesis block, and the certificate from the genesis vote
-    alpenglow_genesis: Option<(Block, Certificate)>,
 }
 
 #[derive(Debug)]
@@ -1103,7 +1099,6 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
-            alpenglow_genesis: None,
         };
 
         bank.transaction_processor =
@@ -1171,20 +1166,7 @@ impl Bank {
         bank.update_last_restart_slot();
         bank.transaction_processor
             .fill_missing_sysvar_cache_entries(&bank);
-        if bank.cluster_type == Some(ClusterType::Development)
-            && bank
-                .feature_set
-                .is_active(&agave_feature_set::alpenglow::id())
-        {
-            // This is a dev cluster with alpenglow enabled at genesis.
-            // We will not be initiating the migration so fill in a fake genesis certificate for now.
-            let cert = Certificate {
-                cert_type: CertificateType::Genesis(0, Hash::default()),
-                signature: BLSSignature::default(),
-                bitmap: Vec::default(),
-            };
-            bank.set_alpenglow_genesis((0, Hash::default()), cert);
-        }
+
         bank
     }
 
@@ -1365,7 +1347,6 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
-            alpenglow_genesis: parent.alpenglow_genesis.clone(),
         };
 
         let (_, ancestors_time_us) = measure_us!({
@@ -1834,8 +1815,6 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
-            // TODO(ashwin): Plug in from snapshot
-            alpenglow_genesis: None,
         };
 
         // Sanity assertions between bank snapshot and genesis config
@@ -2774,6 +2753,17 @@ impl Bank {
         blockhash_queue
             .get_hash_age(blockhash)
             .map(|age| self.block_height + MAX_PROCESSING_AGE as u64 - age)
+    }
+
+    /// If this is an alpenglow block, return the genesis certificate.
+    ///
+    /// Note: this should only be called on a frozen bank, otherwise results
+    /// might be inaccurate for the first alpenglow bank.
+    pub fn get_alpenglow_genesis_certificate(&self) -> Option<Certificate> {
+        self.get_account(&GENESIS_CERTIFICATE_ACCOUNT).map(|acct| {
+            acct.deserialize_data()
+                .expect("Programmer error deserializing genesis certificate")
+        })
     }
 
     pub fn confirmed_last_blockhash(&self) -> Hash {
@@ -5654,14 +5644,6 @@ impl Bank {
 
     pub fn get_bank_hash_stats(&self) -> BankHashStats {
         self.bank_hash_stats.load()
-    }
-
-    pub fn get_alpenglow_genesis(&self) -> Option<(Block, Certificate)> {
-        self.alpenglow_genesis.clone()
-    }
-
-    pub fn set_alpenglow_genesis(&mut self, genesis_block: Block, genesis_cert: Certificate) {
-        self.alpenglow_genesis = Some((genesis_block, genesis_cert));
     }
 
     pub fn clear_epoch_rewards_cache(&self) {

@@ -38,7 +38,6 @@ use {
         ThreadPool,
     },
     solana_accounts_db::contains::Contains,
-    solana_bls_signatures::Signature as BLSSignature,
     solana_clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::entry::VerifyRecyclers,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
@@ -92,10 +91,7 @@ use {
         voting_utils::GenerateVoteTxResult,
         votor::{LeaderWindowNotifier, Votor, VotorConfig},
     },
-    solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, ConsensusMessage},
-        migration::MigrationStatus,
-    },
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -686,42 +682,6 @@ impl ReplayStage {
             migration_status: migration_status.clone(),
         };
         let votor = Votor::new(votor_config);
-
-        let root_bank = bank_forks.read().unwrap().root_bank();
-        let alpenglow_ff_activation_slot = root_bank
-            .feature_set
-            .activated_slot(&agave_feature_set::alpenglow::id());
-
-        // Check the status of the Alpenglow migration
-        if let Some((genesis_block, genesis_cert)) = root_bank.get_alpenglow_genesis() {
-            // We have started up post Alpenglow genesis
-            warn!("{my_pubkey}: Enabling alpenglow on startup");
-            migration_status.record_feature_activation(
-                alpenglow_ff_activation_slot.expect("FF must be active"),
-            );
-            migration_status.set_genesis_block(genesis_block);
-            migration_status.set_genesis_certificate(Arc::new(genesis_cert));
-            migration_status.enable_alpenglow();
-            assert!(migration_status.is_alpenglow_enabled());
-        } else if let Some(ff_activation_slot) = alpenglow_ff_activation_slot {
-            // Alpenglow is not enabled on startup, however the feature flag is active.
-            // Start tracking the migration.
-            migration_status.record_feature_activation(ff_activation_slot);
-
-            // TODO(ashwin): once migration PRs have all landed delete the following.
-            // Otherwise invalidator will be broken in the meantime since we're landing
-            // migration PRs piecemeal. For now we just enable alpenglow if the FF is active.
-            let block = (0, Hash::default());
-            let cert = Certificate {
-                cert_type: CertificateType::Genesis(0, Hash::default()),
-                signature: BLSSignature::default(),
-                bitmap: Vec::default(),
-            };
-            migration_status.set_genesis_block(block);
-            migration_status.set_genesis_certificate(Arc::new(cert));
-            migration_status.enable_alpenglow();
-            assert!(migration_status.is_alpenglow_enabled());
-        }
 
         let mut highest_frozen_slot = bank_forks
             .read()
@@ -2325,10 +2285,9 @@ impl ReplayStage {
         datapoint_info!("replay_stage-my_leader_slot", ("slot", my_leader_slot, i64),);
         info!("new fork:{my_leader_slot} parent:{parent_slot} (leader) root:{root_slot}");
 
-        let migration_slot = migration_status.migration_slot().unwrap_or(u64::MAX);
         let root_distance = my_leader_slot - root_slot;
         let vote_only_bank = if root_distance > MAX_ROOT_DISTANCE_FOR_VOTE_ONLY
-            || my_leader_slot >= migration_slot
+            || migration_status.should_bank_be_vote_only(my_leader_slot)
         {
             info!("{my_pubkey}: Creating block in slot {my_leader_slot} in VoM");
             datapoint_info!("vote-only-bank", ("slot", my_leader_slot, i64));
@@ -2632,15 +2591,14 @@ impl ReplayStage {
         tbft_structs: &mut TowerBFTStructures,
     ) -> Result<(), SetRootError> {
         assert!(!migration_status.is_alpenglow_enabled());
-        let migration_slot = migration_status.migration_slot().unwrap_or(Slot::MAX);
         if bank.is_empty() {
             datapoint_info!("replay_stage-voted_empty_bank", ("slot", bank.slot(), i64));
         }
         trace!("handle votable bank {}", bank.slot());
-        let new_root = tower
-            .record_bank_vote(bank)
+        let new_root = tower.record_bank_vote(bank).filter(|root| {
             // We do not root during the migration - post genesis rooting is handled by votor
-            .filter(|root| *root < migration_slot);
+            migration_status.should_report_commitment_or_root(*root)
+        });
 
         if let Some(new_root) = new_root {
             let highest_super_majority_root = Some(
@@ -2668,7 +2626,7 @@ impl ReplayStage {
             )?;
 
             // Check if we've rooted a bank that will tell us the migration slot
-            if migration_status.migration_slot().is_none() {
+            if migration_status.is_pre_feature_activation() {
                 if let Some(slot) = bank_forks
                     .read()
                     .unwrap()
@@ -2676,14 +2634,10 @@ impl ReplayStage {
                     .feature_set
                     .activated_slot(&agave_feature_set::alpenglow::id())
                 {
-                    migration_status.record_feature_activation(slot);
+                    let migration_slot = migration_status.record_feature_activation(slot);
                     datapoint_info!(
                         "migration-started",
-                        (
-                            "migration_slot",
-                            migration_status.migration_slot().unwrap() as i64,
-                            i64
-                        ),
+                        ("migration_slot", migration_slot as i64, i64),
                     );
                 }
             }
@@ -3465,7 +3419,7 @@ impl ReplayStage {
                     r_replay_stats.batch_execute.totals
                 );
                 new_frozen_slots.push(bank.slot());
-                if bank_slot <= migration_status.genesis_slot().unwrap_or(Slot::MAX) {
+                if migration_status.should_publish_epoch_slots(bank_slot) {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
@@ -3561,9 +3515,7 @@ impl ReplayStage {
                 // 2) Shredding finishes before replay, we notify here
                 //
                 // For non leader banks (2) is always true, so notify here
-                if migration_status
-                    .genesis_slot()
-                    .is_some_and(|gs| bank.slot() > gs)
+                if migration_status.should_send_votor_event(bank.slot())
                     && bank.block_id().is_some()
                 {
                     // Leader blocks will not have a block id, broadcast stage will

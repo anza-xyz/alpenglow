@@ -221,10 +221,7 @@ impl ConsensusPoolService {
             // - When we first migrate to alpenglow from TowerBFT - kick off with genesis block
             // - If we startup post alpenglow migration - kick off with root block
             if !kick_off_parent_ready && ctx.migration_status.is_alpenglow_enabled() {
-                let genesis_block = ctx
-                    .migration_status
-                    .genesis_block()
-                    .expect("Alpenglow enabled");
+                let genesis_block = ctx.migration_status.genesis_block();
                 // can expect once we have block id in snapshots (SIMD-0333)
                 let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
                 let kick_off_block = genesis_block.max(root_block);
