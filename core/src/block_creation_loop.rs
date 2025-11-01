@@ -365,14 +365,22 @@ fn record_and_complete_block(
 
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
-    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let footer = produce_block_footer(block_producer_time_nanos);
-    w_poh_recorder.send_marker(footer)?;
 
-    // Alpentick and clear bank
+    // This is the "current" time
+    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
+
+    // Update the bank's clock timestamp with the value from the block footer
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
+
+    let parent_epoch = bank.parent().map(|parent_bank| parent_bank.epoch());
+    let footer = produce_block_footer(block_producer_time_nanos);
+    w_poh_recorder.send_marker(footer)?;
+
+    bank.set_clock(parent_epoch, block_producer_time_nanos);
+
+    // Alpentick and clear bank
     trace!(
         "{}: bank {} has reached block timeout, ticking",
         bank.collector_id(),

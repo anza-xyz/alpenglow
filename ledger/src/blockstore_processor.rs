@@ -833,6 +833,11 @@ pub enum BlockstoreProcessorError {
 
     #[error("non consecutive leader slot for bank {0} parent {1}")]
     NonConsecutiveLeaderSlot(Slot, Slot),
+
+    #[error("block component verifier error: {0}")]
+    BlockComponentVerifier(
+        #[from] solana_runtime::block_component_verifier::BlockComponentVerifierError,
+    ),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1508,10 +1513,10 @@ pub fn confirm_slot(
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
-    let slot_entries_load_result = {
+    let (slot_components, num_shreds, slot_full) = {
         let mut load_elapsed = Measure::start("load_elapsed");
         let load_result = blockstore
-            .get_slot_entries_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
+            .get_slot_components_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
             .map_err(BlockstoreProcessorError::FailedToLoadEntries);
         load_elapsed.stop();
         if load_result.is_err() {
@@ -1522,10 +1527,35 @@ pub fn confirm_slot(
         load_result
     }?;
 
+    // Process block component markers for Alpenglow slots
+    if let Some(parent_bank) = bank.parent() {
+        if let Some(first_alpenglow_slot) = bank
+            .feature_set
+            .activated_slot(&agave_feature_set::alpenglow::id())
+        {
+            if bank.parent_slot() >= first_alpenglow_slot {
+                let mut verifier = bank.block_component_verifier.write().unwrap();
+                for marker in slot_components.iter().filter_map(|bc| bc.as_marker()) {
+                    verifier.on_marker(
+                        bank.clone_without_scheduler(),
+                        parent_bank.clone(),
+                        marker,
+                    )?;
+                }
+            }
+        }
+    }
+
+    let slot_entries = slot_components
+        .into_iter()
+        .filter_map(|c| c.as_entry_batch_owned())
+        .flatten()
+        .collect_vec();
+
     confirm_slot_entries(
         bank,
         replay_tx_thread_pool,
-        slot_entries_load_result,
+        (slot_entries, num_shreds, slot_full),
         timing,
         progress,
         skip_verification,
@@ -2244,6 +2274,7 @@ pub fn process_single_slot(
             }
         })?;
     bank.set_block_id(block_id);
+
     bank.freeze(); // all banks handled by this routine are created from complete slots
 
     if let Some(slot_callback) = &opts.slot_callback {
