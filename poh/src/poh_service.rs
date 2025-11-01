@@ -111,9 +111,7 @@ impl PohService {
             .spawn(move || {
                 if migration_status.is_alpenglow_enabled() {
                     // We've started up post alpenglow migration. Don't bother starting PohService
-                    migration_status
-                        .is_poh_shutdown
-                        .store(true, Ordering::Release);
+                    info!("Post Alpenglow migration, not starting PohService");
                     return;
                 }
                 if poh_config.hashes_per_tick.is_none() {
@@ -171,10 +169,9 @@ impl PohService {
                     return;
                 }
 
-                // Notify that we have shutdown poh service, which lets the block creation loop and votor start
-                migration_status
-                    .is_poh_shutdown
-                    .store(true, Ordering::Release);
+                // Notify that we have shutdown poh service, which enables Alpenglow
+                // and lets the block creation loop and votor start
+                migration_status.poh_service_is_shutting_down();
                 info!("PohService shutdown");
             })
             .unwrap();

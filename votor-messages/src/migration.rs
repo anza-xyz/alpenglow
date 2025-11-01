@@ -209,6 +209,11 @@ impl MigrationPhase {
     fn is_pre_feature_activation(&self) -> bool {
         matches!(self, MigrationPhase::PreFeatureActivation)
     }
+
+    /// Check if we are ready to enable
+    fn is_ready_to_enable(&self) -> bool {
+        matches!(self, MigrationPhase::ReadyToEnable { .. })
+    }
 }
 
 /// Keeps track of the current migration status
@@ -220,14 +225,12 @@ pub struct MigrationStatus {
     /// Communication with PohService
     /// Flag indicating whether we should shutdown Poh
     pub shutdown_poh: AtomicBool,
-    /// Flag indicating whether Poh has been shutdown
-    pub is_poh_shutdown: AtomicBool,
 
     /// The current phase of the migration we are in
     phase: RwLock<MigrationPhase>,
 
-    /// Used to notify threads that are waiting for alpenglow to be enabled
-    migration_wait: (Mutex<()>, Condvar),
+    /// Used to notify threads that are waiting for Poh to be shutdown and alpenglow to be enabled
+    migration_wait: (Mutex<bool>, Condvar),
 }
 
 impl Default for MigrationStatus {
@@ -257,9 +260,8 @@ impl MigrationStatus {
         Self {
             my_pubkey,
             shutdown_poh: AtomicBool::new(is_alpenglow_enabled),
-            is_poh_shutdown: AtomicBool::new(is_alpenglow_enabled),
             phase: RwLock::new(phase),
-            migration_wait: (Mutex::new(()), Condvar::new()),
+            migration_wait: (Mutex::new(is_alpenglow_enabled), Condvar::new()),
         }
     }
 
@@ -466,33 +468,47 @@ impl MigrationStatus {
         *phase = MigrationPhase::ReadyToEnable { genesis_cert: cert };
     }
 
-    /// Enable alpenglow only to be used during `ReadyToEnable`:
+    /// Enable alpenglow only to be used during `ReadyToEnable` from replay_stage:
     /// - Tell PoH to shutdown
     /// - Wait for Poh to shutdown
     /// - Notify all threads that are waiting for alpenglow to be enabled
     ///
     /// Transitions from `ReadyToEnable` to `AlpenglowEnabled`
-    pub fn enable_alpenglow(&self) {
+    pub fn enable_alpenglow(&self, exit: &AtomicBool) {
+        assert!(self.phase.read().unwrap().is_ready_to_enable());
+
+        // Tell PohService to shutdown and bump the phase to `MigrationPhase::AlpenglowEnabled`
+        self.shutdown_poh.store(true, Ordering::Release);
+        // Wait for PohService
+        self.wait_for_migration_or_exit(exit);
+
+        if exit.load(Ordering::Relaxed) {
+            warn!(
+                "{}: Validator shutdown before Alpenglow could be enabled",
+                self.my_pubkey
+            );
+            return;
+        }
+
+        warn!("{}: Alpenglow enabled!", self.my_pubkey);
+    }
+
+    /// PohService is shutting down after being asked to by replay_stage via `enable_alpenglow`.
+    ///
+    /// Transition the phase from `ReadyToEnable` to `AlpenglowEnabled`
+    pub fn poh_service_is_shutting_down(&self) {
         let MigrationPhase::ReadyToEnable { genesis_cert } = self.phase.read().unwrap().clone()
         else {
             unreachable!(
-                "{}: Programmer error, enabling alpenglow before we are ReadyToEnable",
+                "{}: Programmer error, PohService is shutting down before we are ReadyToEnable",
                 self.my_pubkey
             );
         };
 
-        self.shutdown_poh.store(true, Ordering::Release);
-        while !self.is_poh_shutdown.load(Ordering::Acquire) {
-            // Wait for PohService to shutdown poh
-            std::hint::spin_loop();
-        }
-
         *self.phase.write().unwrap() = MigrationPhase::AlpenglowEnabled { genesis_cert };
-
-        let (_lock, cvar) = &self.migration_wait;
-        cvar.notify_all();
-
-        warn!("{}: Alpenglow enabled!", self.my_pubkey);
+        let (is_alpenglow_enabled, condvar) = &self.migration_wait;
+        *is_alpenglow_enabled.lock().unwrap() = true;
+        condvar.notify_all();
     }
 
     /// Alpenglow has rooted a block in a new epoch. This indicates the migration epoch has completed.
@@ -547,18 +563,20 @@ impl MigrationStatus {
     /// Wait for migration to complete and alpenglow to be enabled or the exit flag.
     /// If successful returns the genesis block. If exit flag is hit, returns None
     pub fn wait_for_migration_or_exit(&self, exit: &AtomicBool) -> Option<Block> {
-        let (lock, cvar) = &self.migration_wait;
+        let (is_alpenglow_enabled, cvar) = &self.migration_wait;
         loop {
             if exit.load(Ordering::Relaxed) {
                 return None;
             }
-            let _ = cvar
-                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |_| {
-                    !self.is_poh_shutdown.load(Ordering::Acquire)
-                })
+            let (enabled, _) = cvar
+                .wait_timeout_while(
+                    is_alpenglow_enabled.lock().unwrap(),
+                    Duration::from_secs(5),
+                    |is_alpenglow_enabled| !*is_alpenglow_enabled,
+                )
                 .unwrap();
 
-            if self.is_poh_shutdown.load(Ordering::Acquire) {
+            if *enabled {
                 return Some(self.genesis_block());
             }
         }

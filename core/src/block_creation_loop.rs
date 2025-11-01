@@ -253,6 +253,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         ctx.metrics.loop_count += 1;
         ctx.metrics.report(1000);
     }
+
+    info!("{my_pubkey}: Block creation loop shutting down");
 }
 
 /// Resets poh recorder
