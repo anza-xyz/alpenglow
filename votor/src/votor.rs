@@ -75,19 +75,11 @@ use {
     solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashMap,
-        sync::{atomic::AtomicBool, Arc, Condvar, Mutex, RwLock},
+        sync::{atomic::AtomicBool, Arc, RwLock},
         thread,
         time::Duration,
     },
 };
-
-/// Communication with the block creation loop to notify leader window
-#[derive(Default)]
-pub struct LeaderWindowNotifier {
-    pub window_info: Mutex<Option<LeaderWindowInfo>>,
-    pub window_notification: Condvar,
-    pub highest_parent_ready: RwLock<(Slot, (Slot, Hash))>,
-}
 
 /// Inputs to Votor
 pub struct VotorConfig {
@@ -115,7 +107,8 @@ pub struct VotorConfig {
     pub commitment_sender: Sender<CommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
-    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub leader_window_info_sender: Sender<LeaderWindowInfo>,
+    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
 
@@ -131,7 +124,8 @@ pub(crate) struct SharedContext {
     pub(crate) bank_forks: Arc<RwLock<BankForks>>,
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
-    pub(crate) leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub(crate) leader_window_info_sender: Sender<LeaderWindowInfo>,
+    pub(crate) highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub(crate) vote_history_storage: Arc<dyn VoteHistoryStorage>,
 }
 
@@ -162,7 +156,8 @@ impl Votor {
             commitment_sender,
             drop_bank_sender,
             bank_notification_sender,
-            leader_window_notifier,
+            leader_window_info_sender,
+            highest_parent_ready,
             event_sender,
             own_vote_sender,
             event_receiver,
@@ -182,7 +177,8 @@ impl Votor {
             bank_forks: bank_forks.clone(),
             cluster_info: cluster_info.clone(),
             rpc_subscriptions,
-            leader_window_notifier,
+            highest_parent_ready,
+            leader_window_info_sender,
             vote_history_storage,
         };
 

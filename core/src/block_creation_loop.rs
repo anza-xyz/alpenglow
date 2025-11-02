@@ -12,6 +12,7 @@ use {
     crossbeam_channel::Receiver,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
@@ -28,7 +29,9 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
-    solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
+    solana_version::version,
+    solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor_messages::migration::MigrationStatus,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -80,17 +83,19 @@ pub struct BlockCreationLoopConfig {
     pub slot_status_notifier: Option<SlotStatusNotifier>,
 
     // Receivers / notifications from banking stage / replay / votor
-    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
-    pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
+    pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
+    pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
 }
 
 struct LeaderContext {
     exit: Arc<AtomicBool>,
     my_pubkey: Pubkey,
-    leader_window_notifier: Arc<LeaderWindowNotifier>,
+    leader_window_info_receiver: Receiver<LeaderWindowInfo>,
+    highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
 
     blockstore: Arc<Blockstore>,
     record_receiver: RecordReceiver,
@@ -147,9 +152,12 @@ fn start_loop(config: BlockCreationLoopConfig) {
         rpc_subscriptions,
         banking_tracer,
         slot_status_notifier,
-        leader_window_notifier,
-        replay_highest_frozen,
         record_receiver_receiver,
+        record_receiver,
+        leader_window_info_receiver,
+        replay_highest_frozen,
+        migration_status,
+        highest_parent_ready,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -174,7 +182,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
     let mut ctx = LeaderContext {
         exit,
         my_pubkey,
-        leader_window_notifier: leader_window_notifier.clone(),
+        highest_parent_ready,
+        leader_window_info_receiver,
         blockstore,
         poh_recorder: poh_recorder.clone(),
         record_receiver,
@@ -213,7 +222,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
             );
         }
 
-        // Wait for the voting loop to notify us
+        // Wait for the voting loop to notify us, draining all pending messages and keeping the highest slot
         let LeaderWindowInfo {
             start_slot,
             end_slot,
@@ -221,15 +230,22 @@ fn start_loop(config: BlockCreationLoopConfig) {
             parent_block: (parent_slot, _),
             skip_timer,
         } = {
-            let window_info = leader_window_notifier.window_info.lock().unwrap();
-            let (mut guard, timeout_res) = leader_window_notifier
-                .window_notification
-                .wait_timeout_while(window_info, Duration::from_secs(1), |wi| wi.is_none())
-                .unwrap();
-            if timeout_res.timed_out() {
+            // Drain all pending messages and keep the latest one
+            let Some(info) = ctx
+                .leader_window_info_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .ok()
+                .and_then(|window| {
+                    ctx.leader_window_info_receiver
+                        .try_iter()
+                        .last()
+                        .or(Some(window))
+                })
+            else {
                 continue;
-            }
-            guard.take().unwrap()
+            };
+
+            info
         };
 
         trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
@@ -411,12 +427,7 @@ fn start_leader_retry_replay(
         ctx.slot_metrics.attempt_count += 1;
 
         // Check if the entire window is skipped.
-        let highest_parent_ready_slot = ctx
-            .leader_window_notifier
-            .highest_parent_ready
-            .read()
-            .unwrap()
-            .0;
+        let highest_parent_ready_slot = ctx.highest_parent_ready.read().unwrap().0;
         if highest_parent_ready_slot > end_slot {
             trace!(
                 "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is \

@@ -145,7 +145,6 @@ use {
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
-        votor::LeaderWindowNotifier,
     },
     solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
@@ -1412,11 +1411,13 @@ impl Validator {
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
-        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
 
         // Pass RecordReceiver from PohService to BlockCreationLoop when shutting down. Gives us a strong guarentee
         // that both block producers are not running at the same time
         let (record_receiver_sender, record_receiver_receiver) = bounded(1);
+
+        let (leader_window_info_sender, leader_window_info_receiver) = bounded(7);
+        let highest_parent_ready = Arc::new(RwLock::default());
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
@@ -1441,9 +1442,10 @@ impl Validator {
             rpc_subscriptions: rpc_subscriptions.clone(),
             banking_tracer: banking_tracer.clone(),
             slot_status_notifier: slot_status_notifier.clone(),
-            leader_window_notifier: leader_window_notifier.clone(),
-            replay_highest_frozen: replay_highest_frozen.clone(),
             record_receiver_receiver,
+            leader_window_info_receiver: leader_window_info_receiver.clone(),
+            replay_highest_frozen: replay_highest_frozen.clone(),
+            highest_parent_ready: highest_parent_ready.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1689,7 +1691,8 @@ impl Validator {
             vote_connection_cache,
             alpenglow_connection_cache,
             replay_highest_frozen.clone(),
-            leader_window_notifier.clone(),
+            leader_window_info_sender.clone(),
+            highest_parent_ready.clone(),
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
