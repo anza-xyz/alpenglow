@@ -56,7 +56,7 @@ use {
     },
     solana_streamer::{
         evicting_sender::EvictingSender,
-        quic::{spawn_simple_qos_server_with_cancel, SimpleQosQuicStreamerConfig, SpawnServerResult},
+        quic::{spawn_simple_qos_server, SimpleQosQuicStreamerConfig, SpawnServerResult},
         streamer::StakedNodes,
     },
     tokio_util::sync::CancellationToken,
@@ -261,7 +261,7 @@ impl Tvu {
             endpoints: _,
             thread: alpenglow_quic_t,
             key_updater: alpenglow_stream_key_updater,
-        } = spawn_simple_qos_server_with_cancel(
+        } = spawn_simple_qos_server(
             "solQuicAlpglw",
             "quic_streamer_alpenglow",
             vec![alpenglow_quic_socket],

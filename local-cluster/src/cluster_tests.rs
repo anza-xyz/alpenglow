@@ -30,7 +30,7 @@ use {
     solana_signer::Signer,
     solana_streamer::{
         packet::PacketBatch,
-        quic::{spawn_server_with_cancel, QuicStreamerConfig, SpawnServerResult},
+        quic::{spawn_stake_wighted_qos_server, QuicStreamerConfig, SpawnServerResult},
         nonblocking::swqos::SwQosConfig,
         socket::SocketAddrSpace,
         streamer::StakedNodes,
@@ -442,7 +442,7 @@ pub fn start_quic_streamer_to_listen_for_votes_and_certs(
     let SpawnServerResult {
         thread: quic_server_thread,
         ..
-    } = spawn_server_with_cancel(
+    } = spawn_stake_wighted_qos_server(
         "AlpenglowLocalClusterTest",
         "quic_streamer_test",
         [vote_listener_socket],
