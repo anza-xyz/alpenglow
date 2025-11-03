@@ -214,6 +214,11 @@ impl MigrationPhase {
     fn is_ready_to_enable(&self) -> bool {
         matches!(self, MigrationPhase::ReadyToEnable { .. })
     }
+
+    /// Check if we are in the migrationary period
+    fn is_in_migration(&self) -> bool {
+        matches!(self, MigrationPhase::Migration { .. })
+    }
 }
 
 /// Keeps track of the current migration status
@@ -333,6 +338,7 @@ impl MigrationStatus {
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
+    dispatch!(pub fn is_in_migration(&self) -> bool);
 
     /// The alpenglow feature flag has been activated in slot `slot`.
     /// This should only be called using the feature account of a *rooted* slot,
