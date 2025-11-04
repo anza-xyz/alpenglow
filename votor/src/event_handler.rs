@@ -263,7 +263,11 @@ impl EventHandler {
                     .map_err(|_| SendError(()))?;
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
-                if Self::try_notar(
+
+                if slot == last_of_consecutive_leader_slots(slot) && slot > 10 {
+                    Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
+                    return Ok(votes);
+                } else if Self::try_notar(
                     my_pubkey,
                     block,
                     parent_block,
@@ -1043,7 +1047,7 @@ mod tests {
                 start_slot,
                 end_slot,
                 parent_block,
-                skip_timer: Instant::now(),
+                skip_timer: Some(Instant::now()),
             }))
             .unwrap();
     }

@@ -289,6 +289,7 @@ pub struct Blockstore {
     insert_shreds_lock: Mutex<()>,
     new_shreds_signals: Mutex<Vec<Sender<bool>>>,
     completed_slots_senders: Mutex<Vec<CompletedSlotsSender>>,
+    update_parent_signals: Mutex<Vec<Sender<(Slot, Slot, Hash, u32)>>>,
     pub lowest_cleanup_slot: RwLock<Slot>,
     pub slots_stats: SlotsStats,
     rpc_api_metrics: BlockstoreRpcApiMetrics,
@@ -513,6 +514,7 @@ impl Blockstore {
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
             completed_slots_senders: Mutex::default(),
+            update_parent_signals: Mutex::default(),
             insert_shreds_lock: Mutex::<()>::default(),
             max_root,
             lowest_cleanup_slot: RwLock::<Slot>::default(),
@@ -1677,6 +1679,7 @@ impl Blockstore {
             &mut shred_insertion_tracker,
             metrics,
         );
+
         if let Some((reed_solomon_cache, retransmit_sender)) = should_recover_shreds {
             self.handle_shred_recovery(
                 leader_schedule,
@@ -1804,6 +1807,10 @@ impl Blockstore {
         self.completed_slots_senders.lock().unwrap().push(s);
     }
 
+    pub fn add_update_parent_signal(&self, s: Sender<(Slot, Slot, Hash, u32)>) {
+        self.update_parent_signals.lock().unwrap().push(s);
+    }
+
     pub fn get_new_shred_signals_len(&self) -> usize {
         self.new_shreds_signals.lock().unwrap().len()
     }
@@ -1815,6 +1822,7 @@ impl Blockstore {
     pub fn drop_signal(&self) {
         self.new_shreds_signals.lock().unwrap().clear();
         self.completed_slots_senders.lock().unwrap().clear();
+        self.update_parent_signals.lock().unwrap().clear();
     }
 
     /// Clear `slot` from the Blockstore, see ``Blockstore::purge_slot_cleanup_chaining`
@@ -2509,6 +2517,21 @@ impl Blockstore {
 
         // Update entry with new ParentMeta
         entry.parent_meta = Some(WorkingEntry::Dirty(new_parent_meta));
+
+        // Send signal if this is an UpdateParent on a dead slot
+        // if new_parent_meta.populated_from_update_parent() {
+        //     let update_parent_signals = self.update_parent_signals.lock().unwrap();
+        //     for signal in update_parent_signals.iter() {
+        //         signal
+        //             .send((
+        //                 slot,
+        //                 new_parent_meta.parent_slot,
+        //                 new_parent_meta.parent_block_id,
+        //                 new_parent_meta.replay_fec_set_index,
+        //             ))
+        //             .unwrap();
+        //     }
+        // }
 
         Ok(())
     }

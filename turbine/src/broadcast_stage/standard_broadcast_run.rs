@@ -359,6 +359,7 @@ impl StandardBroadcastRun {
             .unwrap();
 
         let shreds = if send_header {
+            trace!("!!!! {} SENDING HEADER", bank.collector_id());
             header_shreds.extend_from_slice(&component_shreds);
             header_shreds
         } else {
