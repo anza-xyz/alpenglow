@@ -332,6 +332,13 @@ impl StandardBroadcastRun {
 
         let mut header_shreds = if send_header {
             let header = produce_block_header(self.parent, self.parent_block_id);
+
+            println!(
+                "!!!! {} SENDING HEADER :: {:?}",
+                bank.collector_id(),
+                header
+            );
+
             self.component_to_shreds(
                 keypair,
                 &BlockComponent::BlockMarker(header),
@@ -357,6 +364,12 @@ impl StandardBroadcastRun {
                 MAX_CODE_SHREDS_PER_SLOT as u32,
             )
             .unwrap();
+
+        println!(
+            "!!!! {} SENDING COMPONENT :: {:?}",
+            bank.collector_id(),
+            receive_results.component
+        );
 
         let shreds = if send_header {
             header_shreds.extend_from_slice(&component_shreds);

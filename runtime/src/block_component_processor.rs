@@ -1,13 +1,13 @@
 use {
-    crate::bank::Bank,
+    crate::{bank::Bank, bank_forks::BankForks},
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
-        VersionedBlockHeader, VersionedBlockMarker,
+        VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
     solana_votor_messages::{consensus_message::Certificate, migration::MigrationStatus},
-    std::sync::Arc,
+    std::sync::{Arc, RwLock},
     thiserror::Error,
 };
 
@@ -23,31 +23,38 @@ pub enum BlockComponentProcessorError {
     GenesisCertificateOnNonChild,
     #[error("Missing block footer")]
     MissingBlockFooter,
-    #[error("Missing block header")]
-    MissingBlockHeader,
+    #[error("Missing parent marker (neither a footer nor update parent was present)")]
+    MissingParentMarker,
     #[error("Multiple block footers detected")]
     MultipleBlockFooters,
     #[error("Multiple block headers detected")]
     MultipleBlockHeaders,
+    #[error("Multiple update parents detected")]
+    MultipleUpdateParents,
     #[error("Nanosecond clock out of bounds")]
     NanosecondClockOutOfBounds,
+    #[error("Spurious update parent")]
+    SpuriousUpdateParent,
+    #[error("Abandoned bank")]
+    AbandonedBank(VersionedUpdateParent),
 }
 
 #[derive(Default)]
 pub struct BlockComponentProcessor {
     has_header: bool,
     has_footer: bool,
+    update_parent: Option<VersionedUpdateParent>,
 }
 
 impl BlockComponentProcessor {
-    fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
+    pub fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
         // Post-migration: both header and footer are required
         if !self.has_footer {
             return Err(BlockComponentProcessorError::MissingBlockFooter);
         }
 
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
         Ok(())
@@ -60,22 +67,17 @@ impl BlockComponentProcessor {
     pub fn on_entry_batch(
         &mut self,
         migration_status: &MigrationStatus,
-        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         if !migration_status.is_alpenglow_enabled() {
             return Ok(());
         }
 
-        // The block header must be the first component of each block.
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        // We must have either a header or an update parent prior to processing entry batches.
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
-        if is_final {
-            self.on_final()
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     /// Process a block marker:
@@ -89,11 +91,11 @@ impl BlockComponentProcessor {
     /// in which case we run the block level checks (has header / has footer).
     pub fn on_marker(
         &mut self,
+        _bank_forks: &RwLock<BankForks>,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: VersionedBlockMarker,
         migration_status: &MigrationStatus,
-        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
         let VersionedBlockMarker::V1(marker) = marker;
@@ -118,16 +120,12 @@ impl BlockComponentProcessor {
             BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
 
             // We process UpdateParent messages on shred ingest, so no callback needed here
-            BlockMarkerV1::UpdateParent(_) => Ok(()),
+            BlockMarkerV1::UpdateParent(update_parent) => {
+                self.on_update_parent(update_parent.inner())
+            }
 
             // Any other combination means we saw a marker too early
             _ => Err(BlockComponentProcessorError::BlockComponentPreMigration),
-        }?;
-
-        if is_final && migration_status.should_allow_block_markers(slot) {
-            self.on_final()
-        } else {
-            Ok(())
         }
     }
 
@@ -192,13 +190,12 @@ impl BlockComponentProcessor {
         parent_bank: Arc<Bank>,
         footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
-        // The block header must be the first component of each block.
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
-        }
-
         if self.has_footer {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
+        }
+
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
         let VersionedBlockFooter::V1(footer) = footer;
@@ -218,8 +215,33 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockHeaders);
         }
 
+        if self.update_parent.is_some() {
+            return Err(BlockComponentProcessorError::SpuriousUpdateParent);
+        }
+
         self.has_header = true;
         Ok(())
+    }
+
+    fn on_update_parent(
+        &mut self,
+        update_parent: &VersionedUpdateParent,
+    ) -> Result<(), BlockComponentProcessorError> {
+        if self.update_parent.is_some() {
+            return Err(BlockComponentProcessorError::MultipleUpdateParents);
+        }
+
+        self.update_parent = Some(update_parent.clone());
+
+        match self.has_header {
+            true => {
+                println!("Abandoned bank :: {:?}", update_parent);
+                Err(BlockComponentProcessorError::AbandonedBank(
+                    update_parent.clone(),
+                ))
+            }
+            false => Ok(()),
+        }
     }
 
     fn enforce_nanosecond_clock_bounds(
@@ -284,10 +306,10 @@ impl BlockComponentProcessor {
 mod tests {
     use {
         super::*,
-        crate::{bank::Bank, genesis_utils::create_genesis_config},
+        crate::{bank::Bank, bank_forks::BankForks, genesis_utils::create_genesis_config},
         solana_entry::block_component::{BlockFooterV1, BlockHeaderV1, FinalCertificate},
         solana_program::{hash::Hash, pubkey::Pubkey},
-        std::sync::Arc,
+        std::sync::{Arc, RwLock},
     };
 
     fn create_test_bank() -> Arc<Bank> {
@@ -303,16 +325,22 @@ mod tests {
         ))
     }
 
+    fn create_bank_forks() -> Arc<RwLock<BankForks>> {
+        let genesis_config_info = create_genesis_config(10_000);
+        let bank = Bank::new_for_tests(&genesis_config_info.genesis_config);
+        BankForks::new_rw_arc(bank)
+    }
+
     #[test]
     fn test_missing_header_error_on_entry_batch() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
 
         // Try to process entry batch without header - should fail
-        let result = processor.on_entry_batch(&migration_status, false);
+        let result = processor.on_entry_batch(&migration_status);
         assert_eq!(
             result,
-            Err(BlockComponentProcessorError::MissingBlockHeader)
+            Err(BlockComponentProcessorError::MissingParentMarker)
         );
     }
 
@@ -325,7 +353,7 @@ mod tests {
         };
 
         // Try to mark slot as full without footer - should fail
-        let result = processor.on_entry_batch(&migration_status, true);
+        let result = processor.on_entry_batch(&migration_status);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MissingBlockFooter)
@@ -440,9 +468,10 @@ mod tests {
 
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         processor
-            .on_marker(bank, parent, marker, &migration_status, false)
+            .on_marker(&bank_forks, bank, parent, marker, &migration_status)
             .unwrap();
         assert!(processor.has_header);
     }
@@ -457,6 +486,7 @@ mod tests {
 
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Calculate valid timestamp based on parent's time
         let parent_time_nanos = parent.clock().unix_timestamp.saturating_mul(1_000_000_000);
@@ -473,7 +503,7 @@ mod tests {
         ));
 
         processor
-            .on_marker(bank.clone(), parent, marker, &migration_status, false)
+            .on_marker(&bank_forks, bank.clone(), parent, marker, &migration_status)
             .unwrap();
         assert!(processor.has_footer);
 
@@ -501,7 +531,7 @@ mod tests {
         processor.on_header(&header).unwrap();
 
         // Process some entry batches (not full yet)
-        assert!(processor.on_entry_batch(&migration_status, false).is_ok());
+        assert!(processor.on_entry_batch(&migration_status).is_ok());
 
         // Process footer with valid timestamp
         let footer = VersionedBlockFooter::V1(BlockFooterV1 {
@@ -518,7 +548,7 @@ mod tests {
         assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
 
         // Process final entry batch (slot is full) - should succeed
-        let result = processor.on_entry_batch(&migration_status, true);
+        let result = processor.on_entry_batch(&migration_status);
         assert!(result.is_ok());
     }
 
@@ -528,6 +558,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Try to process a block header marker pre-migration - should fail
         let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
@@ -537,7 +568,7 @@ mod tests {
             }),
         ));
 
-        let result = processor.on_marker(bank, parent, marker, &migration_status, false);
+        let result = processor.on_marker(&bank_forks, bank, parent, marker, &migration_status);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -550,11 +581,11 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
 
         // Processing entry batches pre-migration (without markers) should succeed
-        let result = processor.on_entry_batch(&migration_status, false);
+        let result = processor.on_entry_batch(&migration_status);
         assert!(result.is_ok());
 
         // Even with slot full
-        let result = processor.on_entry_batch(&migration_status, true);
+        let result = processor.on_entry_batch(&migration_status);
         assert!(result.is_ok());
     }
 
@@ -564,6 +595,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Process header marker
         let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
@@ -574,16 +606,16 @@ mod tests {
         ));
         processor
             .on_marker(
+                &bank_forks,
                 bank.clone(),
                 parent.clone(),
                 header_marker,
                 &migration_status,
-                false,
             )
             .unwrap();
 
         // Process entry batches
-        assert!(processor.on_entry_batch(&migration_status, false).is_ok());
+        assert!(processor.on_entry_batch(&migration_status).is_ok());
 
         // Calculate valid timestamp based on parent's time
         let parent_time_nanos = parent.clock().unix_timestamp.saturating_mul(1_000_000_000);
@@ -601,11 +633,11 @@ mod tests {
         ));
         processor
             .on_marker(
+                &bank_forks,
                 bank.clone(),
                 parent,
                 footer_marker,
                 &migration_status,
-                false,
             )
             .unwrap();
 
@@ -613,7 +645,7 @@ mod tests {
         assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
 
         // Process final entry batch with slot_full=true - should succeed
-        let result = processor.on_entry_batch(&migration_status, true);
+        let result = processor.on_entry_batch(&migration_status);
         assert!(result.is_ok());
     }
 
@@ -634,7 +666,7 @@ mod tests {
         let result = processor.on_footer(bank, parent, &footer);
         assert_eq!(
             result,
-            Err(BlockComponentProcessorError::MissingBlockHeader)
+            Err(BlockComponentProcessorError::MissingParentMarker)
         );
     }
 
@@ -644,6 +676,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Process header first
         processor.has_header = true;
@@ -664,8 +697,13 @@ mod tests {
         ));
 
         // Should succeed - footer is processed and slot_full validation passes
-        let result =
-            processor.on_marker(bank.clone(), parent, footer_marker, &migration_status, true);
+        let result = processor.on_marker(
+            &bank_forks,
+            bank.clone(),
+            parent,
+            footer_marker,
+            &migration_status,
+        );
         assert!(result.is_ok());
         assert!(processor.has_footer);
 
@@ -682,7 +720,7 @@ mod tests {
         };
 
         // Process entry batch with header but not full - should succeed even without footer
-        let result = processor.on_entry_batch(&migration_status, false);
+        let result = processor.on_entry_batch(&migration_status);
         assert!(result.is_ok());
     }
 

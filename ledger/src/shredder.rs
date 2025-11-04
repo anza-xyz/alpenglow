@@ -64,6 +64,7 @@ impl Shredder {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn make_merkle_shreds_from_component(
         &self,
         keypair: &Keypair,
@@ -179,6 +180,7 @@ impl Shredder {
         .partition(Shred::is_data)
     }
 
+    #[allow(dead_code)]
     pub fn component_to_merkle_shreds_for_tests(
         &self,
         keypair: &Keypair,

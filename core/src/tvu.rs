@@ -161,6 +161,7 @@ impl Tvu {
         sockets: TvuSockets,
         blockstore: Arc<Blockstore>,
         ledger_signal_receiver: Receiver<bool>,
+        update_parent_receiver: Receiver<(Slot, Slot, Hash, u32)>,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
         poh_controller: PohController,
@@ -409,6 +410,7 @@ impl Tvu {
 
         let replay_receivers = ReplayReceivers {
             ledger_signal_receiver,
+            update_parent_receiver,
             duplicate_slots_receiver,
             ancestor_duplicate_slots_receiver,
             duplicate_confirmed_slots_receiver,
@@ -680,6 +682,7 @@ pub mod tests {
         let (votor_event_sender, votor_event_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::default());
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
+        let (_update_parent_sender, update_parent_receiver) = unbounded();
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -698,6 +701,7 @@ pub mod tests {
             },
             blockstore,
             ledger_signal_receiver,
+            update_parent_receiver,
             Some(Arc::new(RpcSubscriptions::new_for_tests(
                 exit.clone(),
                 max_complete_transaction_status_slot,
