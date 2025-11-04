@@ -32,6 +32,7 @@ use {
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
+    parking_lot::RwLock as PLRwLock,
     quinn::Endpoint,
     solana_accounts_db::{
         accounts_db::{AccountsDbConfig, ACCOUNTS_DB_CONFIG_FOR_TESTING},
@@ -142,6 +143,7 @@ use {
     solana_validator_exit::Exit,
     solana_vote_program::vote_state,
     solana_votor::{
+        consensus_rewards::ConsensusRewards,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
@@ -1425,6 +1427,11 @@ impl Validator {
             migration_status.clone(),
         );
 
+        let consensus_rewards = Arc::new(PLRwLock::new(ConsensusRewards::new(
+            cluster_info.clone(),
+            leader_schedule_cache.clone(),
+        )));
+
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
             migration_status: migration_status.clone(),
@@ -1439,6 +1446,7 @@ impl Validator {
             record_receiver: record_receiver.clone(),
             leader_window_notifier: leader_window_notifier.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
+            consensus_rewards: consensus_rewards.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1693,6 +1701,7 @@ impl Validator {
             key_notifiers.clone(),
             alpenglow_last_voted.clone(),
             migration_status.clone(),
+            consensus_rewards,
         )
         .map_err(ValidatorError::Other)?;
 

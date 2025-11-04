@@ -9,6 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
+    parking_lot::RwLock as PLRwLock,
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
@@ -31,8 +32,14 @@ use {
         bank_forks::BankForks,
     },
     solana_version::version,
-    solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor::{
+        common::block_timeout, consensus_rewards::ConsensusRewards, event::LeaderWindowInfo,
+        votor::LeaderWindowNotifier,
+    },
+    solana_votor_messages::{
+        migration::MigrationStatus,
+        rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -79,6 +86,7 @@ pub struct BlockCreationLoopConfig {
     pub poh_recorder: Arc<RwLock<PohRecorder>>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    pub consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
 
     // Notifiers
     pub banking_tracer: Arc<BankingTracer>,
@@ -104,6 +112,7 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -134,9 +143,15 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker {
+fn produce_block_footer(
+    block_producer_time_nanos: u64,
+    skip_reward_certificate: Option<SkipRewardCertificate>,
+    notar_reward_certificate: Option<NotarRewardCertificate>,
+) -> VersionedBlockMarker {
     let footer = BlockFooterV1 {
         block_producer_time_nanos,
+        skip_reward_certificate,
+        notar_reward_certificate,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
     };
 
@@ -166,6 +181,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         leader_window_notifier,
         replay_highest_frozen,
         migration_status,
+        consensus_rewards,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -189,6 +205,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
+        consensus_rewards,
     };
 
     info!("{my_pubkey}: Block creation loop initialized");
@@ -301,6 +318,7 @@ fn produce_window(
         if let Err(e) = record_and_complete_block(
             ctx.poh_recorder.as_ref(),
             &mut ctx.record_receiver,
+            ctx.consensus_rewards.clone(),
             skip_timer,
             timeout,
         ) {
@@ -342,9 +360,17 @@ fn produce_window(
 fn record_and_complete_block(
     poh_recorder: &RwLock<PohRecorder>,
     record_receiver: &mut RecordReceiver,
+    consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
     block_timer: Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
+    // Taking a read lock on consensus_rewards can contend with the write lock in bls_sigverifier.
+    // We are ready to produce the block footer now, while we gather other bits of data, we can block on the consensus_rewards lock in a separate thread to minimise contention.
+    let handle = std::thread::spawn(move || {
+        // XXX: how to look up the slot.
+        let slot = u64::MAX;
+        consensus_rewards.read().build_rewards_certs(slot)
+    });
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
@@ -378,7 +404,8 @@ fn record_and_complete_block(
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
     let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let footer = produce_block_footer(block_producer_time_nanos);
+    let (skip, notar) = handle.join().unwrap();
+    let footer = produce_block_footer(block_producer_time_nanos, skip, notar);
     w_poh_recorder.send_marker(footer)?;
 
     // Alpentick and clear bank

@@ -8045,6 +8045,7 @@ dependencies = [
  "min-max-heap",
  "num_cpus",
  "num_enum",
+ "parking_lot 0.12.4",
  "prio-graph",
  "qualifier_attr",
  "quinn",
@@ -8397,6 +8398,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "solana-transaction-error",
+ "solana-votor-messages",
  "thiserror 2.0.16",
 ]
 

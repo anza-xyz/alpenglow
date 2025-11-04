@@ -39,6 +39,7 @@ solana-runtime-transaction = { workspace = true }
 solana-sha256-hasher = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
+solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
