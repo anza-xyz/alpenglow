@@ -31,6 +31,7 @@ use {
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
+        installed_scheduler_pool::BankWithScheduler,
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
@@ -91,6 +92,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub optimistic_parent_receiver: Receiver<BankWithScheduler>,
 }
 
 struct LeaderContext {
@@ -171,6 +173,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         migration_status,
         highest_parent_ready,
+        optimistic_parent_receiver,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -252,6 +255,12 @@ fn start_loop(config: BlockCreationLoopConfig) {
 
             info
         };
+
+        // TODO(ksn): fast leader handover. Once we can stream parent ready events over a channel,
+        // we'll have the two channels race each other to determine what to do.
+        //
+        // For now, just drain the channel and don't do anything with optimistic parents.
+        while let Ok(_optimistic_parent) = optimistic_parent_receiver.try_recv() {}
 
         trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
         if let Err(e) = produce_window(start_slot, end_slot, parent_slot, skip_timer, &mut ctx) {

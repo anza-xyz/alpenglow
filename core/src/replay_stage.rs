@@ -312,6 +312,7 @@ pub struct ReplaySenders {
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
+    pub optimistic_parent_sender: Sender<BankWithScheduler>,
 }
 
 pub struct ReplayReceivers {
@@ -632,6 +633,7 @@ impl ReplayStage {
             dumped_slots_sender,
             votor_event_sender,
             own_vote_sender,
+            optimistic_parent_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -853,9 +855,11 @@ impl ReplayStage {
                     &replay_tx_thread_pool,
                     &prioritization_fee_cache,
                     &mut purge_repair_slot_counter,
+                    &leader_schedule_cache,
                     (!migration_status.is_alpenglow_enabled()).then_some(&mut tbft_structs),
                     migration_status.as_ref(),
                     &votor_event_sender,
+                    &optimistic_parent_sender,
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
                 if migration_status.is_alpenglow_enabled() {
@@ -3289,10 +3293,12 @@ impl ReplayStage {
         block_metadata_notifier: Option<BlockMetadataNotifierArc>,
         replay_result_vec: &[ReplaySlotFromBlockstore],
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
+        leader_schedule_cache: &Arc<LeaderScheduleCache>,
         my_pubkey: &Pubkey,
         mut tbft_structs: Option<&mut TowerBFTStructures>,
         migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
+        optimistic_parent_sender: &Sender<BankWithScheduler>,
     ) -> Vec<Slot> {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
         let mut tx_count = 0;
@@ -3435,6 +3441,19 @@ impl ReplayStage {
                     ("slot", bank_slot, i64),
                     ("hash", bank.hash().to_string(), String),
                 );
+
+                // Fast leader handover: if we're going to be the next leader, and our leader window
+                // starts on the next slot, then send the bank through this channel.
+                let is_next_leader = leader_schedule_cache
+                    .slot_leader_at(bank.slot() + 1, Some(bank))
+                    .is_some_and(|leader| &leader == my_pubkey);
+                let next_slot = bank.slot().saturating_add(1);
+
+                if is_next_leader && next_slot == first_of_consecutive_leader_slots(next_slot) {
+                    // Try sending, but don't block if the channel is full.
+                    let _ = optimistic_parent_sender
+                        .send_timeout(bank.clone_with_scheduler(), Duration::from_secs(1));
+                }
 
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
@@ -3628,9 +3647,11 @@ impl ReplayStage {
         replay_tx_thread_pool: &ThreadPool,
         prioritization_fee_cache: &PrioritizationFeeCache,
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
+        leader_schedule_cache: &Arc<LeaderScheduleCache>,
         tbft_structs: Option<&mut TowerBFTStructures>,
         migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
+        optimistic_parent_sender: &Sender<BankWithScheduler>,
     ) -> Vec<Slot> /* completed slots */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
         let num_active_banks = active_bank_slots.len();
@@ -3699,10 +3720,12 @@ impl ReplayStage {
             block_metadata_notifier,
             &replay_result_vec,
             purge_repair_slot_counter,
+            leader_schedule_cache,
             my_pubkey,
             tbft_structs,
             migration_status,
             votor_event_sender,
+            optimistic_parent_sender,
         )
     }
 
