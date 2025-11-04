@@ -955,19 +955,17 @@ impl BlockFooterV1 {
             return Err(BlockComponentError::InsufficientData);
         }
 
-        // Read bank hash
-        let hash_bytes: [u8; 32] = data[..Self::HASH_SIZE]
-            .try_into()
-            .map_err(|_| BlockComponentError::InsufficientData)?;
+        // Read bank hash; HEADER_SIZE > HASH_SIZE, so this unwrap will never fail.
+        let hash_bytes: [u8; 32] = data[..Self::HASH_SIZE].try_into().unwrap();
         let bank_hash = Hash::new_from_array(hash_bytes);
 
-        // Read timestamp
+        // Read timestamp; HEADER_SIZE > HASH_SIZE + TIMESTAMP_SIZE, so this unwrap will never fail.
         let time_bytes = data[Self::HASH_SIZE..Self::HASH_SIZE + Self::TIMESTAMP_SIZE]
             .try_into()
             .map_err(|_| BlockComponentError::InsufficientData)?;
         let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
 
-        // Read user agent length
+        // Read user agent length; HEADER_SIZE > HASH_SIZE + TIMESTAMP_SIZE, so this access works.
         let user_agent_len = data[Self::HASH_SIZE + Self::TIMESTAMP_SIZE] as usize;
 
         // Validate remaining data size
