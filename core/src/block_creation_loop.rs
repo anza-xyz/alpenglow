@@ -9,6 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
+    crossbeam_channel::Receiver,
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
@@ -85,9 +86,11 @@ pub struct BlockCreationLoopConfig {
     pub slot_status_notifier: Option<SlotStatusNotifier>,
 
     // Receivers / notifications from banking stage / replay / votor
-    pub record_receiver: RecordReceiver,
     pub leader_window_notifier: Arc<LeaderWindowNotifier>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+
+    // Channel to receive RecordReceiver from PohService
+    pub record_receiver_channel: Receiver<RecordReceiver>,
 }
 
 struct LeaderContext {
@@ -162,10 +165,10 @@ fn start_loop(config: BlockCreationLoopConfig) {
         rpc_subscriptions,
         banking_tracer,
         slot_status_notifier,
-        record_receiver,
         leader_window_notifier,
         replay_highest_frozen,
         migration_status,
+        record_receiver_channel,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -173,6 +176,19 @@ fn start_loop(config: BlockCreationLoopConfig) {
 
     // get latest identity pubkey during startup
     let mut my_pubkey = cluster_info.id();
+
+    info!("{my_pubkey}: Block creation loop initialized");
+    // Wait for PohService to be shutdown
+    migration_status.wait_for_migration_or_exit(&exit);
+    info!("{my_pubkey}: Block creation loop starting");
+
+    let record_receiver = match record_receiver_channel.recv() {
+        Ok(receiver) => receiver,
+        Err(e) => {
+            error!("{my_pubkey}: Failed to receive RecordReceiver from PohService. Exiting: {e:?}",);
+            return;
+        }
+    };
 
     let mut ctx = LeaderContext {
         exit,
@@ -190,11 +206,6 @@ fn start_loop(config: BlockCreationLoopConfig) {
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
     };
-
-    info!("{my_pubkey}: Block creation loop initialized");
-    // Wait for PohService to be shutdown
-    migration_status.wait_for_migration_or_exit(&ctx.exit);
-    info!("{my_pubkey}: Block creation loop starting");
 
     // Setup poh
     // Important this is called *before* any new alpenglow

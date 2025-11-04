@@ -13,7 +13,7 @@ use {
     agave_banking_stage_ingress_types::BankingPacketBatch,
     assert_matches::assert_matches,
     bincode::deserialize_from,
-    crossbeam_channel::{unbounded, Sender},
+    crossbeam_channel::{bounded, unbounded, Sender},
     itertools::Itertools,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT, HOLD_TRANSACTIONS_SLOT_OFFSET},
@@ -755,6 +755,7 @@ impl BankingSimulator {
         let transaction_recorder = TransactionRecorder::new(record_sender);
         let (poh_controller, poh_service_message_receiver) = PohController::new();
         let migration_status = Arc::new(MigrationStatus::default());
+        let (record_receiver_sender, _record_receiver_channel) = bounded(1);
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,
@@ -765,6 +766,7 @@ impl BankingSimulator {
             record_receiver,
             poh_service_message_receiver,
             migration_status.clone(),
+            record_receiver_sender,
         );
 
         // Enable BankingTracer to approximate the real environment as close as possible because

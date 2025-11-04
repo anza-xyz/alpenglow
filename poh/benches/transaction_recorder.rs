@@ -1,5 +1,6 @@
 use {
     criterion::{criterion_group, criterion_main, Criterion},
+    crossbeam_channel::{self, bounded},
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
@@ -78,6 +79,7 @@ fn bench_record_transactions(c: &mut Criterion) {
     let (mut poh_controller, poh_service_receiver) = PohController::new();
     let poh_recorder = Arc::new(RwLock::new(poh_recorder));
     let migration_status = Arc::new(MigrationStatus::default());
+    let (record_receiver_sender, _record_receiver_channel) = bounded(1);
     let poh_service = PohService::new(
         poh_recorder.clone(),
         &genesis_config_info.genesis_config.poh_config,
@@ -88,6 +90,7 @@ fn bench_record_transactions(c: &mut Criterion) {
         record_receiver,
         poh_service_receiver,
         migration_status,
+        record_receiver_sender,
     );
     poh_controller
         .set_bank_sync(BankWithScheduler::new_without_scheduler(bank.clone()))
