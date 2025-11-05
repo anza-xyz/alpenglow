@@ -9,7 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::Receiver,
+    crossbeam_channel::{select, Receiver},
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
@@ -49,6 +49,11 @@ use {
 };
 
 mod stats;
+
+enum ParentSource {
+    ParentReady(LeaderWindowInfo),
+    OptimisticParent(BankWithScheduler),
+}
 
 pub struct BlockCreationLoop {
     thread: JoinHandle<()>,
@@ -230,37 +235,54 @@ fn start_loop(config: BlockCreationLoopConfig) {
             );
         }
 
-        // Wait for the voting loop to notify us, draining all pending messages and keeping the highest slot
+        // Race between parent ready notification and optimistic parent events
+        let window_source = {
+            select! {
+                recv(ctx.leader_window_info_receiver) -> msg => {
+                    // Drain all pending messages and keep the latest one
+                    msg.ok()
+                        .and_then(|window| {
+                            ctx.leader_window_info_receiver
+                                .try_iter()
+                                .last()
+                                .or(Some(window))
+                        })
+                        .map(ParentSource::ParentReady)
+                },
+                recv(optimistic_parent_receiver) -> msg => {
+                    // Drain all pending messages and keep the latest one
+                    msg.ok()
+                        .and_then(|bank| {
+                            optimistic_parent_receiver
+                                .try_iter()
+                                .last()
+                                .or(Some(bank))
+                        })
+                        .map(ParentSource::OptimisticParent)
+                },
+                default(Duration::from_secs(1)) => None,
+            }
+        };
+
+        let Some(window_source) = window_source else {
+            continue;
+        };
+
+        // TODO(ksn): fast leader handover. Handle OptimisticParent case.
+        // For now, we only process LeaderNotification events.
         let LeaderWindowInfo {
             start_slot,
             end_slot,
             // TODO: handle duplicate blocks by using the hash here
             parent_block: (parent_slot, _),
             skip_timer,
-        } = {
-            // Drain all pending messages and keep the latest one
-            let Some(info) = ctx
-                .leader_window_info_receiver
-                .recv_timeout(Duration::from_secs(1))
-                .ok()
-                .and_then(|window| {
-                    ctx.leader_window_info_receiver
-                        .try_iter()
-                        .last()
-                        .or(Some(window))
-                })
-            else {
+        } = match window_source {
+            ParentSource::ParentReady(info) => info,
+            ParentSource::OptimisticParent(_bank) => {
+                // Skip optimistic parent events for now
                 continue;
-            };
-
-            info
+            }
         };
-
-        // TODO(ksn): fast leader handover. Once we can stream parent ready events over a channel,
-        // we'll have the two channels race each other to determine what to do.
-        //
-        // For now, just drain the channel and don't do anything with optimistic parents.
-        while let Ok(_optimistic_parent) = optimistic_parent_receiver.try_recv() {}
 
         trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
         if let Err(e) = produce_window(start_slot, end_slot, parent_slot, skip_timer, &mut ctx) {
