@@ -178,7 +178,7 @@ impl PohService {
 
                 // Pass the RecordReceiver to BlockCreationLoop,
                 if let Err(e) = record_receiver_sender.send(record_receiver) {
-                    info!("Unable to send record receiver, shutting down {e:}");
+                    error!("Unable to send record receiver, shutting down {e:}");
                     return;
                 }
 
@@ -809,7 +809,7 @@ mod tests {
             .unwrap_or(DEFAULT_HASHES_PER_BATCH);
         let (_record_sender, record_receiver) = record_channels(false);
         let (_poh_controller, poh_service_message_receiver) = PohController::new();
-        let (record_receiver_sender, _record_receiver_channel) = bounded(1);
+        let (record_receiver_sender, _record_receiver_receiver) = bounded(1);
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &poh_config,

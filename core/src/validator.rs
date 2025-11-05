@@ -1416,7 +1416,7 @@ impl Validator {
 
         // Pass RecordReceiver from PohService to BlockCreationLoop when shutting down. Gives us a strong guarentee
         // that both block producers are not running at the same time
-        let (record_receiver_sender, record_receiver_channel) = bounded(1);
+        let (record_receiver_sender, record_receiver_receiver) = bounded(1);
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
@@ -1433,7 +1433,6 @@ impl Validator {
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
-            migration_status: migration_status.clone(),
             bank_forks: bank_forks.clone(),
             blockstore: blockstore.clone(),
             cluster_info: cluster_info.clone(),
@@ -1444,7 +1443,7 @@ impl Validator {
             slot_status_notifier: slot_status_notifier.clone(),
             leader_window_notifier: leader_window_notifier.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
-            record_receiver_channel,
+            record_receiver_receiver,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 

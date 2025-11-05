@@ -1023,7 +1023,7 @@ fn do_create_test_recorder(
     let transaction_recorder = TransactionRecorder::new(record_sender);
     let poh_recorder = Arc::new(RwLock::new(poh_recorder));
     let (mut poh_controller, poh_service_message_receiver) = PohController::new();
-    let (record_receiver_sender, _record_receiver_channel) = bounded(1);
+    let (record_receiver_sender, _record_receiver_receiver) = bounded(1);
     let poh_service = PohService::new(
         poh_recorder.clone(),
         &poh_config,

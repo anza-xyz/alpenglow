@@ -755,7 +755,7 @@ impl BankingSimulator {
         let transaction_recorder = TransactionRecorder::new(record_sender);
         let (poh_controller, poh_service_message_receiver) = PohController::new();
         let migration_status = Arc::new(MigrationStatus::default());
-        let (record_receiver_sender, _record_receiver_channel) = bounded(1);
+        let (record_receiver_sender, _record_receiver_receiver) = bounded(1);
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,

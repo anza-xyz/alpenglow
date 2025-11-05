@@ -33,7 +33,6 @@ use {
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
-    solana_votor_messages::migration::MigrationStatus,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -71,7 +70,6 @@ impl BlockCreationLoop {
 
 pub struct BlockCreationLoopConfig {
     pub exit: Arc<AtomicBool>,
-    pub migration_status: Arc<MigrationStatus>,
 
     // Shared state
     pub bank_forks: Arc<RwLock<BankForks>>,
@@ -90,7 +88,7 @@ pub struct BlockCreationLoopConfig {
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
 
     // Channel to receive RecordReceiver from PohService
-    pub record_receiver_channel: Receiver<RecordReceiver>,
+    pub record_receiver_receiver: Receiver<RecordReceiver>,
 }
 
 struct LeaderContext {
@@ -167,8 +165,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         slot_status_notifier,
         leader_window_notifier,
         replay_highest_frozen,
-        migration_status,
-        record_receiver_channel,
+        record_receiver_receiver,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -178,17 +175,17 @@ fn start_loop(config: BlockCreationLoopConfig) {
     let mut my_pubkey = cluster_info.id();
 
     info!("{my_pubkey}: Block creation loop initialized");
-    // Wait for PohService to be shutdown
-    migration_status.wait_for_migration_or_exit(&exit);
-    info!("{my_pubkey}: Block creation loop starting");
 
-    let record_receiver = match record_receiver_channel.recv() {
+    // Wait for PohService to be shutdown
+    let record_receiver = match record_receiver_receiver.recv() {
         Ok(receiver) => receiver,
         Err(e) => {
             error!("{my_pubkey}: Failed to receive RecordReceiver from PohService. Exiting: {e:?}",);
             return;
         }
     };
+
+    info!("{my_pubkey}: Block creation loop starting");
 
     let mut ctx = LeaderContext {
         exit,
