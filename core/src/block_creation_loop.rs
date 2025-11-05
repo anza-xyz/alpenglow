@@ -273,7 +273,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
             start_slot,
             end_slot,
             // TODO: handle duplicate blocks by using the hash here
-            parent_block: (parent_slot, _),
+            parent_block: (parent_slot, parent_hash),
             skip_timer,
         } = match window_source {
             ParentSource::ParentReady(info) => info,
@@ -283,12 +283,22 @@ fn start_loop(config: BlockCreationLoopConfig) {
                     "{my_pubkey:?} {} {} !!!!! FOUND OPTIMISTIC PARENT !!!!!",
                     info.start_slot, info.end_slot,
                 );
-                continue;
+                info
             }
         };
 
         trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
-        if let Err(e) = produce_window(start_slot, end_slot, parent_slot, skip_timer, &mut ctx) {
+        let fast_leader_handover = matches!(window_source, ParentSource::OptimisticParent(_));
+
+        if let Err(e) = produce_window(
+            fast_leader_handover,
+            start_slot,
+            end_slot,
+            parent_slot,
+            parent_hash,
+            skip_timer,
+            &mut ctx,
+        ) {
             // Give up on this leader window
             error!(
                 "{my_pubkey}: Unable to produce window {start_slot}-{end_slot}, skipping window: \
@@ -324,9 +334,11 @@ fn reset_poh_recorder(bank: &Arc<Bank>, ctx: &LeaderContext) {
 /// Produces the leader window from `start_slot` -> `end_slot` using parent
 /// `parent_slot` while abiding to the `skip_timer`
 fn produce_window(
+    fast_leader_handover: bool,
     start_slot: Slot,
     end_slot: Slot,
     parent_slot: Slot,
+    parent_hash: Hash,
     skip_timer: Instant,
     ctx: &mut LeaderContext,
 ) -> Result<(), StartLeaderError> {
@@ -345,12 +357,9 @@ fn produce_window(
         );
 
         let mut bank_completion_measure = Measure::start("bank_completion");
-        if let Err(e) = record_and_complete_block(
-            ctx.poh_recorder.as_ref(),
-            &mut ctx.record_receiver,
-            skip_timer,
-            timeout,
-        ) {
+        let optimistic_parent = fast_leader_handover.then_some((parent_slot, parent_hash));
+
+        if let Err(e) = record_and_complete_block(ctx, optimistic_parent, skip_timer, timeout) {
             panic!("PohRecorder record failed: {e:?}");
         }
         assert!(!ctx.poh_recorder.read().unwrap().has_bank());
@@ -387,25 +396,46 @@ fn produce_window(
 /// - Insert the alpentick
 /// - Clear the working bank
 fn record_and_complete_block(
-    poh_recorder: &RwLock<PohRecorder>,
-    record_receiver: &mut RecordReceiver,
+    ctx: &mut LeaderContext,
+    mut optimistic_parent: Option<(Slot, Hash)>,
     block_timer: Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
+    let poh_recorder = ctx.poh_recorder.as_ref();
+    let record_receiver = &mut ctx.record_receiver;
+
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
             break;
         }
 
+        if let Some(optimistic_parent_block) = optimistic_parent {
+            if let Ok(leader_window_info) = ctx.leader_window_info_receiver.try_recv() {
+                // TODO(ksn): reset block timer
+                if leader_window_info.parent_block == optimistic_parent_block {
+                    println!("!!!!! OPTIMISTIC PARENT MATCHED");
+                    optimistic_parent = None;
+                } else {
+                    // TODO(ksn): Parent ready doesn't match optimistic parent
+                    // Need to send UpdateParent block component and stop shred dissemination
+                }
+            }
+        }
+
         let Ok(record) = record_receiver.recv_timeout(remaining_slot_time) else {
             continue;
         };
+
         poh_recorder.write().unwrap().record(
             record.slot,
             record.mixins,
             record.transaction_batches,
         )?;
+    }
+
+    if optimistic_parent.is_some() {
+        println!("!!!!! PARENT READY NOT OBSERVED YET!");
     }
 
     // Shutdown and clear any inflight records
