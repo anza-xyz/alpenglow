@@ -1365,7 +1365,7 @@ mod tests {
     fn create_parent_ready_update() -> UpdateParentV1 {
         UpdateParentV1 {
             new_parent_slot: 42,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         }
     }
 
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn test_block_component_marker() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -1551,7 +1551,7 @@ mod tests {
     #[test]
     fn test_block_marker_v1_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 3692581470,
             block_user_agent: b"validator-client".to_vec(),
         };
@@ -1594,7 +1594,7 @@ mod tests {
     #[test]
     fn test_versioned_block_marker_v1_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: b"my-node".to_vec(),
         };
@@ -1639,7 +1639,7 @@ mod tests {
     #[test]
     fn test_block_component_marker_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5432109876,
             block_user_agent: b"blockchain-node-v3".to_vec(),
         };
@@ -1669,7 +1669,7 @@ mod tests {
     #[test]
     fn test_block_component_serde_marker() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1122334455,
             block_user_agent: b"serde-test".to_vec(),
         };
@@ -1687,7 +1687,7 @@ mod tests {
     #[test]
     fn test_versioned_block_marker_version_upgrade() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 6677889900,
             block_user_agent: b"upgrade-test".to_vec(),
         };
@@ -1705,7 +1705,7 @@ mod tests {
     #[test]
     fn test_versioned_block_footer_version_upgrade() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7788990011,
             block_user_agent: b"footer-upgrade".to_vec(),
         };
@@ -1742,7 +1742,7 @@ mod tests {
 
         // Manually append marker data (this should cause deserialization to fail)
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456,
             block_user_agent: b"bad-data".to_vec(),
         };
@@ -1814,7 +1814,7 @@ mod tests {
         // Valid data should work
         let update = UpdateParentV1 {
             new_parent_slot: 42,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
         let bytes = update.to_bytes().unwrap();
         assert_eq!(bytes.len(), 40); // 8 + 32 bytes
@@ -1948,7 +1948,7 @@ mod tests {
     fn test_block_footer_v1_edge_cases() {
         // Test with maximum timestamp value
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: b"max-time".to_vec(),
         };
@@ -1959,7 +1959,7 @@ mod tests {
 
         // Test with minimum timestamp value
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: b"min-time".to_vec(),
         };
@@ -1970,7 +1970,7 @@ mod tests {
 
         // Test with exactly 255 byte user agent
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: (0..=254).collect::<Vec<u8>>(),
         };
@@ -2023,7 +2023,7 @@ mod tests {
         // Test with zero slot value
         let header = BlockHeaderV1 {
             parent_slot: 0,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
 
         let bytes = header.to_bytes().unwrap();
@@ -2044,7 +2044,7 @@ mod tests {
         // Valid data should work
         let header = BlockHeaderV1 {
             parent_slot: 42,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         let bytes = header.to_bytes().unwrap();
         assert_eq!(bytes.len(), 40); // 8 + 32 bytes
@@ -2102,7 +2102,7 @@ mod tests {
     fn test_block_header_v1_clone_and_debug() {
         let header = BlockHeaderV1 {
             parent_slot: 12345,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         let cloned_header = header.clone();
 
@@ -2170,7 +2170,7 @@ mod tests {
         // Test with zero slot value
         let update = UpdateParentV1 {
             new_parent_slot: 0,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
 
         let bytes = update.to_bytes().unwrap();
@@ -2182,7 +2182,7 @@ mod tests {
     fn test_version_consistency() {
         // Test that version methods return expected values
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: Vec::new(),
         };
@@ -2193,7 +2193,7 @@ mod tests {
 
         let header = BlockHeaderV1 {
             parent_slot: 789,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         assert_eq!(header.version(), 1);
 
@@ -2202,7 +2202,7 @@ mod tests {
 
         let update = UpdateParentV1 {
             new_parent_slot: 456,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
         assert_eq!(update.version(), 1);
 
@@ -2226,7 +2226,7 @@ mod tests {
     fn test_serde_consistency_across_versions() {
         // Test that serde and manual serialization produce same results
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"serde-test-agent".to_vec(),
         };
@@ -2263,7 +2263,7 @@ mod tests {
     fn test_cross_version_compatibility() {
         // Test that V1 data can be read as Current and vice versa
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 999999999,
             block_user_agent: b"cross-version".to_vec(),
         };
@@ -2298,7 +2298,7 @@ mod tests {
 
         for user_agent in test_cases {
             let footer = BlockFooterV1 {
-                bank_hash: Hash::default(),
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 12345,
                 block_user_agent: user_agent.clone(),
             };
@@ -2431,7 +2431,7 @@ mod tests {
     #[test]
     fn test_block_component_new_special() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2474,7 +2474,7 @@ mod tests {
     #[test]
     fn test_block_component_valid_special_only() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2597,7 +2597,7 @@ mod tests {
     #[test]
     fn test_special_entry_v1_block_footer_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2622,7 +2622,7 @@ mod tests {
     #[test]
     fn test_versioned_special_entry_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2676,7 +2676,7 @@ mod tests {
     #[test]
     fn test_versioned_special_entry_v1_variant() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2761,7 +2761,7 @@ mod tests {
 
     #[test]
     fn test_boundary_values() {
-        let boundary_update = create_parent_ready_update_with_data(0, Hash::default());
+        let boundary_update = create_parent_ready_update_with_data(0, Hash::new_unique());
         let boundary_versioned = VersionedUpdateParent::new(boundary_update.clone());
 
         let bytes = boundary_versioned.to_bytes().unwrap();
@@ -2826,7 +2826,7 @@ mod tests {
     fn test_byte_length_validation() {
         // Test BlockMarkerV1 with BlockFooter
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456789,
             block_user_agent: b"test-validator".to_vec(),
         };
@@ -2885,7 +2885,7 @@ mod tests {
         // Test with maximum allowed byte length (just under u16::MAX)
         let large_user_agent = vec![b'x'; 255]; // Max user agent size
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: large_user_agent,
         };
@@ -2905,7 +2905,7 @@ mod tests {
 
         // Test with minimum byte length
         let min_footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: vec![],
         };
@@ -2956,7 +2956,7 @@ mod tests {
 
         // Create second component: marker
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"multi-component-test".to_vec(),
         };
@@ -3051,7 +3051,7 @@ mod tests {
 
         // Create BlockFooter marker component
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"test-validator-v2.0".to_vec(),
         };
@@ -3115,7 +3115,7 @@ mod tests {
 
         // Create BlockFooter V1
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 11111,
             block_user_agent: b"node-1".to_vec(),
         };
@@ -3174,7 +3174,7 @@ mod tests {
 
             // Add footer marker
             let footer = BlockFooterV1 {
-                bank_hash: Hash::default(),
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: i as u64 * 1000,
                 block_user_agent: format!("node-{i}").into_bytes(),
             };
@@ -3222,7 +3222,7 @@ mod tests {
         let component1 = BlockComponent::new_entry_batch(entries1).unwrap();
 
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 555,
             block_user_agent: b"test".to_vec(),
         };
@@ -3280,7 +3280,7 @@ mod tests {
 
         // Block footer at the end
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"agave/2.0.0".to_vec(),
         };
@@ -3324,7 +3324,7 @@ mod tests {
 
         // Test with marker data (zero count)
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: b"test".to_vec(),
         };
@@ -3361,7 +3361,7 @@ mod tests {
 
         // Test as_versioned_block_marker
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 456,
             block_user_agent: b"marker-test".to_vec(),
         };
@@ -3409,7 +3409,7 @@ mod tests {
         let components = vec![
             BlockComponent::new_block_marker(VersionedBlockMarker::new(
                 BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
-                    bank_hash: Hash::default(),
+                    bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 111,
                     block_user_agent: b"node1".to_vec(),
                 })),
@@ -3448,7 +3448,7 @@ mod tests {
             BlockComponent::new_entry_batch(create_mock_entry_batch(1)).unwrap(),
             BlockComponent::new_block_marker(VersionedBlockMarker::new(
                 BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
-                    bank_hash: Hash::default(),
+                    bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 999,
                     block_user_agent: b"test".to_vec(),
                 })),
@@ -3482,7 +3482,7 @@ mod tests {
         // Test BlockComponent with BlockFooter marker (various user agent sizes)
         for user_agent_len in [0, 10, 100, 255, 300] {
             let footer = BlockFooterV1 {
-                bank_hash: Hash::default(),
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 123456789,
                 block_user_agent: vec![b'x'; user_agent_len],
             };
