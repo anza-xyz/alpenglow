@@ -924,6 +924,16 @@ impl BlockFooterV1 {
     /// Combined size of hash, timestamp and length fields.
     const HEADER_SIZE: usize = Self::HASH_SIZE + Self::TIMESTAMP_SIZE + Self::LENGTH_SIZE;
 
+    // Field offsets for deserialization
+    /// Offset where bank hash starts.
+    const BANK_HASH_OFFSET: usize = 0;
+    /// Offset where timestamp starts.
+    const TIMESTAMP_OFFSET: usize = Self::BANK_HASH_OFFSET + Self::HASH_SIZE;
+    /// Offset where user agent length byte is located.
+    const USER_AGENT_LEN_OFFSET: usize = Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE;
+    /// Offset where user agent bytes start.
+    const USER_AGENT_OFFSET: usize = Self::USER_AGENT_LEN_OFFSET + Self::LENGTH_SIZE;
+
     /// Returns the version for this struct.
     pub const fn version(&self) -> u8 {
         1
@@ -932,7 +942,10 @@ impl BlockFooterV1 {
     /// Serializes to bytes with user agent length capping.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let mut buffer = Vec::with_capacity(
-            32 + 8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN),
+            Self::HASH_SIZE
+                + Self::TIMESTAMP_SIZE
+                + Self::LENGTH_SIZE
+                + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN),
         );
 
         // Serialize bank hash
@@ -955,26 +968,30 @@ impl BlockFooterV1 {
             return Err(BlockComponentError::InsufficientData);
         }
 
-        // Read bank hash; HEADER_SIZE > HASH_SIZE, so this unwrap will never fail.
-        let hash_bytes: [u8; 32] = data[..Self::HASH_SIZE].try_into().unwrap();
+        // Read bank hash
+        let hash_bytes: [u8; 32] = data
+            [Self::BANK_HASH_OFFSET..Self::BANK_HASH_OFFSET + Self::HASH_SIZE]
+            .try_into()
+            .map_err(|_| BlockComponentError::InsufficientData)?;
         let bank_hash = Hash::new_from_array(hash_bytes);
 
-        // Read timestamp; HEADER_SIZE > HASH_SIZE + TIMESTAMP_SIZE, so this unwrap will never fail.
-        let time_bytes = data[Self::HASH_SIZE..Self::HASH_SIZE + Self::TIMESTAMP_SIZE]
+        // Read timestamp
+        let time_bytes = data[Self::TIMESTAMP_OFFSET..Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE]
             .try_into()
             .map_err(|_| BlockComponentError::InsufficientData)?;
         let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
 
-        // Read user agent length; HEADER_SIZE > HASH_SIZE + TIMESTAMP_SIZE, so this access works.
-        let user_agent_len = data[Self::HASH_SIZE + Self::TIMESTAMP_SIZE] as usize;
+        // Read user agent length
+        let user_agent_len = data[Self::USER_AGENT_LEN_OFFSET] as usize;
 
         // Validate remaining data size
-        if data.len() < Self::HEADER_SIZE + user_agent_len {
+        if data.len() < Self::USER_AGENT_OFFSET + user_agent_len {
             return Err(BlockComponentError::InsufficientData);
         }
 
         // Read user agent bytes
-        let block_user_agent = data[Self::HEADER_SIZE..Self::HEADER_SIZE + user_agent_len].to_vec();
+        let block_user_agent =
+            data[Self::USER_AGENT_OFFSET..Self::USER_AGENT_OFFSET + user_agent_len].to_vec();
 
         Ok(Self {
             bank_hash,
@@ -1397,7 +1414,7 @@ mod tests {
     #[test]
     fn test_block_footer_v1_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"my-validator-v2.0".to_vec(),
         };
@@ -1406,12 +1423,14 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        // Verify bank hash round-trips correctly
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_empty_user_agent() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: Vec::new(),
         };
@@ -1420,12 +1439,13 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_max_user_agent() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5555555555,
             block_user_agent: vec![b'x'; 255],
         };
@@ -1434,12 +1454,13 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_oversized_user_agent_truncation() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7777777777,
             block_user_agent: vec![b'y'; 300], // Over 255 limit
         };
@@ -1448,6 +1469,7 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         // Should be truncated to 255 bytes
+        assert_eq!(deserialized.bank_hash, footer.bank_hash);
         assert_eq!(deserialized.block_producer_time_nanos, 7777777777);
         assert_eq!(deserialized.block_user_agent.len(), 255);
         assert_eq!(deserialized.block_user_agent, vec![b'y'; 255]);
@@ -1456,7 +1478,7 @@ mod tests {
     #[test]
     fn test_block_footer_v1_binary_user_agent() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1111111111,
             block_user_agent: vec![0x00, 0xFF, 0x7F, 0x80, 0x01, 0xFE],
         };
@@ -1465,6 +1487,7 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
@@ -1481,16 +1504,20 @@ mod tests {
     #[test]
     fn test_versioned_block_footer_serialization() {
         let footer = BlockFooterV1 {
-            bank_hash: Hash::default(),
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 2468135790,
             block_user_agent: b"node-v2.1.0".to_vec(),
         };
-        let versioned = VersionedBlockFooter::new(footer);
+        let versioned = VersionedBlockFooter::new(footer.clone());
 
         let bytes = versioned.to_bytes().unwrap();
         let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
 
         assert_eq!(versioned, deserialized);
+        // Verify bank hash is correctly preserved
+        if let VersionedBlockFooter::Current(deserialized_footer) = deserialized {
+            assert_eq!(footer.bank_hash, deserialized_footer.bank_hash);
+        }
     }
 
     #[test]

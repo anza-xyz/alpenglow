@@ -11,11 +11,7 @@ use {
     },
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
-    },
     solana_gossip::cluster_info::ClusterInfo,
-    solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
@@ -32,7 +28,6 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
-    solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo, votor::LeaderWindowNotifier},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -134,19 +129,6 @@ enum StartLeaderError {
         /* parent ready slot */ Slot,
         /* leader slot */ Slot,
     ),
-}
-
-fn produce_block_footer(bank_hash: Hash, block_producer_time_nanos: u64) -> VersionedBlockMarker {
-    let footer = BlockFooterV1 {
-        bank_hash,
-        block_producer_time_nanos,
-        block_user_agent: format!("agave/{}", version!()).into_bytes(),
-    };
-
-    let footer = VersionedBlockFooter::Current(footer);
-    let footer = BlockMarkerV1::BlockFooter(footer);
-
-    VersionedBlockMarker::Current(footer)
 }
 
 /// The block creation loop.
@@ -385,18 +367,12 @@ fn record_and_complete_block(
         )?;
     }
 
-    // Construct and send the block footer
+    // Alpentick and clear bank
     let mut w_poh_recorder = poh_recorder.write().unwrap();
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
 
-    let bank_hash = bank.hash();
-    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let footer = produce_block_footer(bank_hash, block_producer_time_nanos);
-    w_poh_recorder.send_marker(footer)?;
-
-    // Alpentick and clear bank
     trace!(
         "{}: bank {} has reached block timeout, ticking",
         bank.collector_id(),

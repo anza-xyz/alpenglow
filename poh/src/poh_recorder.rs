@@ -12,6 +12,8 @@
 //!
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
+use solana_entry::block_component::{BlockFooterV1, BlockMarkerV1, VersionedBlockFooter};
+use solana_version::version;
 use {
     crate::{
         poh_controller::PohController, poh_service::PohService, record_channels::record_channels,
@@ -943,7 +945,45 @@ impl PohRecorder {
             .as_nanos() as u64
     }
 
+    fn produce_block_footer(
+        &self,
+        bank_hash: Hash,
+        block_producer_time_nanos: u64,
+    ) -> Result<VersionedBlockMarker> {
+        let footer = BlockFooterV1 {
+            bank_hash,
+            block_producer_time_nanos,
+            block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        };
+
+        let footer = VersionedBlockFooter::Current(footer);
+        let footer = BlockMarkerV1::BlockFooter(footer);
+
+        Ok(VersionedBlockMarker::Current(footer))
+    }
+
+    fn send_block_footer(&mut self) -> Result<()> {
+        let working_bank = self
+            .working_bank
+            .as_ref()
+            .ok_or(PohRecorderError::MaxHeightReached)?;
+
+        // We need to wait for the bank to be frozen to retrieve the bank hash
+        while !working_bank.bank.is_frozen() {
+            std::hint::spin_loop();
+        }
+
+        // Create the footer
+        let bank_hash = working_bank.bank.hash();
+        let block_producer_time_nanos = self.working_bank_block_producer_time_nanos();
+        let footer = self.produce_block_footer(bank_hash, block_producer_time_nanos)?;
+
+        self.send_marker(footer)
+    }
+
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
+        self.send_block_footer().unwrap();
+
         let (poh_entry, tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
             poh_l.tick()

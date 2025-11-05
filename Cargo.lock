@@ -9510,6 +9510,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-time-utils",
  "solana-transaction",
+ "solana-version",
  "solana-votor-messages",
  "thiserror 2.0.16",
  "tikv-jemallocator",
