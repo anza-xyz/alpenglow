@@ -976,7 +976,8 @@ impl BlockFooterV1 {
         let bank_hash = Hash::new_from_array(hash_bytes);
 
         // Read timestamp
-        let time_bytes = data[Self::TIMESTAMP_OFFSET..Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE]
+        let time_bytes = data
+            [Self::TIMESTAMP_OFFSET..Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE]
             .try_into()
             .map_err(|_| BlockComponentError::InsufficientData)?;
         let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
