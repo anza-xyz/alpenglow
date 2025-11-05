@@ -222,6 +222,7 @@ impl ConsensusPoolService {
             // - If we startup post alpenglow migration - kick off with root block
             if !kick_off_parent_ready && ctx.migration_status.is_alpenglow_enabled() {
                 let genesis_block = ctx.migration_status.genesis_block();
+                let root_bank = ctx.sharable_banks.root();
                 // can expect once we have block id in snapshots (SIMD-0333)
                 let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
                 let kick_off_block @ (kick_off_slot, _) = genesis_block.max(root_block);
