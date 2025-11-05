@@ -139,6 +139,23 @@ impl MigrationPhase {
         )
     }
 
+    /// Check if we are in the process of discovering the genesis block, and `slot` could qualify
+    /// to be used for discovery. This entails that `slot` > `migration_slot`. The caller must additionally
+    /// check that the parent of `slot` is super-OC.
+    fn qualifies_for_genesis_discovery(&self, slot: Slot) -> bool {
+        match self {
+            MigrationPhase::Migration {
+                migration_slot,
+                genesis_block,
+                ..
+            } => genesis_block.is_none() && slot > *migration_slot,
+            MigrationPhase::PreFeatureActivation
+            | MigrationPhase::ReadyToEnable { .. }
+            | MigrationPhase::AlpenglowEnabled { .. }
+            | MigrationPhase::FullAlpenglowEpoch { .. } => false,
+        }
+    }
+
     /// Should we create / replay this bank in VoM?
     /// During the migrationary period before genesis has been found, we must validate that banks are VoM
     fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool {
@@ -326,6 +343,7 @@ impl MigrationStatus {
     }
 
     dispatch!(pub fn is_alpenglow_enabled(&self) -> bool);
+    dispatch!(pub fn qualifies_for_genesis_discovery(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool);
     dispatch!(pub fn should_report_commitment_or_root(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool);
@@ -360,6 +378,20 @@ impl MigrationStatus {
         );
 
         migration_slot
+    }
+
+    /// The slot at which migration started.
+    ///
+    /// Should only be used during `Migration`
+    pub fn migration_slot(&self) -> Slot {
+        let MigrationPhase::Migration { migration_slot, .. } = &*self.phase.read().unwrap() else {
+            unreachable!(
+                "{}: Programmer error, attempting to retrieve migration slot while not in \
+                 migration",
+                self.my_pubkey
+            );
+        };
+        *migration_slot
     }
 
     /// The block that is eligible to be the genesis block, which we wish to cast our genesis vote for.
