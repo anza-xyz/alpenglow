@@ -833,7 +833,7 @@ impl BankingSimulator {
             sender,
             None,
             completed_block_sender,
-            migration_status.clone(),
+            migration_status,
         );
 
         info!("Start banking stage!...");
