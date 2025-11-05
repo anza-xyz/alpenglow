@@ -31,7 +31,6 @@ use {
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
-        installed_scheduler_pool::BankWithScheduler,
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
@@ -52,7 +51,7 @@ mod stats;
 
 enum ParentSource {
     ParentReady(LeaderWindowInfo),
-    OptimisticParent(BankWithScheduler),
+    OptimisticParent(LeaderWindowInfo),
 }
 
 pub struct BlockCreationLoop {
@@ -97,7 +96,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub optimistic_parent_receiver: Receiver<BankWithScheduler>,
+    pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
 }
 
 struct LeaderContext {
@@ -278,8 +277,12 @@ fn start_loop(config: BlockCreationLoopConfig) {
             skip_timer,
         } = match window_source {
             ParentSource::ParentReady(info) => info,
-            ParentSource::OptimisticParent(_bank) => {
+            ParentSource::OptimisticParent(info) => {
                 // Skip optimistic parent events for now
+                println!(
+                    "{my_pubkey:?} {} {} !!!!! FOUND OPTIMISTIC PARENT !!!!!",
+                    info.start_slot, info.end_slot,
+                );
                 continue;
             }
         };

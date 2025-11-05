@@ -51,7 +51,6 @@ use {
     },
     solana_runtime::{
         bank_forks::BankForks, commitment::BlockCommitmentCache,
-        installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache, snapshot_controller::SnapshotController,
         vote_sender_types::ReplayVoteSender,
     },
@@ -211,7 +210,7 @@ impl Tvu {
         voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
-        optimistic_parent_sender: Sender<BankWithScheduler>,
+        optimistic_parent_sender: Sender<LeaderWindowInfo>,
         alpenglow_quic_server_config: QuicServerParams,
         staked_nodes: Arc<RwLock<StakedNodes>>,
         key_notifiers: Arc<RwLock<KeyUpdaters>>,

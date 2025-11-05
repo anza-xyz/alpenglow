@@ -312,7 +312,7 @@ pub struct ReplaySenders {
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
-    pub optimistic_parent_sender: Sender<BankWithScheduler>,
+    pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
 }
 
 pub struct ReplayReceivers {
@@ -3298,7 +3298,7 @@ impl ReplayStage {
         mut tbft_structs: Option<&mut TowerBFTStructures>,
         migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
-        optimistic_parent_sender: &Sender<BankWithScheduler>,
+        optimistic_parent_sender: &Sender<LeaderWindowInfo>,
     ) -> Vec<Slot> {
         // TODO: See if processing of blockstore replay results and bank completion can be made thread safe.
         let mut tx_count = 0;
@@ -3450,9 +3450,20 @@ impl ReplayStage {
                 let next_slot = bank.slot().saturating_add(1);
 
                 if is_next_leader && next_slot == first_of_consecutive_leader_slots(next_slot) {
+                    let start_slot = next_slot;
+                    let end_slot = next_slot.saturating_add(NUM_CONSECUTIVE_LEADER_SLOTS - 1);
+                    let parent_block = (bank.slot(), bank.hash());
+
+                    let leader_window_info = LeaderWindowInfo {
+                        start_slot,
+                        end_slot,
+                        parent_block,
+                        skip_timer: Instant::now(), // can ignore
+                    };
+
                     // Try sending, but don't block if the channel is full.
                     let _ = optimistic_parent_sender
-                        .send_timeout(bank.clone_with_scheduler(), Duration::from_secs(1));
+                        .send_timeout(leader_window_info, Duration::from_secs(1));
                 }
 
                 if let Some(transaction_status_sender) = transaction_status_sender {
@@ -3651,7 +3662,7 @@ impl ReplayStage {
         tbft_structs: Option<&mut TowerBFTStructures>,
         migration_status: &MigrationStatus,
         votor_event_sender: &VotorEventSender,
-        optimistic_parent_sender: &Sender<BankWithScheduler>,
+        optimistic_parent_sender: &Sender<LeaderWindowInfo>,
     ) -> Vec<Slot> /* completed slots */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
         let num_active_banks = active_bank_slots.len();
