@@ -145,7 +145,6 @@ use {
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
-        votor::LeaderWindowNotifier,
     },
     solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
@@ -1412,7 +1411,10 @@ impl Validator {
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
-        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
+
+        let (leader_window_info_sender, leader_window_info_receiver) = bounded(7);
+        let highest_parent_ready = Arc::new(RwLock::default());
+
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,
@@ -1424,6 +1426,8 @@ impl Validator {
             poh_service_message_receiver,
             migration_status.clone(),
         );
+
+        let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
@@ -1437,8 +1441,10 @@ impl Validator {
             banking_tracer: banking_tracer.clone(),
             slot_status_notifier: slot_status_notifier.clone(),
             record_receiver: record_receiver.clone(),
-            leader_window_notifier: leader_window_notifier.clone(),
+            leader_window_info_receiver: leader_window_info_receiver.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
+            highest_parent_ready: highest_parent_ready.clone(),
+            optimistic_parent_receiver: optimistic_parent_receiver.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1684,10 +1690,12 @@ impl Validator {
             vote_connection_cache,
             alpenglow_connection_cache,
             replay_highest_frozen.clone(),
-            leader_window_notifier.clone(),
+            leader_window_info_sender.clone(),
+            highest_parent_ready.clone(),
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
+            optimistic_parent_sender,
             alpenglow_quic_server_config,
             staked_nodes.clone(),
             key_notifiers.clone(),
