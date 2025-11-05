@@ -3449,21 +3449,23 @@ impl ReplayStage {
                     .is_some_and(|leader| &leader == my_pubkey);
                 let next_slot = bank.slot().saturating_add(1);
 
-                if is_next_leader && next_slot == first_of_consecutive_leader_slots(next_slot) {
-                    let start_slot = next_slot;
-                    let end_slot = next_slot.saturating_add(NUM_CONSECUTIVE_LEADER_SLOTS - 1);
-                    let parent_block = (bank.slot(), bank.hash());
+                if let Some(block_id) = block_id {
+                    if is_next_leader && next_slot == first_of_consecutive_leader_slots(next_slot) {
+                        let start_slot = next_slot;
+                        let end_slot = next_slot.saturating_add(NUM_CONSECUTIVE_LEADER_SLOTS - 1);
+                        let parent_block = (bank.slot(), block_id);
 
-                    let leader_window_info = LeaderWindowInfo {
-                        start_slot,
-                        end_slot,
-                        parent_block,
-                        skip_timer: Instant::now(), // can ignore
-                    };
+                        let leader_window_info = LeaderWindowInfo {
+                            start_slot,
+                            end_slot,
+                            parent_block,
+                            skip_timer: Instant::now(), // can ignore
+                        };
 
-                    // Try sending, but don't block if the channel is full.
-                    let _ = optimistic_parent_sender
-                        .send_timeout(leader_window_info, Duration::from_secs(1));
+                        // Try sending, but don't block if the channel is full.
+                        let _ = optimistic_parent_sender
+                            .send_timeout(leader_window_info, Duration::from_secs(1));
+                    }
                 }
 
                 if let Some(transaction_status_sender) = transaction_status_sender {

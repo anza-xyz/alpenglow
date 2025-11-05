@@ -9,7 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::{select, Receiver},
+    crossbeam_channel::{select_biased, Receiver},
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
@@ -235,8 +235,9 @@ fn start_loop(config: BlockCreationLoopConfig) {
         }
 
         // Race between parent ready notification and optimistic parent events
+        // Parent ready is checked first and has priority if both channels are ready
         let window_source = {
-            select! {
+            select_biased! {
                 recv(ctx.leader_window_info_receiver) -> msg => {
                     // Drain all pending messages and keep the latest one
                     msg.ok()
@@ -276,11 +277,17 @@ fn start_loop(config: BlockCreationLoopConfig) {
             parent_block: (parent_slot, parent_hash),
             skip_timer,
         } = match window_source {
-            ParentSource::ParentReady(info) => info,
+            ParentSource::ParentReady(info) => {
+                println!(
+                    "{my_pubkey:?} {} {} !!!!! RACE :: PARENT READY !!!!!",
+                    info.start_slot, info.end_slot,
+                );
+                info
+            }
             ParentSource::OptimisticParent(info) => {
                 // Skip optimistic parent events for now
                 println!(
-                    "{my_pubkey:?} {} {} !!!!! FOUND OPTIMISTIC PARENT !!!!!",
+                    "{my_pubkey:?} {} {} !!!!! RACE :: OPTIMISTIC PARENT !!!!!",
                     info.start_slot, info.end_slot,
                 );
                 info
@@ -357,8 +364,12 @@ fn produce_window(
         );
 
         let mut bank_completion_measure = Measure::start("bank_completion");
-        let optimistic_parent = fast_leader_handover.then_some((parent_slot, parent_hash));
+        let optimistic_parent = match fast_leader_handover && slot == start_slot {
+            true => Some((parent_slot, parent_hash)),
+            false => None,
+        };
 
+        println!("!!!!! {my_pubkey:?} {slot} RECORD_AND_COMPLETE_BLOCK");
         if let Err(e) = record_and_complete_block(ctx, optimistic_parent, skip_timer, timeout) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -404,9 +415,15 @@ fn record_and_complete_block(
     let poh_recorder = ctx.poh_recorder.as_ref();
     let record_receiver = &mut ctx.record_receiver;
 
+    println!("!!!!! INITIAL OPTIMISTIC PARENT :: {:?}", optimistic_parent);
+
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
+            println!(
+                "!!!!! REMAINING SLOT TIME IS ZERO :: {:?}",
+                optimistic_parent
+            );
             break;
         }
 
@@ -414,11 +431,16 @@ fn record_and_complete_block(
             if let Ok(leader_window_info) = ctx.leader_window_info_receiver.try_recv() {
                 // TODO(ksn): reset block timer
                 if leader_window_info.parent_block == optimistic_parent_block {
-                    println!("!!!!! OPTIMISTIC PARENT MATCHED");
+                    println!(
+                        "!!!!! {} {} OPTIMISTIC PARENT MATCHED",
+                        leader_window_info.start_slot, leader_window_info.end_slot
+                    );
                     optimistic_parent = None;
                 } else {
                     // TODO(ksn): Parent ready doesn't match optimistic parent
                     // Need to send UpdateParent block component and stop shred dissemination
+                    println!("!!!!! {} {} PARENT READY TIME optimistic_parent_block = {:?} :: parent_ready_block = {:?}", leader_window_info.start_slot, leader_window_info.end_slot, optimistic_parent_block, leader_window_info.parent_block);
+                    optimistic_parent = None;
                 }
             }
         }
@@ -434,9 +456,38 @@ fn record_and_complete_block(
         )?;
     }
 
-    if optimistic_parent.is_some() {
-        println!("!!!!! PARENT READY NOT OBSERVED YET!");
+    if let Some(optimistic_parent_block) = optimistic_parent {
+        let parent_ready_leader_window_info = ctx
+            .leader_window_info_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .ok()
+            .and_then(|window| {
+                ctx.leader_window_info_receiver
+                    .try_iter()
+                    .last()
+                    .or(Some(window))
+            });
+
+        let Some(parent_ready_leader_window_info) = parent_ready_leader_window_info else {
+            panic!("COULDN'T GET A PARENT READY");
+        };
+
+        if optimistic_parent_block != parent_ready_leader_window_info.parent_block {
+            // TODO(ksn): Parent ready doesn't match optimistic parent
+            // Need to send UpdateParent block component and stop shred dissemination
+            optimistic_parent = None;
+            println!("!!!!! {} {} PARENT READY TIME optimistic_parent_block = {:?} :: parent_ready_block = {:?}", parent_ready_leader_window_info.start_slot, parent_ready_leader_window_info.end_slot, optimistic_parent_block, parent_ready_leader_window_info.parent_block);
+        } else {
+            optimistic_parent = None;
+            println!(
+                "!!!!! {} {} HAPPY CASE!",
+                parent_ready_leader_window_info.start_slot,
+                parent_ready_leader_window_info.end_slot
+            );
+        }
     }
+
+    println!("!!!!! optimistic_parent = {:?}", optimistic_parent);
 
     // Shutdown and clear any inflight records
     // TODO: do we need to lower the block timeout from 400ms to account for this / insertion of the block footer
