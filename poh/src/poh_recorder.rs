@@ -607,9 +607,10 @@ impl PohRecorder {
 
                 if is_alpentick {
                     // Wait for the bank to be frozen with timeout
+                    // TODO: change this to use DELTA_BLOCK from votor instead.
                     let start = Instant::now();
                     while !working_bank.bank.is_frozen() {
-                        if start.elapsed() > Duration::from_secs(1) {
+                        if start.elapsed() > Duration::from_millis(400) {
                             break;
                         }
                         std::hint::spin_loop();
@@ -617,11 +618,15 @@ impl PohRecorder {
 
                     // If the bank still isn't frozen, we've timed out
                     if !working_bank.bank.is_frozen() {
+                        error!(
+                            "slot = {} block production failure. bank freezing timed out.",
+                            working_bank.bank.slot()
+                        );
                         break;
                     }
 
                     // Send out the block footer
-                    let footer = self.produce_block_footer()?;
+                    let footer = self.produce_block_footer(working_bank);
                     let footer_entry_marker = (
                         EntryMarker::Marker(footer),
                         working_bank.max_tick_height - 1,
@@ -632,6 +637,10 @@ impl PohRecorder {
                         .send((working_bank.bank.clone(), footer_entry_marker));
 
                     if send_result.is_err() {
+                        error!(
+                            "slot = {} block production failure. failed to broadcast footer",
+                            working_bank.bank.slot()
+                        );
                         break;
                     }
                 }
@@ -977,12 +986,7 @@ impl PohRecorder {
             .as_nanos() as u64
     }
 
-    fn produce_block_footer(&self) -> Result<VersionedBlockMarker> {
-        let working_bank = self
-            .working_bank
-            .as_ref()
-            .ok_or(PohRecorderError::MaxHeightReached)?;
-
+    fn produce_block_footer(&self, working_bank: &WorkingBank) -> VersionedBlockMarker {
         if !working_bank.bank.is_frozen() {
             let slot = working_bank.bank.slot();
             error!("slot = {slot} creating a block footer with a non-frozen bank! ");
@@ -997,7 +1001,7 @@ impl PohRecorder {
         let footer = VersionedBlockFooter::Current(footer);
         let footer = BlockMarkerV1::BlockFooter(footer);
 
-        Ok(VersionedBlockMarker::Current(footer))
+        VersionedBlockMarker::Current(footer)
     }
 
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {

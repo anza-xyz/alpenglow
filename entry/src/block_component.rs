@@ -1365,7 +1365,7 @@ mod tests {
     fn create_parent_ready_update() -> UpdateParentV1 {
         UpdateParentV1 {
             new_parent_slot: 42,
-            new_parent_block_id: Hash::new_from_array([42u8; 32]),
+            new_parent_block_id: Hash::new_from_array([96u8; 32]),
         }
     }
 
