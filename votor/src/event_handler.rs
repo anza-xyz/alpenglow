@@ -25,7 +25,11 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus, vote::Vote},
+    solana_votor_messages::{
+        consensus_message::Block,
+        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        vote::Vote,
+    },
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
@@ -124,10 +128,26 @@ impl EventHandler {
 
         // Wait until migration has completed
         info!("{}: Event loop initialized", local_context.my_pubkey);
-        let Some(genesis_block) = migration_status.wait_for_migration_or_exit(&exit) else {
-            // Exited during migration
-            return Ok(());
-        };
+        let mut last_genesis_vote_refresh_time = Instant::now();
+        loop {
+            if exit.load(Ordering::Relaxed) {
+                // Exited during the migration
+                return Ok(());
+            }
+
+            if migration_status.is_alpenglow_enabled() {
+                // Migration successful
+                break;
+            }
+
+            if last_genesis_vote_refresh_time.elapsed() > GENESIS_VOTE_REFRESH
+                && Self::maybe_send_genesis_vote(&migration_status, &mut vctx)?
+            {
+                last_genesis_vote_refresh_time = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let genesis_block = migration_status.genesis_block();
         let root_slot = vctx.sharable_banks.root().slot();
         info!(
             "{}: Event loop starting genesis {genesis_block:?} root {root_slot}",
@@ -195,6 +215,27 @@ impl EventHandler {
         }
 
         Ok(())
+    }
+
+    fn maybe_send_genesis_vote(
+        migration_status: &MigrationStatus,
+        vctx: &mut VotingContext,
+    ) -> Result<bool, EventLoopError> {
+        let Some((slot, block_id)) = migration_status.get_votable_genesis_block() else {
+            return Ok(false);
+        };
+
+        let vote = Vote::new_genesis_vote(slot, block_id);
+        let Some(bls_op) = generate_vote_message(
+            vote,
+            // We set `is_refresh` because we don't want this vote in the `VoteHistory`
+            true, vctx,
+        )?
+        else {
+            return Ok(false);
+        };
+        vctx.bls_sender.send(bls_op).map_err(|_| SendError(()))?;
+        Ok(true)
     }
 
     fn handle_parent_ready_event(

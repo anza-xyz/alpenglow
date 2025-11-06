@@ -156,6 +156,18 @@ impl MigrationPhase {
         }
     }
 
+    /// If we have entered the migration and discovered the genesis block, return the block
+    /// so that we may vote on it.
+    fn get_votable_genesis_block(&self) -> Option<Block> {
+        match self {
+            MigrationPhase::Migration { genesis_block, .. } => *genesis_block,
+            MigrationPhase::PreFeatureActivation
+            | MigrationPhase::ReadyToEnable { .. }
+            | MigrationPhase::AlpenglowEnabled { .. }
+            | MigrationPhase::FullAlpenglowEpoch { .. } => None,
+        }
+    }
+
     /// Should we create / replay this bank in VoM?
     /// During the migrationary period before genesis has been found, we must validate that banks are VoM
     fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool {
@@ -344,6 +356,7 @@ impl MigrationStatus {
 
     dispatch!(pub fn is_alpenglow_enabled(&self) -> bool);
     dispatch!(pub fn qualifies_for_genesis_discovery(&self, slot: Slot) -> bool);
+    dispatch!(pub fn get_votable_genesis_block(&self) -> Option<Block>);
     dispatch!(pub fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool);
     dispatch!(pub fn should_report_commitment_or_root(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool);
@@ -392,22 +405,6 @@ impl MigrationStatus {
             );
         };
         *migration_slot
-    }
-
-    /// The block that is eligible to be the genesis block, which we wish to cast our genesis vote for.
-    /// Returns `None` if we have not yet received an eligible block.
-    ///
-    /// Should only be used during `Migration`
-    pub fn eligible_genesis_block(&self) -> Option<Block> {
-        let phase = self.phase.read().unwrap();
-        let MigrationPhase::Migration { genesis_block, .. } = &*phase else {
-            unreachable!(
-                "{}: Programmer error, attempting to find eligble genesis block while not in \
-                 migration",
-                self.my_pubkey
-            );
-        };
-        *genesis_block
     }
 
     /// Set our view of the genesis block. This is the ancestor of the super-oc block prior to the migration slot.
