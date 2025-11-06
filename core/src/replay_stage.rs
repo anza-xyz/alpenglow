@@ -90,12 +90,16 @@ use {
         },
         root_utils,
         vote_history::VoteHistory,
-        vote_history_storage::VoteHistoryStorage,
+        vote_history_storage::{SavedVoteHistory, VoteHistoryStorage},
         voting_service::BLSOp,
-        voting_utils::GenerateVoteTxResult,
+        voting_utils::{self, GenerateVoteTxResult},
         votor::{Votor, VotorConfig},
     },
-    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
+    solana_votor_messages::{
+        consensus_message::ConsensusMessage,
+        migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        vote::Vote,
+    },
     std::{
         collections::{HashMap, HashSet},
         num::{NonZeroUsize, Saturating},
@@ -682,7 +686,7 @@ impl ReplayStage {
             highest_parent_ready,
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
-            own_vote_sender,
+            own_vote_sender: own_vote_sender.clone(),
             consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
@@ -753,6 +757,7 @@ impl ReplayStage {
                 last_refresh_time: Instant::now(),
                 last_print_time: Instant::now(),
             };
+            let mut last_genesis_vote_refresh_time = Instant::now();
             let mut tbft_structs = TowerBFTStructures {
                 heaviest_subtree_fork_choice,
                 duplicate_slots_tracker,
@@ -1017,6 +1022,22 @@ impl ReplayStage {
                         migration_status.as_ref(),
                     );
                     compute_bank_stats_time.stop();
+
+                    // Check if we should vote / refresh our genesis vote
+                    if last_genesis_vote_refresh_time.elapsed() > GENESIS_VOTE_REFRESH
+                        && migration_status.is_in_migration()
+                        && Self::maybe_send_genesis_vote(
+                            migration_status.as_ref(),
+                            bank_forks.as_ref(),
+                            vote_account,
+                            &identity_keypair,
+                            &authorized_voter_keypairs,
+                            &own_vote_sender,
+                            &bls_sender,
+                        )
+                    {
+                        last_genesis_vote_refresh_time = Instant::now();
+                    }
 
                     let mut compute_slot_stats_time = Measure::start("compute_slot_stats_time");
                     for slot in newly_computed_slot_stats {
@@ -1470,6 +1491,59 @@ impl ReplayStage {
             "migration-complete",
             ("genesis_slot", genesis_slot as i64, i64),
         );
+    }
+
+    /// If we have an eligble genesis block, send out a genesis vote
+    /// Returns false if no eligble block was found
+    fn maybe_send_genesis_vote(
+        migration_status: &MigrationStatus,
+        bank_forks: &RwLock<BankForks>,
+        vote_account: Pubkey,
+        identity_keypair: &Arc<Keypair>,
+        authorized_voter_keypairs: &Arc<std::sync::RwLock<Vec<Arc<Keypair>>>>,
+        own_vote_sender: &Sender<ConsensusMessage>,
+        bls_sender: &Sender<BLSOp>,
+    ) -> bool {
+        let Some((slot, block_id)) = migration_status.eligible_genesis_block() else {
+            // We have not yet discovered the genesis block
+            return false;
+        };
+
+        let vote = Vote::new_genesis_vote(slot, block_id);
+        match voting_utils::generate_vote_tx(
+            &vote,
+            bank_forks.read().unwrap().root_bank().as_ref(),
+            vote_account,
+            identity_keypair,
+            authorized_voter_keypairs,
+            None,
+            &mut HashMap::new(),
+        ) {
+            GenerateVoteTxResult::ConsensusMessage(message) => {
+                // Send vote to ConsensusPool and rest of cluster
+                warn!(
+                    "{}: Casting genesis vote for ({slot}, {block_id})",
+                    identity_keypair.pubkey()
+                );
+                // If sending fails that means the channel is disconnected and we are shutting down
+                let _ = own_vote_sender.send(message.clone());
+                let _ = bls_sender.send(BLSOp::PushVote {
+                    message: Arc::new(message),
+                    slot,
+                    saved_vote_history:
+                        solana_votor::vote_history_storage::SavedVoteHistoryVersions::Current(
+                            SavedVoteHistory::default(),
+                        ),
+                });
+            }
+            e => {
+                warn!(
+                    "{}: Unable to send genesis vote for {slot} {block_id}: {e:?}",
+                    identity_keypair.pubkey()
+                );
+            }
+        }
+        true
     }
 
     /// Loads the tower from `tower_storage` with identity `node_pubkey`.
