@@ -983,6 +983,11 @@ impl PohRecorder {
             .as_ref()
             .ok_or(PohRecorderError::MaxHeightReached)?;
 
+        if !working_bank.bank.is_frozen() {
+            let slot = working_bank.bank.slot();
+            error!("slot = {slot} creating a block footer with a non-frozen bank! ");
+        }
+
         let footer = BlockFooterV1 {
             bank_hash: working_bank.bank.hash(),
             block_producer_time_nanos: self.working_bank_block_producer_time_nanos(),
