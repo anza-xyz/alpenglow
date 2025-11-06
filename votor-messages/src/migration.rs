@@ -414,12 +414,12 @@ impl MigrationStatus {
     ///
     /// Should only be used during `Migration`, and transitions to `ReadyToEnable` if we have already
     /// received a genesis certificate and it matches.
-    pub fn set_genesis_block(&self, genesis_block_arg: Block) {
+    pub fn set_genesis_block(&self, discovered_genesis_block @ (slot, _): Block) {
         let mut phase = self.phase.write().unwrap();
         let MigrationPhase::Migration {
+            migration_slot,
             ref mut genesis_block,
             ref genesis_cert,
-            ..
         } = &mut *phase
         else {
             unreachable!(
@@ -429,13 +429,19 @@ impl MigrationStatus {
         };
         assert!(
             genesis_block.is_none(),
-            "Attempting to overwrite genesis block to {genesis_block_arg:?}. Programmer error"
+            "Attempting to overwrite genesis block to {discovered_genesis_block:?}. Programmer \
+             error"
+        );
+
+        assert!(
+            slot < *migration_slot,
+            "Attempting to set a genesis block that is past the migration start"
         );
         warn!(
-            "{} Setting genesis block {genesis_block_arg:?}",
+            "{} Setting genesis block {discovered_genesis_block:?}",
             self.my_pubkey
         );
-        *genesis_block = Some(genesis_block_arg);
+        *genesis_block = Some(discovered_genesis_block);
 
         let Some(genesis_cert) = genesis_cert else {
             return;
@@ -449,9 +455,9 @@ impl MigrationStatus {
             .unwrap_or(true)
         {
             panic!(
-                "{}: We wish to cast a genesis vote on {genesis_block_arg:?}, however we have \
-                 received a genesis certificate for ({slot}, {block_id}). This means there is \
-                 significant malicious activity causing two distinct forks to reach the \
+                "{}: We wish to cast a genesis vote on {discovered_genesis_block:?}, however we \
+                 have received a genesis certificate for ({slot}, {block_id}). This means there \
+                 is significant malicious activity causing two distinct forks to reach the \
                  {GENESIS_VOTE_THRESHOLD}. We cannot recover without operator intervention.",
                 self.my_pubkey
             );
@@ -470,9 +476,9 @@ impl MigrationStatus {
     pub fn set_genesis_certificate(&self, cert: Arc<Certificate>) {
         let mut phase = self.phase.write().unwrap();
         let MigrationPhase::Migration {
+            migration_slot,
             ref genesis_block,
             ref mut genesis_cert,
-            ..
         } = &mut *phase
         else {
             unreachable!(
@@ -483,7 +489,17 @@ impl MigrationStatus {
         let CertificateType::Genesis(slot, block_id) = cert.cert_type else {
             unreachable!("Programmer error adding invalid genesis certificate");
         };
+
+        assert!(
+            slot < *migration_slot,
+            "Attempting to set a genesis certificate past the migration start"
+        );
+        warn!(
+            "{} Setting genesis cert for ({slot},{block_id:?})",
+            self.my_pubkey
+        );
         *genesis_cert = Some(cert.clone());
+
         let Some(genesis_block) = genesis_block else {
             return;
         };
