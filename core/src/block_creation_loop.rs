@@ -29,9 +29,7 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
-    solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
-    solana_votor_messages::migration::MigrationStatus,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -153,10 +151,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         banking_tracer,
         slot_status_notifier,
         record_receiver_receiver,
-        record_receiver,
         leader_window_info_receiver,
         replay_highest_frozen,
-        migration_status,
         highest_parent_ready,
     } = config;
 
