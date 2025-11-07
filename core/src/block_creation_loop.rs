@@ -81,12 +81,12 @@ pub struct BlockCreationLoopConfig {
     pub slot_status_notifier: Option<SlotStatusNotifier>,
 
     // Receivers / notifications from banking stage / replay / votor
-
-    // Channel to receive RecordReceiver from PohService
-    pub record_receiver_receiver: Receiver<RecordReceiver>,
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+
+    // Channel to receive RecordReceiver from PohService
+    pub record_receiver_receiver: Receiver<RecordReceiver>,
 }
 
 struct LeaderContext {
