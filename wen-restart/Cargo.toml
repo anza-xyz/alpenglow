@@ -35,6 +35,7 @@ solana-time-utils = { workspace = true }
 solana-vote = { workspace = true }
 solana-vote-interface = { workspace = true }
 solana-vote-program = { workspace = true }
+solana-votor-messages = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

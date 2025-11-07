@@ -146,7 +146,6 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
-    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -841,6 +840,8 @@ impl Validator {
         )
         .map_err(ValidatorError::Other)?;
 
+        let migration_status = bank_forks.read().unwrap().migration_status();
+
         if !config.no_poh_speed_test {
             check_poh_speed(&bank_forks.read().unwrap().root_bank(), None)?;
         }
@@ -1379,10 +1380,6 @@ impl Validator {
             Some(stats_reporter_sender.clone()),
             exit.clone(),
         );
-        let migration_status = Arc::new(initialize_migration_status(
-            cluster_info.id(),
-            bank_forks.read().unwrap().root_bank(),
-        ));
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
@@ -3055,25 +3052,6 @@ pub fn is_snapshot_config_valid(snapshot_config: &SnapshotConfig) -> bool {
             full_snapshot_interval_slots > incremental_snapshot_interval_slots
         }
     }
-}
-
-/// Based on the current feature flag activation and genesis certificate account in the root bank,
-/// determine which phase of the migration we are in and initialize accordingly.
-fn initialize_migration_status(my_pubkey: Pubkey, root_bank: Arc<Bank>) -> MigrationStatus {
-    let epoch_schedule = root_bank.epoch_schedule();
-    let root_epoch = epoch_schedule.get_epoch(root_bank.slot());
-    let ff_activation_slot = root_bank
-        .feature_set
-        .activated_slot(&agave_feature_set::alpenglow::id());
-    let genesis_cert = root_bank.get_alpenglow_genesis_certificate();
-
-    MigrationStatus::initialize(
-        my_pubkey,
-        root_epoch,
-        ff_activation_slot,
-        genesis_cert,
-        epoch_schedule,
-    )
 }
 
 #[cfg(test)]

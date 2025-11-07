@@ -941,6 +941,7 @@ pub(crate) fn process_blockstore_for_bank_0(
         transaction_status_sender,
         &VerifyRecyclers::default(),
         entry_notification_sender,
+        &bank_forks.read().unwrap().migration_status(),
     )?;
 
     Ok(bank_forks)
@@ -1066,9 +1067,10 @@ pub fn process_blockstore_from_root(
 /// Verify that a segment of entries has the correct number of ticks and hashes
 fn verify_ticks(
     bank: &Bank,
-    mut entries: &[Entry],
+    entries: &[Entry],
     slot_full: bool,
     tick_hash_count: &mut u64,
+    migration_status: &MigrationStatus,
 ) -> std::result::Result<(), BlockError> {
     let next_bank_tick_height = bank.tick_height() + entries.tick_count();
     let max_bank_tick_height = bank.max_tick_height();
@@ -1096,33 +1098,8 @@ fn verify_ticks(
         }
     }
 
-    if let Some(first_alpenglow_slot) = bank
-        .feature_set
-        .activated_slot(&agave_feature_set::alpenglow::id())
-    {
-        if bank.parent_slot() >= first_alpenglow_slot {
-            // If both the parent and the bank slot are in an epoch post alpenglow activation,
-            // no tick verification is needed
-            return Ok(());
-        }
-
-        // If the bank is in the alpenglow epoch, but the parent is from an epoch
-        // where the feature flag is not active, we must verify ticks that correspond
-        // to the epoch in which PoH is active. This verification is criticial, as otherwise
-        // a leader could jump the gun and publish a block in the alpenglow epoch without waiting
-        // the appropriate time as determined by PoH in the prior epoch.
-        if bank.slot() >= first_alpenglow_slot && next_bank_tick_height == max_bank_tick_height {
-            if entries.is_empty() {
-                // This shouldn't happen, but good to double check
-                error!("Processing empty entries in verify_ticks()");
-                return Ok(());
-            }
-            // last entry must be a tick, as verified by the `has_trailing_entry`
-            // check above. Because in Alpenglow the last tick does not have any
-            // hashing guarantees, we pass everything but that last tick to the
-            // entry verification.
-            entries = &entries[..entries.len() - 1];
-        }
+    if migration_status.should_have_alpenglow_ticks(bank.slot()) {
+        return Ok(());
     }
 
     let hashes_per_tick = bank.hashes_per_tick().unwrap_or(0);
@@ -1150,6 +1127,7 @@ fn confirm_full_slot(
     entry_notification_sender: Option<&EntryNotifierSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     timing: &mut ExecuteTimings,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let mut confirmation_timing = ConfirmationTiming::default();
     let skip_verification = !opts.run_verification;
@@ -1169,6 +1147,7 @@ fn confirm_full_slot(
         opts.allow_dead_slots,
         opts.runtime_config.log_messages_bytes_limit,
         &ignored_prioritization_fee_cache,
+        migration_status,
     )?;
 
     timing.accumulate(&confirmation_timing.batch_execute.totals);
@@ -1508,6 +1487,7 @@ pub fn confirm_slot(
     allow_dead_slots: bool,
     log_messages_bytes_limit: Option<usize>,
     prioritization_fee_cache: &PrioritizationFeeCache,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
@@ -1538,6 +1518,7 @@ pub fn confirm_slot(
         recyclers,
         log_messages_bytes_limit,
         prioritization_fee_cache,
+        migration_status,
     )
 }
 
@@ -1555,6 +1536,7 @@ fn confirm_slot_entries(
     recyclers: &VerifyRecyclers,
     log_messages_bytes_limit: Option<usize>,
     prioritization_fee_cache: &PrioritizationFeeCache,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let ConfirmationTiming {
         confirmation_elapsed,
@@ -1607,21 +1589,23 @@ fn confirm_slot_entries(
 
     if !skip_verification {
         let tick_hash_count = &mut progress.tick_hash_count;
-        verify_ticks(bank, &entries, slot_full, tick_hash_count).map_err(|err| {
-            warn!(
-                "{:#?}, slot: {}, entry len: {}, tick_height: {}, last entry: {}, last_blockhash: \
-                 {}, shred_index: {}, slot_full: {}",
-                err,
-                slot,
-                num_entries,
-                bank.tick_height(),
-                progress.last_entry,
-                bank.last_blockhash(),
-                num_shreds,
-                slot_full,
-            );
-            err
-        })?;
+        verify_ticks(bank, &entries, slot_full, tick_hash_count, migration_status).map_err(
+            |err| {
+                warn!(
+                    "{:#?}, slot: {}, entry len: {}, tick_height: {}, last entry: {}, \
+                     last_blockhash: {}, shred_index: {}, slot_full: {}",
+                    err,
+                    slot,
+                    num_entries,
+                    bank.tick_height(),
+                    progress.last_entry,
+                    bank.last_blockhash(),
+                    num_shreds,
+                    slot_full,
+                );
+                err
+            },
+        )?;
     }
 
     let last_entry_hash = entries.last().map(|e| e.hash);
@@ -1766,6 +1750,7 @@ fn process_bank_0(
     transaction_status_sender: Option<&TransactionStatusSender>,
     recyclers: &VerifyRecyclers,
     entry_notification_sender: Option<&EntryNotifierSender>,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     assert_eq!(bank0.slot(), 0);
     let mut progress = ConfirmationProgress::new(bank0.last_blockhash());
@@ -1780,6 +1765,7 @@ fn process_bank_0(
         entry_notification_sender,
         None,
         &mut ExecuteTimings::default(),
+        migration_status,
     )
     .map_err(|_| BlockstoreProcessorError::FailedToReplayBank0)?;
     if let Some((result, _timings)) = bank0.wait_for_completed_scheduler() {
@@ -1806,6 +1792,7 @@ fn process_next_slots(
     leader_schedule_cache: &LeaderScheduleCache,
     pending_slots: &mut Vec<(SlotMeta, Bank, Hash)>,
     opts: &ProcessOptions,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     if meta.next_slots.is_empty() {
         return Ok(());
@@ -1939,6 +1926,7 @@ fn load_frozen_forks(
     timing: &mut ExecuteTimings,
     snapshot_controller: Option<&SnapshotController>,
 ) -> result::Result<(u64, usize), BlockstoreProcessorError> {
+    let migration_status = bank_forks.read().unwrap().migration_status();
     let blockstore_max_root = blockstore.max_root();
     let mut root = bank_forks.read().unwrap().root();
     let max_root = std::cmp::max(root, blockstore_max_root);
@@ -1964,6 +1952,7 @@ fn load_frozen_forks(
         leader_schedule_cache,
         &mut pending_slots,
         opts,
+        &migration_status,
     )?;
 
     if Some(bank_forks.read().unwrap().root()) != opts.halt_at_slot {
@@ -2020,6 +2009,7 @@ fn load_frozen_forks(
                 entry_notification_sender,
                 None,
                 timing,
+                &migration_status,
             ) {
                 assert!(bank_forks.write().unwrap().remove(bank.slot()).is_some());
                 if opts.abort_on_invalid_block {
@@ -2140,6 +2130,7 @@ fn load_frozen_forks(
                 leader_schedule_cache,
                 &mut pending_slots,
                 opts,
+                &migration_status,
             )?;
         }
     } else if opts.run_final_accounts_hash_calc {
@@ -2206,6 +2197,7 @@ pub fn process_single_slot(
     entry_notification_sender: Option<&EntryNotifierSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
     timing: &mut ExecuteTimings,
+    migration_status: &MigrationStatus,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
     // Mark corrupt slots as dead so validators don't replay this slot and
@@ -2221,6 +2213,7 @@ pub fn process_single_slot(
         entry_notification_sender,
         replay_vote_sender,
         timing,
+        migration_status,
     )
     .and_then(|()| {
         if let Some((result, completed_timings)) = bank.wait_for_completed_scheduler() {
@@ -4289,6 +4282,7 @@ pub mod tests {
             None,
             &recyclers,
             None,
+            &MigrationStatus::default(),
         )
         .unwrap();
         let bank0_last_blockhash = bank0.last_blockhash();
@@ -4308,6 +4302,7 @@ pub mod tests {
             None,
             None,
             &mut ExecuteTimings::default(),
+            &MigrationStatus::default(),
         )
         .unwrap();
         bank_forks.write().unwrap().set_root(1, None, None).unwrap();
@@ -4932,6 +4927,7 @@ pub mod tests {
             &VerifyRecyclers::default(),
             None,
             &PrioritizationFeeCache::new(0u64),
+            &MigrationStatus::default(),
         )
     }
 
@@ -5026,6 +5022,7 @@ pub mod tests {
             &VerifyRecyclers::default(),
             None,
             &PrioritizationFeeCache::new(0u64),
+            &MigrationStatus::default(),
         )
         .unwrap();
         assert_eq!(progress.num_txs, 2);
@@ -5071,6 +5068,7 @@ pub mod tests {
             &VerifyRecyclers::default(),
             None,
             &PrioritizationFeeCache::new(0u64),
+            &MigrationStatus::default(),
         )
         .unwrap();
         assert_eq!(progress.num_txs, 5);
