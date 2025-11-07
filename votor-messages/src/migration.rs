@@ -407,11 +407,7 @@ impl MigrationStatus {
     pub fn eligible_genesis_block(&self) -> Option<Block> {
         let phase = self.phase.read().unwrap();
         let MigrationPhase::Migration { genesis_block, .. } = &*phase else {
-            unreachable!(
-                "{}: Programmer error, attempting to find eligble genesis block while not in \
-                 migration",
-                self.my_pubkey
-            );
+            return None;
         };
         *genesis_block
     }
