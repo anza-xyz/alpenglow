@@ -19,8 +19,12 @@ use {
     },
     solana_clock::{Slot, MAX_PROCESSING_AGE},
     solana_cost_model::{cost_model::CostModel, transaction_cost::TransactionCost},
-    solana_entry::entry::{
-        self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus, VerifyRecyclers,
+    solana_entry::{
+        block_component::BlockComponent,
+        entry::{
+            self, create_ticks, Entry, EntrySlice, EntryType, EntryVerificationStatus,
+            VerifyRecyclers,
+        },
     },
     solana_genesis_config::GenesisConfig,
     solana_hash::Hash,
@@ -1496,7 +1500,7 @@ pub fn confirm_slot(
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
 
-    let (slot_components, num_shreds, slot_full) = {
+    let (slot_components, completed_ranges, slot_full) = {
         let mut load_elapsed = Measure::start("load_elapsed");
         let load_result = blockstore
             .get_slot_components_with_shred_info(slot, progress.num_shreds, allow_dead_slots)
@@ -1510,8 +1514,8 @@ pub fn confirm_slot(
         load_result
     }?;
 
-    // Process block component markers for Alpenglow slots. Note that we don't need to run migration
-    // checks here. Here's why:
+    // Process block components for Alpenglow slots. Note that we don't need to run migration checks
+    // for BlockMarkers here, despite BlockMarkers only being active post-Alpenglow. Here's why:
     //
     // Post-Alpenglow migration - validators that have Alpenglow enabled can parse BlockComponents.
     // Things just work.
@@ -1524,34 +1528,52 @@ pub fn confirm_slot(
     // (2) validators *capable* of processing BlockMarkers will store the BlockMarkers in shred
     //     ingest, run through this verifying code here, and then error out when finish() is invoked
     //     during replay, resulting in the slot being marked as dead.
-    if let Some(parent_bank) = bank.parent() {
-        let mut verifier = bank.block_component_verifier.write().unwrap();
-        for marker in slot_components.iter().filter_map(|bc| bc.as_marker()) {
-            verifier.on_marker(bank.clone_without_scheduler(), parent_bank.clone(), marker)?;
+    let mut verifier = bank.block_component_verifier.write().unwrap();
+
+    // Find the index of the last EntryBatch in slot_components
+    let last_entry_batch_index = slot_components
+        .iter()
+        .rev()
+        .position(|bc| matches!(bc, BlockComponent::EntryBatch(_)))
+        .map(|ix| slot_components.len() - 1 - ix);
+
+    for (ix, (completed_range, component)) in completed_ranges
+        .iter()
+        .zip(slot_components.into_iter())
+        .enumerate()
+    {
+        let num_shreds = completed_range.end - completed_range.start;
+
+        match component {
+            BlockComponent::EntryBatch(entries) => {
+                let slot_full = slot_full && ix == last_entry_batch_index.unwrap();
+
+                confirm_slot_entries(
+                    bank,
+                    replay_tx_thread_pool,
+                    (entries, num_shreds as u64, slot_full),
+                    timing,
+                    progress,
+                    skip_verification,
+                    transaction_status_sender,
+                    entry_notification_sender,
+                    replay_vote_sender,
+                    recyclers,
+                    log_messages_bytes_limit,
+                    prioritization_fee_cache,
+                    migration_status,
+                )?;
+            }
+            BlockComponent::BlockMarker(marker) => {
+                if let Some(parent_bank) = bank.parent() {
+                    verifier.on_marker(bank.clone_without_scheduler(), parent_bank, &marker)?;
+                }
+                progress.num_shreds += num_shreds as u64;
+            }
         }
     }
 
-    let slot_entries = slot_components
-        .into_iter()
-        .filter_map(|c| c.as_entry_batch_owned())
-        .flatten()
-        .collect_vec();
-
-    confirm_slot_entries(
-        bank,
-        replay_tx_thread_pool,
-        (slot_entries, num_shreds, slot_full),
-        timing,
-        progress,
-        skip_verification,
-        transaction_status_sender,
-        entry_notification_sender,
-        replay_vote_sender,
-        recyclers,
-        log_messages_bytes_limit,
-        prioritization_fee_cache,
-        migration_status,
-    )
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -3971,7 +3971,7 @@ impl Blockstore {
                 Err(e) => return Err(e),
             };
 
-        let entries = self.get_slot_entries_in_block(slot, completed_ranges, Some(&slot_meta))?;
+        let entries = self.get_slot_entries_in_block(slot, &completed_ranges, Some(&slot_meta))?;
         Ok((entries, num_shreds, slot_meta.is_full()))
     }
 
@@ -3983,17 +3983,26 @@ impl Blockstore {
         slot: Slot,
         start_index: u64,
         allow_dead_slots: bool,
-    ) -> Result<(Vec<BlockComponent>, u64, bool)> {
-        let (completed_ranges, slot_meta, num_shreds) =
+    ) -> Result<(Vec<BlockComponent>, Vec<Range<u32>>, bool)> {
+        let (completed_ranges, slot_meta, _) =
             match self.get_slot_data_with_shred_info_common(slot, start_index, allow_dead_slots) {
                 Ok(data) => data,
-                Err(BlockstoreError::SlotUnavailable) => return Ok((vec![], 0, false)),
+                Err(BlockstoreError::SlotUnavailable) => return Ok((vec![], vec![], false)),
                 Err(e) => return Err(e),
             };
 
         let components =
-            self.get_slot_components_in_block(slot, completed_ranges, Some(&slot_meta))?;
-        Ok((components, num_shreds, slot_meta.is_full()))
+            self.get_slot_components_in_block(slot, &completed_ranges, Some(&slot_meta))?;
+
+        // TODO(ksn): get rid of this once we remove BlockComponent::from_bytes_multiple
+        if completed_ranges.len() != components.len() {
+            return Err(BlockstoreError::BlockComponentMisalignment(
+                slot,
+                start_index,
+            ));
+        }
+
+        Ok((components, completed_ranges, slot_meta.is_full()))
     }
 
     /// Gets accounts used in transactions in the slot range [starting_slot, ending_slot].
@@ -4109,7 +4118,7 @@ impl Blockstore {
     fn process_slot_data_in_block<T, I, F>(
         &self,
         slot: Slot,
-        completed_ranges: CompletedRanges,
+        completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
         transform: F,
     ) -> Result<Vec<T>>
@@ -4147,7 +4156,7 @@ impl Blockstore {
                     })
                 });
         completed_ranges
-            .into_iter()
+            .iter()
             .map(|Range { start, end }| end - start)
             .map(|num_shreds| {
                 shreds
@@ -4201,7 +4210,7 @@ impl Blockstore {
     fn get_slot_components_in_block(
         &self,
         slot: Slot,
-        completed_ranges: CompletedRanges,
+        completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<BlockComponent>> {
         self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| Ok(cs.into_iter()))
@@ -4216,7 +4225,7 @@ impl Blockstore {
     fn get_slot_entries_in_block(
         &self,
         slot: Slot,
-        completed_ranges: CompletedRanges,
+        completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
         self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| {
@@ -4233,7 +4242,7 @@ impl Blockstore {
         range: Range<u32>,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
-        self.get_slot_entries_in_block(slot, vec![range], slot_meta)
+        self.get_slot_entries_in_block(slot, &vec![range], slot_meta)
     }
 
     /// Performs checks on the last fec set of a replayed slot, and returns the block_id.
