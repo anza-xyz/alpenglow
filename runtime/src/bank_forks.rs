@@ -15,7 +15,6 @@ use {
     solana_hash::Hash,
     solana_measure::measure::Measure,
     solana_program_runtime::loaded_programs::{BlockRelation, ForkGraph},
-    solana_pubkey::Pubkey,
     solana_unified_scheduler_logic::SchedulingMode,
     solana_votor_messages::migration::MigrationStatus,
     std::{
@@ -185,13 +184,7 @@ impl BankForks {
             .activated_slot(&agave_feature_set::alpenglow::id());
         let genesis_cert = root_bank.get_alpenglow_genesis_certificate();
 
-        MigrationStatus::initialize(
-            Pubkey::default(),
-            root_epoch,
-            ff_activation_slot,
-            genesis_cert,
-            epoch_schedule,
-        )
+        MigrationStatus::initialize(root_epoch, ff_activation_slot, genesis_cert, epoch_schedule)
     }
 
     pub fn banks(&self) -> &HashMap<Slot, BankWithScheduler> {

@@ -731,6 +731,7 @@ impl ReplayStage {
                     };
                     warn!("Identity changed during startup from {my_old_pubkey} to {my_pubkey}");
                 }
+                migration_status.set_pubkey(my_pubkey);
             }
             let (mut progress, heaviest_subtree_fork_choice) =
                 Self::initialize_progress_and_fork_choice_with_locked_bank_forks(
@@ -1231,6 +1232,7 @@ impl ReplayStage {
                                 identity_keypair = cluster_info.keypair().clone();
                                 let my_old_pubkey = my_pubkey;
                                 my_pubkey = identity_keypair.pubkey();
+                                migration_status.set_pubkey(my_pubkey);
 
                                 // Load the new identity's tower
                                 tower = match Self::load_tower(
@@ -1415,7 +1417,7 @@ impl ReplayStage {
     /// - Shutdown poh
     /// - Start block creation loop and Votor
     ///
-    /// Should only be called if we have received a genesis certificate on our view of the genesis block.
+    /// Should only be called if we're in `ReadyToEnable`
     #[allow(clippy::too_many_arguments)]
     fn enable_alpenglow(
         exit: &AtomicBool,
@@ -1432,7 +1434,9 @@ impl ReplayStage {
     ) {
         let root_bank = bank_forks.read().unwrap().root_bank();
 
-        let genesis_block @ (genesis_slot, block_id) = migration_status.genesis_block();
+        let genesis_block @ (genesis_slot, block_id) = migration_status
+            .genesis_block()
+            .expect("Must be ready to enable");
         warn!(
             "{my_pubkey}: Alpenglow genesis vote has succeeded enabling alpenglow. Genesis block \
              {genesis_block:?}"
@@ -4027,7 +4031,8 @@ impl ReplayStage {
                     if parent_is_super_oc
                         && migration_status.qualifies_for_genesis_discovery(bank_slot)
                     {
-                        let migration_slot = migration_status.migration_slot();
+                        let migration_slot =
+                            migration_status.migration_slot().expect("In migration");
                         // We have a block whose ancestor qualifies to be the genesis block.
                         let genesis_slot = ancestors
                             .get(&bank_slot)

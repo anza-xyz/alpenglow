@@ -895,6 +895,7 @@ impl Validator {
         cluster_info.set_bind_ip_addrs(node.bind_ip_addrs.clone());
         let cluster_info = Arc::new(cluster_info);
         let node_multihoming = Arc::new(NodeMultihoming::from(&node));
+        migration_status.set_pubkey(cluster_info.id());
 
         assert!(is_snapshot_config_valid(&config.snapshot_config));
 
