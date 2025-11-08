@@ -41,7 +41,7 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
-        block_component_verifier::BlockComponentVerifier,
+        block_component_verifier::BlockComponentProcessor,
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
@@ -557,7 +557,7 @@ impl PartialEq for Bank {
             block_id,
             bank_hash_stats: _,
             epoch_rewards_calculation_cache: _,
-            block_component_verifier: _,
+            block_component_processor: _,
             // Ignore new fields explicitly if they do not impact PartialEq.
             // Adding ".." will remove compile-time checks that if a new field
             // is added to the struct, this PartialEq is accordingly updated.
@@ -907,7 +907,7 @@ pub struct Bank {
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
 
     /// Block component verifier for validating block headers/footers and clock bounds
-    pub block_component_verifier: RwLock<BlockComponentVerifier>,
+    pub block_component_processor: RwLock<BlockComponentProcessor>,
 }
 
 #[derive(Debug)]
@@ -1104,7 +1104,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
-            block_component_verifier: RwLock::new(BlockComponentVerifier::default()),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         bank.transaction_processor =
@@ -1353,7 +1353,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
-            block_component_verifier: RwLock::new(BlockComponentVerifier::default()),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         let (_, ancestors_time_us) = measure_us!({
@@ -1822,7 +1822,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
-            block_component_verifier: RwLock::new(BlockComponentVerifier::default()),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         // Sanity assertions between bank snapshot and genesis config

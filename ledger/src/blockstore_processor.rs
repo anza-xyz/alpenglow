@@ -36,7 +36,7 @@ use {
         bank::{Bank, PreCommitResult, TransactionBalancesSet},
         bank_forks::{BankForks, SetRootError},
         bank_utils,
-        block_component_verifier::BlockComponentVerifierError,
+        block_component_verifier::BlockComponentProcessorError,
         commitment::VOTE_THRESHOLD_SIZE,
         dependency_tracker::DependencyTracker,
         installed_scheduler_pool::BankWithScheduler,
@@ -844,7 +844,7 @@ pub enum BlockstoreProcessorError {
     UserTransactionsInVoteOnlyBank(Slot),
 
     #[error("block component verifier error: {0}")]
-    BlockComponentVerifier(#[from] BlockComponentVerifierError),
+    BlockComponentVerifier(#[from] BlockComponentProcessorError),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1528,7 +1528,7 @@ pub fn confirm_slot(
     // (2) validators *capable* of processing BlockMarkers will store the BlockMarkers in shred
     //     ingest, run through this verifying code here, and then error out when finish() is invoked
     //     during replay, resulting in the slot being marked as dead.
-    let mut verifier = bank.block_component_verifier.write().unwrap();
+    let mut verifier = bank.block_component_processor.write().unwrap();
 
     // Find the index of the last EntryBatch in slot_components
     let last_entry_batch_index = slot_components
