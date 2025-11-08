@@ -34,7 +34,7 @@ use {
         window_service::DuplicateSlotReceiver,
     },
     agave_votor::{
-        event::{CompletedBlock, VotorEvent, VotorEventSender},
+        event::{CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventSender},
         root_utils,
         vote_history_storage::SavedVoteHistory,
         voting_service::BLSOp,
@@ -307,6 +307,7 @@ pub struct ReplaySenders {
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<Vec<ConsensusMessage>>,
     pub lockouts_sender: Sender<TowerCommitmentAggregationData>,
+    pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
 }
 
 pub struct ReplayReceivers {
@@ -618,6 +619,7 @@ impl ReplayStage {
             votor_event_sender,
             own_vote_sender,
             lockouts_sender,
+            optimistic_parent_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -806,6 +808,18 @@ impl ReplayStage {
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
                 if migration_status.is_alpenglow_enabled() {
+                    let bank_forks_r = bank_forks.read().unwrap();
+                    for frozen_slot in &new_frozen_slots {
+                        let bank = bank_forks_r.get(*frozen_slot).unwrap();
+                        Self::maybe_notify_of_optimistic_parent(
+                            &bank,
+                            &my_pubkey,
+                            &leader_schedule_cache,
+                            &optimistic_parent_sender,
+                        );
+                    }
+                    drop(bank_forks_r);
+
                     if let Some(highest) = new_frozen_slots.iter().max() {
                         if *highest > highest_frozen_slot {
                             highest_frozen_slot = *highest;
@@ -3301,6 +3315,54 @@ impl ReplayStage {
             }
         }
         replay_result
+    }
+
+    /// Fast leader handover: if we're going to be the next leader, and our leader window
+    /// starts on the next slot, then send the bank through the optimistic parent channel.
+    fn maybe_notify_of_optimistic_parent(
+        bank: &Arc<Bank>,
+        my_pubkey: &Pubkey,
+        leader_schedule_cache: &LeaderScheduleCache,
+        optimistic_parent_sender: &Sender<LeaderWindowInfo>,
+    ) {
+        let next_slot = bank.slot().saturating_add(1);
+
+        let is_next_leader = leader_schedule_cache
+            .slot_leader_at(next_slot, Some(bank))
+            .is_some_and(|leader| leader.id == *my_pubkey);
+
+        if !is_next_leader {
+            return;
+        }
+
+        if next_slot != first_of_consecutive_leader_slots(next_slot) {
+            return;
+        }
+
+        // TODO(ksn): if the leader has, e.g., two consecutive leader windows, this line here
+        // prevents fast leader handover from the first leader window to the second. This is because
+        // the block id is only computed after shredding a block, which occurs in broadcast, which
+        // happens after replay. This function, on the other hand, is invoked prior to replay.
+        //
+        // To address this, we should additionally add in an optimistic parent channel that goes
+        // from broadcast to replay.
+        let Some(block_id) = bank.block_id() else {
+            return;
+        };
+
+        let end_slot = next_slot.saturating_add(NUM_CONSECUTIVE_LEADER_SLOTS - 1);
+        let leader_window_info = LeaderWindowInfo {
+            start_slot: next_slot,
+            end_slot,
+            parent_block: (bank.slot(), block_id),
+            skip_timer: Instant::now(), // ignore for now
+        };
+
+        optimistic_parent_sender
+            .send_timeout(leader_window_info, Duration::from_secs(1))
+            .unwrap_or_else(|err| {
+                error!("optimistic_parent_sender failed to send leader window info: {err:?}");
+            });
     }
 
     #[allow(clippy::too_many_arguments)]

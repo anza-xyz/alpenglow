@@ -155,6 +155,7 @@ pub struct AlpenglowInitializationState {
     pub leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
 
     // Main communication channel
     pub votor_event_sender: VotorEventSender,
@@ -248,6 +249,7 @@ impl Tvu {
             key_notifiers,
             bls_connection_cache,
             voting_service_test_override,
+            optimistic_parent_sender,
         } = votor_init;
 
         // streamer and sigverify for A2A BLS messages
@@ -487,6 +489,7 @@ impl Tvu {
             votor_event_sender,
             own_vote_sender: consensus_message_sender,
             lockouts_sender,
+            optimistic_parent_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -750,6 +753,7 @@ pub mod tests {
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
         let (leader_window_info_sender, _leader_window_info_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::new((0, (0, Hash::default()))));
+        let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
         let (votor_event_sender, votor_event_receiver): (VotorEventSender, VotorEventReceiver) =
             unbounded();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
@@ -830,6 +834,7 @@ pub mod tests {
                 leader_window_info_sender,
                 replay_highest_frozen,
                 highest_parent_ready,
+                optimistic_parent_sender,
                 votor_event_sender,
                 votor_event_receiver,
                 cancel,

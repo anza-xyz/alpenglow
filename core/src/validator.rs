@@ -1487,6 +1487,7 @@ impl Validator {
 
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
         let highest_parent_ready = Arc::new(RwLock::default());
+        let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
@@ -1502,6 +1503,7 @@ impl Validator {
             highest_parent_ready: highest_parent_ready.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
             record_receiver_receiver,
+            optimistic_parent_receiver: optimistic_parent_receiver.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1691,6 +1693,7 @@ impl Validator {
                 leader_window_info_sender,
                 replay_highest_frozen: replay_highest_frozen.clone(),
                 highest_parent_ready: highest_parent_ready.clone(),
+                optimistic_parent_sender,
                 votor_event_sender: votor_event_sender.clone(),
                 votor_event_receiver,
                 cancel: cancel.clone(),
