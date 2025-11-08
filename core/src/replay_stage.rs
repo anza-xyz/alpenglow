@@ -46,6 +46,7 @@ use {
         vote::Vote,
     },
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    itertools::Itertools,
     rayon::{ThreadPool, prelude::*},
     solana_accounts_db::contains::Contains,
     solana_clock::{BankId, NUM_CONSECUTIVE_LEADER_SLOTS, Slot},
@@ -808,9 +809,14 @@ impl ReplayStage {
                 );
                 let did_complete_bank = !new_frozen_slots.is_empty();
                 if migration_status.is_alpenglow_enabled() {
-                    let bank_forks_r = bank_forks.read().unwrap();
-                    for frozen_slot in &new_frozen_slots {
-                        let bank = bank_forks_r.get(*frozen_slot).unwrap();
+                    let fast_leader_handover_notifies = {
+                        let bank_forks_r = bank_forks.read().unwrap();
+                        new_frozen_slots
+                            .iter()
+                            .filter_map(|slot| bank_forks_r.get(*slot))
+                            .collect_vec()
+                    };
+                    for bank in fast_leader_handover_notifies {
                         Self::maybe_notify_of_optimistic_parent(
                             &bank,
                             &my_pubkey,
@@ -818,7 +824,6 @@ impl ReplayStage {
                             &optimistic_parent_sender,
                         );
                     }
-                    drop(bank_forks_r);
 
                     if let Some(highest) = new_frozen_slots.iter().max() {
                         if *highest > highest_frozen_slot {
