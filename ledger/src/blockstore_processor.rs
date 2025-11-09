@@ -36,7 +36,7 @@ use {
         bank::{Bank, PreCommitResult, TransactionBalancesSet},
         bank_forks::{BankForks, SetRootError},
         bank_utils,
-        block_component_verifier::BlockComponentProcessorError,
+        block_component_processor::BlockComponentProcessorError,
         commitment::VOTE_THRESHOLD_SIZE,
         dependency_tracker::DependencyTracker,
         installed_scheduler_pool::BankWithScheduler,

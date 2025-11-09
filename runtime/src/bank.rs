@@ -41,7 +41,7 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
-        block_component_verifier::BlockComponentProcessor,
+        block_component_processor::BlockComponentProcessor,
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
@@ -906,7 +906,7 @@ pub struct Bank {
     /// The hashmap is keyed by parent_hash.
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
 
-    /// Block component verifier for validating block headers/footers and clock bounds
+    /// Block component processor for validating block headers/footers and clock bounds
     pub block_component_processor: RwLock<BlockComponentProcessor>,
 }
 
