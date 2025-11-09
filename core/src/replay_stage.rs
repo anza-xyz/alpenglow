@@ -3440,17 +3440,19 @@ impl ReplayStage {
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead.
                 let is_leader_block = bank.collector_id() == my_pubkey;
-                let block_id = match blockstore.check_last_fec_set_and_get_block_id(
-                    bank.slot(),
-                    bank.hash(),
-                    false,
-                    &bank.feature_set,
-                ) {
-                    Ok(block_id) => block_id,
+                let (chained_merkle_id, ag_id) = match blockstore
+                    .check_last_fec_set_and_get_block_ids(
+                        bank.slot(),
+                        bank.parent_ag_id(),
+                        bank.hash(),
+                        false,
+                        &bank.feature_set,
+                    ) {
+                    Ok((chained_merkle_id, ag_id)) => (chained_merkle_id, ag_id),
                     Err(result_err) => {
                         if is_leader_block {
                             // Our leader block has not finished shredding
-                            None
+                            (None, None)
                         } else {
                             let root = bank_forks.read().unwrap().root();
                             Self::mark_dead_slot(
@@ -3473,6 +3475,9 @@ impl ReplayStage {
 
                 if bank.chained_merkle_id().is_none() {
                     bank.set_chained_merkle_id(block_id);
+                }
+                if bank.alpenglow_block_id().is_none() {
+                    bank.set_alpenglow_block_id(ag_id);
                 }
 
                 let r_replay_stats = replay_stats.read().unwrap();

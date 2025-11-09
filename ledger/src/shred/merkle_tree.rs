@@ -1,6 +1,9 @@
 use {
-    crate::shred::Error, solana_hash::Hash, solana_sha256_hasher::hashv,
-    solana_votor_messages::SliceRoot, static_assertions::const_assert_eq,
+    crate::shred::Error,
+    solana_hash::Hash,
+    solana_sha256_hasher::hashv,
+    solana_votor_messages::{AlpenglowBlockId, SliceRoot},
+    static_assertions::const_assert_eq,
 };
 
 pub(crate) const SIZE_OF_MERKLE_ROOT: usize = std::mem::size_of::<Hash>();
@@ -23,13 +26,11 @@ pub(crate) struct SliceMerkleTree {
     pub root: SliceRoot,
 }
 
-/*
 pub(crate) struct DoubleMerkleTree {
-    pub hashes: Vec<Option<Hash>>,
-    pub parent_id: AlpenglowBlockId,
+    pub _hashes: Vec<Option<Hash>>,
+    pub _parent_id: AlpenglowBlockId,
     pub block_id: AlpenglowBlockId,
 }
-*/
 
 fn make_basic_merkle_tree<I>(items: I) -> Result<Vec<Option<Hash>>, Error>
 where
@@ -74,29 +75,27 @@ where
 }
 
 // The tree on top of slice trees for Alpenglow block id/repair.
-/*
 pub fn make_double_merkle_tree<I>(
     slice_roots: I,
     parent_id: AlpenglowBlockId,
 ) -> Result<DoubleMerkleTree, Error>
 where
-    I: IntoIterator<Item = Result<SliceRoot, Error>>,
+    I: IntoIterator<Item = SliceRoot>,
     <I as IntoIterator>::IntoIter: ExactSizeIterator,
 {
-    let hashes: Vec<Result<Hash, Error>> = slice_roots
+    let hashes: Vec<_> = slice_roots
         .into_iter()
-        .map(|x| x.map(|sr| sr.0))
+        .map(|slice_root| Ok(slice_root.0))
         .chain(std::iter::once(Ok(parent_id.0)))
         .collect();
     let nodes = make_basic_merkle_tree(hashes)?;
     let root = nodes[1].unwrap();
     Ok(DoubleMerkleTree {
-        hashes: nodes,
-        parent_id,
+        _hashes: nodes,
+        _parent_id: parent_id,
         block_id: AlpenglowBlockId(root),
     })
 }
-*/
 
 pub fn make_merkle_proof(
     mut index: usize, // leaf index

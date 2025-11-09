@@ -18,8 +18,9 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredId,
-            ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
+            self, merkle_tree::make_double_merkle_tree, ErasureSetId, ProcessShredsStats,
+            ReedSolomonCache, Shred, ShredData, ShredId, ShredType, Shredder,
+            DATA_SHREDS_PER_FEC_BLOCK,
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -63,7 +64,7 @@ use {
         VersionedConfirmedBlock, VersionedConfirmedBlockWithEntries,
         VersionedTransactionWithStatusMeta,
     },
-    solana_votor_messages::SliceRoot,
+    solana_votor_messages::{AlpenglowBlockId, SliceRoot},
     std::{
         borrow::Cow,
         cell::RefCell,
@@ -4148,19 +4149,21 @@ impl Blockstore {
         self.get_slot_entries_in_block(slot, vec![range], slot_meta)
     }
 
-    /// Performs checks on the last fec set of a replayed slot, and returns the block_id.
+    /// Performs checks on the last fec set of a replayed slot, and returns: chained merkle id, alpenglow block_id.
     /// Returns:
     ///     - BlockstoreProcessorError::IncompleteFinalFecSet
     ///       if the last fec set is not full
     ///     - BlockstoreProcessorError::InvalidRetransmitterSignatureFinalFecSet
     ///       if the last fec set is not signed by retransmitters
-    pub fn check_last_fec_set_and_get_block_id(
+    pub fn check_last_fec_set_and_get_block_ids(
         &self,
         slot: Slot,
+        parent_ag_id: Option<AlpenglowBlockId>,
         bank_hash: Hash,
         is_leader: bool,
         feature_set: &FeatureSet,
-    ) -> std::result::Result<Option<SliceRoot>, BlockstoreProcessorError> {
+    ) -> std::result::Result<(Option<SliceRoot>, Option<AlpenglowBlockId>), BlockstoreProcessorError>
+    {
         let results = self.check_last_fec_set(slot);
         let Ok(results) = results else {
             if !is_leader {
@@ -4172,14 +4175,50 @@ impl Blockstore {
             if feature_set.is_active(&agave_feature_set::vote_only_full_fec_sets::id()) {
                 return Err(BlockstoreProcessorError::IncompleteFinalFecSet);
             }
-            return Ok(None);
+            return Ok((None, None));
         };
         // Update metrics
         if results.last_fec_set_merkle_root.is_none() {
             datapoint_warn!("incomplete_final_fec_set", ("slot", slot, i64),);
         }
+
         // Return block id / error based on feature flags
-        results.get_last_fec_set_merkle_root(feature_set)
+        let chained_merkle_id = results.get_last_fec_set_merkle_root(feature_set)?;
+
+        let alpenglow_block_id = self.compute_alpenglow_block_id(slot, parent_ag_id)?;
+
+        Ok((chained_merkle_id, alpenglow_block_id))
+    }
+
+    fn compute_alpenglow_block_id(
+        &self,
+        slot: Slot,
+        parent_block_ag_id: Option<AlpenglowBlockId>,
+    ) -> Result<Option<AlpenglowBlockId>> {
+        let Some(parent_block_ag_id) = parent_block_ag_id else {
+            return Ok(None);
+        };
+        let slot_meta = self.meta(slot)?.ok_or(BlockstoreError::SlotUnavailable)?;
+        let last_shred_index = slot_meta
+            .last_index
+            .ok_or(BlockstoreError::UnknownLastIndex(slot))?;
+        let roots: Vec<_> = (0..last_shred_index)
+            .map(|i| {
+                self.merkle_root_meta_from_location(
+                    ErasureSetId::new(slot, i as u32),
+                    BlockLocation::Original,
+                )
+                .unwrap()
+                .unwrap()
+                .merkle_root()
+                .unwrap()
+            })
+            .dedup()
+            .collect();
+        let id = make_double_merkle_tree(roots.into_iter(), parent_block_ag_id)
+            .map_err(|_| BlockstoreError::SlotUnavailable)?
+            .block_id;
+        Ok(Some(id))
     }
 
     /// Performs checks on the last FEC set for this slot.

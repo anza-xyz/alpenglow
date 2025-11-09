@@ -12,7 +12,7 @@ use {
     solana_poh::poh_recorder::WorkingBankEntry,
     solana_runtime::bank::Bank,
     solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
-    solana_votor_messages::SliceRoot,
+    solana_votor_messages::{AlpenglowBlockId, SliceRoot},
     std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -199,8 +199,10 @@ pub(super) fn set_block_id_and_send(
     votor_event_sender: &VotorEventSender,
     bank: Arc<Bank>,
     chained_merkle_id: SliceRoot,
+    alpenglow_block_id: AlpenglowBlockId,
 ) -> Result<()> {
     bank.set_chained_merkle_id(Some(chained_merkle_id));
+    bank.set_alpenglow_block_id(Some(alpenglow_block_id));
     if bank.is_frozen() {
         votor_event_sender.send(VotorEvent::Block(CompletedBlock {
             slot: bank.slot(),

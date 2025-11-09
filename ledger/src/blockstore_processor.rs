@@ -2228,8 +2228,15 @@ pub fn process_single_slot(
         result?
     }
 
-    let chained_merkle_id = blockstore
-        .check_last_fec_set_and_get_block_id(slot, bank.hash(), false, &bank.feature_set)
+    let parent_ag_id = bank.parent_alpenglow_block_id();
+    let (chained_merkle_id, alpenglow_block_id) = blockstore
+        .check_last_fec_set_and_get_block_ids(
+            slot,
+            parent_ag_id,
+            bank.hash(),
+            false,
+            &bank.feature_set,
+        )
         .inspect_err(|err| {
             warn!("slot {slot} failed last fec set checks: {err}");
             if blockstore.is_primary_access() {
@@ -2244,6 +2251,7 @@ pub fn process_single_slot(
             }
         })?;
     bank.set_chained_merkle_id(chained_merkle_id);
+    bank.set_alpenglow_block_id(alpenglow_block_id);
     bank.freeze(); // all banks handled by this routine are created from complete slots
 
     if let Some(slot_callback) = &opts.slot_callback {

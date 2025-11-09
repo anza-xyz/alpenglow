@@ -338,11 +338,11 @@ impl StandardBroadcastRun {
             self.completed = true;
 
             // Populate the block id and send for voting
-            // The block id is the merkle root of the last FEC set which is now the chained merkle root
             broadcast_utils::set_block_id_and_send(
                 votor_event_sender,
                 bank.clone(),
                 self.chained_merkle_root,
+                ag_id, // TO BE CONTINUED
             )?;
         }
 
