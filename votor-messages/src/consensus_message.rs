@@ -1,17 +1,16 @@
 //! Put BLS message here so all clients can agree on the format
 use {
-    crate::vote::Vote,
+    crate::{vote::Vote, AlpenglowBlockId},
     serde::{Deserialize, Serialize},
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
-    solana_hash::Hash,
 };
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
 
 /// Block, a (slot, hash) tuple
-pub type Block = (Slot, Hash);
+pub type Block = (Slot, AlpenglowBlockId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 /// BLS vote message, we need rank to look up pubkey
@@ -30,11 +29,11 @@ pub enum Certificate {
     /// Finalize certificate
     Finalize(Slot),
     /// Fast finalize certificate
-    FinalizeFast(Slot, Hash),
+    FinalizeFast(Slot, AlpenglowBlockId),
     /// Notarize certificate
-    Notarize(Slot, Hash),
+    Notarize(Slot, AlpenglowBlockId),
     /// Notarize fallback certificate
-    NotarizeFallback(Slot, Hash),
+    NotarizeFallback(Slot, AlpenglowBlockId),
     /// Skip certificate
     Skip(Slot),
 }
@@ -55,14 +54,18 @@ pub enum CertificateType {
 }
 
 impl Certificate {
-    /// Create a new certificate ID from a CertificateType, Option<Slot>, and Option<Hash>
-    pub fn new(certificate_type: CertificateType, slot: Slot, hash: Option<Hash>) -> Self {
-        match (certificate_type, hash) {
+    /// Create a new certificate ID from a CertificateType, Option<Slot>, and Option<AlpenglowBlockId>
+    pub fn new(
+        certificate_type: CertificateType,
+        slot: Slot,
+        ag_id: Option<AlpenglowBlockId>,
+    ) -> Self {
+        match (certificate_type, ag_id) {
             (CertificateType::Finalize, None) => Certificate::Finalize(slot),
-            (CertificateType::FinalizeFast, Some(hash)) => Certificate::FinalizeFast(slot, hash),
-            (CertificateType::Notarize, Some(hash)) => Certificate::Notarize(slot, hash),
-            (CertificateType::NotarizeFallback, Some(hash)) => {
-                Certificate::NotarizeFallback(slot, hash)
+            (CertificateType::FinalizeFast, Some(ag_id)) => Certificate::FinalizeFast(slot, ag_id),
+            (CertificateType::Notarize, Some(ag_id)) => Certificate::Notarize(slot, ag_id),
+            (CertificateType::NotarizeFallback, Some(ag_id)) => {
+                Certificate::NotarizeFallback(slot, ag_id)
             }
             (CertificateType::Skip, None) => Certificate::Skip(slot),
             _ => panic!("Invalid certificate type and hash combination"),
@@ -163,9 +166,9 @@ impl Certificate {
     /// the verifier uses to check the single aggregate signature.
     pub fn to_source_votes(&self) -> Option<(Vote, Vote)> {
         match self {
-            Certificate::NotarizeFallback(slot, hash) => {
-                let vote1 = Vote::new_notarization_vote(*slot, *hash);
-                let vote2 = Vote::new_notarization_fallback_vote(*slot, *hash);
+            Certificate::NotarizeFallback(slot, ag_id) => {
+                let vote1 = Vote::new_notarization_vote(*slot, *ag_id);
+                let vote2 = Vote::new_notarization_fallback_vote(*slot, *ag_id);
                 Some((vote1, vote2))
             }
             Certificate::Skip(slot) => {

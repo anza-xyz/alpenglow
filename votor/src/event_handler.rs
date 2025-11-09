@@ -24,7 +24,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SetRootError},
     solana_signer::Signer,
-    solana_votor_messages::{consensus_message::Block, vote::Vote, SliceRoot},
+    solana_votor_messages::{consensus_message::Block, vote::Vote, AlpenglowBlockId},
     std::{
         collections::{BTreeMap, BTreeSet},
         sync::{
@@ -350,7 +350,8 @@ impl EventHandler {
                 {
                     return Ok(votes);
                 }
-                info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id}");
+                let block_id_hash = block_id.0;
+                info!("{my_pubkey}: Voting notarize-fallback for {slot} {block_id_hash}");
                 if let Some(bls_op) = generate_vote_message(
                     Vote::new_notarization_fallback_vote(slot, block_id),
                     false,
@@ -476,7 +477,7 @@ impl EventHandler {
         local_context: &mut LocalContext,
     ) -> Option<(Slot, Block)> {
         let (slot, hash) = finalized_block;
-        let block_id = SliceRoot(hash);
+        let block_id = hash;
         let first_slot_of_window = first_of_consecutive_leader_slots(slot);
         if first_slot_of_window == slot || first_slot_of_window == 0 {
             // No need to trigger parent ready for the first slot of the window
@@ -493,13 +494,13 @@ impl EventHandler {
             // We haven't finished replay for the block, so we can't trigger parent ready
             return None;
         }
-        if bank.chained_merkle_id() != Some(block_id) {
+        if bank.alpenglow_block_id() != Some(block_id) {
             // We have a different block id for the slot, repair should kick in later
             return None;
         }
         let parent_bank = bank.parent()?;
         let parent_slot = parent_bank.slot();
-        let Some(SliceRoot(parent_chained_merkle_hash)) = parent_bank.chained_merkle_id() else {
+        let Some(parent_ag_id) = parent_bank.alpenglow_block_id() else {
             // Maybe this bank is set to root after we drop bank_forks.
             error!(
                 "{}: Unable to find block id for parent bank {parent_slot} to trigger parent ready",
@@ -507,12 +508,13 @@ impl EventHandler {
             );
             return None;
         };
+        let parent_ag_id_hash = parent_ag_id.0;
         info!(
             "{}: Triggering parent ready for slot {slot} with parent {parent_slot} \
-             {parent_chained_merkle_hash}",
+             {parent_ag_id_hash}",
             local_context.my_pubkey
         );
-        Some((slot, (parent_slot, parent_chained_merkle_hash)))
+        Some((slot, (parent_slot, parent_ag_id)))
     }
 
     fn handle_set_identity(
@@ -540,23 +542,19 @@ impl EventHandler {
         let slot = bank.slot();
         let block = (
             slot,
-            bank.chained_merkle_id()
-                .expect("Block id must be set upstream")
-                .0,
+            bank.alpenglow_block_id()
+                .expect("Block id must be set upstream"),
         );
         let parent_slot = bank.parent_slot();
-        let parent_chained_merkle_hash = bank
-            .parent_chained_merkle_id()
-            .unwrap_or_else(|| {
-                // To account for child of genesis and snapshots we insert a
-                // default block id here. Charlie is working on a SIMD to add block
-                // id to snapshots, which can allow us to remove this and update
-                // the default case in parent ready tracker.
-                trace!("Using default block id for {slot} parent {parent_slot}");
-                SliceRoot(Hash::default())
-            })
-            .0;
-        let parent_block = (parent_slot, parent_chained_merkle_hash);
+        let parent_ag_id = bank.parent_alpenglow_block_id().unwrap_or_else(|| {
+            // To account for child of genesis and snapshots we insert a
+            // default block id here. Charlie is working on a SIMD to add block
+            // id to snapshots, which can allow us to remove this and update
+            // the default case in parent ready tracker.
+            trace!("Using default block id for {slot} parent {parent_slot}");
+            AlpenglowBlockId(Hash::default())
+        });
+        let parent_block = (parent_slot, parent_ag_id);
         (block, parent_block)
     }
 
@@ -597,8 +595,8 @@ impl EventHandler {
                 return Ok(false);
             }
         }
-
-        info!("{my_pubkey}: Voting notarize for {slot} {block_id}");
+        let block_id_hash = block_id.0;
+        info!("{my_pubkey}: Voting notarize for {slot} {block_id_hash}");
         if let Some(bls_op) = generate_vote_message(
             Vote::new_notarization_vote(slot, block_id),
             false,
@@ -758,9 +756,7 @@ impl EventHandler {
                 (slot > old_root
                     && vctx.vote_history.voted(slot)
                     && bank.is_frozen()
-                    && bank
-                        .chained_merkle_id()
-                        .is_some_and(|bid| bid == SliceRoot(block_id)))
+                    && bank.alpenglow_block_id().is_some_and(|bid| bid == block_id))
                 .then_some(slot)
             })
             .max()
@@ -1060,7 +1056,7 @@ mod tests {
         parent_bank: Arc<Bank>,
     ) -> Arc<Bank> {
         let bank = Bank::new_from_parent(parent_bank, &Pubkey::new_unique(), slot);
-        bank.set_chained_merkle_id(Some(SliceRoot(Hash::new_unique())));
+        bank.set_alpenglow_block_id(Some(AlpenglowBlockId(Hash::new_unique())));
         bank.freeze();
         let mut bank_forks_w = test_context.bank_forks.write().unwrap();
         bank_forks_w.insert(bank);
@@ -1218,9 +1214,16 @@ mod tests {
         // If there is a parent ready for block 1 Notarization is sent out.
         let slot = 1;
         let parent_slot = 0;
-        send_parent_ready_event(&test_context, slot, (parent_slot, Hash::default()));
+        send_parent_ready_event(
+            &test_context,
+            slot,
+            (parent_slot, AlpenglowBlockId(Hash::default())),
+        );
         sleep(TEST_SHORT_TIMEOUT);
-        check_parent_ready_slot(&test_context, (slot, (parent_slot, Hash::default())));
+        check_parent_ready_slot(
+            &test_context,
+            (slot, (parent_slot, AlpenglowBlockId(Hash::default()))),
+        );
         let root_bank = test_context
             .bank_forks
             .read()
@@ -1228,7 +1231,7 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, slot, root_bank);
-        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
+        let block_id_1 = bank1.alpenglow_block_id().unwrap();
 
         // We should receive Notarize Vote for block 1
         check_for_vote(
@@ -1243,7 +1246,7 @@ mod tests {
 
         let slot = 2;
         let bank2 = create_block_and_send_block_event(&test_context, slot, bank1.clone());
-        let block_id_2 = bank2.chained_merkle_id().unwrap().0;
+        let block_id_2 = bank2.alpenglow_block_id().unwrap();
 
         // Because 2 is middle of window, we should see Notarize vote for block 2 even without parentready
         check_for_vote(
@@ -1259,7 +1262,7 @@ mod tests {
         // Slot 4 completed replay without parent ready or parent notarized should not trigger Notarize vote
         let slot = 4;
         let bank4 = create_block_and_send_block_event(&test_context, slot, bank2.clone());
-        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
+        let block_id_4 = bank4.alpenglow_block_id().unwrap();
         check_no_vote_or_commitment(&test_context);
 
         // Send parent ready for slot 4 should trigger Notarize vote for slot 4
@@ -1289,12 +1292,12 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
+        let block_id_1 = bank1.alpenglow_block_id().unwrap();
 
         // Add parent ready for 0 to trigger notar vote for 1
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
-        check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
+        check_parent_ready_slot(&test_context, (1, (0, AlpenglowBlockId(Hash::default()))));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
 
@@ -1303,7 +1306,7 @@ mod tests {
         check_for_vote(&test_context, &Vote::new_finalization_vote(1));
 
         let bank2 = create_block_and_send_block_event(&test_context, 2, bank1.clone());
-        let block_id_2 = bank2.chained_merkle_id().unwrap().0;
+        let block_id_2 = bank2.alpenglow_block_id().unwrap();
         // Both Notarize and Finalize votes should trigger for 2
         check_for_vote(&test_context, &Vote::new_notarization_vote(2, block_id_2));
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 2);
@@ -1313,7 +1316,7 @@ mod tests {
         // Create bank3 but do not Notarize, so Finalize vote should not trigger
         let slot = 3;
         let bank3 = create_block_only(&test_context, slot, bank2.clone());
-        let block_id_3 = bank3.chained_merkle_id().unwrap().0;
+        let block_id_3 = bank3.alpenglow_block_id().unwrap();
         // Check no notarization vote for 3
         check_no_vote_or_commitment(&test_context);
 
@@ -1393,10 +1396,10 @@ mod tests {
             .sharable_banks()
             .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1_old = bank_1.chained_merkle_id().unwrap().0;
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        let block_id_1_old = bank_1.alpenglow_block_id().unwrap();
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
-        check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
+        check_parent_ready_slot(&test_context, (1, (0, AlpenglowBlockId(Hash::default()))));
         check_for_vote(
             &test_context,
             &Vote::new_notarization_vote(1, block_id_1_old),
@@ -1404,7 +1407,7 @@ mod tests {
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
 
         // Now we got safe_to_notar event for slot 1 and a different block id
-        let block_id_1_1 = Hash::new_unique();
+        let block_id_1_1 = AlpenglowBlockId(Hash::new_unique());
         send_safe_to_notar_event(&test_context, (1, block_id_1_1));
         // We should see rest of the window skipped
         check_for_vote(&test_context, &Vote::new_skip_vote(2));
@@ -1419,7 +1422,7 @@ mod tests {
         // In this test you can trigger this any number of times, but the white paper
         // proved we can only get up to 3 different block ids on a slot, and our
         // certificate pool implementation checks that.
-        let block_id_1_2 = Hash::new_unique();
+        let block_id_1_2 = AlpenglowBlockId(Hash::new_unique());
         send_safe_to_notar_event(&test_context, (1, block_id_1_2));
         // No skips this time because we already skipped the rest of the window
         // We should also see notarize fallback for the new block id
@@ -1445,10 +1448,10 @@ mod tests {
             .sharable_banks()
             .root();
         let bank_1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank_1.chained_merkle_id().unwrap().0;
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        let block_id_1 = bank_1.alpenglow_block_id().unwrap();
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
-        check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
+        check_parent_ready_slot(&test_context, (1, (0, AlpenglowBlockId(Hash::default()))));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
 
@@ -1471,7 +1474,7 @@ mod tests {
 
         // Produce a full window of blocks
         // Assume the leader for 1-3 is us, send produce window event
-        send_produce_window_event(&test_context, 1, 3, (0, Hash::default()));
+        send_produce_window_event(&test_context, 1, 3, (0, AlpenglowBlockId(Hash::default())));
 
         // Check that leader_window_notifier is updated
         let window_info = test_context
@@ -1490,12 +1493,12 @@ mod tests {
         assert_eq!(received_leader_window_info.end_slot, 3);
         assert_eq!(
             received_leader_window_info.parent_block,
-            (0, Hash::default())
+            (0, AlpenglowBlockId(Hash::default()))
         );
         drop(guard);
 
         // Suddenly I found out I produced block 1 already, send new produce window event
-        let block_id_1 = Hash::new_unique();
+        let block_id_1 = AlpenglowBlockId(Hash::new_unique());
         send_produce_window_event(&test_context, 2, 3, (1, block_id_1));
         let window_info = test_context
             .leader_window_notifier
@@ -1530,11 +1533,11 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
+        let block_id_1 = bank1.alpenglow_block_id().unwrap();
 
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
-        check_parent_ready_slot(&test_context, (1, (0, Hash::default())));
+        check_parent_ready_slot(&test_context, (1, (0, AlpenglowBlockId(Hash::default()))));
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         check_for_commitment(&test_context, AlpenglowCommitmentType::Notarize, 1);
 
@@ -1567,10 +1570,10 @@ mod tests {
             .sharable_banks()
             .root();
         let bank4 = create_block_and_send_block_event(&test_context, 4, root_bank);
-        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
+        let block_id_4 = bank4.alpenglow_block_id().unwrap();
 
         let bank5 = create_block_and_send_block_event(&test_context, 5, bank4.clone());
-        let block_id_5 = bank5.chained_merkle_id().unwrap().0;
+        let block_id_5 = bank5.alpenglow_block_id().unwrap();
 
         send_finalized_event(&test_context, (5, block_id_5), true);
         sleep(TEST_SHORT_TIMEOUT);
@@ -1580,7 +1583,7 @@ mod tests {
         // We are partitioned off from rest of the network, and suddenly received finalize for
         // slot 9 a little before we finished replay slot 9
         let bank9 = create_block_only(&test_context, 9, bank5.clone());
-        let block_id_9 = bank9.chained_merkle_id().unwrap().0;
+        let block_id_9 = bank9.alpenglow_block_id().unwrap();
         send_finalized_event(&test_context, (9, block_id_9), true);
         sleep(TEST_SHORT_TIMEOUT);
         send_block_event(&test_context, 9, bank9.clone());
@@ -1606,8 +1609,8 @@ mod tests {
             .sharable_banks()
             .root();
         let bank1 = create_block_and_send_block_event(&test_context, 1, root_bank);
-        let block_id_1 = bank1.chained_merkle_id().unwrap().0;
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        let block_id_1 = bank1.alpenglow_block_id().unwrap();
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
         check_for_vote(&test_context, &Vote::new_notarization_vote(1, block_id_1));
         sleep(TEST_SHORT_TIMEOUT);
@@ -1667,7 +1670,7 @@ mod tests {
             .sharable_banks()
             .root();
         let _ = create_block_and_send_block_event(&test_context, 1, root_bank.clone());
-        send_parent_ready_event(&test_context, 1, (0, Hash::default()));
+        send_parent_ready_event(&test_context, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
         // There should be no votes but we should see commitments for hot spares
         assert_eq!(
@@ -1688,8 +1691,8 @@ mod tests {
         // We should now be able to vote again
         let slot = 4;
         let bank4 = create_block_and_send_block_event(&test_context, slot, root_bank);
-        let block_id_4 = bank4.chained_merkle_id().unwrap().0;
-        send_parent_ready_event(&test_context, slot, (0, Hash::default()));
+        let block_id_4 = bank4.alpenglow_block_id().unwrap();
+        send_parent_ready_event(&test_context, slot, (0, AlpenglowBlockId(Hash::default())));
         check_for_vote(
             &test_context,
             &Vote::new_notarization_vote(slot, block_id_4),
@@ -1731,7 +1734,7 @@ mod tests {
         // We normally need some event hitting all the senders to trigger exit
         let root_bank = setup_result.bank_forks.read().unwrap().root_bank();
         let _ = create_block_and_send_block_event(&setup_result, 1, root_bank);
-        send_parent_ready_event(&setup_result, 1, (0, Hash::default()));
+        send_parent_ready_event(&setup_result, 1, (0, AlpenglowBlockId(Hash::default())));
         sleep(TEST_SHORT_TIMEOUT);
         // Verify that the event_handler exits within 5 seconds
         let start = Instant::now();

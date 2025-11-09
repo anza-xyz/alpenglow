@@ -200,10 +200,7 @@ impl ConsensusPoolService {
         // Kick off parent ready
         let root_block = (
             root_bank.slot(),
-            root_bank
-                .chained_merkle_id()
-                .map(|sr| sr.0)
-                .unwrap_or_default(),
+            root_bank.alpenglow_block_id().unwrap_or_default(),
         );
         let mut highest_parent_ready = root_bank.slot();
         events.push(VotorEvent::ParentReady {
@@ -442,6 +439,7 @@ mod tests {
                 Certificate, CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
             },
             vote::Vote,
+            AlpenglowBlockId,
         },
         std::sync::{Arc, Mutex},
         test_case::test_case,
@@ -552,7 +550,7 @@ mod tests {
         let setup_result = setup();
 
         // validator 0 to 7 send Notarize on slot 2
-        let block_id = Hash::new_unique();
+        let block_id = AlpenglowBlockId(Hash::new_unique());
         let target_slot = 2;
         let notarize_vote = Vote::new_notarization_vote(target_slot, block_id);
         let messages_to_send = (0..8)
@@ -702,7 +700,7 @@ mod tests {
         // A lot of the receiver needs a finalize certificate to trigger an exit
         if channel_name != "consensus_message_receiver" {
             let finalize_certificate = CertificateMessage {
-                certificate: Certificate::FinalizeFast(2, Hash::new_unique()),
+                certificate: Certificate::FinalizeFast(2, AlpenglowBlockId(Hash::new_unique())),
                 signature: BLSSignature::default(),
                 bitmap: vec![],
             };

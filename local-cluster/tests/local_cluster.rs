@@ -103,6 +103,7 @@ use {
             CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
         vote::Vote,
+        AlpenglowBlockId,
     },
     std::{
         collections::{BTreeSet, HashMap, HashSet},
@@ -6572,7 +6573,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     struct VoteListenerState {
         num_notar_fallback_votes: u32,
         a_equivocates: bool,
-        notar_fallback_map: HashMap<Slot, Vec<Hash>>,
+        notar_fallback_map: HashMap<Slot, Vec<AlpenglowBlockId>>,
         double_notar_fallback_slots: Vec<Slot>,
         check_for_roots: bool,
         post_experiment_votes: HashMap<Slot, Vec<u16>>,
@@ -6617,7 +6618,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             // Create vote for Node B (potentially equivocated)
             let vote = &vote_message.vote;
             let vote_b = if self.a_equivocates && vote.is_notarization() {
-                let new_block_id = Hash::new_unique();
+                let new_block_id = AlpenglowBlockId(Hash::new_unique());
                 Vote::new_notarization_vote(vote.slot(), new_block_id)
             } else {
                 *vote

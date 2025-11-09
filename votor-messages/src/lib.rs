@@ -17,9 +17,13 @@ extern crate solana_frozen_abi_macro;
 /// For every FEC set (AKA slice) of shreds, we have a Merkle tree over the shreds
 /// signed by the leader. This is the root.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SliceRoot(pub Hash);
 
 /// We locally build a second Merkle tree over the SliceRoots of a given block.
 /// The root identifies the block and facilitates repair in Alpenglow.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
+#[serde(transparent)]
 pub struct AlpenglowBlockId(pub Hash);

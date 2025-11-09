@@ -17,7 +17,6 @@ use {
     log::{error, trace},
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
-    solana_hash::Hash,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
@@ -25,6 +24,7 @@ use {
             Block, CertificateMessage, CertificateType, ConsensusMessage, VoteMessage,
         },
         vote::Vote,
+        AlpenglowBlockId,
     },
     std::{
         cmp::Ordering,
@@ -136,10 +136,7 @@ impl ConsensusPool {
     pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
-        let root_block = (
-            bank.slot(),
-            bank.chained_merkle_id().map(|sr| sr.0).unwrap_or_default(),
-        );
+        let root_block = (bank.slot(), bank.alpenglow_block_id().unwrap_or_default());
         let parent_ready_tracker = ParentReadyTracker::new(my_pubkey, root_block);
 
         Self {
@@ -170,7 +167,7 @@ impl ConsensusPool {
         &mut self,
         slot: Slot,
         vote_type: VoteType,
-        block_id: Option<Hash>,
+        block_id: Option<AlpenglowBlockId>,
         transaction: &VoteMessage,
         validator_vote_key: &Pubkey,
         validator_stake: Stake,
@@ -202,7 +199,7 @@ impl ConsensusPool {
     fn update_certificates(
         &mut self,
         vote: &Vote,
-        block_id: Option<Hash>,
+        block_id: Option<AlpenglowBlockId>,
         events: &mut Vec<VotorEvent>,
         total_stake: Stake,
     ) -> Result<Vec<Arc<CertificateMessage>>, AddVoteError> {
@@ -263,7 +260,7 @@ impl ConsensusPool {
         slot: Slot,
         vote_type: VoteType,
         validator_vote_key: &Pubkey,
-        block_id: &Option<Hash>,
+        block_id: &Option<AlpenglowBlockId>,
     ) -> Option<VoteType> {
         for conflicting_type in conflicting_types(vote_type) {
             if let Some(pool) = self.vote_pools.get(&(slot, *conflicting_type)) {
@@ -692,8 +689,9 @@ mod tests {
             },
         },
         solana_signer::Signer,
-        solana_votor_messages::consensus_message::{
-            CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+        solana_votor_messages::{
+            consensus_message::{CertificateType, VoteMessage, BLS_KEYPAIR_DERIVE_SEED},
+            AlpenglowBlockId,
         },
         std::sync::{Arc, RwLock},
         test_case::test_case,
@@ -959,7 +957,7 @@ mod tests {
             &mut pool,
             &bank_forks.read().unwrap().root_bank(),
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default()),
+            Vote::new_notarization_vote(5, AlpenglowBlockId(Hash::default())),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -984,7 +982,7 @@ mod tests {
             &mut pool,
             &bank_forks.read().unwrap().root_bank(),
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default()),
+            Vote::new_notarization_vote(5, AlpenglowBlockId(Hash::default())),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1004,7 +1002,7 @@ mod tests {
             &mut pool,
             &bank_forks.read().unwrap().root_bank(),
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default()),
+            Vote::new_notarization_vote(5, AlpenglowBlockId(Hash::default())),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1033,7 +1031,7 @@ mod tests {
             &mut pool,
             &bank_forks.read().unwrap().root_bank(),
             &validator_keypairs,
-            Vote::new_notarization_vote(5, Hash::default()),
+            Vote::new_notarization_vote(5, AlpenglowBlockId(Hash::default())),
         );
         assert_eq!(pool.highest_notarized_slot(), 5);
 
@@ -1056,8 +1054,8 @@ mod tests {
     }
 
     #[test_case(Vote::new_finalization_vote(5), vec![CertificateType::Finalize])]
-    #[test_case(Vote::new_notarization_vote(6, Hash::new_unique()), vec![CertificateType::Notarize, CertificateType::NotarizeFallback])]
-    #[test_case(Vote::new_notarization_fallback_vote(7, Hash::new_unique()), vec![CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_notarization_vote(6, AlpenglowBlockId(Hash::new_unique())), vec![CertificateType::Notarize, CertificateType::NotarizeFallback])]
+    #[test_case(Vote::new_notarization_fallback_vote(7, AlpenglowBlockId(Hash::new_unique())), vec![CertificateType::NotarizeFallback])]
     #[test_case(Vote::new_skip_vote(8), vec![CertificateType::Skip])]
     #[test_case(Vote::new_skip_fallback_vote(9), vec![CertificateType::Skip])]
     fn test_add_vote_and_create_new_certificate_with_types(
@@ -1154,15 +1152,15 @@ mod tests {
     #[test_case(CertificateType::Finalize, Vote::new_finalization_vote(5))]
     #[test_case(
         CertificateType::FinalizeFast,
-        Vote::new_notarization_vote(6, Hash::new_unique())
+        Vote::new_notarization_vote(6, AlpenglowBlockId(Hash::new_unique()))
     )]
     #[test_case(
         CertificateType::Notarize,
-        Vote::new_notarization_vote(6, Hash::new_unique())
+        Vote::new_notarization_vote(6, AlpenglowBlockId(Hash::new_unique()))
     )]
     #[test_case(
         CertificateType::NotarizeFallback,
-        Vote::new_notarization_fallback_vote(7, Hash::new_unique())
+        Vote::new_notarization_fallback_vote(7, AlpenglowBlockId(Hash::new_unique()))
     )]
     #[test_case(CertificateType::Skip, Vote::new_skip_vote(8))]
     fn test_add_certificate_with_types(certificate_type: CertificateType, vote: Vote) {
@@ -1598,7 +1596,7 @@ mod tests {
 
         // Create bank 2
         let slot = 2;
-        let block_id = Hash::new_unique();
+        let block_id = AlpenglowBlockId(Hash::new_unique());
 
         // Add a skip from myself.
         let vote = Vote::new_skip_vote(2);
@@ -1640,7 +1638,7 @@ mod tests {
 
         // Create bank 3
         let slot = 3;
-        let block_id = Hash::new_unique();
+        let block_id = AlpenglowBlockId(Hash::new_unique());
 
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
@@ -1659,7 +1657,7 @@ mod tests {
         assert!(new_events.is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
-        let vote = Vote::new_notarization_vote(3, Hash::new_unique());
+        let vote = Vote::new_notarization_vote(3, AlpenglowBlockId(Hash::new_unique()));
         assert!(pool
             .add_message(
                 bank.epoch_schedule(),
@@ -1703,7 +1701,7 @@ mod tests {
 
         // Add 20% notarization for another block, we should notify on new block_id
         // but not on the same block_id because we already sent the event
-        let duplicate_block_id = Hash::new_unique();
+        let duplicate_block_id = AlpenglowBlockId(Hash::new_unique());
         for rank in 7..9 {
             let vote = Vote::new_notarization_vote(3, duplicate_block_id);
             assert!(pool
@@ -1737,7 +1735,7 @@ mod tests {
         let mut new_events = vec![];
 
         // Add a notarize from myself.
-        let block_id = Hash::new_unique();
+        let block_id = AlpenglowBlockId(Hash::new_unique());
         let vote = Vote::new_notarization_vote(2, block_id);
         assert!(pool
             .add_message(
@@ -1789,9 +1787,11 @@ mod tests {
 
     fn create_new_vote(vote_type: VoteType, slot: Slot) -> Vote {
         match vote_type {
-            VoteType::Notarize => Vote::new_notarization_vote(slot, Hash::default()),
+            VoteType::Notarize => {
+                Vote::new_notarization_vote(slot, AlpenglowBlockId(Hash::default()))
+            }
             VoteType::NotarizeFallback => {
-                Vote::new_notarization_fallback_vote(slot, Hash::default())
+                Vote::new_notarization_fallback_vote(slot, AlpenglowBlockId(Hash::default()))
             }
             VoteType::Skip => Vote::new_skip_vote(slot),
             VoteType::SkipFallback => Vote::new_skip_fallback_vote(slot),
@@ -1889,7 +1889,7 @@ mod tests {
             certificate: Certificate::new(
                 CertificateType::FinalizeFast,
                 2,
-                Some(Hash::new_unique()),
+                Some(AlpenglowBlockId(Hash::new_unique())),
             ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
@@ -1931,7 +1931,11 @@ mod tests {
             .is_err());
 
         // Send a cert on slot 2, it should be rejected
-        let certificate = Certificate::new(CertificateType::Notarize, 2, Some(Hash::new_unique()));
+        let certificate = Certificate::new(
+            CertificateType::Notarize,
+            2,
+            Some(AlpenglowBlockId(Hash::new_unique())),
+        );
 
         let cert = ConsensusMessage::Certificate(CertificateMessage {
             certificate,
@@ -1962,7 +1966,7 @@ mod tests {
             certificate: Certificate::new(
                 CertificateType::NotarizeFallback,
                 3,
-                Some(Hash::new_unique()),
+                Some(AlpenglowBlockId(Hash::new_unique())),
             ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
@@ -2003,7 +2007,11 @@ mod tests {
 
         // Add Notarize cert on 5
         let cert_5 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Notarize, 5, Some(Hash::new_unique())),
+            certificate: Certificate::new(
+                CertificateType::Notarize,
+                5,
+                Some(AlpenglowBlockId(Hash::new_unique())),
+            ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
@@ -2040,7 +2048,7 @@ mod tests {
             certificate: Certificate::new(
                 CertificateType::FinalizeFast,
                 5,
-                Some(Hash::new_unique()),
+                Some(AlpenglowBlockId(Hash::new_unique())),
             ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
@@ -2065,7 +2073,11 @@ mod tests {
 
         // Now add Notarize cert on 6
         let cert_6 = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Notarize, 6, Some(Hash::new_unique())),
+            certificate: Certificate::new(
+                CertificateType::Notarize,
+                6,
+                Some(AlpenglowBlockId(Hash::new_unique())),
+            ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
@@ -2108,7 +2120,7 @@ mod tests {
             certificate: Certificate::new(
                 CertificateType::NotarizeFallback,
                 6,
-                Some(Hash::new_unique()),
+                Some(AlpenglowBlockId(Hash::new_unique())),
             ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
@@ -2175,7 +2187,11 @@ mod tests {
             )
             .is_ok());
         let cert_8_notarize = CertificateMessage {
-            certificate: Certificate::new(CertificateType::Notarize, 8, Some(Hash::new_unique())),
+            certificate: Certificate::new(
+                CertificateType::Notarize,
+                8,
+                Some(AlpenglowBlockId(Hash::new_unique())),
+            ),
             signature: BLSSignature::default(),
             bitmap: Vec::new(),
         };
@@ -2206,7 +2222,7 @@ mod tests {
         let mut events = vec![];
 
         // Add a notarization cert on slot 1 to 3
-        let hash = Hash::new_unique();
+        let hash = AlpenglowBlockId(Hash::new_unique());
         for slot in 1..=3 {
             let cert = CertificateMessage {
                 certificate: Certificate::new(CertificateType::Notarize, slot, Some(hash)),
@@ -2309,7 +2325,7 @@ mod tests {
     fn test_vote_message_signature_verification() {
         let (validator_keypairs, _, _) = create_initial_state();
         let rank_to_test = 3;
-        let vote = Vote::new_notarization_vote(42, Hash::new_unique());
+        let vote = Vote::new_notarization_vote(42, AlpenglowBlockId(Hash::new_unique()));
 
         let consensus_message = dummy_transaction(&validator_keypairs, &vote, rank_to_test);
         let ConsensusMessage::Vote(vote_message) = consensus_message else {

@@ -1,8 +1,7 @@
 use {
     crate::{consensus_pool::vote_certificate_builder::VoteCertificateBuilder, Stake},
-    solana_hash::Hash,
     solana_pubkey::Pubkey,
-    solana_votor_messages::consensus_message::VoteMessage,
+    solana_votor_messages::{consensus_message::VoteMessage, AlpenglowBlockId},
     std::collections::{HashMap, HashSet},
 };
 
@@ -86,9 +85,9 @@ impl VotePool for SimpleVotePool {
 
 pub(crate) struct DuplicateBlockVotePool {
     max_entries_per_pubkey: usize,
-    pub(crate) votes: HashMap<Hash, VoteEntry>,
+    pub(crate) votes: HashMap<AlpenglowBlockId, VoteEntry>,
     total_stake: Stake,
-    prev_voted_block_ids: HashMap<Pubkey, Vec<Hash>>,
+    prev_voted_block_ids: HashMap<Pubkey, Vec<AlpenglowBlockId>>,
 }
 
 impl DuplicateBlockVotePool {
@@ -104,7 +103,7 @@ impl DuplicateBlockVotePool {
     pub fn add_vote(
         &mut self,
         validator_vote_key: &Pubkey,
-        voted_block_id: Hash,
+        voted_block_id: AlpenglowBlockId,
         transaction: &VoteMessage,
         validator_stake: Stake,
     ) -> Option<Stake> {
@@ -138,13 +137,17 @@ impl DuplicateBlockVotePool {
         Some(vote_entry.total_stake_by_key)
     }
 
-    pub fn total_stake_by_block_id(&self, block_id: &Hash) -> Stake {
+    pub fn total_stake_by_block_id(&self, block_id: &AlpenglowBlockId) -> Stake {
         self.votes
             .get(block_id)
             .map_or(0, |vote_entries| vote_entries.total_stake_by_key)
     }
 
-    pub fn add_to_certificate(&self, block_id: &Hash, output: &mut VoteCertificateBuilder) {
+    pub fn add_to_certificate(
+        &self,
+        block_id: &AlpenglowBlockId,
+        output: &mut VoteCertificateBuilder,
+    ) {
         if let Some(vote_entries) = self.votes.get(block_id) {
             output
                 .aggregate(&vote_entries.transactions)
@@ -155,7 +158,7 @@ impl DuplicateBlockVotePool {
     pub fn has_prev_validator_vote_for_block(
         &self,
         validator_vote_key: &Pubkey,
-        block_id: &Hash,
+        block_id: &AlpenglowBlockId,
     ) -> bool {
         self.prev_voted_block_ids
             .get(validator_vote_key)
@@ -177,7 +180,8 @@ mod test {
     use {
         super::*,
         solana_bls_signatures::Signature as BLSSignature,
-        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
+        solana_hash::Hash,
+        solana_votor_messages::{consensus_message::VoteMessage, vote::Vote, AlpenglowBlockId},
     };
 
     #[test]
@@ -208,7 +212,7 @@ mod test {
     fn test_notarization_pool() {
         let mut vote_pool = DuplicateBlockVotePool::new(1);
         let my_pubkey = Pubkey::new_unique();
-        let block_id = Hash::new_unique();
+        let block_id = AlpenglowBlockId(Hash::new_unique());
         let vote = Vote::new_notarization_vote(3, block_id);
         let transaction = VoteMessage {
             vote,
@@ -250,7 +254,7 @@ mod test {
     fn test_notarization_fallback_pool() {
         solana_logger::setup();
         let mut vote_pool = DuplicateBlockVotePool::new(3);
-        let vote = Vote::new_notarization_fallback_vote(7, Hash::new_unique());
+        let vote = Vote::new_notarization_fallback_vote(7, AlpenglowBlockId(Hash::new_unique()));
         let transaction = VoteMessage {
             vote,
             signature: BLSSignature::default(),
@@ -258,7 +262,9 @@ mod test {
         };
         let my_pubkey = Pubkey::new_unique();
 
-        let block_ids: Vec<Hash> = (0..4).map(|_| Hash::new_unique()).collect();
+        let block_ids: Vec<AlpenglowBlockId> = (0..4)
+            .map(|_| AlpenglowBlockId(Hash::new_unique()))
+            .collect();
 
         // Adding the first 3 votes should succeed, but total_stake should remain at 10
         for block_id in &block_ids[0..3] {

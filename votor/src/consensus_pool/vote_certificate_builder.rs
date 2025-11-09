@@ -158,12 +158,13 @@ mod tests {
         solana_votor_messages::{
             consensus_message::{Certificate, CertificateType, VoteMessage},
             vote::Vote,
+            AlpenglowBlockId,
         },
     };
 
     #[test]
     fn test_normal_build() {
-        let hash = Hash::new_unique();
+        let hash = AlpenglowBlockId(Hash::new_unique());
         let certificate = Certificate::new(CertificateType::NotarizeFallback, 1, Some(hash));
         let mut builder = VoteCertificateBuilder::new(certificate);
         // Test building the certificate from Notarize and NotarizeFallback votes
@@ -269,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_errors() {
-        let hash = Hash::new_unique();
+        let hash = AlpenglowBlockId(Hash::new_unique());
         let certificate = Certificate::new(CertificateType::NotarizeFallback, 1, Some(hash));
         let mut builder = VoteCertificateBuilder::new(certificate);
 
@@ -346,7 +347,7 @@ mod tests {
     #[test]
     fn test_certificate_verification_base2_encoding() {
         let slot = 10;
-        let hash = Hash::new_unique();
+        let hash = AlpenglowBlockId(Hash::new_unique());
         let certificate_id = Certificate::new(CertificateType::Notarize, slot, Some(hash));
 
         // 1. Setup: Create keypairs and a single vote object.
@@ -393,7 +394,7 @@ mod tests {
     #[test]
     fn test_certificate_verification_base3_encoding() {
         let slot = 20;
-        let hash = Hash::new_unique();
+        let hash = AlpenglowBlockId(Hash::new_unique());
         // A NotarizeFallback certificate can be composed of both Notarize and NotarizeFallback
         // votes.
         let certificate_id = Certificate::new(CertificateType::NotarizeFallback, slot, Some(hash));

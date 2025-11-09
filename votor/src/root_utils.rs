@@ -15,7 +15,7 @@ use {
         snapshot_controller::SnapshotController,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::consensus_message::Block,
+    solana_votor_messages::{consensus_message::Block, AlpenglowBlockId},
     std::{
         collections::BTreeSet,
         sync::{Arc, RwLock},
@@ -46,7 +46,7 @@ pub(crate) fn set_root(
     info!("{my_pubkey}: setting root {new_root}");
     vctx.vote_history.set_root(new_root);
     *pending_blocks = pending_blocks.split_off(&new_root);
-    *finalized_blocks = finalized_blocks.split_off(&(new_root, Hash::default()));
+    *finalized_blocks = finalized_blocks.split_off(&(new_root, AlpenglowBlockId(Hash::default())));
     *received_shred = received_shred.split_off(&new_root);
 
     check_and_handle_new_root(

@@ -58,7 +58,6 @@ use {
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
-    solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_pubkey::Pubkey,
@@ -70,7 +69,7 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, AlpenglowBlockId},
     std::{
         collections::HashMap,
         sync::{
@@ -87,7 +86,7 @@ use {
 pub struct LeaderWindowNotifier {
     pub window_info: Mutex<Option<LeaderWindowInfo>>,
     pub window_notification: Condvar,
-    pub highest_parent_ready: RwLock<(Slot, (Slot, Hash))>,
+    pub highest_parent_ready: RwLock<(Slot, (Slot, AlpenglowBlockId))>,
 }
 
 /// Inputs to Votor

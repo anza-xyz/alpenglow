@@ -7,7 +7,7 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_pubkey::Pubkey,
-    solana_votor_messages::{consensus_message::Block, vote::Vote},
+    solana_votor_messages::{consensus_message::Block, vote::Vote, AlpenglowBlockId},
     std::collections::{hash_map::Entry, HashMap, HashSet},
     thiserror::Error,
 };
@@ -59,11 +59,11 @@ pub struct VoteHistory {
 
     /// The blocks for which this node has cast a notarization vote
     /// In the format of slot, block_id, bank_hash
-    voted_notar: HashMap<Slot, Hash>,
+    voted_notar: HashMap<Slot, AlpenglowBlockId>,
 
     /// The blocks for which this node has cast a notarization fallback
     /// vote in this slot
-    voted_notar_fallback: HashMap<Slot, HashSet<Hash>>,
+    voted_notar_fallback: HashMap<Slot, HashSet<AlpenglowBlockId>>,
 
     /// The slots for which this node has cast a skip fallback vote
     voted_skip_fallback: HashSet<Slot>,
@@ -108,13 +108,13 @@ impl VoteHistory {
     }
 
     /// The block for which we voted notarize in slot `slot`
-    pub fn voted_notar(&self, slot: Slot) -> Option<Hash> {
+    pub fn voted_notar(&self, slot: Slot) -> Option<AlpenglowBlockId> {
         assert!(slot >= self.root);
         self.voted_notar.get(&slot).copied()
     }
 
     /// Whether we voted notarize fallback in `slot` for block `(block_id, bank_hash)`
-    pub fn voted_notar_fallback(&self, slot: Slot, block_id: Hash) -> bool {
+    pub fn voted_notar_fallback(&self, slot: Slot, block_id: AlpenglowBlockId) -> bool {
         assert!(slot >= self.root);
         self.voted_notar_fallback
             .get(&slot)
