@@ -1547,8 +1547,9 @@ pub fn confirm_slot(
             BlockComponent::EntryBatch(entries) => {
                 let slot_full = slot_full && ix == last_entry_batch_index.unwrap();
 
-                // Skip block component validation for genesis block
-                if bank.parent().is_some() {
+                // Skip block component validation for genesis block. Slot 0 is handled specially,
+                // since it won't have the required block markers (e.g., the header and the footer).
+                if bank.slot() != 0 {
                     processor
                         .on_entry_batch(migration_status, is_final)
                         .inspect_err(|err| {
