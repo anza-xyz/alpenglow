@@ -1918,6 +1918,11 @@ impl Bank {
         }
     }
 
+    pub fn time(&self) -> Instant {
+        // XXX: look up from the block footer
+        Instant::now()
+    }
+
     pub fn collector_id(&self) -> &Pubkey {
         &self.collector_id
     }

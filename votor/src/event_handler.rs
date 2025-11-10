@@ -243,6 +243,7 @@ impl EventHandler {
         match event {
             // Block has completed replay
             VotorEvent::Block(CompletedBlock { slot, bank }) => {
+                let block_time = Duration::from_millis(400);
                 debug_assert!(bank.is_frozen());
                 let now = Instant::now();
                 let mut consensus_metrics_events =
@@ -263,6 +264,22 @@ impl EventHandler {
                     .map_err(|_| SendError(()))?;
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
+
+                let parent = bank.parent().unwrap();
+
+                if bank.time() <= parent.time()
+                    || bank.time()
+                        > parent.time()
+                            + block_time
+                                .checked_mul(2)
+                                .unwrap()
+                                .checked_mul((bank.slot() - parent.slot()).try_into().unwrap())
+                                .unwrap()
+                {
+                    let () = Self::try_skip_window(my_pubkey, bank.slot(), vctx, &mut votes)?;
+                    return Ok(votes);
+                }
+
                 if Self::try_notar(
                     my_pubkey,
                     block,
