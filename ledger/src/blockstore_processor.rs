@@ -1526,8 +1526,8 @@ pub fn confirm_slot(
     //     ingest in blockstore.
     //
     // (2) validators *capable* of processing BlockMarkers will store the BlockMarkers in shred
-    //     ingest, run through this verifying code here, and then error out when finish() is invoked
-    //     during replay, resulting in the slot being marked as dead.
+    //     ingest, run through this verifying code here, and then error out when processing a
+    //     BlockMarker, resulting in the slot being marked as dead.
     let mut processor = bank.block_component_processor.write().unwrap();
 
     // Find the index of the last EntryBatch in slot_components
@@ -1541,10 +1541,16 @@ pub fn confirm_slot(
         .enumerate()
     {
         let num_shreds = completed_range.end - completed_range.start;
+        let is_final = slot_full && ix == completed_ranges.len() - 1;
 
         match component {
             BlockComponent::EntryBatch(entries) => {
                 let slot_full = slot_full && ix == last_entry_batch_index.unwrap();
+
+                // Skip block component validation for genesis block
+                if bank.parent().is_some() {
+                    processor.on_entry_batch(migration_status, is_final)?;
+                }
 
                 confirm_slot_entries(
                     bank,
@@ -1563,9 +1569,14 @@ pub fn confirm_slot(
                 )?;
             }
             BlockComponent::BlockMarker(marker) => {
-                // Skip verification for the genesis block
                 if let Some(parent_bank) = bank.parent() {
-                    processor.on_marker(bank.clone_without_scheduler(), parent_bank, &marker)?;
+                    processor.on_marker(
+                        bank.clone_without_scheduler(),
+                        parent_bank,
+                        &marker,
+                        migration_status,
+                        is_final,
+                    )?;
                 }
                 progress.num_shreds += num_shreds as u64;
             }
