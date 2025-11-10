@@ -72,7 +72,7 @@ impl BlockComponentProcessor {
         is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         // Pre-migration: blocks with block components should be marked as dead
-        if migration_status.should_have_alpenglow_ticks(bank.slot()) {
+        if !migration_status.is_alpenglow_enabled() {
             return Err(BlockComponentProcessorError::BlockComponentPreMigration);
         }
 
