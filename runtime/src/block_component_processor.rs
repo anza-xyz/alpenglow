@@ -27,19 +27,8 @@ pub struct BlockComponentProcessor {
 }
 
 impl BlockComponentProcessor {
-    pub fn finish(
-        &self,
-        migration_status: &MigrationStatus,
-    ) -> Result<(), BlockComponentProcessorError> {
-        // Pre-migration: blocks with block components should be marked as dead
-        if !migration_status.is_alpenglow_enabled() {
-            match self.has_footer || self.has_header {
-                false => return Ok(()),
-                true => return Err(BlockComponentProcessorError::BlockComponentPreMigration),
-            }
-        }
-
-        // Post-migration: both header and footer are required
+    fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
+        // Post-migration: both header and footer are required.
         if !self.has_footer {
             return Err(BlockComponentProcessorError::MissingBlockFooter);
         }
@@ -51,18 +40,52 @@ impl BlockComponentProcessor {
         Ok(())
     }
 
+    pub fn on_entry_batch(
+        &mut self,
+        migration_status: &MigrationStatus,
+        is_final: bool,
+    ) -> Result<(), BlockComponentProcessorError> {
+        if !migration_status.is_alpenglow_enabled() {
+            return Ok(());
+        }
+
+        // The block header must be the first component of each block.
+        if !self.has_header {
+            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        }
+
+        if is_final {
+            self.on_final()
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn on_marker(
         &mut self,
         marker: &VersionedBlockMarker,
+        migration_status: &MigrationStatus,
+        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
+        // Pre-migration: blocks with block components should be marked as dead.
+        if !migration_status.is_alpenglow_enabled() {
+            return Err(BlockComponentProcessorError::BlockComponentPreMigration);
+        }
+
         let VersionedBlockMarker::V1(marker) = marker;
 
         match marker {
             BlockMarkerV1::BlockFooter(footer) => self.on_footer(footer.inner()),
             BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
-            // We process UpdateParent messages on shred ingest, so no callback needed here
+            // We process UpdateParent messages on shred ingest, so no callback needed here.
             BlockMarkerV1::UpdateParent(_) => Ok(()),
             BlockMarkerV1::GenesisCertificate(_) => Ok(()),
+        }?;
+
+        if is_final {
+            self.on_final()
+        } else {
+            Ok(())
         }
     }
 
@@ -70,6 +93,11 @@ impl BlockComponentProcessor {
         &mut self,
         _footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
+        // The block header must be the first component of each block.
+        if !self.has_header {
+            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        }
+
         if self.has_footer {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
