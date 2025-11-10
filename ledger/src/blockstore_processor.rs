@@ -1549,7 +1549,11 @@ pub fn confirm_slot(
 
                 // Skip block component validation for genesis block
                 if bank.parent().is_some() {
-                    processor.on_entry_batch(migration_status, is_final)?;
+                    processor
+                        .on_entry_batch(migration_status, is_final)
+                        .inspect_err(|err| {
+                            warn!("Block component processing failed for slot {slot}: {err:?}",);
+                        })?;
                 }
 
                 confirm_slot_entries(
@@ -1570,13 +1574,17 @@ pub fn confirm_slot(
             }
             BlockComponent::BlockMarker(marker) => {
                 if let Some(parent_bank) = bank.parent() {
-                    processor.on_marker(
-                        bank.clone_without_scheduler(),
-                        parent_bank,
-                        &marker,
-                        migration_status,
-                        is_final,
-                    )?;
+                    processor
+                        .on_marker(
+                            bank.clone_without_scheduler(),
+                            parent_bank,
+                            &marker,
+                            migration_status,
+                            is_final,
+                        )
+                        .inspect_err(|err| {
+                            warn!("Block component processing failed for slot {slot}: {err:?}",);
+                        })?;
                 }
                 progress.num_shreds += num_shreds as u64;
             }
