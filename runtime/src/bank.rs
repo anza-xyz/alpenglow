@@ -906,7 +906,9 @@ pub struct Bank {
     /// The hashmap is keyed by parent_hash.
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
 
-    /// Block component processor for validating block headers/footers and clock bounds
+    /// Block component processor for validating block headers/footers and clock bounds. We
+    /// currently write to this during replay, as we process block components one at a time, and
+    /// read from this once replay is complete.
     pub block_component_processor: RwLock<BlockComponentProcessor>,
 }
 
