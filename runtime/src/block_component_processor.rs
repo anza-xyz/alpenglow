@@ -29,18 +29,7 @@ pub struct BlockComponentProcessor {
 }
 
 impl BlockComponentProcessor {
-    pub fn finish(
-        &self,
-        migration_status: &MigrationStatus,
-    ) -> Result<(), BlockComponentProcessorError> {
-        // Pre-migration: blocks with block components should be marked as dead
-        if !migration_status.is_alpenglow_enabled() {
-            match self.has_footer || self.has_header {
-                false => return Ok(()),
-                true => return Err(BlockComponentProcessorError::BlockComponentPreMigration),
-            }
-        }
-
+    fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
         // Post-migration: both header and footer are required
         if !self.has_footer {
             return Err(BlockComponentProcessorError::MissingBlockFooter);
@@ -53,12 +42,41 @@ impl BlockComponentProcessor {
         Ok(())
     }
 
+    pub fn on_entry_batch(
+        &mut self,
+        migration_status: &MigrationStatus,
+        is_final: bool,
+    ) -> Result<(), BlockComponentProcessorError> {
+        if !migration_status.is_alpenglow_enabled() {
+            return Ok(());
+        }
+
+        // The block header must be the first component of each block.
+        if !self.has_header {
+            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        }
+
+        if is_final {
+            self.on_final()
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn on_marker(
         &mut self,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: &VersionedBlockMarker,
+        migration_status: &MigrationStatus,
+        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
+        // Pre-migration: blocks with block components should be marked as dead
+        if !migration_status.is_alpenglow_enabled() {
+            return Err(BlockComponentProcessorError::BlockComponentPreMigration);
+        }
+
+        // Here onwards, Alpenglow is enabled
         let marker = match marker {
             VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
         };
@@ -68,6 +86,12 @@ impl BlockComponentProcessor {
             BlockMarkerV1::BlockHeader(header) => self.on_header(header),
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
+        }?;
+
+        if is_final {
+            self.on_final()
+        } else {
+            Ok(())
         }
     }
 
@@ -77,6 +101,11 @@ impl BlockComponentProcessor {
         _parent_bank: Arc<Bank>,
         _footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
+        // The block header must be the first component of each block.
+        if !self.has_header {
+            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        }
+
         if self.has_footer {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
@@ -122,15 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_header_error() {
+    fn test_missing_header_error_on_entry_batch() {
         let migration_status = MigrationStatus::post_migration_status();
-        let processor = BlockComponentProcessor::default();
+        let mut processor = BlockComponentProcessor::default();
 
-        // Set footer but not header
-        let mut v = processor;
-        v.has_footer = true;
-
-        let result = v.finish(&migration_status);
+        // Try to process entry batch without header - should fail
+        let result = processor.on_entry_batch(&migration_status, false);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MissingBlockHeader)
@@ -138,14 +164,15 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_footer_error() {
+    fn test_missing_footer_error_on_slot_full() {
         let migration_status = MigrationStatus::post_migration_status();
-        let processor = BlockComponentProcessor {
+        let mut processor = BlockComponentProcessor {
             has_header: true,
             ..BlockComponentProcessor::default()
         };
 
-        let result = processor.finish(&migration_status);
+        // Try to mark slot as full without footer - should fail
+        let result = processor.on_entry_batch(&migration_status, true);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MissingBlockFooter)
@@ -173,7 +200,11 @@ mod tests {
 
     #[test]
     fn test_multiple_footers_error() {
-        let mut processor = BlockComponentProcessor::default();
+        let mut processor = BlockComponentProcessor {
+            has_header: true,
+            ..Default::default()
+        };
+
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
@@ -198,7 +229,11 @@ mod tests {
 
     #[test]
     fn test_on_footer_sets_timestamp() {
-        let mut processor = BlockComponentProcessor::default();
+        let mut processor = BlockComponentProcessor {
+            has_header: true,
+            ..Default::default()
+        };
+
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
@@ -228,6 +263,7 @@ mod tests {
 
     #[test]
     fn test_on_marker_processes_header() {
+        let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
         let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
             VersionedBlockHeader::V1(BlockHeaderV1 {
@@ -239,13 +275,20 @@ mod tests {
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
-        processor.on_marker(bank, parent, &marker).unwrap();
+        processor
+            .on_marker(bank, parent, &marker, &migration_status, false)
+            .unwrap();
         assert!(processor.has_header);
     }
 
     #[test]
     fn test_on_marker_processes_footer() {
-        let mut processor = BlockComponentProcessor::default();
+        let migration_status = MigrationStatus::post_migration_status();
+        let mut processor = BlockComponentProcessor {
+            has_header: true,
+            ..Default::default()
+        };
+
         let footer_time = 1_234_567_890_000_000_000;
         let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::V1(BlockFooterV1 {
@@ -258,7 +301,9 @@ mod tests {
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
-        processor.on_marker(bank.clone(), parent, &marker).unwrap();
+        processor
+            .on_marker(bank.clone(), parent, &marker, &migration_status, false)
+            .unwrap();
         assert!(processor.has_footer);
     }
 
@@ -277,6 +322,9 @@ mod tests {
         });
         processor.on_header(&header).unwrap();
 
+        // Process some entry batches (not full yet)
+        assert!(processor.on_entry_batch(&migration_status, false).is_ok());
+
         // Process footer with valid timestamp
         let footer = VersionedBlockFooter::V1(BlockFooterV1 {
             bank_hash: Hash::new_unique(),
@@ -287,48 +335,27 @@ mod tests {
             .on_footer(bank.clone(), parent.clone(), &footer)
             .unwrap();
 
-        // Finish verification
-        let result = processor.finish(&migration_status);
+        // Process final entry batch (slot is full) - should succeed
+        let result = processor.on_entry_batch(&migration_status, true);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_block_component_detected_pre_migration_with_header() {
-        let migration_status = MigrationStatus::default();
-        let mut processor = BlockComponentProcessor::default();
-
-        // Add a header pre-migration
-        let header = VersionedBlockHeader::V1(BlockHeaderV1 {
-            parent_slot: 0,
-            parent_block_id: Hash::default(),
-        });
-        processor.on_header(&header).unwrap();
-
-        // Should fail because we have a header pre-migration
-        let result = processor.finish(&migration_status);
-        assert_eq!(
-            result,
-            Err(BlockComponentProcessorError::BlockComponentPreMigration)
-        );
-    }
-
-    #[test]
-    fn test_block_component_detected_pre_migration_with_footer() {
+    fn test_block_marker_detected_pre_migration() {
         let migration_status = MigrationStatus::default();
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
-        // Add a footer pre-migration
-        let footer = VersionedBlockFooter::V1(BlockFooterV1 {
-            bank_hash: Hash::new_unique(),
-            block_producer_time_nanos: 1_000_000_000,
-            block_user_agent: vec![],
-        });
-        processor.on_footer(bank, parent, &footer).unwrap();
+        // Try to process a block header marker pre-migration - should fail
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+            VersionedBlockHeader::V1(BlockHeaderV1 {
+                parent_slot: 0,
+                parent_block_id: Hash::default(),
+            }),
+        ));
 
-        // Should fail because we have a footer pre-migration
-        let result = processor.finish(&migration_status);
+        let result = processor.on_marker(bank, parent, &marker, &migration_status, false);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -336,12 +363,16 @@ mod tests {
     }
 
     #[test]
-    fn test_no_block_components_pre_migration() {
+    fn test_entry_batch_pre_migration_succeeds() {
         let migration_status = MigrationStatus::default();
-        let processor = BlockComponentProcessor::default();
+        let mut processor = BlockComponentProcessor::default();
 
-        // Should succeed because no block components were added
-        let result = processor.finish(&migration_status);
+        // Processing entry batches pre-migration (without markers) should succeed
+        let result = processor.on_entry_batch(&migration_status, false);
+        assert!(result.is_ok());
+
+        // Even with slot full
+        let result = processor.on_entry_batch(&migration_status, true);
         assert!(result.is_ok());
     }
 
@@ -352,23 +383,98 @@ mod tests {
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
-        // Process header
-        let header = VersionedBlockHeader::V1(BlockHeaderV1 {
-            parent_slot: 0,
-            parent_block_id: Hash::default(),
-        });
-        processor.on_header(&header).unwrap();
+        // Process header marker
+        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+            VersionedBlockHeader::V1(BlockHeaderV1 {
+                parent_slot: 0,
+                parent_block_id: Hash::default(),
+            }),
+        ));
+        processor
+            .on_marker(
+                bank.clone(),
+                parent.clone(),
+                &header_marker,
+                &migration_status,
+                false,
+            )
+            .unwrap();
 
-        // Process footer
+        // Process entry batches
+        assert!(processor.on_entry_batch(&migration_status, false).is_ok());
+
+        // Process footer marker
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(BlockFooterV1 {
+                bank_hash: Hash::new_unique(),
+                block_producer_time_nanos: 1_234_567_890_000_000_000,
+                block_user_agent: vec![],
+            }),
+        ));
+        processor
+            .on_marker(bank, parent, &footer_marker, &migration_status, false)
+            .unwrap();
+
+        // Process final entry batch with slot_full=true - should succeed
+        let result = processor.on_entry_batch(&migration_status, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_footer_without_header_errors() {
+        let mut processor = BlockComponentProcessor::default();
+        let parent = create_test_bank();
+        let bank = create_child_bank(&parent, 1);
+
         let footer = VersionedBlockFooter::V1(BlockFooterV1 {
             bank_hash: Hash::new_unique(),
-            block_producer_time_nanos: 1_234_567_890_000_000_000,
+            block_producer_time_nanos: 1_000_000_000,
             block_user_agent: vec![],
         });
-        processor.on_footer(bank, parent, &footer).unwrap();
 
-        // Should succeed post-migration with both header and footer
-        let result = processor.finish(&migration_status);
+        // Try to process footer without header - should fail
+        let result = processor.on_footer(bank, parent, &footer);
+        assert_eq!(
+            result,
+            Err(BlockComponentProcessorError::MissingBlockHeader)
+        );
+    }
+
+    #[test]
+    fn test_marker_with_footer_at_slot_full() {
+        let migration_status = MigrationStatus::post_migration_status();
+        let mut processor = BlockComponentProcessor::default();
+        let parent = create_test_bank();
+        let bank = create_child_bank(&parent, 1);
+
+        // Process header first
+        processor.has_header = true;
+
+        // Process footer marker with slot_full=true
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+            VersionedBlockFooter::V1(BlockFooterV1 {
+                bank_hash: Hash::new_unique(),
+                block_producer_time_nanos: 1_000_000_000,
+                block_user_agent: vec![],
+            }),
+        ));
+
+        // Should succeed - footer is processed and slot_full validation passes
+        let result = processor.on_marker(bank, parent, &footer_marker, &migration_status, true);
+        assert!(result.is_ok());
+        assert!(processor.has_footer);
+    }
+
+    #[test]
+    fn test_entry_batch_with_header_not_full_succeeds() {
+        let migration_status = MigrationStatus::post_migration_status();
+        let mut processor = BlockComponentProcessor {
+            has_header: true,
+            ..Default::default()
+        };
+
+        // Process entry batch with header but not full - should succeed even without footer
+        let result = processor.on_entry_batch(&migration_status, false);
         assert!(result.is_ok());
     }
 }
