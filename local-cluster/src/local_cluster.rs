@@ -211,16 +211,12 @@ impl LocalCluster {
     }
 
     pub fn new(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
-            .lock()
-            .unwrap() = VoteStateTargetVersion::V3;
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V3;
         Self::init(config, socket_addr_space, AlpenglowMode::Disabled)
     }
 
     pub fn new_alpenglow(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
-        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
-            .lock()
-            .unwrap() = VoteStateTargetVersion::V4;
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V4;
         Self::init(config, socket_addr_space, AlpenglowMode::Enabled)
     }
 
@@ -228,9 +224,7 @@ impl LocalCluster {
         config: &mut ClusterConfig,
         socket_addr_space: SocketAddrSpace,
     ) -> Self {
-        *solana_vote_program::vote_state::TEMP_HARDCODED_TARGET_VERSION
-            .lock()
-            .unwrap() = VoteStateTargetVersion::V4;
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() = VoteStateTargetVersion::V4;
         Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
     }
 
@@ -346,7 +340,7 @@ impl LocalCluster {
         let leader_node = Node::new_localhost_with_pubkey(&leader_pubkey);
 
         // For PreMigration mode, we need to create V4 vote accounts but not activate the feature
-        let create_v4_accounts = matches!(
+        let is_alpenglow = matches!(
             alpenglow_mode,
             AlpenglowMode::Enabled | AlpenglowMode::PreMigration
         );
@@ -360,7 +354,7 @@ impl LocalCluster {
             &keys_in_genesis,
             stakes_in_genesis,
             config.cluster_type,
-            create_v4_accounts,
+            is_alpenglow,
         );
 
         // Remove the alpenglow feature and genesis certificate for PreMigration mode

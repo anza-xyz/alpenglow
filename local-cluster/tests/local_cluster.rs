@@ -6243,12 +6243,16 @@ fn test_alpenglow_migration(num_nodes: usize) {
         .collect::<Vec<_>>();
     let node_stakes = vec![DEFAULT_NODE_STAKE; num_nodes];
 
+    // We want the epochs to be as short as possible to reduce test time without being flaky.
+    // We start the migration at an offset of 32, so use 64 as the epoch length.
+    let slots_per_epoch = 2 * MINIMUM_SLOTS_PER_EPOCH;
+    assert!(slots_per_epoch > MIGRATION_SLOT_OFFSET);
     let mut cluster_config = ClusterConfig {
         validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
         validator_keys: Some(validator_keys),
         node_stakes: node_stakes.clone(),
-        slots_per_epoch: 2 * MINIMUM_SLOTS_PER_EPOCH,
-        stakers_slot_offset: 2 * MINIMUM_SLOTS_PER_EPOCH,
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
         // So we don't have to wait so long
         skip_warmup_slots: false,
         ..ClusterConfig::default()
