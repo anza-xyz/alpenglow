@@ -843,8 +843,8 @@ pub enum BlockstoreProcessorError {
     #[error("user transactions found in vote only mode bank at slot {0}")]
     UserTransactionsInVoteOnlyBank(Slot),
 
-    #[error("block component verifier error: {0}")]
-    BlockComponentVerifier(#[from] BlockComponentProcessorError),
+    #[error("block component processor error: {0}")]
+    BlockComponentProcessor(#[from] BlockComponentProcessorError),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
@@ -1528,14 +1528,12 @@ pub fn confirm_slot(
     // (2) validators *capable* of processing BlockMarkers will store the BlockMarkers in shred
     //     ingest, run through this verifying code here, and then error out when finish() is invoked
     //     during replay, resulting in the slot being marked as dead.
-    let mut verifier = bank.block_component_processor.write().unwrap();
+    let mut processor = bank.block_component_processor.write().unwrap();
 
     // Find the index of the last EntryBatch in slot_components
     let last_entry_batch_index = slot_components
         .iter()
-        .rev()
-        .position(|bc| matches!(bc, BlockComponent::EntryBatch(_)))
-        .map(|ix| slot_components.len() - 1 - ix);
+        .rposition(|bc| matches!(bc, BlockComponent::EntryBatch(_)));
 
     for (ix, (completed_range, component)) in completed_ranges
         .iter()
@@ -1565,8 +1563,9 @@ pub fn confirm_slot(
                 )?;
             }
             BlockComponent::BlockMarker(marker) => {
+                // Skip verification for the genesis block
                 if let Some(parent_bank) = bank.parent() {
-                    verifier.on_marker(bank.clone_without_scheduler(), parent_bank, &marker)?;
+                    processor.on_marker(bank.clone_without_scheduler(), parent_bank, &marker)?;
                 }
                 progress.num_shreds += num_shreds as u64;
             }

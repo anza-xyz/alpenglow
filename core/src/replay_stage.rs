@@ -3705,7 +3705,7 @@ impl ReplayStage {
                             blockstore,
                             bank,
                             root,
-                            &BlockstoreProcessorError::BlockComponentVerifier(err),
+                            &BlockstoreProcessorError::BlockComponentProcessor(err),
                             rpc_subscriptions,
                             slot_status_notifier,
                             progress,
