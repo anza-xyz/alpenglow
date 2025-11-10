@@ -7,8 +7,9 @@ pub mod handler;
 pub(crate) mod handler;
 
 pub use solana_vote_interface::state::{vote_state_versions::*, *};
+pub use handler::VoteStateTargetVersion;
 use {
-    handler::{VoteStateHandle, VoteStateHandler, VoteStateTargetVersion},
+    handler::{VoteStateHandle, VoteStateHandler},
     log::*,
     solana_account::{AccountSharedData, WritableAccount},
     solana_bls_signatures::{VerifiableProofOfPossession, keypair::Keypair as BLSKeypair},
@@ -30,8 +31,13 @@ use {
     std::{
         cmp::Ordering,
         collections::{HashSet, VecDeque},
+        sync::{LazyLock, Mutex},
     },
 };
+
+// Dev-only override for forcing vote-state target version in local-cluster migration tests.
+pub static TEMP_HARDCODED_TARGET_VERSION: LazyLock<Mutex<Option<VoteStateTargetVersion>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 // Switch that preserves old behavior before vote state v4 feature gate.
 // This should be cleaned up when vote state v4 is activated.

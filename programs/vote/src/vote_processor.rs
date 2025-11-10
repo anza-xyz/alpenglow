@@ -100,6 +100,11 @@ declare_process_instruction!(Entrypoint, DEFAULT_COMPUTE_UNITS, |invoke_context|
     } else {
         VoteStateTargetVersion::V3
     };
+    #[cfg(feature = "dev-context-only-utils")]
+    let target_version = vote_state::TEMP_HARDCODED_TARGET_VERSION
+        .lock()
+        .unwrap()
+        .unwrap_or(target_version);
 
     let signers = instruction_context.get_signers()?;
     let is_init_account_v2_enabled = is_init_account_v2_enabled(invoke_context);

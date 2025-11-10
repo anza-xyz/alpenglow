@@ -57,7 +57,7 @@ use {
     solana_vote_program::{
         vote_instruction,
         vote_state::{
-            self, VoteAuthorize, VoteInit, VoteStateV4, VoterWithBLSArgs,
+            self, VoteAuthorize, VoteInit, VoteStateTargetVersion, VoteStateV4, VoterWithBLSArgs,
             create_bls_pubkey_and_proof_of_possession,
         },
     },
@@ -205,10 +205,14 @@ impl LocalCluster {
     }
 
     pub fn new(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() =
+            Some(VoteStateTargetVersion::V3);
         Self::init(config, socket_addr_space, AlpenglowMode::Disabled)
     }
 
     pub fn new_alpenglow(config: &mut ClusterConfig, socket_addr_space: SocketAddrSpace) -> Self {
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() =
+            Some(VoteStateTargetVersion::V4);
         Self::init(config, socket_addr_space, AlpenglowMode::Enabled)
     }
 
@@ -216,6 +220,8 @@ impl LocalCluster {
         config: &mut ClusterConfig,
         socket_addr_space: SocketAddrSpace,
     ) -> Self {
+        *vote_state::TEMP_HARDCODED_TARGET_VERSION.lock().unwrap() =
+            Some(VoteStateTargetVersion::V4);
         Self::init(config, socket_addr_space, AlpenglowMode::PreMigration)
     }
 

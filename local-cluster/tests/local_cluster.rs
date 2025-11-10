@@ -6433,6 +6433,12 @@ fn test_alpenglow_migration_1() {
 
 #[test]
 #[serial]
+fn test_alpenglow_migration_2() {
+    test_alpenglow_migration(2)
+}
+
+#[test]
+#[serial]
 fn test_alpenglow_migration_4() {
     test_alpenglow_migration(4)
 }
@@ -6696,10 +6702,11 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             loop {
                 let n_bytes = vote_listener_socket.recv(&mut buf).unwrap();
 
-                let bls_message = bincode::deserialize::<BLSMessage>(&buf[0..n_bytes]).unwrap();
+                let bls_message =
+                    bincode::deserialize::<ConsensusMessage>(&buf[0..n_bytes]).unwrap();
 
                 match bls_message {
-                    BLSMessage::Vote(vote_message) => {
+                    ConsensusMessage::Vote(vote_message) => {
                         let vote = &vote_message.vote;
                         let node_name = vote_message.rank as usize;
 
@@ -6733,7 +6740,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                         );
                     }
 
-                    BLSMessage::Certificate(cert_message) => {
+                    ConsensusMessage::Certificate(cert_message) => {
                         // Wait until the final stage before looking for finalization certificates.
                         if experiment_state.stage != Stage::ObserveLiveness {
                             continue;
