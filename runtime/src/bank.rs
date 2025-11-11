@@ -1391,6 +1391,15 @@ impl Bank {
         let (_, update_sysvars_time_us) = measure_us!({
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
+
+            // If Alpenglow is enabled, update the clock from the footer.
+            if new.get_alpenglow_genesis_certificate().is_some() {
+                let parent_timestamp = new.parent().unwrap().clock().unix_timestamp;
+                new.update_clock_from_footer(parent_timestamp);
+            } else {
+                new.update_clock(Some(parent.epoch()));
+            }
+
             new.update_last_restart_slot()
         });
 
@@ -2020,7 +2029,7 @@ impl Bank {
             .unwrap_or_default()
     }
 
-    pub fn set_alpenglow_clock_sysvar(&self, unix_timestamp: UnixTimestamp) {
+    pub fn update_clock_from_footer(&self, unix_timestamp: UnixTimestamp) {
         let mut epoch_start_timestamp =
             // On epoch boundaries, update epoch_start_timestamp
             if self.parent().is_some() && self.parent().unwrap().epoch() != self.epoch() {

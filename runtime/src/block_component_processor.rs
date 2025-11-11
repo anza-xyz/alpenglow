@@ -136,7 +136,7 @@ impl BlockComponentProcessor {
 
     pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
         // Update clock sysvar
-        bank.set_alpenglow_clock_sysvar(footer.block_producer_time_nanos as UnixTimestamp);
+        bank.update_clock_from_footer(footer.block_producer_time_nanos as UnixTimestamp);
 
         // TODO: rewards
     }
