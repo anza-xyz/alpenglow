@@ -2039,12 +2039,15 @@ impl Bank {
             epoch_start_timestamp = self.unix_timestamp_from_genesis();
         }
 
+        // Update clock sysvar
+        // NOTE: block footer UNIX timestamps are in nanoseconds, but clock sysvar stores timestamps
+        // in seconds
         let clock = sysvar::clock::Clock {
             slot: self.slot,
             epoch_start_timestamp,
             epoch: self.epoch_schedule().get_epoch(self.slot),
             leader_schedule_epoch: self.epoch_schedule().get_leader_schedule_epoch(self.slot),
-            unix_timestamp,
+            unix_timestamp: unix_timestamp / 1_000_000_000,
         };
         self.update_sysvar_account(&sysvar::clock::id(), |account| {
             create_account(

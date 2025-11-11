@@ -252,16 +252,20 @@ mod tests {
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
 
-        let footer_time = 1_234_567_890_000_000_000; // nanos
+        let footer_time_nanos = 1_234_567_890_000_000_000; // nanos
+        let expected_time_secs = 1_234_567_890; // seconds
         let footer = VersionedBlockFooter::V1(BlockFooterV1 {
             bank_hash: Hash::new_unique(),
-            block_producer_time_nanos: footer_time,
+            block_producer_time_nanos: footer_time_nanos,
             block_user_agent: vec![],
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
 
         assert!(processor.has_footer);
+
+        // Verify clock sysvar was updated with correct timestamp (nanos converted to seconds)
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
     }
 
     #[test]
@@ -304,11 +308,12 @@ mod tests {
             ..Default::default()
         };
 
-        let footer_time = 1_234_567_890_000_000_000;
+        let footer_time_nanos = 1_234_567_890_000_000_000;
+        let expected_time_secs = 1_234_567_890;
         let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
-                block_producer_time_nanos: footer_time,
+                block_producer_time_nanos: footer_time_nanos,
                 block_user_agent: vec![],
             }),
         ));
@@ -320,6 +325,9 @@ mod tests {
             .on_marker(bank.clone(), parent, &marker, &migration_status, false)
             .unwrap();
         assert!(processor.has_footer);
+
+        // Verify clock sysvar was updated
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
     }
 
     #[test]
@@ -327,7 +335,8 @@ mod tests {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
-        let parent_time = 1_000_000_000_000_000_000u64;
+        let footer_time_nanos = 1_234_567_890_100_000_000u64; // 1234567890.1 seconds
+        let expected_time_secs = 1_234_567_890; // truncated to seconds
         let bank = create_child_bank(&parent, 1);
 
         // Process header
@@ -343,12 +352,15 @@ mod tests {
         // Process footer with valid timestamp
         let footer = VersionedBlockFooter::V1(BlockFooterV1 {
             bank_hash: Hash::new_unique(),
-            block_producer_time_nanos: parent_time + 100_000_000, // 100ms later
+            block_producer_time_nanos: footer_time_nanos,
             block_user_agent: vec![],
         });
         processor
             .on_footer(bank.clone(), parent.clone(), &footer)
             .unwrap();
+
+        // Verify clock sysvar was updated
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
 
         // Process final entry batch (slot is full) - should succeed
         let result = processor.on_entry_batch(&migration_status, true);
@@ -419,16 +431,27 @@ mod tests {
         assert!(processor.on_entry_batch(&migration_status, false).is_ok());
 
         // Process footer marker
+        let footer_time_nanos = 1_234_567_890_000_000_000;
+        let expected_time_secs = 1_234_567_890;
         let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
-                block_producer_time_nanos: 1_234_567_890_000_000_000,
+                block_producer_time_nanos: footer_time_nanos,
                 block_user_agent: vec![],
             }),
         ));
         processor
-            .on_marker(bank, parent, &footer_marker, &migration_status, false)
+            .on_marker(
+                bank.clone(),
+                parent,
+                &footer_marker,
+                &migration_status,
+                false,
+            )
             .unwrap();
+
+        // Verify clock sysvar was updated
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
 
         // Process final entry batch with slot_full=true - should succeed
         let result = processor.on_entry_batch(&migration_status, true);
@@ -466,18 +489,29 @@ mod tests {
         processor.has_header = true;
 
         // Process footer marker with slot_full=true
+        let footer_time_nanos = 2_000_000_000_000_000_000;
+        let expected_time_secs = 2_000_000_000;
         let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
-                block_producer_time_nanos: 1_000_000_000,
+                block_producer_time_nanos: footer_time_nanos,
                 block_user_agent: vec![],
             }),
         ));
 
         // Should succeed - footer is processed and slot_full validation passes
-        let result = processor.on_marker(bank, parent, &footer_marker, &migration_status, true);
+        let result = processor.on_marker(
+            bank.clone(),
+            parent,
+            &footer_marker,
+            &migration_status,
+            true,
+        );
         assert!(result.is_ok());
         assert!(processor.has_footer);
+
+        // Verify clock sysvar was updated
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
     }
 
     #[test]
