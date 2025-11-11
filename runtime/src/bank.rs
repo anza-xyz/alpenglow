@@ -1393,10 +1393,7 @@ impl Bank {
             new.update_stake_history(Some(parent.epoch()));
 
             // If Alpenglow is enabled, update the clock from the footer.
-            if new.get_alpenglow_genesis_certificate().is_some() {
-                let parent_timestamp = new.parent().unwrap().clock().unix_timestamp;
-                new.update_clock_from_footer(parent_timestamp);
-            } else {
+            if new.get_alpenglow_genesis_certificate().is_none() {
                 new.update_clock(Some(parent.epoch()));
             }
 

@@ -567,6 +567,63 @@ impl PohRecorder {
         self.start_tick_height = self.tick_height() + 1;
     }
 
+    /// Waits for the bank to freeze and sends the block footer with the bank hash.
+    /// Returns:
+    /// - Ok(()): Footer sent successfully
+    /// - Err(None): Bank freeze timeout (caller should break without updating send_result)
+    /// - Err(Some(e)): Send failed (caller should update send_result and break)
+    fn wait_for_freeze_and_send_footer(
+        &self,
+        footer: &BlockFooterV1,
+        working_bank: &WorkingBank,
+    ) -> std::result::Result<(), Option<SendError<WorkingBankEntryMarker>>> {
+        // Wait for the bank to be frozen with timeout
+        // TODO: change this to use DELTA_BLOCK from votor instead.
+        let start = Instant::now();
+        while !working_bank.bank.is_frozen() {
+            if start.elapsed() > Duration::from_millis(400) {
+                break;
+            }
+            std::hint::spin_loop();
+        }
+
+        // If the bank still isn't frozen, we've timed out
+        if !working_bank.bank.is_frozen() {
+            error!(
+                "slot = {} block production failure. bank freezing timed out.",
+                working_bank.bank.slot()
+            );
+            return Err(None);
+        }
+
+        // Send out the block footer - we now have the bank hash
+        let mut footer = footer.clone();
+        footer.bank_hash = working_bank.bank.hash();
+
+        let footer = VersionedBlockFooter::Current(footer.clone());
+        let footer = BlockMarkerV1::BlockFooter(footer);
+        let footer = VersionedBlockMarker::Current(footer);
+
+        let footer_entry_marker = (
+            EntryMarker::Marker(footer),
+            working_bank.max_tick_height - 1,
+        );
+
+        let send_result = self
+            .working_bank_sender
+            .send((working_bank.bank.clone(), footer_entry_marker));
+
+        if send_result.is_err() {
+            error!(
+                "slot = {} block production failure. failed to broadcast footer",
+                working_bank.bank.slot()
+            );
+            return Err(send_result.err());
+        }
+
+        Ok(())
+    }
+
     // Flush cache will delay flushing the cache for a bank until it past the WorkingBank::min_tick_height
     // On a record flush will flush the cache at the WorkingBank::min_tick_height, since a record
     // occurs after the min_tick_height was generated
@@ -605,48 +662,14 @@ impl PohRecorder {
                 working_bank.bank.register_tick(&entry.hash);
 
                 if let Some(footer) = footer.as_ref() {
-                    // Wait for the bank to be frozen with timeout
-                    // TODO: change this to use DELTA_BLOCK from votor instead.
-                    let start = Instant::now();
-                    while !working_bank.bank.is_frozen() {
-                        if start.elapsed() > Duration::from_millis(400) {
+                    match self.wait_for_freeze_and_send_footer(footer, working_bank) {
+                        Ok(()) => {}        // Continue processing
+                        Err(None) => break, // Timeout - break without updating send_result
+                        Err(Some(e)) => {
+                            // Send failed - update send_result and break
+                            send_result = Err(e);
                             break;
                         }
-                        std::hint::spin_loop();
-                    }
-
-                    // If the bank still isn't frozen, we've timed out
-                    if !working_bank.bank.is_frozen() {
-                        error!(
-                            "slot = {} block production failure. bank freezing timed out.",
-                            working_bank.bank.slot()
-                        );
-                        break;
-                    }
-
-                    // Send out the block footer - we now have the bank hash
-                    let mut footer = footer.clone();
-                    footer.bank_hash = working_bank.bank.hash();
-
-                    let footer = VersionedBlockFooter::Current(footer.clone());
-                    let footer = BlockMarkerV1::BlockFooter(footer);
-                    let footer = VersionedBlockMarker::Current(footer);
-
-                    let footer_entry_marker = (
-                        EntryMarker::Marker(footer),
-                        working_bank.max_tick_height - 1,
-                    );
-
-                    send_result = self
-                        .working_bank_sender
-                        .send((working_bank.bank.clone(), footer_entry_marker));
-
-                    if send_result.is_err() {
-                        error!(
-                            "slot = {} block production failure. failed to broadcast footer",
-                            working_bank.bank.slot()
-                        );
-                        break;
                     }
                 }
 

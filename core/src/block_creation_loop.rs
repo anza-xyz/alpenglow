@@ -40,7 +40,7 @@ use {
             Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
-        time::{Duration, Instant, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -347,6 +347,21 @@ fn produce_window(
     Ok(())
 }
 
+/// Produces a block footer with the current timestamp and version information.
+/// The bank_hash field is left as default and will be filled in after the bank freezes.
+fn produce_block_footer(block_producer_start_time: SystemTime) -> BlockFooterV1 {
+    let block_producer_time_nanos = block_producer_start_time
+        .duration_since(UNIX_EPOCH)
+        .expect("Misconfigured system clock; couldn't measure block producer time.")
+        .as_nanos() as u64;
+
+    BlockFooterV1 {
+        bank_hash: Hash::default(),
+        block_producer_time_nanos,
+        block_user_agent: format!("agave/{}", version!()).into_bytes(),
+    }
+}
+
 /// Records incoming transactions until we reach the block timeout.
 /// Afterwards:
 /// - Shutdown the record receiver
@@ -408,21 +423,9 @@ fn record_and_complete_block(
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
 
-    // Determine the footer's timestamp
+    // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let block_producer_time_nanos = working_bank
-        .start
-        .duration_since(UNIX_EPOCH)
-        .expect("Misconfigured system clock; couldn't measure block producer time.")
-        .as_nanos() as u64;
-
-    // Produce the footer
-    // - fill in the bank hash after poh recorder ticks, and the bank freezes
-    let footer = BlockFooterV1 {
-        bank_hash: Hash::default(),
-        block_producer_time_nanos,
-        block_user_agent: format!("agave/{}", version!()).into_bytes(),
-    };
+    let footer = produce_block_footer(*working_bank.start);
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
