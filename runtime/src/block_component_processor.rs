@@ -99,9 +99,9 @@ impl BlockComponentProcessor {
 
     fn on_footer(
         &mut self,
-        _bank: Arc<Bank>,
+        bank: Arc<Bank>,
         _parent_bank: Arc<Bank>,
-        _footer: &VersionedBlockFooter,
+        footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
         // The block header must be the first component of each block.
         if !self.has_header {
@@ -111,6 +111,12 @@ impl BlockComponentProcessor {
         if self.has_footer {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
+
+        let footer = match footer {
+            VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
+        };
+
+        Self::update_bank_with_footer(bank, footer);
 
         self.has_footer = true;
         Ok(())

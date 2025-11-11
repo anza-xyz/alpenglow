@@ -29,6 +29,7 @@ use {
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
+        block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
@@ -39,7 +40,7 @@ use {
             Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
-        time::{Duration, Instant},
+        time::{Duration, Instant, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -407,14 +408,26 @@ fn record_and_complete_block(
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
 
+    // Determine the footer's timestamp
+    let working_bank = w_poh_recorder.working_bank().unwrap();
+    let block_producer_time_nanos = working_bank
+        .start
+        .duration_since(UNIX_EPOCH)
+        .expect("Misconfigured system clock; couldn't measure block producer time.")
+        .as_nanos() as u64;
+
     // Produce the footer
     // - fill in the bank hash after poh recorder ticks, and the bank freezes
-    // - fill in the block producer time once we have working_bank in poh_recorder
     let footer = BlockFooterV1 {
         bank_hash: Hash::default(),
-        block_producer_time_nanos: 0,
+        block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
     };
+
+    BlockComponentProcessor::update_bank_with_footer(
+        working_bank.bank.clone_without_scheduler(),
+        &footer,
+    );
 
     drop(bank);
     w_poh_recorder.tick_alpenglow(max_tick_height, footer);

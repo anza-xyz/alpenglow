@@ -34,10 +34,7 @@ use {
     solana_measure::measure_us,
     solana_poh_config::PohConfig,
     solana_pubkey::Pubkey,
-    solana_runtime::{
-        bank::Bank, block_component_processor::BlockComponentProcessor,
-        installed_scheduler_pool::BankWithScheduler,
-    },
+    solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
     solana_transaction::versioned::VersionedTransaction,
     solana_votor_messages::migration::MigrationStatus,
     std::{
@@ -46,7 +43,7 @@ use {
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, RwLock,
         },
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime},
     },
     thiserror::Error,
 };
@@ -985,21 +982,7 @@ impl PohRecorder {
         self.clear_bank();
     }
 
-    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64, mut footer: BlockFooterV1) {
-        // Update the footer's timestamp
-        let working_bank = self.working_bank.as_ref().unwrap();
-        let block_producer_time_nanos = working_bank
-            .start
-            .duration_since(UNIX_EPOCH)
-            .expect("Misconfigured system clock; couldn't measure block producer time.")
-            .as_nanos() as u64;
-        footer.block_producer_time_nanos = block_producer_time_nanos;
-
-        BlockComponentProcessor::update_bank_with_footer(
-            working_bank.bank.clone_without_scheduler(),
-            &footer,
-        );
-
+    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64, footer: BlockFooterV1) {
         let (poh_entry, tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
             poh_l.tick()
