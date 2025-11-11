@@ -2026,11 +2026,11 @@ impl Bank {
             .unwrap_or_default()
     }
 
-    pub fn update_clock_from_footer(&self, unix_timestamp: UnixTimestamp) {
+    pub fn update_clock_from_footer(&self, unix_timestamp_nanos: i64) {
         let mut epoch_start_timestamp =
             // On epoch boundaries, update epoch_start_timestamp
             if self.parent().is_some() && self.parent().unwrap().epoch() != self.epoch() {
-                unix_timestamp
+                unix_timestamp_nanos / 1_000_000_000
             } else {
                 self.clock().epoch_start_timestamp
             };
@@ -2047,7 +2047,7 @@ impl Bank {
             epoch_start_timestamp,
             epoch: self.epoch_schedule().get_epoch(self.slot),
             leader_schedule_epoch: self.epoch_schedule().get_leader_schedule_epoch(self.slot),
-            unix_timestamp: unix_timestamp / 1_000_000_000,
+            unix_timestamp: unix_timestamp_nanos / 1_000_000_000,
         };
         self.update_sysvar_account(&sysvar::clock::id(), |account| {
             create_account(

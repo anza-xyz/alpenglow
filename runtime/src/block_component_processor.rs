@@ -1,6 +1,5 @@
 use {
     crate::bank::Bank,
-    solana_clock::UnixTimestamp,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
         VersionedBlockMarker,
@@ -136,7 +135,7 @@ impl BlockComponentProcessor {
 
     pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
         // Update clock sysvar
-        bank.update_clock_from_footer(footer.block_producer_time_nanos as UnixTimestamp);
+        bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
         // TODO: rewards
     }
@@ -525,5 +524,50 @@ mod tests {
         // Process entry batch with header but not full - should succeed even without footer
         let result = processor.on_entry_batch(&migration_status, false);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_footer_sets_epoch_start_timestamp_on_epoch_change() {
+        let mut processor = BlockComponentProcessor {
+            has_header: true,
+            ..Default::default()
+        };
+
+        // Create genesis bank
+        let genesis_config_info = create_genesis_config(10_000);
+        let genesis_bank = Arc::new(Bank::new_for_tests(&genesis_config_info.genesis_config));
+
+        // Get epoch schedule to find first slot of next epoch
+        let epoch_schedule = genesis_bank.epoch_schedule();
+        let first_slot_in_epoch_1 = epoch_schedule.get_first_slot_in_epoch(1);
+
+        // Create parent bank at last slot of epoch 0
+        let mut parent = genesis_bank.clone();
+        for slot in 1..first_slot_in_epoch_1 {
+            parent = create_child_bank(&parent, slot);
+        }
+
+        // Create bank at first slot of epoch 1
+        let bank = create_child_bank(&parent, first_slot_in_epoch_1);
+
+        // Verify we're in epoch 1
+        assert_eq!(bank.epoch(), 1);
+
+        // Process footer with a specific timestamp
+        let footer_time_nanos = 1_500_000_000_000_000_000;
+        let expected_time_secs = 1_500_000_000;
+        let footer = VersionedBlockFooter::V1(BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
+            block_producer_time_nanos: footer_time_nanos,
+            block_user_agent: vec![],
+        });
+
+        processor.on_footer(bank.clone(), parent, &footer).unwrap();
+
+        // Verify clock sysvar was updated
+        assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
+
+        // Verify epoch_start_timestamp was set correctly for the new epoch
+        assert_eq!(bank.clock().epoch_start_timestamp, expected_time_secs);
     }
 }
