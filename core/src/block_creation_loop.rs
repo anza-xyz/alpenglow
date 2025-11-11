@@ -11,6 +11,7 @@ use {
     },
     crossbeam_channel::Receiver,
     solana_clock::Slot,
+    solana_entry::block_component::BlockFooterV1,
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
@@ -29,6 +30,7 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
     },
+    solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -404,8 +406,18 @@ fn record_and_complete_block(
     // will properly increment the tick_height to max_tick_height.
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
+
+    // Produce the footer
+    // - fill in the bank hash after poh recorder ticks, and the bank freezes
+    // - fill in the block producer time once we have working_bank in poh_recorder
+    let footer = BlockFooterV1 {
+        bank_hash: Hash::default(),
+        block_producer_time_nanos: 0,
+        block_user_agent: format!("agave/{}", version!()).into_bytes(),
+    };
+
     drop(bank);
-    w_poh_recorder.tick_alpenglow(max_tick_height);
+    w_poh_recorder.tick_alpenglow(max_tick_height, footer);
 
     Ok(())
 }

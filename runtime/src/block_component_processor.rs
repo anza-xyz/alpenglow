@@ -1,7 +1,9 @@
 use {
     crate::bank::Bank,
+    solana_clock::UnixTimestamp,
     solana_entry::block_component::{
-        BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader, VersionedBlockMarker,
+        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
+        VersionedBlockMarker,
     },
     solana_votor_messages::migration::MigrationStatus,
     std::sync::Arc,
@@ -124,6 +126,13 @@ impl BlockComponentProcessor {
 
         self.has_header = true;
         Ok(())
+    }
+
+    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+        // Update clock sysvar
+        bank.set_alpenglow_clock_sysvar(footer.block_producer_time_nanos as UnixTimestamp);
+
+        // TODO: rewards
     }
 }
 

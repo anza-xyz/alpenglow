@@ -2021,6 +2021,34 @@ impl Bank {
             .unwrap_or_default()
     }
 
+    pub fn set_alpenglow_clock_sysvar(&self, unix_timestamp: UnixTimestamp) {
+        let mut epoch_start_timestamp =
+            // On epoch boundaries, update epoch_start_timestamp
+            if self.parent().is_some() && self.parent().unwrap().epoch() != self.epoch() {
+                unix_timestamp
+            } else {
+                self.clock().epoch_start_timestamp
+            };
+
+        if self.slot == 0 {
+            epoch_start_timestamp = self.unix_timestamp_from_genesis();
+        }
+
+        let clock = sysvar::clock::Clock {
+            slot: self.slot,
+            epoch_start_timestamp,
+            epoch: self.epoch_schedule().get_epoch(self.slot),
+            leader_schedule_epoch: self.epoch_schedule().get_leader_schedule_epoch(self.slot),
+            unix_timestamp,
+        };
+        self.update_sysvar_account(&sysvar::clock::id(), |account| {
+            create_account(
+                &clock,
+                self.inherit_specially_retained_account_fields(account),
+            )
+        });
+    }
+
     fn update_clock(&self, parent_epoch: Option<Epoch>) {
         let mut unix_timestamp = self.clock().unix_timestamp;
         // set epoch_start_timestamp to None to warp timestamp
