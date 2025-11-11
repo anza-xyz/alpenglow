@@ -175,6 +175,26 @@ pub struct Stakes<T: Clone> {
 }
 
 impl<T: Clone> Stakes<T> {
+    pub fn clone_and_filter_for_alpenglow(
+        &self,
+        max_vote_accounts: usize,
+        minimum_identity_account_balance: u64,
+        identity_account_balances: &HashMap<Pubkey, u64>,
+    ) -> Stakes<T> {
+        Stakes {
+            vote_accounts: self.vote_accounts.clone_and_filter_for_alpenglow(
+                max_vote_accounts,
+                minimum_identity_account_balance,
+                identity_account_balances,
+            ),
+            epoch: self.epoch,
+            // Do not need anything else for EpochStakes
+            stake_delegations: ImHashMap::new(),
+            unused: 0,
+            stake_history: StakeHistory::default(),
+        }
+    }
+
     pub fn vote_accounts(&self) -> &VoteAccounts {
         &self.vote_accounts
     }

@@ -119,6 +119,7 @@ pub fn create_genesis_config_with_vote_accounts(
     )
 }
 
+#[cfg(feature = "dev-context-only-utils")]
 pub fn create_genesis_config_with_alpenglow_vote_accounts(
     mint_lamports: u64,
     voting_keypairs: &[impl Borrow<ValidatorVoteKeypairs>],
@@ -331,7 +332,10 @@ pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
 pub fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive() {
-        if IS_ALPENGLOW || *feature_id != agave_feature_set::alpenglow::id() {
+        if IS_ALPENGLOW
+            || (*feature_id != agave_feature_set::alpenglow::id()
+                && *feature_id != agave_feature_set::alpenglow_vat_and_limit_validators::id())
+        {
             activate_feature(genesis_config, *feature_id);
         }
     }
