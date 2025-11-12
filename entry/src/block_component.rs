@@ -82,14 +82,31 @@
 /// │ Parent Block ID             (32 bytes)  │
 /// └─────────────────────────────────────────┘
 /// ```
+///
+/// ### GenesisCertificate Layout
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Genesis Slot                  (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Genesis Block ID             (32 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ BLS Signature               (192 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap length (max 512)       (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap                (up to 512 bytes) │
+/// └─────────────────────────────────────────┘
+/// ```
 use {
     crate::entry::Entry,
     serde::{
         de::{self, Visitor},
         Deserialize, Deserializer, Serialize, Serializer,
     },
+    solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    solana_votor_messages::consensus_message::{Certificate, CertificateType},
     std::{error::Error, fmt},
 };
 
@@ -187,6 +204,7 @@ impl From<bincode::Error> for BlockComponentError {
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum BlockComponent {
     EntryBatch(Vec<Entry>),
     BlockMarker(VersionedBlockMarker),
@@ -231,6 +249,7 @@ pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
     BlockHeader(VersionedBlockHeader),
     UpdateParent(VersionedUpdateParent),
+    GenesisCertificate(GenesisCertificate),
 }
 
 // ============================================================================
@@ -349,6 +368,33 @@ pub enum VersionedUpdateParent {
 pub struct UpdateParentV1 {
     pub new_parent_slot: Slot,
     pub new_parent_block_id: Hash,
+}
+
+// ============================================================================
+// Genesis Certificate
+// ============================================================================
+/// Genesis certificate
+///
+/// # Serialization Format
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Genesis Slot                  (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Genesis Block ID             (32 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ BLS Signature               (192 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap length (max 512)       (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap                (up to 512 bytes) │
+/// └─────────────────────────────────────────┘
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct GenesisCertificate {
+    pub slot: Slot,
+    pub block_id: Hash,
+    pub bls_signature: BLSSignature,
+    pub bitmap: Vec<u8>,
 }
 
 // ============================================================================
@@ -835,6 +881,7 @@ impl BlockMarkerV1 {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
             Self::BlockHeader(header) => (1_u8, header.to_bytes()?),
             Self::UpdateParent(update) => (2_u8, update.to_bytes()?),
+            Self::GenesisCertificate(certificate) => (3_u8, certificate.to_bytes()?),
         };
 
         write_variant_with_length(variant_id, &data_bytes)
@@ -854,6 +901,9 @@ impl BlockMarkerV1 {
             2 => Ok(Self::UpdateParent(VersionedUpdateParent::from_bytes(
                 payload,
             )?)),
+            3 => Ok(Self::GenesisCertificate(GenesisCertificate::from_bytes(
+                payload,
+            )?)),
             _ => Err(BlockComponentError::UnknownVariant {
                 variant_type: "BlockMarkerV1".to_string(),
                 id: variant_id,
@@ -867,6 +917,7 @@ impl BlockMarkerV1 {
             Self::BlockFooter(footer) => footer.serialized_size(),
             Self::BlockHeader(header) => header.serialized_size(),
             Self::UpdateParent(update) => update.serialized_size(),
+            Self::GenesisCertificate(certificate) => certificate.serialized_size(),
         };
         Self::VARIANT_ID_SIZE + Self::LENGTH_FIELD_SIZE + data_size
     }
@@ -1347,6 +1398,89 @@ impl<'de> Deserialize<'de> for VersionedUpdateParent {
     }
 }
 
+// ============================================================================
+// GenesisCertificate Implementation
+// ============================================================================
+
+impl GenesisCertificate {
+    /// Maximum allowed size for the validator bitmap in bytes - corresponds to 4096 validators.
+    pub const MAX_BITMAP_SIZE: usize = 512;
+
+    /// Serializes the certificate to bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+        if self.bitmap.len() > Self::MAX_BITMAP_SIZE {
+            return Err(BlockComponentError::SerializationFailed(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                self.bitmap.len(),
+                Self::MAX_BITMAP_SIZE
+            )));
+        }
+        bincode::serialize(self)
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
+    }
+
+    /// Deserializes from bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+        let cert: Self = bincode::deserialize(data)
+            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
+
+        if cert.bitmap.len() > Self::MAX_BITMAP_SIZE {
+            return Err(BlockComponentError::DeserializationFailed(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                cert.bitmap.len(),
+                Self::MAX_BITMAP_SIZE
+            )));
+        }
+
+        Ok(cert)
+    }
+
+    /// Returns the serialized size in bytes without actually serializing.
+    pub fn serialized_size(&self) -> u64 {
+        // 8 (slot) + 32 (hash) + 192 (BLS signature) + 8 (bitmap length) + bitmap length
+        std::mem::size_of::<Slot>() as u64
+            + solana_hash::HASH_BYTES as u64
+            + solana_bls_signatures::BLS_SIGNATURE_AFFINE_SIZE as u64
+            + std::mem::size_of::<usize>() as u64
+            + self.bitmap.len() as u64
+    }
+}
+
+impl TryFrom<Certificate> for GenesisCertificate {
+    type Error = String;
+
+    fn try_from(cert: Certificate) -> Result<Self, Self::Error> {
+        let CertificateType::Genesis(slot, block_id) = cert.cert_type else {
+            return Err("Invalid certificate type".to_string());
+        };
+
+        if cert.bitmap.len() > GenesisCertificate::MAX_BITMAP_SIZE {
+            return Err(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                cert.bitmap.len(),
+                GenesisCertificate::MAX_BITMAP_SIZE
+            ));
+        }
+
+        Ok(Self {
+            slot,
+            block_id,
+            bls_signature: cert.signature,
+            bitmap: cert.bitmap,
+        })
+    }
+}
+
+impl From<GenesisCertificate> for Certificate {
+    fn from(cert: GenesisCertificate) -> Self {
+        Self {
+            cert_type: CertificateType::Genesis(cert.slot, cert.block_id),
+            signature: cert.bls_signature,
+            bitmap: cert.bitmap,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, solana_hash::Hash, std::iter::repeat_n};
@@ -1799,6 +1933,91 @@ mod tests {
 
         // Invalid footer data after version
         assert!(VersionedBlockFooter::from_bytes(&[0u8, 1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn test_genesis_certificate_serialization() {
+        use solana_bls_signatures::Signature as BLSSignature;
+
+        // Test with various bitmap sizes
+        let test_cases = vec![vec![0u8; 0], vec![2u8; 100], vec![3u8; 512], vec![4u8; 513]];
+
+        for bitmap in test_cases {
+            let slot = 12345u64;
+            let block_id = Hash::new_unique();
+            let bls_signature = BLSSignature::default();
+
+            let cert = GenesisCertificate {
+                slot,
+                block_id,
+                bls_signature,
+                bitmap: bitmap.clone(),
+            };
+
+            if cert.bitmap.len() > GenesisCertificate::MAX_BITMAP_SIZE {
+                assert!(
+                    cert.to_bytes().is_err(),
+                    "Should fail to create certificate with oversized bitmap"
+                );
+                continue;
+            }
+
+            // Test direct serialization of GenesisCertificate
+            let bytes = cert.to_bytes().expect("Should serialize successfully");
+
+            let deserialized =
+                GenesisCertificate::from_bytes(&bytes).expect("Should deserialize successfully");
+
+            assert_eq!(cert.slot, deserialized.slot);
+            assert_eq!(cert.block_id, deserialized.block_id);
+            assert_eq!(cert.bls_signature, deserialized.bls_signature);
+            assert_eq!(cert.bitmap, deserialized.bitmap);
+
+            let calculated_size = cert.serialized_size();
+            let actual_size = bytes.len() as u64;
+            assert_eq!(calculated_size as i64, actual_size as i64);
+
+            // Test as part of BlockComponent
+            let marker = BlockMarkerV1::GenesisCertificate(cert);
+            let versioned_marker = VersionedBlockMarker::Current(marker);
+            let component = BlockComponent::BlockMarker(versioned_marker);
+
+            let bytes = component
+                .to_bytes()
+                .expect("Should serialize BlockComponent");
+
+            let components = BlockComponent::from_bytes_multiple(&bytes)
+                .expect("Should deserialize BlockComponent");
+            assert_eq!(components.len(), 1);
+
+            match &components[0] {
+                BlockComponent::BlockMarker(VersionedBlockMarker::Current(
+                    BlockMarkerV1::GenesisCertificate(deserialized),
+                )) => {
+                    assert_eq!(deserialized.slot, slot);
+                    assert_eq!(deserialized.block_id, block_id);
+                    assert_eq!(deserialized.bls_signature, bls_signature);
+                    assert_eq!(deserialized.bitmap, bitmap);
+                }
+                _ => panic!("Wrong component type deserialized"),
+            }
+        }
+
+        // Test that oversized bitmap fails during deserialization
+        let oversized_cert = GenesisCertificate {
+            slot: 999,
+            block_id: Hash::new_unique(),
+            bls_signature: BLSSignature::default(),
+            bitmap: vec![255u8; 600], // Oversized (> 512)
+        };
+
+        // Force serialize with bincode (bypassing our validation)
+        let forced_bytes = bincode::serialize(&oversized_cert).unwrap();
+
+        // Our from_bytes should catch the oversized bitmap
+        let result = GenesisCertificate::from_bytes(&forced_bytes);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
     }
 
     #[test]

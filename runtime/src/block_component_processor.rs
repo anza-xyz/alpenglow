@@ -87,6 +87,8 @@ impl BlockComponentProcessor {
             BlockMarkerV1::BlockHeader(header) => self.on_header(header),
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
+            // TODO(ashwin): update genesis certificate account / ticks
+            BlockMarkerV1::GenesisCertificate(_) => Ok(()),
         }?;
 
         if is_final {
