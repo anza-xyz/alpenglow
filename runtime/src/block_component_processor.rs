@@ -1,8 +1,11 @@
 use {
+    crate::bank::Bank,
     agave_votor_messages::migration::MigrationStatus,
     solana_entry::block_component::{
-        BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader, VersionedBlockMarker,
+        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
+        VersionedBlockMarker,
     },
+    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -63,6 +66,7 @@ impl BlockComponentProcessor {
 
     pub fn on_marker(
         &mut self,
+        bank: Arc<Bank>,
         marker: &VersionedBlockMarker,
         migration_status: &MigrationStatus,
         is_final: bool,
@@ -75,7 +79,7 @@ impl BlockComponentProcessor {
         let VersionedBlockMarker::V1(marker) = marker;
 
         match marker {
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(footer.inner()),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, footer.inner()),
             BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
             // We process UpdateParent messages on shred ingest, so no callback needed here.
             BlockMarkerV1::UpdateParent(_) => Ok(()),
@@ -91,7 +95,8 @@ impl BlockComponentProcessor {
 
     fn on_footer(
         &mut self,
-        _footer: &VersionedBlockFooter,
+        bank: Arc<Bank>,
+        footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
         // The block header must be the first component of each block.
         if !self.has_header {
@@ -101,6 +106,9 @@ impl BlockComponentProcessor {
         if self.has_footer {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
+
+        let VersionedBlockFooter::V1(footer) = footer;
+        Self::update_bank_with_footer(bank, footer);
 
         self.has_footer = true;
         Ok(())
@@ -116,5 +124,12 @@ impl BlockComponentProcessor {
 
         self.has_header = true;
         Ok(())
+    }
+
+    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+        // Update clock sysvar from footer timestamp.
+        bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
+
+        // TODO: rewards
     }
 }

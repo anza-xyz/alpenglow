@@ -1578,7 +1578,12 @@ pub fn confirm_slot(
             }
             BlockComponent::BlockMarker(marker) => {
                 processor
-                    .on_marker(&marker, migration_status, is_final)
+                    .on_marker(
+                        bank.clone_without_scheduler(),
+                        &marker,
+                        migration_status,
+                        is_final,
+                    )
                     .inspect_err(|err| {
                         warn!("Block component processing failed for slot {slot}: {err:?}",);
                     })?;

@@ -23,7 +23,7 @@ use {
     log::*,
     solana_clock::{BankId, NUM_CONSECUTIVE_LEADER_SLOTS, Slot},
     solana_entry::{
-        block_component::VersionedBlockMarker,
+        block_component::{BlockFooterV1, VersionedBlockMarker},
         entry::Entry,
         poh::{Poh, PohEntry},
     },
@@ -930,7 +930,7 @@ impl PohRecorder {
             .as_nanos() as u64
     }
 
-    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64) {
+    pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64, _footer: BlockFooterV1) {
         let (poh_entry, tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
             poh_l.tick()

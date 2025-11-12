@@ -1452,7 +1452,12 @@ impl Bank {
         let (_, update_sysvars_time_us) = measure_us!({
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
-            new.update_clock(Some(parent.epoch()));
+
+            // If Alpenglow is enabled, update the clock from the footer.
+            if new.get_alpenglow_genesis_certificate().is_none() {
+                new.update_clock(Some(parent.epoch()));
+            }
+
             new.update_last_restart_slot()
         });
 

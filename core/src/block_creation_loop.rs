@@ -26,6 +26,7 @@ use {
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
+        block_component_processor::BlockComponentProcessor,
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_version::version,
@@ -136,17 +137,15 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer(block_producer_time_nanos: u64) -> VersionedBlockMarker {
-    let footer = BlockFooterV1 {
+fn produce_block_footer(block_producer_time_nanos: u64) -> BlockFooterV1 {
+    BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
         final_cert: None,
         skip_reward_cert: None,
         notar_reward_cert: None,
-    };
-
-    VersionedBlockMarker::new_block_footer(footer)
+    }
 }
 
 /// The block creation loop.
@@ -402,7 +401,7 @@ fn record_and_complete_block(
     let mut w_poh_recorder = poh_recorder.write().unwrap();
     let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
     let footer = produce_block_footer(block_producer_time_nanos);
-    w_poh_recorder.send_marker(footer)?;
+    w_poh_recorder.send_marker(VersionedBlockMarker::new_block_footer(footer.clone()))?;
 
     // Alpentick and clear bank
     let bank = w_poh_recorder
@@ -419,9 +418,14 @@ fn record_and_complete_block(
     // Set the tick height for the bank to max_tick_height - 1, so that PohRecorder::flush_cache()
     // will properly increment the tick_height to max_tick_height.
     bank.set_tick_height(max_tick_height - 1);
-    // Write the single tick for this slot
+
+    BlockComponentProcessor::update_bank_with_footer(
+        bank.clone(),
+        &footer,
+    );
+
     drop(bank);
-    w_poh_recorder.tick_alpenglow(max_tick_height);
+    w_poh_recorder.tick_alpenglow(max_tick_height, footer);
 
     Ok(())
 }
