@@ -2028,15 +2028,12 @@ impl Bank {
 
     pub fn update_clock_from_footer(&self, unix_timestamp_nanos: i64) {
         // On epoch boundaries, update epoch_start_timestamp
-        let epoch_start_timestamp = if self.slot == 0 {
-            self.unix_timestamp_from_genesis()
-        } else {
-            match self.parent() {
-                Some(parent) if parent.epoch() != self.epoch() => {
-                    unix_timestamp_nanos / 1_000_000_000
-                }
-                _ => self.clock().epoch_start_timestamp,
+        let epoch_start_timestamp = match (self.slot, self.parent()) {
+            (0, _) => self.unix_timestamp_from_genesis(),
+            (_, Some(parent)) if parent.epoch() != self.epoch() => {
+                unix_timestamp_nanos / 1_000_000_000
             }
+            _ => self.clock().epoch_start_timestamp,
         };
 
         // Update clock sysvar
