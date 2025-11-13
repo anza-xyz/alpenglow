@@ -601,6 +601,15 @@ impl MigrationStatus {
 
     /// The alpenglow genesis block. This should only be used when we are in `ReadyToEnable` or further
     pub fn genesis_block(&self) -> Option<Block> {
+        self.genesis_certificate().map(|cert| {
+            cert.cert_type
+                .to_block()
+                .expect("Must be a genesis certificate")
+        })
+    }
+
+    /// The alpenglow genesis certificate. Only relevant when we are in `ReadyToEnable` or further
+    pub fn genesis_certificate(&self) -> Option<Arc<Certificate>> {
         let phase = self.phase.read().unwrap();
         match &*phase {
             MigrationPhase::PreFeatureActivation | MigrationPhase::Migration { .. } => None,
@@ -613,12 +622,7 @@ impl MigrationStatus {
             | MigrationPhase::FullAlpenglowEpoch {
                 genesis_cert: certificate,
                 ..
-            } => Some(
-                certificate
-                    .cert_type
-                    .to_block()
-                    .expect("Must be a genesis certificate"),
-            ),
+            } => Some(certificate.clone()),
         }
     }
 

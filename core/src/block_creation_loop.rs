@@ -11,7 +11,9 @@ use {
     },
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::block_component::BlockFooterV1,
+    solana_entry::block_component::{
+        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockMarker,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
@@ -33,6 +35,7 @@ use {
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor_messages::consensus_message::Certificate,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -112,6 +115,9 @@ struct LeaderContext {
     // Metrics
     metrics: BlockCreationLoopMetrics,
     slot_metrics: SlotMetrics,
+
+    // Migration information
+    genesis_cert: Arc<Certificate>,
 }
 
 #[derive(Default)]
@@ -178,6 +184,13 @@ fn start_loop(config: BlockCreationLoopConfig) {
         }
     };
 
+    let genesis_cert = bank_forks
+        .read()
+        .unwrap()
+        .migration_status()
+        .genesis_certificate()
+        .expect("Migration complete, genesis certificate must exist");
+
     info!("{my_pubkey}: Block creation loop starting");
 
     let mut ctx = LeaderContext {
@@ -196,6 +209,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
+        genesis_cert,
     };
 
     // Setup poh
@@ -640,6 +654,21 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
     // Insert the bank
     let tpu_bank = ctx.bank_forks.write().unwrap().insert(tpu_bank);
     ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
+
+    // If this the very first alpenglow block, include the genesis certificate
+    if parent_slot == ctx.genesis_cert.cert_type.slot() {
+        let genesis_marker = VersionedBlockMarker::Current(BlockMarkerV1::GenesisCertificate(
+            GenesisCertificate::try_from((*ctx.genesis_cert).clone())
+                .expect("Genesis certificate must be valid"),
+        ));
+        ctx.poh_recorder
+            .write()
+            .unwrap()
+            .send_marker(genesis_marker)
+            .expect("Max tick height cannot have been reached");
+    }
+
+    // Wakeup banking stage
     ctx.record_receiver.restart(slot);
 
     info!(
