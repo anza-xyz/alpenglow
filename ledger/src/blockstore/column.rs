@@ -2,7 +2,7 @@
 use {
     crate::{
         blockstore::error::Result,
-        blockstore_meta::{self},
+        blockstore_meta,
     },
     bincode::Options as BincodeOptions,
     serde::{Serialize, de::DeserializeOwned},
@@ -218,6 +218,16 @@ pub mod columns {
     /// * index type: `u64` (see [`SlotColumn`])
     /// * value type: [`blockstore_meta::SlotCertificates`]
     pub struct SlotCertificates;
+
+    #[derive(Debug)]
+    /// The parent metadata column
+    ///
+    /// This column stores metadata about parent blocks for each slot. We update
+    /// this column on receiving BlockHeader BlockComponents.
+    ///
+    /// * index type: `u64` (see [`SlotColumn`])
+    /// * value type: [`blockstore_meta::ParentMeta`]
+    pub struct ParentMeta;
 }
 
 macro_rules! convert_column_index_to_key_bytes {
@@ -854,4 +864,13 @@ impl ColumnName for columns::SlotCertificates {
 }
 impl TypedColumn for columns::SlotCertificates {
     type Type = blockstore_meta::SlotCertificates;
+}
+
+impl SlotColumn for columns::ParentMeta {}
+impl ColumnName for columns::ParentMeta {
+    const NAME: &'static str = "parent_meta";
+}
+
+impl TypedColumn for columns::ParentMeta {
+    type Type = blockstore_meta::ParentMeta;
 }
