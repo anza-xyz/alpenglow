@@ -236,7 +236,6 @@ pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
 /// This will be guaranteed through the VAT rules,
 /// only the top 2000 validators by stake will be present in vote account structures.
 pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
-
 /// The off-curve account where we store the Alpenglow clock. The clock sysvar has seconds
 /// resolution while the Alpenglow clock has nanosecond resolution.
 static NANOSECOND_CLOCK_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {

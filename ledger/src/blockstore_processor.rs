@@ -1577,9 +1577,13 @@ pub fn confirm_slot(
                 )?;
             }
             BlockComponent::BlockMarker(marker) => {
+                let parent_bank = bank
+                    .parent()
+                    .unwrap_or_else(|| bank.clone_without_scheduler());
                 processor
                     .on_marker(
                         bank.clone_without_scheduler(),
+                        parent_bank,
                         &marker,
                         migration_status,
                         is_final,

@@ -37,7 +37,7 @@ use {
             atomic::{AtomicBool, Ordering},
         },
         thread::{self, Builder, JoinHandle},
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -137,7 +137,7 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer(block_producer_time_nanos: u64) -> BlockFooterV1 {
+fn produce_block_footer_with_timestamp(block_producer_time_nanos: u64) -> BlockFooterV1 {
     BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos,
@@ -359,6 +359,57 @@ fn produce_window(
     Ok(())
 }
 
+/// Clamps the block producer timestamp to ensure that the leader produces a timestamp that conforms
+/// to Alpenglow clock bounds.
+fn skew_block_producer_time_nanos(
+    parent_slot: Slot,
+    parent_time_nanos: i64,
+    working_bank_slot: Slot,
+    working_bank_time_nanos: i64,
+) -> i64 {
+    let (min_working_bank_time, max_working_bank_time) =
+        BlockComponentProcessor::nanosecond_time_bounds(
+            parent_slot,
+            parent_time_nanos,
+            working_bank_slot,
+        );
+
+    working_bank_time_nanos
+        .max(min_working_bank_time)
+        .min(max_working_bank_time)
+}
+
+/// Produces a block footer with the current timestamp and version information.
+/// The bank_hash field is left as default and will be filled in after the bank freezes.
+fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+    let mut block_producer_time_nanos = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Misconfigured system clock; couldn't measure block producer time.")
+            .as_nanos(),
+    )
+    .unwrap_or(i64::MAX);
+
+    let slot = bank.slot();
+
+    if let Some(parent_bank) = bank.parent() {
+        // Get parent time from alpenglow clock (nanoseconds) or fall back to clock sysvar.
+        let parent_time_nanos = parent_bank
+            .get_nanosecond_clock()
+            .unwrap_or_else(|| parent_bank.clock().unix_timestamp.saturating_mul(1_000_000_000));
+        let parent_slot = parent_bank.slot();
+
+        block_producer_time_nanos = skew_block_producer_time_nanos(
+            parent_slot,
+            parent_time_nanos,
+            slot,
+            block_producer_time_nanos,
+        );
+    }
+
+    let block_producer_time_nanos = u64::try_from(block_producer_time_nanos).unwrap_or_default();
+    produce_block_footer_with_timestamp(block_producer_time_nanos)
+}
 /// Records incoming transactions until we reach the block timeout.
 /// Afterwards:
 /// - Shutdown the record receiver
@@ -399,15 +450,13 @@ fn record_and_complete_block(
 
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
-    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let footer = produce_block_footer(block_producer_time_nanos);
-    w_poh_recorder.send_marker(VersionedBlockMarker::new_block_footer(footer.clone()))?;
-
-    // Alpentick and clear bank
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
+    let footer = produce_block_footer(bank.clone());
+    w_poh_recorder.send_marker(VersionedBlockMarker::new_block_footer(footer.clone()))?;
 
+    // Alpentick and clear bank
     trace!(
         "{}: bank {} has reached block timeout, ticking",
         bank.leader_id(),
