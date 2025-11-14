@@ -103,7 +103,9 @@ use {
         de::{self, Visitor},
         Deserialize, Deserializer, Serialize, Serializer,
     },
-    solana_bls_signatures::{Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed},
+    solana_bls_signatures::{
+        Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
+    },
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::consensus_message::{Certificate, CertificateType},
@@ -343,7 +345,6 @@ pub struct VotesAggregate {
     signature: BLSSignatureCompressed,
     bitmap: Vec<u8>,
 }
-
 
 // ============================================================================
 // Block Header Types
@@ -1060,7 +1061,7 @@ impl BlockFooterV1 {
         let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
         buffer.push(capped_len as u8);
         buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
-    
+
         // Serialize final certificate if present, add a byte of 1 if present, otherwise a byte of 0
         if let Some(final_cert) = &self.final_cert {
             let cert_size: u16 = final_cert
@@ -1130,9 +1131,7 @@ impl BlockFooterV1 {
         let final_cert = if final_cert_length == 0 {
             None
         } else {
-            FinalCertificate::from_bytes(
-                &data[final_cert_start..],
-            )?
+            FinalCertificate::from_bytes(&data[final_cert_start..])?
         };
         Ok(Self {
             bank_hash,
@@ -1145,7 +1144,10 @@ impl BlockFooterV1 {
     /// Returns the serialized size in bytes without actually serializing.
     fn serialized_size(&self) -> u64 {
         let user_agent_size = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN) as u64;
-        let final_cert_size = self.final_cert.as_ref().map_or(0, |cert| cert.serialized_size());
+        let final_cert_size = self
+            .final_cert
+            .as_ref()
+            .map_or(0, |cert| cert.serialized_size());
         Self::HASH_SIZE as u64
             + Self::TIMESTAMP_SIZE as u64
             + Self::LENGTH_SIZE as u64
