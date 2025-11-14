@@ -927,49 +927,47 @@ impl BlockFooterV1 {
 
     /// Serializes to bytes with user agent length capping.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        unimplemented!()
-        // let mut buffer =
-        //     Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
+        let mut buffer =
+            Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
 
-        // // Serialize timestamp
-        // buffer.extend_from_slice(&self.block_producer_time_nanos.to_le_bytes());
+        // Serialize timestamp
+        buffer.extend_from_slice(&self.block_producer_time_nanos.to_le_bytes());
 
-        // // Serialize user agent with length capping
-        // let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
-        // buffer.push(capped_len as u8);
-        // buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
+        // Serialize user agent with length capping
+        let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
+        buffer.push(capped_len as u8);
+        buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
 
-        // Ok(buffer)
+        Ok(buffer)
     }
 
     /// Deserializes from bytes with validation.
     fn from_bytes(_data: &[u8]) -> Result<Self, BlockComponentError> {
-        unimplemented!()
-        // if data.len() < Self::HEADER_SIZE {
-        //     return Err(BlockComponentError::InsufficientData);
-        // }
+        if data.len() < Self::HEADER_SIZE {
+            return Err(BlockComponentError::InsufficientData);
+        }
 
-        // // Read timestamp
-        // // Unwrap: HEADER_SIZE = TIMESTAMP_SIZE + USER_AGENT_LEN_SIZE > TIMESTAMP_SIZE, so this will
-        // // never fail.
-        // let time_bytes = data[..Self::TIMESTAMP_SIZE].try_into().unwrap();
-        // let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
+        // Read timestamp
+        // Unwrap: HEADER_SIZE = TIMESTAMP_SIZE + USER_AGENT_LEN_SIZE > TIMESTAMP_SIZE, so this will
+        // never fail.
+        let time_bytes = data[..Self::TIMESTAMP_SIZE].try_into().unwrap();
+        let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
 
-        // // Read user agent length
-        // let user_agent_len = data[Self::TIMESTAMP_SIZE] as usize;
+        // Read user agent length
+        let user_agent_len = data[Self::TIMESTAMP_SIZE] as usize;
 
-        // // Validate remaining data size
-        // if data.len() < Self::HEADER_SIZE + user_agent_len {
-        //     return Err(BlockComponentError::InsufficientData);
-        // }
+        // Validate remaining data size
+        if data.len() < Self::HEADER_SIZE + user_agent_len {
+            return Err(BlockComponentError::InsufficientData);
+        }
 
-        // // Read user agent bytes
-        // let block_user_agent = data[Self::HEADER_SIZE..Self::HEADER_SIZE + user_agent_len].to_vec();
+        // Read user agent bytes
+        let block_user_agent = data[Self::HEADER_SIZE..Self::HEADER_SIZE + user_agent_len].to_vec();
 
-        // Ok(Self {
-        //     block_producer_time_nanos,
-        //     block_user_agent,
-        // })
+        Ok(Self {
+            block_producer_time_nanos,
+            block_user_agent,
+        })
     }
 
     /// Returns the serialized size in bytes without actually serializing.
