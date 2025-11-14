@@ -3,6 +3,8 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
+    solana_pubkey::Pubkey,
+    solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_votor_messages::{
         consensus_message::VoteMessage,
         rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
@@ -58,7 +60,12 @@ impl ConsensusRewards {
     }
 
     /// Adds received [`VoteMessage`]s from other nodes.
-    pub fn add_vote_message(&mut self, root_slot: Slot, vote: VoteMessage) {
+    pub fn add_vote_message(
+        &mut self,
+        root_slot: Slot,
+        rank_map: Arc<BLSPubkeyToRankMap>,
+        vote: VoteMessage,
+    ) {
         // drop old state no longer needed
         self.votes = self
             .votes
@@ -70,7 +77,7 @@ impl ConsensusRewards {
         }
         self.votes
             .entry(vote.vote.slot())
-            .or_default()
+            .or_insert(Entry::new(rank_map))
             .add_vote(vote);
     }
 
@@ -81,9 +88,10 @@ impl ConsensusRewards {
     ) -> (
         Option<SkipRewardCertificate>,
         Option<NotarRewardCertificate>,
+        Vec<Pubkey>,
     ) {
         match self.votes.get(&slot) {
-            None => (None, None),
+            None => (None, None, vec![]),
             Some(entry) => entry.build_certs(slot),
         }
     }
