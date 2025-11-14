@@ -1,14 +1,49 @@
 use {
-    crate::bank::Bank,
+    crate::{
+        bank::Bank, epoch_stakes::VersionedEpochStakes,
+        validated_reward_certificate::ValidatedRewardCertificate,
+    },
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
         VersionedBlockMarker,
     },
+    solana_epoch_schedule::EpochSchedule,
     solana_votor_messages::migration::MigrationStatus,
     std::sync::Arc,
     thiserror::Error,
 };
+
+fn round(input: f64) -> Option<u64> {
+    if !input.is_finite() || input < 0.0 || input > u64::MAX as f64 {
+        return None;
+    }
+    let rounded = input.round();
+    Some(rounded as u64)
+}
+
+/// Returns voting reward in Lamports.
+///
+/// Half should goes to the validator and half to the leader.
+fn calculate_voting_reward(
+    validator_stake_lamports: u64,
+    total_stake_lamports: u64,
+    slots_per_epoch: u64,
+    total_supply_lamports: u64,
+    slots_per_year: f64,
+    yearly_inflation: f64,
+) -> u64 {
+    // Some assertions to catch issues of the caller incorrectly using the function.
+    debug_assert!(validator_stake_lamports <= total_stake_lamports);
+    debug_assert!(total_stake_lamports <= total_supply_lamports);
+
+    let epoch_inflation = (1f64 + yearly_inflation).powf(slots_per_year) - 1f64;
+    let per_slot_inflation =
+        total_supply_lamports as f64 * epoch_inflation / slots_per_epoch as f64;
+    let fractional_stake = validator_stake_lamports as f64 / total_stake_lamports as f64;
+    // XXX: unwraps
+    round(fractional_stake * per_slot_inflation).unwrap()
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
@@ -121,7 +156,22 @@ impl BlockComponentProcessor {
         };
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
-        Self::update_bank_with_footer(bank, footer);
+
+        let epoch_stakes = bank.epoch_stakes(bank.epoch()).unwrap();
+        let validated_reward_cert = ValidatedRewardCertificate::try_new(
+            epoch_stakes,
+            &footer.skip_reward_certificate,
+            &footer.notar_reward_certificate,
+        )
+        .unwrap();
+        let epoch_schedule = bank.epoch_schedule();
+        Self::update_bank_with_footer(
+            bank.clone(),
+            footer,
+            validated_reward_cert,
+            epoch_stakes,
+            epoch_schedule,
+        );
 
         self.has_footer = true;
         Ok(())
@@ -189,11 +239,37 @@ impl BlockComponentProcessor {
         (min_working_bank_time, max_working_bank_time)
     }
 
-    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+    pub fn update_bank_with_footer(
+        bank: Arc<Bank>,
+        footer: &BlockFooterV1,
+        validated_reward_cert: ValidatedRewardCertificate,
+        epoch_stakes: &VersionedEpochStakes,
+        epoch_schedule: &EpochSchedule,
+    ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
-        // TODO: rewards
+        let total_supply_lamports = bank.capitalization();
+        let vote_accounts = epoch_stakes.stakes().vote_accounts().as_ref();
+        let total_stake_lamports = epoch_stakes.total_stake();
+        let yearly_inflation = bank.inflation().total(bank.slot_in_year_for_inflation());
+        for validator in validated_reward_cert.into_validators() {
+            // XXX: find which validators got no rewards so they can be removed.
+            let (validator_stake_lamports, _) = vote_accounts.get(&validator).unwrap();
+            let reward_lamports = calculate_voting_reward(
+                *validator_stake_lamports,
+                total_stake_lamports,
+                epoch_schedule.slots_per_epoch,
+                total_supply_lamports,
+                bank.slots_per_year(),
+                yearly_inflation,
+            );
+            let validator_reward_lamports = reward_lamports / 2;
+            // XXX: pay the leader rewards
+            let _leader_reward_lamports = reward_lamports - validator_reward_lamports;
+
+            bank.pay_vote_reward(validator, validator_reward_lamports);
+        }
     }
 }
 

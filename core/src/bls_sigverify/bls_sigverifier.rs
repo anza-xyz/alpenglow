@@ -278,7 +278,9 @@ impl BLSSigVerifier {
             let mut guard = self.consensus_rewards.write();
             let root_slot = root_bank.slot();
             for v in rewards_votes {
-                guard.add_vote_message(root_slot, v);
+                if let Some(rank_map) = get_key_to_rank_map(&root_bank, v.vote.slot()) {
+                    guard.add_vote_message(root_slot, rank_map.clone(), v);
+                }
             }
         }
 

@@ -3,17 +3,22 @@ use {
     solana_bls_signatures::{Signature as BLSSignature, SignatureProjective},
     solana_clock::Slot,
     solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_signer_store::encode_base2,
     solana_votor_messages::{
         consensus_message::VoteMessage,
         rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
         vote::Vote,
     },
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, sync::Arc},
 };
 
 /// Builds a signature and bitmap suitable for creating a rewards certificate.
-fn build_sig_bitmap(votes: &BTreeMap<u16, VoteMessage>) -> Option<(BLSSignature, Vec<u8>)> {
+fn build_sig_bitmap(
+    votes: &BTreeMap<u16, VoteMessage>,
+    rank_map: &BLSPubkeyToRankMap,
+) -> Option<(BLSSignature, Vec<u8>, Vec<Pubkey>)> {
     let Some(max_rank) = votes.last_key_value().map(|(rank, _)| rank).cloned() else {
         return None;
     };
@@ -26,20 +31,32 @@ fn build_sig_bitmap(votes: &BTreeMap<u16, VoteMessage>) -> Option<(BLSSignature,
     signature
         .aggregate_with(votes.values().map(|v| &v.signature))
         .unwrap();
+    let validators = votes
+        .keys()
+        .map(|rank| rank_map.get_pubkey((*rank).try_into().unwrap()).unwrap().0)
+        .collect();
     // XXX: panics below.
-    Some((signature.into(), encode_base2(&bitmap).unwrap()))
+    Some((signature.into(), encode_base2(&bitmap).unwrap(), validators))
 }
 
 /// Per slot container for storing notar and skip votes for creating rewards certificates.
-#[derive(Default)]
 pub(super) struct Entry {
     /// map from validator rank to the skip vote.
     skip: BTreeMap<u16, VoteMessage>,
     /// notar votes are indexed by block id as different validators may vote for different blocks.
     notar: BTreeMap<Hash, BTreeMap<u16, VoteMessage>>,
+    rank_map: Arc<BLSPubkeyToRankMap>,
 }
 
 impl Entry {
+    pub(super) fn new(rank_map: Arc<BLSPubkeyToRankMap>) -> Self {
+        Self {
+            skip: BTreeMap::default(),
+            notar: BTreeMap::default(),
+            rank_map,
+        }
+    }
+
     pub(super) fn wants_vote(&self, vote: &VoteMessage) -> bool {
         match vote.vote {
             Vote::Skip(_) => !self.skip.contains_key(&vote.rank),
@@ -77,12 +94,19 @@ impl Entry {
     ) -> (
         Option<SkipRewardCertificate>,
         Option<NotarRewardCertificate>,
+        Vec<Pubkey>,
     ) {
-        let skip = build_sig_bitmap(&self.skip).map(|(signature, bitmap)| SkipRewardCertificate {
-            slot,
-            signature,
-            bitmap,
-        });
+        let (skip, skip_validators) = match build_sig_bitmap(&self.skip, &self.rank_map) {
+            Some((signature, bitmap, skip_validators)) => (
+                Some(SkipRewardCertificate {
+                    slot,
+                    signature,
+                    bitmap,
+                }),
+                skip_validators,
+            ),
+            None => (None, vec![]),
+        };
 
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
         // pick the block_id with most votes.
@@ -99,16 +123,26 @@ impl Entry {
                 }
             }
         }
-        let notar = notar
-            .map(|(block_id, votes)| {
-                build_sig_bitmap(votes).map(|(signature, bitmap)| NotarRewardCertificate {
-                    slot,
-                    block_id: *block_id,
-                    signature,
-                    bitmap,
-                })
-            })
-            .flatten();
-        (skip, notar)
+
+        let (notar, notar_validators) = match notar {
+            None => (None, vec![]),
+            Some((block_id, votes)) => match build_sig_bitmap(votes, &self.rank_map) {
+                None => (None, vec![]),
+                Some((signature, bitmap, validators)) => (
+                    Some(NotarRewardCertificate {
+                        slot,
+                        block_id: *block_id,
+                        signature,
+                        bitmap,
+                    }),
+                    validators,
+                ),
+            },
+        };
+
+        let mut validators = skip_validators;
+        validators.extend_from_slice(&notar_validators);
+
+        (skip, notar, validators)
     }
 }

@@ -31,6 +31,7 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
+        validated_reward_certificate::ValidatedRewardCertificate,
     },
     solana_version::version,
     solana_votor::{
@@ -485,16 +486,25 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let (skip_reward_certificate, notar_reward_certificate) = handle.join().unwrap();
+    let (skip_reward_certificate, notar_reward_certificate, validators) = handle.join().unwrap();
     let footer = produce_block_footer(
         working_bank.bank.clone_without_scheduler(),
         skip_reward_certificate,
         notar_reward_certificate,
     );
+    let validated_reward_cert = ValidatedRewardCertificate::new_for_block_producer(validators);
 
+    let epoch_stakes = working_bank
+        .bank
+        .epoch_stakes(working_bank.bank.epoch())
+        .unwrap();
+    let epoch_schedule = working_bank.bank.epoch_schedule();
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
         &footer,
+        validated_reward_cert,
+        epoch_stakes,
+        epoch_schedule,
     );
 
     drop(bank);
