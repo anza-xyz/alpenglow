@@ -24,10 +24,11 @@ pub(super) struct FailEntryVerificationBroadcastRun {
     next_code_index: u32,
     cluster_nodes_cache: Arc<ClusterNodesCache<BroadcastStage>>,
     reed_solomon_cache: Arc<ReedSolomonCache>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl FailEntryVerificationBroadcastRun {
-    pub(super) fn new(shred_version: u16) -> Self {
+    pub(super) fn new(shred_version: u16, migration_status: Arc<MigrationStatus>) -> Self {
         let cluster_nodes_cache = Arc::new(ClusterNodesCache::<BroadcastStage>::new(
             CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
             CLUSTER_NODES_CACHE_TTL,
@@ -42,6 +43,7 @@ impl FailEntryVerificationBroadcastRun {
             next_code_index: 0,
             cluster_nodes_cache,
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
+            migration_status,
         }
     }
 }
@@ -74,7 +76,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             self.next_code_index = 0;
             self.current_slot = bank.slot();
 
-            true
+            self.migration_status.is_alpenglow_enabled()
         } else {
             false
         };

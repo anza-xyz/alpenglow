@@ -979,6 +979,13 @@ impl OptimisticSlotMetaVersioned {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ParentMeta {
+    pub parent_slot: Slot,
+    pub parent_block_id: Hash,
+    pub replay_fec_set_index: u32,
+}
+
 #[cfg(test)]
 mod test {
     use {

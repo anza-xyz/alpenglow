@@ -147,9 +147,7 @@ use {
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
-        votor::LeaderWindowNotifier,
     },
-    solana_votor_messages::migration::MigrationStatus,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -844,6 +842,8 @@ impl Validator {
         )
         .map_err(ValidatorError::Other)?;
 
+        let migration_status = bank_forks.read().unwrap().migration_status();
+
         if !config.no_poh_speed_test {
             check_poh_speed(&bank_forks.read().unwrap().root_bank(), None)?;
         }
@@ -897,6 +897,7 @@ impl Validator {
         cluster_info.set_bind_ip_addrs(node.bind_ip_addrs.clone());
         let cluster_info = Arc::new(cluster_info);
         let node_multihoming = Arc::new(NodeMultihoming::from(&node));
+        migration_status.set_pubkey(cluster_info.id());
 
         assert!(is_snapshot_config_valid(&config.snapshot_config));
 
@@ -1382,10 +1383,6 @@ impl Validator {
             Some(stats_reporter_sender.clone()),
             exit.clone(),
         );
-        let migration_status = Arc::new(initialize_migration_status(
-            cluster_info.id(),
-            bank_forks.read().unwrap().root_bank(),
-        ));
         let serve_repair = config.repair_handler_type.create_serve_repair(
             blockstore.clone(),
             cluster_info.clone(),
@@ -1414,7 +1411,14 @@ impl Validator {
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
-        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
+
+        // Pass RecordReceiver from PohService to BlockCreationLoop when shutting down. Gives us a strong guarentee
+        // that both block producers are not running at the same time
+        let (record_receiver_sender, record_receiver_receiver) = bounded(1);
+
+        let (leader_window_info_sender, leader_window_info_receiver) = bounded(7);
+        let highest_parent_ready = Arc::new(RwLock::default());
+
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &genesis_config.poh_config,
@@ -1422,19 +1426,20 @@ impl Validator {
             bank_forks.read().unwrap().root_bank().ticks_per_slot(),
             config.poh_pinned_cpu_core,
             config.poh_hashes_per_batch,
-            record_receiver.clone(),
+            record_receiver,
             poh_service_message_receiver,
             migration_status.clone(),
+            record_receiver_sender,
         );
 
         let consensus_rewards = Arc::new(PLRwLock::new(ConsensusRewards::new(
             cluster_info.clone(),
             leader_schedule_cache.clone(),
         )));
+        let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
-            migration_status: migration_status.clone(),
             bank_forks: bank_forks.clone(),
             blockstore: blockstore.clone(),
             cluster_info: cluster_info.clone(),
@@ -1443,10 +1448,12 @@ impl Validator {
             rpc_subscriptions: rpc_subscriptions.clone(),
             banking_tracer: banking_tracer.clone(),
             slot_status_notifier: slot_status_notifier.clone(),
-            record_receiver: record_receiver.clone(),
-            leader_window_notifier: leader_window_notifier.clone(),
+            record_receiver_receiver,
+            leader_window_info_receiver: leader_window_info_receiver.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
             consensus_rewards: consensus_rewards.clone(),
+            highest_parent_ready: highest_parent_ready.clone(),
+            optimistic_parent_receiver: optimistic_parent_receiver.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1692,10 +1699,12 @@ impl Validator {
             vote_connection_cache,
             alpenglow_connection_cache,
             replay_highest_frozen.clone(),
-            leader_window_notifier.clone(),
+            leader_window_info_sender.clone(),
+            highest_parent_ready.clone(),
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
+            optimistic_parent_sender,
             alpenglow_quic_server_config,
             staked_nodes.clone(),
             key_notifiers.clone(),
@@ -1794,7 +1803,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
-            migration_status.clone(),
+            migration_status,
         );
 
         datapoint_info!(
@@ -3056,25 +3065,6 @@ pub fn is_snapshot_config_valid(snapshot_config: &SnapshotConfig) -> bool {
             full_snapshot_interval_slots > incremental_snapshot_interval_slots
         }
     }
-}
-
-/// Based on the current feature flag activation and genesis certificate account in the root bank,
-/// determine which phase of the migration we are in and initialize accordingly.
-fn initialize_migration_status(my_pubkey: Pubkey, root_bank: Arc<Bank>) -> MigrationStatus {
-    let epoch_schedule = root_bank.epoch_schedule();
-    let root_epoch = epoch_schedule.get_epoch(root_bank.slot());
-    let ff_activation_slot = root_bank
-        .feature_set
-        .activated_slot(&agave_feature_set::alpenglow::id());
-    let genesis_cert = root_bank.get_alpenglow_genesis_certificate();
-
-    MigrationStatus::initialize(
-        my_pubkey,
-        root_epoch,
-        ff_activation_slot,
-        genesis_cert,
-        epoch_schedule,
-    )
 }
 
 #[cfg(test)]

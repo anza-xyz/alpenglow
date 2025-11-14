@@ -6,6 +6,7 @@ use {
         poh_recorder::{PohRecorder, Record},
         record_channels::RecordReceiver,
     },
+    crossbeam_channel::Sender,
     log::*,
     solana_clock::DEFAULT_HASHES_PER_SECOND,
     solana_entry::poh::Poh,
@@ -104,6 +105,7 @@ impl PohService {
         record_receiver: RecordReceiver,
         poh_service_receiver: PohServiceMessageReceiver,
         migration_status: Arc<MigrationStatus>,
+        record_receiver_sender: Sender<RecordReceiver>,
     ) -> Self {
         let poh_config = poh_config.clone();
         let tick_producer = Builder::new()
@@ -112,9 +114,14 @@ impl PohService {
                 if migration_status.is_alpenglow_enabled() {
                     // We've started up post alpenglow migration. Don't bother starting PohService
                     info!("Post Alpenglow migration, not starting PohService");
+                    // Send the RecordReceiver directly to BlockCreationLoop,
+                    // if this fails then we're already shutting down
+                    if let Err(e) = record_receiver_sender.send(record_receiver) {
+                        info!("Unable to send record receiver, shutting down {e:?}");
+                    }
                     return;
                 }
-                if poh_config.hashes_per_tick.is_none() {
+                let record_receiver = if poh_config.hashes_per_tick.is_none() {
                     if poh_config.target_tick_count.is_none() {
                         Self::low_power_tick_producer(
                             poh_recorder.clone(),
@@ -124,7 +131,7 @@ impl PohService {
                             poh_service_receiver,
                             &migration_status.shutdown_poh,
                             ticks_per_slot,
-                        );
+                        )
                     } else {
                         Self::short_lived_low_power_tick_producer(
                             poh_recorder.clone(),
@@ -133,7 +140,7 @@ impl PohService {
                             record_receiver,
                             poh_service_receiver,
                             ticks_per_slot,
-                        );
+                        )
                     }
                 } else {
                     // PoH service runs in a tight loop, generating hashes as fast as possible.
@@ -155,8 +162,8 @@ impl PohService {
                         poh_service_receiver,
                         target_ns_per_tick,
                         &migration_status.shutdown_poh,
-                    );
-                }
+                    )
+                };
 
                 // Migrate to alpenglow PoH
                 if !poh_exit.load(Ordering::Relaxed)
@@ -166,6 +173,12 @@ impl PohService {
                     info!("Migrating poh service to alpenglow tick producer");
                 } else {
                     poh_exit.store(true, Ordering::Relaxed);
+                    return;
+                }
+
+                // Pass the RecordReceiver to BlockCreationLoop,
+                if let Err(e) = record_receiver_sender.send(record_receiver) {
+                    error!("Unable to send record receiver, shutting down {e:}");
                     return;
                 }
 
@@ -198,7 +211,7 @@ impl PohService {
         poh_service_receiver: PohServiceMessageReceiver,
         shutdown_poh: &AtomicBool,
         ticks_per_slot: u64,
-    ) {
+    ) -> RecordReceiver {
         let poh = poh_recorder.read().unwrap().poh.clone();
         let mut last_tick = Instant::now();
         let mut should_shutdown_for_test_producers =
@@ -273,6 +286,7 @@ impl PohService {
                 ticks_per_slot,
             );
         }
+        record_receiver
     }
 
     pub fn read_record_receiver_and_process(
@@ -309,7 +323,7 @@ impl PohService {
         mut record_receiver: RecordReceiver,
         poh_service_receiver: PohServiceMessageReceiver,
         ticks_per_slot: u64,
-    ) {
+    ) -> RecordReceiver {
         let mut warned = false;
         let mut elapsed_ticks = 0;
         let mut last_tick = Instant::now();
@@ -394,6 +408,7 @@ impl PohService {
                 ticks_per_slot,
             );
         }
+        record_receiver
     }
 
     /// Returns true if the receiver should be shutdown. This is for test variants of the poh service.
@@ -524,7 +539,7 @@ impl PohService {
         poh_service_receiver: PohServiceMessageReceiver,
         target_ns_per_tick: u64,
         shutdown_poh: &AtomicBool,
-    ) {
+    ) -> RecordReceiver {
         let poh = poh_recorder.read().unwrap().poh.clone();
         let mut timing = PohTiming::new();
         let mut next_record = None;
@@ -592,6 +607,7 @@ impl PohService {
                 break;
             }
         }
+        record_receiver
     }
 
     /// Check for a service message and shutdown the channel if there is one.
@@ -661,6 +677,7 @@ mod tests {
             poh_controller::PohController, poh_recorder::PohRecorderError::MaxHeightReached,
             record_channels::record_channels,
         },
+        crossbeam_channel::bounded,
         rand::{thread_rng, Rng},
         solana_clock::{DEFAULT_HASHES_PER_TICK, DEFAULT_MS_PER_SLOT},
         solana_entry::entry_marker::EntryMarker,
@@ -792,6 +809,7 @@ mod tests {
             .unwrap_or(DEFAULT_HASHES_PER_BATCH);
         let (_record_sender, record_receiver) = record_channels(false);
         let (_poh_controller, poh_service_message_receiver) = PohController::new();
+        let (record_receiver_sender, _record_receiver_receiver) = bounded(1);
         let poh_service = PohService::new(
             poh_recorder.clone(),
             &poh_config,
@@ -802,6 +820,7 @@ mod tests {
             record_receiver,
             poh_service_message_receiver,
             Arc::new(MigrationStatus::default()),
+            record_receiver_sender,
         );
         poh_recorder.write().unwrap().set_bank_for_test(bank);
 

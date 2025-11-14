@@ -50,10 +50,15 @@ pub(super) struct BroadcastDuplicatesRun {
     original_last_data_shreds: Arc<Mutex<HashSet<Signature>>>,
     partition_last_data_shreds: Arc<Mutex<HashSet<Signature>>>,
     reed_solomon_cache: Arc<ReedSolomonCache>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BroadcastDuplicatesRun {
-    pub(super) fn new(shred_version: u16, config: BroadcastDuplicatesConfig) -> Self {
+    pub(super) fn new(
+        shred_version: u16,
+        config: BroadcastDuplicatesConfig,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
         let cluster_nodes_cache = Arc::new(ClusterNodesCache::<BroadcastStage>::new(
             CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
             CLUSTER_NODES_CACHE_TTL,
@@ -73,6 +78,7 @@ impl BroadcastDuplicatesRun {
             original_last_data_shreds: Arc::<Mutex<HashSet<Signature>>>::default(),
             partition_last_data_shreds: Arc::<Mutex<HashSet<Signature>>>::default(),
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
+            migration_status,
         }
     }
 }
@@ -107,7 +113,7 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.prev_entry_hash = None;
             self.num_slots_broadcasted += 1;
 
-            true
+            self.migration_status.is_alpenglow_enabled()
         } else {
             false
         };

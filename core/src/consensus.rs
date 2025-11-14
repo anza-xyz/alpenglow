@@ -41,6 +41,7 @@ use {
             MAX_LOCKOUT_HISTORY,
         },
     },
+    solana_votor_messages::migration::GENESIS_VOTE_THRESHOLD,
     std::{
         cmp::Ordering,
         collections::{HashMap, HashSet},
@@ -171,6 +172,7 @@ pub(crate) struct ComputedBankState {
     pub voted_stakes: VotedStakes,
     pub total_stake: Stake,
     pub fork_stake: Stake,
+    pub parent_is_super_oc: bool,
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
     pub lockout_intervals: LockoutIntervals,
@@ -389,6 +391,7 @@ impl Tower {
     pub(crate) fn collect_vote_lockouts(
         vote_account_pubkey: &Pubkey,
         bank_slot: Slot,
+        parent_slot: Slot,
         vote_accounts: &VoteAccountsHashMap,
         ancestors: &HashMap<Slot, HashSet<Slot>>,
         get_frozen_hash: impl Fn(Slot) -> Option<Hash>,
@@ -396,6 +399,7 @@ impl Tower {
     ) -> ComputedBankState {
         let mut vote_slots = HashSet::new();
         let mut voted_stakes = HashMap::new();
+        let mut super_oc_stake = 0;
         let mut total_stake = 0;
 
         // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
@@ -442,14 +446,20 @@ impl Tower {
             }
             let start_root = vote_state.root_slot;
 
-            // Add the last vote to update the `heaviest_subtree_fork_choice`
             if let Some(last_landed_voted_slot) = vote_state.last_voted_slot() {
+                // Add the last vote to update the `heaviest_subtree_fork_choice`
                 latest_validator_votes_for_frozen_banks.check_add_vote(
                     key,
                     last_landed_voted_slot,
                     get_frozen_hash(last_landed_voted_slot),
                     true,
                 );
+
+                // For migration - a block is super OC there are 82% of votes in the direct child
+                // on the very next slot
+                if last_landed_voted_slot == parent_slot {
+                    super_oc_stake += voted_stake;
+                }
             }
 
             vote_state.process_next_vote_slot(bank_slot);
@@ -496,6 +506,9 @@ impl Tower {
             total_stake += voted_stake;
         }
 
+        let parent_is_super_oc = bank_slot == parent_slot + 1
+            && super_oc_stake as f64 / total_stake as f64 > GENESIS_VOTE_THRESHOLD;
+
         // TODO: populate_ancestor_voted_stakes only adds zeros. Comment why
         // that is necessary (if so).
         Self::populate_ancestor_voted_stakes(&mut voted_stakes, vote_slots, ancestors);
@@ -519,6 +532,7 @@ impl Tower {
             voted_stakes,
             total_stake,
             fork_stake,
+            parent_is_super_oc,
             lockout_intervals,
             my_latest_landed_vote,
         }
@@ -2483,6 +2497,7 @@ pub mod test {
         } = Tower::collect_vote_lockouts(
             &Pubkey::default(),
             1,
+            0,
             &accounts,
             &ancestors,
             |_| Some(Hash::default()),
@@ -2530,6 +2545,7 @@ pub mod test {
         } = Tower::collect_vote_lockouts(
             &Pubkey::default(),
             MAX_LOCKOUT_HISTORY as u64,
+            (MAX_LOCKOUT_HISTORY - 1) as Slot,
             &accounts,
             &ancestors,
             |_| Some(Hash::default()),
@@ -2842,6 +2858,7 @@ pub mod test {
         } = Tower::collect_vote_lockouts(
             &Pubkey::default(),
             vote_to_evaluate,
+            vote_to_evaluate - 1,
             &accounts,
             &ancestors,
             |_| None,
@@ -2862,6 +2879,7 @@ pub mod test {
         } = Tower::collect_vote_lockouts(
             &Pubkey::default(),
             vote_to_evaluate,
+            vote_to_evaluate - 1,
             &accounts,
             &ancestors,
             |_| None,

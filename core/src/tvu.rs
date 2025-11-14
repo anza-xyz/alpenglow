@@ -35,6 +35,7 @@ use {
         cluster_info::ClusterInfo, duplicate_shred_handler::DuplicateShredHandler,
         duplicate_shred_listener::DuplicateShredListener,
     },
+    solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
         block_location_lookup::BlockLocationLookup, blockstore::Blockstore,
@@ -62,11 +63,10 @@ use {
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
         consensus_rewards::ConsensusRewards,
-        event::{VotorEventReceiver, VotorEventSender},
+        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
-        votor::LeaderWindowNotifier,
     },
     solana_votor_messages::migration::MigrationStatus,
     std::{
@@ -207,10 +207,12 @@ impl Tvu {
         vote_connection_cache: Arc<ConnectionCache>,
         alpenglow_connection_cache: Arc<ConnectionCache>,
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
-        leader_window_notifier: Arc<LeaderWindowNotifier>,
+        leader_window_info_sender: Sender<LeaderWindowInfo>,
+        highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
         voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
+        optimistic_parent_sender: Sender<LeaderWindowInfo>,
         alpenglow_quic_server_config: QuicServerParams,
         staked_nodes: Arc<RwLock<StakedNodes>>,
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
@@ -313,6 +315,7 @@ impl Tvu {
             slot_status_notifier.clone(),
             tvu_config.xdp_sender,
             votor_event_sender.clone(),
+            migration_status.clone(),
         );
 
         let (ancestor_duplicate_slots_sender, ancestor_duplicate_slots_receiver) = unbounded();
@@ -405,6 +408,7 @@ impl Tvu {
             dumped_slots_sender,
             votor_event_sender,
             own_vote_sender: consensus_message_sender,
+            optimistic_parent_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -444,7 +448,8 @@ impl Tvu {
             banking_tracer,
             snapshot_controller,
             replay_highest_frozen,
-            leader_window_notifier,
+            leader_window_info_sender,
+            highest_parent_ready,
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
             migration_status,
@@ -596,7 +601,7 @@ pub mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-        solana_votor::vote_history_storage::FileVoteHistoryStorage,
+        solana_votor::{consensus_metrics, vote_history_storage::FileVoteHistoryStorage},
         std::sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -651,6 +656,7 @@ pub mod tests {
         let (verified_vote_sender, verified_vote_receiver) = unbounded();
         let (replay_vote_sender, _replay_vote_receiver) = unbounded();
         let (_, gossip_confirmed_slots_receiver) = unbounded();
+        let (leader_window_info_sender, _) = bounded(1);
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
         let ignored_prioritization_fee_cache = Arc::new(PrioritizationFeeCache::new(0u64));
         let outstanding_repair_requests = Arc::<RwLock<OutstandingShredRepairs>>::default();
@@ -676,6 +682,8 @@ pub mod tests {
             DEFAULT_TPU_CONNECTION_POOL_SIZE,
         );
         let (votor_event_sender, votor_event_receiver) = unbounded();
+        let highest_parent_ready = Arc::new(RwLock::default());
+        let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -744,10 +752,12 @@ pub mod tests {
             Arc::new(connection_cache),
             Arc::new(alpenglow_connection_cache),
             Arc::new(ReplayHighestFrozen::default()),
-            Arc::new(LeaderWindowNotifier::default()),
+            leader_window_info_sender,
+            highest_parent_ready,
             None,
             votor_event_sender,
             votor_event_receiver,
+            optimistic_parent_sender,
             QuicServerParams::default_for_tests(),
             Arc::new(RwLock::new(StakedNodes::default())),
             Arc::new(RwLock::new(KeyUpdaters::default())),

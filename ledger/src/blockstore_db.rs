@@ -200,6 +200,7 @@ impl Rocks {
             new_cf_descriptor::<columns::AlternateIndex>(options, oldest_slot),
             new_cf_descriptor::<columns::AlternateShredData>(options, oldest_slot),
             new_cf_descriptor::<columns::AlternateMerkleRootMeta>(options, oldest_slot),
+            new_cf_descriptor::<columns::ParentMeta>(options, oldest_slot),
         ];
 
         // If the access type is Secondary, we don't need to open all of the
@@ -248,7 +249,7 @@ impl Rocks {
         cf_descriptors
     }
 
-    const fn columns() -> [&'static str; 26] {
+    const fn columns() -> [&'static str; 27] {
         [
             columns::ErasureMeta::NAME,
             columns::DeadSlots::NAME,
@@ -276,6 +277,7 @@ impl Rocks {
             columns::AlternateIndex::NAME,
             columns::AlternateShredData::NAME,
             columns::AlternateMerkleRootMeta::NAME,
+            columns::ParentMeta::NAME,
         ]
     }
 

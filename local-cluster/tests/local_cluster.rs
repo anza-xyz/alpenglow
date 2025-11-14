@@ -102,6 +102,7 @@ use {
         consensus_message::{
             CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
+        migration::MIGRATION_SLOT_OFFSET,
         vote::Vote,
     },
     std::{
@@ -6220,6 +6221,144 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
         &validator_keys,
         &node_stakes,
     );
+}
+
+fn test_alpenglow_migration(num_nodes: usize) {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    let test_name = &format!("test_alpenglow_migration_{num_nodes}");
+
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
+    let vote_listener_addr = vote_listener_socket.try_clone().unwrap();
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
+    // Since we don't skip warmup slots and have very small epochs + tight MIGRATION_SLOT_OFFSET
+    // we can't afford any forking due to rolling start
+    validator_config.wait_for_supermajority = Some(0);
+
+    let validator_keys = (0..num_nodes)
+        .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
+        .collect::<Vec<_>>();
+    let node_stakes = vec![DEFAULT_NODE_STAKE; num_nodes];
+
+    // We want the epochs to be as short as possible to reduce test time without being flaky.
+    // We start the migration at an offset of 32, so use 64 as the epoch length.
+    let slots_per_epoch = 2 * MINIMUM_SLOTS_PER_EPOCH;
+    assert!(slots_per_epoch > MIGRATION_SLOT_OFFSET);
+    let mut cluster_config = ClusterConfig {
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_keys: Some(validator_keys),
+        node_stakes: node_stakes.clone(),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        // So we don't have to wait so long
+        skip_warmup_slots: false,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster with alpenglow accounts but feature not activated
+    let cluster = LocalCluster::new_pre_migration_alpenglow(
+        &mut cluster_config,
+        SocketAddrSpace::Unspecified,
+    );
+
+    let validator_keys: Vec<Arc<Keypair>> = cluster
+        .validators
+        .values()
+        .map(|v| v.info.keypair.clone())
+        .collect();
+
+    // Send feature activation transaction
+    info!("Sending feature activation transaction");
+    let client = RpcClient::new_socket_with_commitment(
+        cluster.entry_point_info.rpc().unwrap(),
+        CommitmentConfig::processed(),
+    );
+    let faucet_keypair = &cluster.funding_keypair;
+    let feature_keypair = &*agave_feature_set::alpenglow::TEST_KEYPAIR;
+    let blockhash = client.get_latest_blockhash().unwrap();
+    let lamports = client
+        .get_minimum_balance_for_rent_exemption(solana_feature_gate_interface::Feature::size_of())
+        .unwrap();
+
+    let activation_message = solana_message::Message::new(
+        &solana_feature_gate_interface::activate_with_lamports(
+            &agave_feature_set::alpenglow::id(),
+            &faucet_keypair.pubkey(),
+            lamports,
+        ),
+        Some(&faucet_keypair.pubkey()),
+    );
+    let activation_tx = solana_transaction::Transaction::new(
+        &[&feature_keypair, &faucet_keypair],
+        activation_message,
+        blockhash,
+    );
+
+    client.send_and_confirm_transaction(&activation_tx).unwrap();
+    info!("Feature activation transaction confirmed");
+
+    // Monitor for feature activation
+    let activation_slot;
+    loop {
+        if let Ok(account) = client.get_account(&agave_feature_set::alpenglow::id()) {
+            if let Some(feature) = solana_feature_gate_interface::from_account(&account) {
+                if let Some(slot) = feature.activated_at {
+                    activation_slot = slot;
+                    info!("Feature activated at slot {slot}");
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // The migration happens at a fixed offset from feature activation
+    let migration_slot = activation_slot + MIGRATION_SLOT_OFFSET;
+    info!("Waiting for migration slot {migration_slot}");
+
+    loop {
+        let slot = client.get_slot().unwrap();
+        if slot >= migration_slot - 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    info!("Migration slot reached, checking for notarized votes");
+
+    // Check for new notarized votes
+    cluster.check_for_new_notarized_votes(
+        4,
+        test_name,
+        SocketAddrSpace::Unspecified,
+        vote_listener_addr,
+        &validator_keys,
+        &node_stakes,
+    );
+
+    // Additionally ensure that roots are being made
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_migration_1() {
+    test_alpenglow_migration(1)
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_migration_2() {
+    test_alpenglow_migration(2)
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_migration_4() {
+    test_alpenglow_migration(4)
 }
 
 fn broadcast_vote(

@@ -9,12 +9,12 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
+    crossbeam_channel::Receiver,
     parking_lot::RwLock as PLRwLock,
     solana_clock::Slot,
-    solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
-    },
+    solana_entry::block_component::BlockFooterV1,
     solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
@@ -30,16 +30,13 @@ use {
     solana_runtime::{
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
+        block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
     solana_votor::{
         common::block_timeout, consensus_rewards::ConsensusRewards, event::LeaderWindowInfo,
-        votor::LeaderWindowNotifier,
     },
-    solana_votor_messages::{
-        migration::MigrationStatus,
-        rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
-    },
+    solana_votor_messages::rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -47,7 +44,7 @@ use {
             Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
 };
@@ -77,7 +74,6 @@ impl BlockCreationLoop {
 
 pub struct BlockCreationLoopConfig {
     pub exit: Arc<AtomicBool>,
-    pub migration_status: Arc<MigrationStatus>,
 
     // Shared state
     pub bank_forks: Arc<RwLock<BankForks>>,
@@ -93,15 +89,20 @@ pub struct BlockCreationLoopConfig {
     pub slot_status_notifier: Option<SlotStatusNotifier>,
 
     // Receivers / notifications from banking stage / replay / votor
-    pub record_receiver: RecordReceiver,
-    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+
+    // Channel to receive RecordReceiver from PohService
+    pub record_receiver_receiver: Receiver<RecordReceiver>,
+    pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
 }
 
 struct LeaderContext {
     exit: Arc<AtomicBool>,
     my_pubkey: Pubkey,
-    leader_window_notifier: Arc<LeaderWindowNotifier>,
+    leader_window_info_receiver: Receiver<LeaderWindowInfo>,
+    highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
 
     blockstore: Arc<Blockstore>,
     record_receiver: RecordReceiver,
@@ -143,24 +144,6 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer(
-    block_producer_time_nanos: u64,
-    skip_reward_certificate: Option<SkipRewardCertificate>,
-    notar_reward_certificate: Option<NotarRewardCertificate>,
-) -> VersionedBlockMarker {
-    let footer = BlockFooterV1 {
-        block_producer_time_nanos,
-        skip_reward_certificate,
-        notar_reward_certificate,
-        block_user_agent: format!("agave/{}", version!()).into_bytes(),
-    };
-
-    let footer = VersionedBlockFooter::Current(footer);
-    let footer = BlockMarkerV1::BlockFooter(footer);
-
-    VersionedBlockMarker::Current(footer)
-}
-
 /// The block creation loop.
 ///
 /// The `votor::consensus_pool_service` tracks when it is our leader window, and
@@ -177,10 +160,11 @@ fn start_loop(config: BlockCreationLoopConfig) {
         rpc_subscriptions,
         banking_tracer,
         slot_status_notifier,
-        record_receiver,
-        leader_window_notifier,
+        record_receiver_receiver,
+        leader_window_info_receiver,
         replay_highest_frozen,
-        migration_status,
+        highest_parent_ready,
+        optimistic_parent_receiver,
         consensus_rewards,
     } = config;
 
@@ -190,10 +174,24 @@ fn start_loop(config: BlockCreationLoopConfig) {
     // get latest identity pubkey during startup
     let mut my_pubkey = cluster_info.id();
 
+    info!("{my_pubkey}: Block creation loop initialized");
+
+    // Wait for PohService to be shutdown
+    let record_receiver = match record_receiver_receiver.recv() {
+        Ok(receiver) => receiver,
+        Err(e) => {
+            error!("{my_pubkey}: Failed to receive RecordReceiver from PohService. Exiting: {e:?}",);
+            return;
+        }
+    };
+
+    info!("{my_pubkey}: Block creation loop starting");
+
     let mut ctx = LeaderContext {
         exit,
         my_pubkey,
-        leader_window_notifier: leader_window_notifier.clone(),
+        highest_parent_ready,
+        leader_window_info_receiver,
         blockstore,
         poh_recorder: poh_recorder.clone(),
         record_receiver,
@@ -207,11 +205,6 @@ fn start_loop(config: BlockCreationLoopConfig) {
         slot_metrics: SlotMetrics::default(),
         consensus_rewards,
     };
-
-    info!("{my_pubkey}: Block creation loop initialized");
-    // Wait for PohService to be shutdown
-    migration_status.wait_for_migration_or_exit(&ctx.exit);
-    info!("{my_pubkey}: Block creation loop starting");
 
     // Setup poh
     // Important this is called *before* any new alpenglow
@@ -238,7 +231,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
             );
         }
 
-        // Wait for the voting loop to notify us
+        // Wait for the voting loop to notify us, draining all pending messages and keeping the highest slot
         let LeaderWindowInfo {
             start_slot,
             end_slot,
@@ -246,16 +239,29 @@ fn start_loop(config: BlockCreationLoopConfig) {
             parent_block: (parent_slot, _),
             skip_timer,
         } = {
-            let window_info = leader_window_notifier.window_info.lock().unwrap();
-            let (mut guard, timeout_res) = leader_window_notifier
-                .window_notification
-                .wait_timeout_while(window_info, Duration::from_secs(1), |wi| wi.is_none())
-                .unwrap();
-            if timeout_res.timed_out() {
+            // Drain all pending messages and keep the latest one
+            let Some(info) = ctx
+                .leader_window_info_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .ok()
+                .and_then(|window| {
+                    ctx.leader_window_info_receiver
+                        .try_iter()
+                        .last()
+                        .or(Some(window))
+                })
+            else {
                 continue;
-            }
-            guard.take().unwrap()
+            };
+
+            info
         };
+
+        // TODO(ksn): fast leader handover. Once we can stream parent ready events over a channel,
+        // we'll have the two channels race each other to determine what to do.
+        //
+        // For now, just drain the channel and don't do anything with optimistic parents.
+        while let Ok(_optimistic_parent) = optimistic_parent_receiver.try_recv() {}
 
         trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
         if let Err(e) = produce_window(start_slot, end_slot, parent_slot, skip_timer, &mut ctx) {
@@ -350,6 +356,64 @@ fn produce_window(
     Ok(())
 }
 
+/// Clamps the block producer timestamp to ensure that the leader produces a timestamp that conforms
+/// to Alpenglow clock bounds.
+fn skew_block_producer_time_nanos(
+    parent_slot: Slot,
+    parent_time_nanos: i64,
+    working_bank_slot: Slot,
+    working_bank_time_nanos: i64,
+) -> i64 {
+    let (min_working_bank_time, max_working_bank_time) =
+        BlockComponentProcessor::nanosecond_time_bounds(
+            parent_slot,
+            parent_time_nanos,
+            working_bank_slot,
+        );
+
+    working_bank_time_nanos
+        .max(min_working_bank_time)
+        .min(max_working_bank_time)
+}
+
+/// Produces a block footer with the current timestamp and version information.
+/// The bank_hash field is left as default and will be filled in after the bank freezes.
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    skip_reward_certificate: Option<SkipRewardCertificate>,
+    notar_reward_certificate: Option<NotarRewardCertificate>,
+) -> BlockFooterV1 {
+    let mut block_producer_time_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Misconfigured system clock; couldn't measure block producer time.")
+        .as_nanos() as i64;
+
+    let slot = bank.slot();
+
+    if let Some(parent_bank) = bank.parent() {
+        // Get parent time from alpenglow clock (nanoseconds) or fall back to clock sysvar (seconds -> nanoseconds)
+        let parent_time_nanos = bank
+            .get_nanosecond_clock()
+            .unwrap_or_else(|| bank.clock().unix_timestamp.saturating_mul(1_000_000_000));
+        let parent_slot = parent_bank.slot();
+
+        block_producer_time_nanos = skew_block_producer_time_nanos(
+            parent_slot,
+            parent_time_nanos,
+            slot,
+            block_producer_time_nanos,
+        );
+    }
+
+    BlockFooterV1 {
+        bank_hash: Hash::default(),
+        block_producer_time_nanos: block_producer_time_nanos as u64,
+        block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        skip_reward_certificate,
+        notar_reward_certificate,
+    }
+}
+
 /// Records incoming transactions until we reach the block timeout.
 /// Afterwards:
 /// - Shutdown the record receiver
@@ -401,17 +465,12 @@ fn record_and_complete_block(
         )?;
     }
 
-    // Construct and send the block footer
-    let mut w_poh_recorder = poh_recorder.write().unwrap();
-    let block_producer_time_nanos = w_poh_recorder.working_bank_block_producer_time_nanos();
-    let (skip, notar) = handle.join().unwrap();
-    let footer = produce_block_footer(block_producer_time_nanos, skip, notar);
-    w_poh_recorder.send_marker(footer)?;
-
     // Alpentick and clear bank
+    let mut w_poh_recorder = poh_recorder.write().unwrap();
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
+
     trace!(
         "{}: bank {} has reached block timeout, ticking",
         bank.collector_id(),
@@ -423,8 +482,23 @@ fn record_and_complete_block(
     // will properly increment the tick_height to max_tick_height.
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
+
+    // Produce the footer with the current timestamp
+    let working_bank = w_poh_recorder.working_bank().unwrap();
+    let (skip_reward_certificate, notar_reward_certificate) = handle.join().unwrap();
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        skip_reward_certificate,
+        notar_reward_certificate,
+    );
+
+    BlockComponentProcessor::update_bank_with_footer(
+        working_bank.bank.clone_without_scheduler(),
+        &footer,
+    );
+
     drop(bank);
-    w_poh_recorder.tick_alpenglow(max_tick_height);
+    w_poh_recorder.tick_alpenglow(max_tick_height, footer);
 
     Ok(())
 }
@@ -450,12 +524,7 @@ fn start_leader_retry_replay(
         ctx.slot_metrics.attempt_count += 1;
 
         // Check if the entire window is skipped.
-        let highest_parent_ready_slot = ctx
-            .leader_window_notifier
-            .highest_parent_ready
-            .read()
-            .unwrap()
-            .0;
+        let highest_parent_ready_slot = ctx.highest_parent_ready.read().unwrap().0;
         if highest_parent_ready_slot > end_slot {
             trace!(
                 "{my_pubkey}: Skipping production of {slot} because highest parent ready slot is \

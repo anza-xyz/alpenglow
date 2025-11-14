@@ -214,12 +214,8 @@ impl EventHandler {
             timer_manager.write().set_timeouts(slot);
             local_context.stats.timeout_set = local_context.stats.timeout_set.saturating_add(1);
         }
-        let mut highest_parent_ready = ctx
-            .leader_window_notifier
-            .highest_parent_ready
-            .write()
-            .unwrap();
 
+        let mut highest_parent_ready = ctx.highest_parent_ready.write().unwrap();
         let (current_slot, _) = *highest_parent_ready;
 
         if slot > current_slot {
@@ -403,21 +399,7 @@ impl EventHandler {
             // It is time to produce our leader window
             VotorEvent::ProduceWindow(window_info) => {
                 info!("{my_pubkey}: ProduceWindow {window_info:?}");
-                let mut l_window_info = ctx.leader_window_notifier.window_info.lock().unwrap();
-                if let Some(old_window_info) = l_window_info.as_ref() {
-                    stats.leader_window_replaced = stats.leader_window_replaced.saturating_add(1);
-                    error!(
-                        "{my_pubkey}: Attempting to start leader window for {}-{}, however there \
-                         is already a pending window to produce {}-{}. Our production is lagging, \
-                         discarding in favor of the newer window",
-                        window_info.start_slot,
-                        window_info.end_slot,
-                        old_window_info.start_slot,
-                        old_window_info.end_slot,
-                    );
-                }
-                *l_window_info = Some(window_info);
-                ctx.leader_window_notifier.window_notification.notify_one();
+                ctx.leader_window_info_sender.send(window_info).unwrap();
             }
 
             // We have finalized this block consider it for rooting
@@ -820,7 +802,6 @@ mod tests {
                 VoteHistoryStorage,
             },
             voting_service::BLSOp,
-            votor::LeaderWindowNotifier,
         },
         crossbeam_channel::{unbounded, Receiver, RecvTimeoutError},
         parking_lot::RwLock as PlRwLock,
@@ -867,7 +848,8 @@ mod tests {
         bank_forks: Arc<RwLock<BankForks>>,
         my_bls_keypair: BLSKeypair,
         timer_manager: Arc<PlRwLock<TimerManager>>,
-        leader_window_notifier: Arc<LeaderWindowNotifier>,
+        leader_window_info_receiver: Receiver<LeaderWindowInfo>,
+        highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
         drop_bank_receiver: Receiver<Vec<BankWithScheduler>>,
         cluster_info: Arc<ClusterInfo>,
         consensus_metrics_receiver: ConsensusMetricsEventReceiver,
@@ -881,6 +863,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let (event_sender, event_receiver) = unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
+        let (leader_window_info_sender, leader_window_info_receiver) = unbounded();
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
@@ -920,15 +903,16 @@ mod tests {
             )
             .unwrap(),
         );
+        let highest_parent_ready = Arc::new(RwLock::default());
 
-        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
         let shared_context = SharedContext {
             cluster_info: cluster_info.clone(),
             bank_forks: bank_forks.clone(),
             vote_history_storage: Arc::new(FileVoteHistoryStorage::default()),
-            leader_window_notifier: leader_window_notifier.clone(),
+            leader_window_info_sender,
             blockstore,
             rpc_subscriptions: None,
+            highest_parent_ready: highest_parent_ready.clone(),
         };
 
         let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);
@@ -977,10 +961,11 @@ mod tests {
             bank_forks,
             my_bls_keypair,
             timer_manager,
-            leader_window_notifier,
+            leader_window_info_receiver,
             drop_bank_receiver,
             cluster_info,
             consensus_metrics_receiver,
+            highest_parent_ready,
         }
     }
 
@@ -1186,14 +1171,7 @@ mod tests {
     }
 
     fn check_parent_ready_slot(test_context: &EventHandlerTestContext, expected: (Slot, Block)) {
-        assert_eq!(
-            *test_context
-                .leader_window_notifier
-                .highest_parent_ready
-                .read()
-                .unwrap(),
-            expected
-        );
+        assert_eq!(*test_context.highest_parent_ready.read().unwrap(), expected);
         let slot = expected.0;
         check_timeout_set(test_context, slot);
     }
@@ -1508,46 +1486,28 @@ mod tests {
         // Assume the leader for 1-3 is us, send produce window event
         send_produce_window_event(&test_context, 1, 3, (0, Hash::default()));
 
-        // Check that leader_window_notifier is updated
-        let window_info = test_context
-            .leader_window_notifier
-            .window_info
-            .lock()
+        // Check that leader_window_info is sent via channel
+        let received_leader_window_info = test_context
+            .leader_window_info_receiver
+            .recv_timeout(TEST_SHORT_TIMEOUT)
             .unwrap();
-        let (mut guard, timeout_res) = test_context
-            .leader_window_notifier
-            .window_notification
-            .wait_timeout_while(window_info, TEST_SHORT_TIMEOUT, |wi| wi.is_none())
-            .unwrap();
-        assert!(!timeout_res.timed_out());
-        let received_leader_window_info = guard.take().unwrap();
         assert_eq!(received_leader_window_info.start_slot, 1);
         assert_eq!(received_leader_window_info.end_slot, 3);
         assert_eq!(
             received_leader_window_info.parent_block,
             (0, Hash::default())
         );
-        drop(guard);
 
         // Suddenly I found out I produced block 1 already, send new produce window event
         let block_id_1 = Hash::new_unique();
         send_produce_window_event(&test_context, 2, 3, (1, block_id_1));
-        let window_info = test_context
-            .leader_window_notifier
-            .window_info
-            .lock()
+        let received_leader_window_info = test_context
+            .leader_window_info_receiver
+            .recv_timeout(TEST_SHORT_TIMEOUT)
             .unwrap();
-        let (mut guard, timeout_res) = test_context
-            .leader_window_notifier
-            .window_notification
-            .wait_timeout_while(window_info, TEST_SHORT_TIMEOUT, |wi| wi.is_none())
-            .unwrap();
-        assert!(!timeout_res.timed_out());
-        let received_leader_window_info = guard.take().unwrap();
         assert_eq!(received_leader_window_info.start_slot, 2);
         assert_eq!(received_leader_window_info.end_slot, 3);
         assert_eq!(received_leader_window_info.parent_block, (1, block_id_1));
-        drop(guard);
 
         test_context.exit.store(true, Ordering::Relaxed);
         test_context.event_handler.join().unwrap();

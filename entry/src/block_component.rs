@@ -55,6 +55,8 @@
 /// ### BlockFooterV1 Layout
 /// ```text
 /// ┌─────────────────────────────────────────┐
+/// │ Bank Hash                   (32 bytes)  │
+/// ├─────────────────────────────────────────┤
 /// │ Producer Time Nanos          (8 bytes)  │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Length            (1 byte)   │
@@ -80,15 +82,34 @@
 /// │ Parent Block ID             (32 bytes)  │
 /// └─────────────────────────────────────────┘
 /// ```
+///
+/// ### GenesisCertificate Layout
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Genesis Slot                  (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Genesis Block ID             (32 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ BLS Signature               (192 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap length (max 512)       (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap                (up to 512 bytes) │
+/// └─────────────────────────────────────────┘
+/// ```
 use {
     crate::entry::Entry,
     serde::{
         de::{self, Visitor},
         Deserialize, Deserializer, Serialize, Serializer,
     },
+    solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     std::{error::Error, fmt},
 };
 
@@ -186,6 +207,7 @@ impl From<bincode::Error> for BlockComponentError {
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum BlockComponent {
     EntryBatch(Vec<Entry>),
     BlockMarker(VersionedBlockMarker),
@@ -226,10 +248,12 @@ pub enum VersionedBlockMarker {
 /// The byte length field indicates the size of the variant data that follows,
 /// allowing for proper parsing even if unknown variants are encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
     BlockHeader(VersionedBlockHeader),
     UpdateParent(VersionedUpdateParent),
+    GenesisCertificate(GenesisCertificate),
 }
 
 // ============================================================================
@@ -260,6 +284,8 @@ pub enum VersionedBlockFooter {
 /// # Serialization Format
 /// ```text
 /// ┌─────────────────────────────────────────┐
+/// │ Bank Hash                   (32 bytes)  │
+/// ├─────────────────────────────────────────┤
 /// │ Producer Time Nanos          (8 bytes)  │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Length            (1 byte)   │
@@ -269,6 +295,7 @@ pub enum VersionedBlockFooter {
 /// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BlockFooterV1 {
+    pub bank_hash: Hash,
     pub block_producer_time_nanos: u64,
     pub skip_reward_certificate: Option<SkipRewardCertificate>,
     pub notar_reward_certificate: Option<NotarRewardCertificate>,
@@ -347,6 +374,33 @@ pub enum VersionedUpdateParent {
 pub struct UpdateParentV1 {
     pub new_parent_slot: Slot,
     pub new_parent_block_id: Hash,
+}
+
+// ============================================================================
+// Genesis Certificate
+// ============================================================================
+/// Genesis certificate
+///
+/// # Serialization Format
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Genesis Slot                  (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Genesis Block ID             (32 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ BLS Signature               (192 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap length (max 512)       (8 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap                (up to 512 bytes) │
+/// └─────────────────────────────────────────┘
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct GenesisCertificate {
+    pub slot: Slot,
+    pub block_id: Hash,
+    pub bls_signature: BLSSignature,
+    pub bitmap: Vec<u8>,
 }
 
 // ============================================================================
@@ -833,6 +887,7 @@ impl BlockMarkerV1 {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
             Self::BlockHeader(header) => (1_u8, header.to_bytes()?),
             Self::UpdateParent(update) => (2_u8, update.to_bytes()?),
+            Self::GenesisCertificate(certificate) => (3_u8, certificate.to_bytes()?),
         };
 
         write_variant_with_length(variant_id, &data_bytes)
@@ -852,6 +907,9 @@ impl BlockMarkerV1 {
             2 => Ok(Self::UpdateParent(VersionedUpdateParent::from_bytes(
                 payload,
             )?)),
+            3 => Ok(Self::GenesisCertificate(GenesisCertificate::from_bytes(
+                payload,
+            )?)),
             _ => Err(BlockComponentError::UnknownVariant {
                 variant_type: "BlockMarkerV1".to_string(),
                 id: variant_id,
@@ -865,6 +923,7 @@ impl BlockMarkerV1 {
             Self::BlockFooter(footer) => footer.serialized_size(),
             Self::BlockHeader(header) => header.serialized_size(),
             Self::UpdateParent(update) => update.serialized_size(),
+            Self::GenesisCertificate(certificate) => certificate.serialized_size(),
         };
         Self::VARIANT_ID_SIZE + Self::LENGTH_FIELD_SIZE + data_size
     }
@@ -913,12 +972,24 @@ impl<'de> Deserialize<'de> for BlockMarkerV1 {
 impl BlockFooterV1 {
     /// Maximum length for user agent bytes.
     const MAX_USER_AGENT_LEN: usize = 255;
+    /// Size in bytes of the hash field.
+    const HASH_SIZE: usize = 32;
     /// Size in bytes of the timestamp field.
     const TIMESTAMP_SIZE: usize = 8;
     /// Size in bytes of the user agent length field.
     const LENGTH_SIZE: usize = 1;
-    /// Combined size of timestamp and length fields.
-    const HEADER_SIZE: usize = Self::TIMESTAMP_SIZE + Self::LENGTH_SIZE;
+    /// Combined size of hash, timestamp and length fields.
+    const HEADER_SIZE: usize = Self::HASH_SIZE + Self::TIMESTAMP_SIZE + Self::LENGTH_SIZE;
+
+    // Field offsets for deserialization
+    /// Offset where bank hash starts.
+    const BANK_HASH_OFFSET: usize = 0;
+    /// Offset where timestamp starts.
+    const TIMESTAMP_OFFSET: usize = Self::BANK_HASH_OFFSET + Self::HASH_SIZE;
+    /// Offset where user agent length byte is located.
+    const USER_AGENT_LEN_OFFSET: usize = Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE;
+    /// Offset where user agent bytes start.
+    const USER_AGENT_OFFSET: usize = Self::USER_AGENT_LEN_OFFSET + Self::LENGTH_SIZE;
 
     /// Returns the version for this struct.
     pub const fn version(&self) -> u8 {
@@ -927,8 +998,15 @@ impl BlockFooterV1 {
 
     /// Serializes to bytes with user agent length capping.
     fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        let mut buffer =
-            Vec::with_capacity(8 + 1 + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN));
+        let mut buffer = Vec::with_capacity(
+            Self::HASH_SIZE
+                + Self::TIMESTAMP_SIZE
+                + Self::LENGTH_SIZE
+                + self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN),
+        );
+
+        // Serialize bank hash
+        buffer.extend_from_slice(self.bank_hash.as_ref());
 
         // Serialize timestamp
         buffer.extend_from_slice(&self.block_producer_time_nanos.to_le_bytes());
@@ -942,38 +1020,54 @@ impl BlockFooterV1 {
     }
 
     /// Deserializes from bytes with validation.
-    fn from_bytes(_data: &[u8]) -> Result<Self, BlockComponentError> {
+    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         if data.len() < Self::HEADER_SIZE {
             return Err(BlockComponentError::InsufficientData);
         }
 
+        // Read bank hash
+        let hash_bytes: [u8; 32] = data
+            [Self::BANK_HASH_OFFSET..Self::BANK_HASH_OFFSET + Self::HASH_SIZE]
+            .try_into()
+            .map_err(|_| BlockComponentError::InsufficientData)?;
+        let bank_hash = Hash::new_from_array(hash_bytes);
+
         // Read timestamp
-        // Unwrap: HEADER_SIZE = TIMESTAMP_SIZE + USER_AGENT_LEN_SIZE > TIMESTAMP_SIZE, so this will
-        // never fail.
-        let time_bytes = data[..Self::TIMESTAMP_SIZE].try_into().unwrap();
+        let time_bytes = data
+            [Self::TIMESTAMP_OFFSET..Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE]
+            .try_into()
+            .map_err(|_| BlockComponentError::InsufficientData)?;
         let block_producer_time_nanos = u64::from_le_bytes(time_bytes);
 
         // Read user agent length
-        let user_agent_len = data[Self::TIMESTAMP_SIZE] as usize;
+        let user_agent_len = data[Self::USER_AGENT_LEN_OFFSET] as usize;
 
         // Validate remaining data size
-        if data.len() < Self::HEADER_SIZE + user_agent_len {
+        if data.len() < Self::USER_AGENT_OFFSET + user_agent_len {
             return Err(BlockComponentError::InsufficientData);
         }
 
         // Read user agent bytes
-        let block_user_agent = data[Self::HEADER_SIZE..Self::HEADER_SIZE + user_agent_len].to_vec();
+        let block_user_agent =
+            data[Self::USER_AGENT_OFFSET..Self::USER_AGENT_OFFSET + user_agent_len].to_vec();
 
         Ok(Self {
+            bank_hash,
             block_producer_time_nanos,
             block_user_agent,
+            // XXX: actually deserialize the rewards
+            skip_reward_certificate: None,
+            notar_reward_certificate: None,
         })
     }
 
     /// Returns the serialized size in bytes without actually serializing.
     fn serialized_size(&self) -> u64 {
         let user_agent_size = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN) as u64;
-        Self::HEADER_SIZE as u64 + user_agent_size
+        Self::HASH_SIZE as u64
+            + Self::TIMESTAMP_SIZE as u64
+            + Self::LENGTH_SIZE as u64
+            + user_agent_size
     }
 }
 
@@ -1313,6 +1407,89 @@ impl<'de> Deserialize<'de> for VersionedUpdateParent {
     }
 }
 
+// ============================================================================
+// GenesisCertificate Implementation
+// ============================================================================
+
+impl GenesisCertificate {
+    /// Maximum allowed size for the validator bitmap in bytes - corresponds to 4096 validators.
+    pub const MAX_BITMAP_SIZE: usize = 512;
+
+    /// Serializes the certificate to bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+        if self.bitmap.len() > Self::MAX_BITMAP_SIZE {
+            return Err(BlockComponentError::SerializationFailed(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                self.bitmap.len(),
+                Self::MAX_BITMAP_SIZE
+            )));
+        }
+        bincode::serialize(self)
+            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
+    }
+
+    /// Deserializes from bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+        let cert: Self = bincode::deserialize(data)
+            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
+
+        if cert.bitmap.len() > Self::MAX_BITMAP_SIZE {
+            return Err(BlockComponentError::DeserializationFailed(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                cert.bitmap.len(),
+                Self::MAX_BITMAP_SIZE
+            )));
+        }
+
+        Ok(cert)
+    }
+
+    /// Returns the serialized size in bytes without actually serializing.
+    pub fn serialized_size(&self) -> u64 {
+        // 8 (slot) + 32 (hash) + 192 (BLS signature) + 8 (bitmap length) + bitmap length
+        std::mem::size_of::<Slot>() as u64
+            + solana_hash::HASH_BYTES as u64
+            + solana_bls_signatures::BLS_SIGNATURE_AFFINE_SIZE as u64
+            + std::mem::size_of::<usize>() as u64
+            + self.bitmap.len() as u64
+    }
+}
+
+impl TryFrom<Certificate> for GenesisCertificate {
+    type Error = String;
+
+    fn try_from(cert: Certificate) -> Result<Self, Self::Error> {
+        let CertificateType::Genesis(slot, block_id) = cert.cert_type else {
+            return Err("Invalid certificate type".to_string());
+        };
+
+        if cert.bitmap.len() > GenesisCertificate::MAX_BITMAP_SIZE {
+            return Err(format!(
+                "Bitmap size {} exceeds maximum of {} bytes",
+                cert.bitmap.len(),
+                GenesisCertificate::MAX_BITMAP_SIZE
+            ));
+        }
+
+        Ok(Self {
+            slot,
+            block_id,
+            bls_signature: cert.signature,
+            bitmap: cert.bitmap,
+        })
+    }
+}
+
+impl From<GenesisCertificate> for Certificate {
+    fn from(cert: GenesisCertificate) -> Self {
+        Self {
+            cert_type: CertificateType::Genesis(cert.slot, cert.block_id),
+            signature: cert.bls_signature,
+            bitmap: cert.bitmap,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, solana_hash::Hash, std::iter::repeat_n};
@@ -1331,7 +1508,7 @@ mod tests {
     fn create_parent_ready_update() -> UpdateParentV1 {
         UpdateParentV1 {
             new_parent_slot: 42,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_from_array([96u8; 32]),
         }
     }
 
@@ -1364,6 +1541,7 @@ mod tests {
     #[test]
     fn test_block_component_marker() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -1380,6 +1558,7 @@ mod tests {
     #[test]
     fn test_block_footer_v1_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"my-validator-v2.0".to_vec(),
         };
@@ -1388,11 +1567,14 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        // Verify bank hash round-trips correctly
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_empty_user_agent() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: Vec::new(),
         };
@@ -1401,11 +1583,13 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_max_user_agent() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5555555555,
             block_user_agent: vec![b'x'; 255],
         };
@@ -1414,11 +1598,13 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
     fn test_block_footer_v1_oversized_user_agent_truncation() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7777777777,
             block_user_agent: vec![b'y'; 300], // Over 255 limit
         };
@@ -1427,6 +1613,7 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         // Should be truncated to 255 bytes
+        assert_eq!(deserialized.bank_hash, footer.bank_hash);
         assert_eq!(deserialized.block_producer_time_nanos, 7777777777);
         assert_eq!(deserialized.block_user_agent.len(), 255);
         assert_eq!(deserialized.block_user_agent, vec![b'y'; 255]);
@@ -1435,6 +1622,7 @@ mod tests {
     #[test]
     fn test_block_footer_v1_binary_user_agent() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1111111111,
             block_user_agent: vec![0x00, 0xFF, 0x7F, 0x80, 0x01, 0xFE],
         };
@@ -1443,6 +1631,7 @@ mod tests {
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
     #[test]
@@ -1459,15 +1648,20 @@ mod tests {
     #[test]
     fn test_versioned_block_footer_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 2468135790,
             block_user_agent: b"node-v2.1.0".to_vec(),
         };
-        let versioned = VersionedBlockFooter::new(footer);
+        let versioned = VersionedBlockFooter::new(footer.clone());
 
         let bytes = versioned.to_bytes().unwrap();
         let deserialized = VersionedBlockFooter::from_bytes(&bytes).unwrap();
 
         assert_eq!(versioned, deserialized);
+        // Verify bank hash is correctly preserved
+        if let VersionedBlockFooter::Current(deserialized_footer) = deserialized {
+            assert_eq!(footer.bank_hash, deserialized_footer.bank_hash);
+        }
     }
 
     #[test]
@@ -1500,6 +1694,7 @@ mod tests {
     #[test]
     fn test_block_marker_v1_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 3692581470,
             block_user_agent: b"validator-client".to_vec(),
         };
@@ -1542,6 +1737,7 @@ mod tests {
     #[test]
     fn test_versioned_block_marker_v1_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: b"my-node".to_vec(),
         };
@@ -1586,6 +1782,7 @@ mod tests {
     #[test]
     fn test_block_component_marker_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5432109876,
             block_user_agent: b"blockchain-node-v3".to_vec(),
         };
@@ -1615,6 +1812,7 @@ mod tests {
     #[test]
     fn test_block_component_serde_marker() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1122334455,
             block_user_agent: b"serde-test".to_vec(),
         };
@@ -1632,6 +1830,7 @@ mod tests {
     #[test]
     fn test_versioned_block_marker_version_upgrade() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 6677889900,
             block_user_agent: b"upgrade-test".to_vec(),
         };
@@ -1649,6 +1848,7 @@ mod tests {
     #[test]
     fn test_versioned_block_footer_version_upgrade() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7788990011,
             block_user_agent: b"footer-upgrade".to_vec(),
         };
@@ -1685,6 +1885,7 @@ mod tests {
 
         // Manually append marker data (this should cause deserialization to fail)
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456,
             block_user_agent: b"bad-data".to_vec(),
         };
@@ -1744,6 +1945,91 @@ mod tests {
     }
 
     #[test]
+    fn test_genesis_certificate_serialization() {
+        use solana_bls_signatures::Signature as BLSSignature;
+
+        // Test with various bitmap sizes
+        let test_cases = vec![vec![0u8; 0], vec![2u8; 100], vec![3u8; 512], vec![4u8; 513]];
+
+        for bitmap in test_cases {
+            let slot = 12345u64;
+            let block_id = Hash::new_unique();
+            let bls_signature = BLSSignature::default();
+
+            let cert = GenesisCertificate {
+                slot,
+                block_id,
+                bls_signature,
+                bitmap: bitmap.clone(),
+            };
+
+            if cert.bitmap.len() > GenesisCertificate::MAX_BITMAP_SIZE {
+                assert!(
+                    cert.to_bytes().is_err(),
+                    "Should fail to create certificate with oversized bitmap"
+                );
+                continue;
+            }
+
+            // Test direct serialization of GenesisCertificate
+            let bytes = cert.to_bytes().expect("Should serialize successfully");
+
+            let deserialized =
+                GenesisCertificate::from_bytes(&bytes).expect("Should deserialize successfully");
+
+            assert_eq!(cert.slot, deserialized.slot);
+            assert_eq!(cert.block_id, deserialized.block_id);
+            assert_eq!(cert.bls_signature, deserialized.bls_signature);
+            assert_eq!(cert.bitmap, deserialized.bitmap);
+
+            let calculated_size = cert.serialized_size();
+            let actual_size = bytes.len() as u64;
+            assert_eq!(calculated_size as i64, actual_size as i64);
+
+            // Test as part of BlockComponent
+            let marker = BlockMarkerV1::GenesisCertificate(cert);
+            let versioned_marker = VersionedBlockMarker::Current(marker);
+            let component = BlockComponent::BlockMarker(versioned_marker);
+
+            let bytes = component
+                .to_bytes()
+                .expect("Should serialize BlockComponent");
+
+            let components = BlockComponent::from_bytes_multiple(&bytes)
+                .expect("Should deserialize BlockComponent");
+            assert_eq!(components.len(), 1);
+
+            match &components[0] {
+                BlockComponent::BlockMarker(VersionedBlockMarker::Current(
+                    BlockMarkerV1::GenesisCertificate(deserialized),
+                )) => {
+                    assert_eq!(deserialized.slot, slot);
+                    assert_eq!(deserialized.block_id, block_id);
+                    assert_eq!(deserialized.bls_signature, bls_signature);
+                    assert_eq!(deserialized.bitmap, bitmap);
+                }
+                _ => panic!("Wrong component type deserialized"),
+            }
+        }
+
+        // Test that oversized bitmap fails during deserialization
+        let oversized_cert = GenesisCertificate {
+            slot: 999,
+            block_id: Hash::new_unique(),
+            bls_signature: BLSSignature::default(),
+            bitmap: vec![255u8; 600], // Oversized (> 512)
+        };
+
+        // Force serialize with bincode (bypassing our validation)
+        let forced_bytes = bincode::serialize(&oversized_cert).unwrap();
+
+        // Our from_bytes should catch the oversized bitmap
+        let result = GenesisCertificate::from_bytes(&forced_bytes);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
     fn test_parent_ready_update_v1_malformed_data() {
         // Empty data should fail bincode deserialization
         assert!(UpdateParentV1::from_bytes(&[]).is_err());
@@ -1756,7 +2042,7 @@ mod tests {
         // Valid data should work
         let update = UpdateParentV1 {
             new_parent_slot: 42,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
         let bytes = update.to_bytes().unwrap();
         assert_eq!(bytes.len(), 40); // 8 + 32 bytes
@@ -1890,6 +2176,7 @@ mod tests {
     fn test_block_footer_v1_edge_cases() {
         // Test with maximum timestamp value
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: b"max-time".to_vec(),
         };
@@ -1900,6 +2187,7 @@ mod tests {
 
         // Test with minimum timestamp value
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: b"min-time".to_vec(),
         };
@@ -1910,6 +2198,7 @@ mod tests {
 
         // Test with exactly 255 byte user agent
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: (0..=254).collect::<Vec<u8>>(),
         };
@@ -1962,7 +2251,7 @@ mod tests {
         // Test with zero slot value
         let header = BlockHeaderV1 {
             parent_slot: 0,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
 
         let bytes = header.to_bytes().unwrap();
@@ -1983,7 +2272,7 @@ mod tests {
         // Valid data should work
         let header = BlockHeaderV1 {
             parent_slot: 42,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         let bytes = header.to_bytes().unwrap();
         assert_eq!(bytes.len(), 40); // 8 + 32 bytes
@@ -2041,7 +2330,7 @@ mod tests {
     fn test_block_header_v1_clone_and_debug() {
         let header = BlockHeaderV1 {
             parent_slot: 12345,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         let cloned_header = header.clone();
 
@@ -2109,7 +2398,7 @@ mod tests {
         // Test with zero slot value
         let update = UpdateParentV1 {
             new_parent_slot: 0,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
 
         let bytes = update.to_bytes().unwrap();
@@ -2121,6 +2410,7 @@ mod tests {
     fn test_version_consistency() {
         // Test that version methods return expected values
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: Vec::new(),
         };
@@ -2131,7 +2421,7 @@ mod tests {
 
         let header = BlockHeaderV1 {
             parent_slot: 789,
-            parent_block_id: Hash::default(),
+            parent_block_id: Hash::new_unique(),
         };
         assert_eq!(header.version(), 1);
 
@@ -2140,7 +2430,7 @@ mod tests {
 
         let update = UpdateParentV1 {
             new_parent_slot: 456,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: Hash::new_unique(),
         };
         assert_eq!(update.version(), 1);
 
@@ -2164,6 +2454,7 @@ mod tests {
     fn test_serde_consistency_across_versions() {
         // Test that serde and manual serialization produce same results
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"serde-test-agent".to_vec(),
         };
@@ -2200,6 +2491,7 @@ mod tests {
     fn test_cross_version_compatibility() {
         // Test that V1 data can be read as Current and vice versa
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 999999999,
             block_user_agent: b"cross-version".to_vec(),
         };
@@ -2234,6 +2526,7 @@ mod tests {
 
         for user_agent in test_cases {
             let footer = BlockFooterV1 {
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 12345,
                 block_user_agent: user_agent.clone(),
             };
@@ -2366,6 +2659,7 @@ mod tests {
     #[test]
     fn test_block_component_new_special() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2408,6 +2702,7 @@ mod tests {
     #[test]
     fn test_block_component_valid_special_only() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2530,6 +2825,7 @@ mod tests {
     #[test]
     fn test_special_entry_v1_block_footer_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2554,6 +2850,7 @@ mod tests {
     #[test]
     fn test_versioned_special_entry_serialization() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2607,6 +2904,7 @@ mod tests {
     #[test]
     fn test_versioned_special_entry_v1_variant() {
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
         };
@@ -2691,7 +2989,7 @@ mod tests {
 
     #[test]
     fn test_boundary_values() {
-        let boundary_update = create_parent_ready_update_with_data(0, Hash::default());
+        let boundary_update = create_parent_ready_update_with_data(0, Hash::new_unique());
         let boundary_versioned = VersionedUpdateParent::new(boundary_update.clone());
 
         let bytes = boundary_versioned.to_bytes().unwrap();
@@ -2756,6 +3054,7 @@ mod tests {
     fn test_byte_length_validation() {
         // Test BlockMarkerV1 with BlockFooter
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456789,
             block_user_agent: b"test-validator".to_vec(),
         };
@@ -2814,6 +3113,7 @@ mod tests {
         // Test with maximum allowed byte length (just under u16::MAX)
         let large_user_agent = vec![b'x'; 255]; // Max user agent size
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: large_user_agent,
         };
@@ -2833,6 +3133,7 @@ mod tests {
 
         // Test with minimum byte length
         let min_footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: vec![],
         };
@@ -2883,6 +3184,7 @@ mod tests {
 
         // Create second component: marker
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"multi-component-test".to_vec(),
         };
@@ -2977,6 +3279,7 @@ mod tests {
 
         // Create BlockFooter marker component
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"test-validator-v2.0".to_vec(),
         };
@@ -3040,6 +3343,7 @@ mod tests {
 
         // Create BlockFooter V1
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 11111,
             block_user_agent: b"node-1".to_vec(),
         };
@@ -3098,6 +3402,7 @@ mod tests {
 
             // Add footer marker
             let footer = BlockFooterV1 {
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: i as u64 * 1000,
                 block_user_agent: format!("node-{i}").into_bytes(),
             };
@@ -3145,6 +3450,7 @@ mod tests {
         let component1 = BlockComponent::new_entry_batch(entries1).unwrap();
 
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 555,
             block_user_agent: b"test".to_vec(),
         };
@@ -3202,6 +3508,7 @@ mod tests {
 
         // Block footer at the end
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"agave/2.0.0".to_vec(),
         };
@@ -3245,6 +3552,7 @@ mod tests {
 
         // Test with marker data (zero count)
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: b"test".to_vec(),
         };
@@ -3281,6 +3589,7 @@ mod tests {
 
         // Test as_versioned_block_marker
         let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 456,
             block_user_agent: b"marker-test".to_vec(),
         };
@@ -3328,6 +3637,7 @@ mod tests {
         let components = vec![
             BlockComponent::new_block_marker(VersionedBlockMarker::new(
                 BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
+                    bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 111,
                     block_user_agent: b"node1".to_vec(),
                 })),
@@ -3366,6 +3676,7 @@ mod tests {
             BlockComponent::new_entry_batch(create_mock_entry_batch(1)).unwrap(),
             BlockComponent::new_block_marker(VersionedBlockMarker::new(
                 BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(BlockFooterV1 {
+                    bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 999,
                     block_user_agent: b"test".to_vec(),
                 })),
@@ -3399,6 +3710,7 @@ mod tests {
         // Test BlockComponent with BlockFooter marker (various user agent sizes)
         for user_agent_len in [0, 10, 100, 255, 300] {
             let footer = BlockFooterV1 {
+                bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 123456789,
                 block_user_agent: vec![b'x'; user_agent_len],
             };
