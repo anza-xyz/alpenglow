@@ -30,6 +30,7 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
+        validated_block_footer::ValidatedBlockFooter,
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
@@ -464,13 +465,15 @@ fn record_and_complete_block(
     let working_bank = w_poh_recorder.working_bank().unwrap();
     let footer = produce_block_footer(working_bank.bank.clone_without_scheduler());
 
+    let footer = ValidatedBlockFooter::new_unchecked_for_block_producer(footer);
+
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
         &footer,
     );
 
     drop(bank);
-    w_poh_recorder.tick_alpenglow(max_tick_height, footer);
+    w_poh_recorder.tick_alpenglow(max_tick_height, footer.into());
 
     Ok(())
 }
