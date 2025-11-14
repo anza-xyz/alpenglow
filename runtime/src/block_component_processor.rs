@@ -1,14 +1,32 @@
 use {
-    crate::bank::Bank,
+    crate::{
+        bank::Bank, epoch_stakes::VersionedEpochStakes,
+        validated_reward_certificate::ValidatedRewardCertificate,
+    },
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
         VersionedBlockMarker,
     },
+    solana_epoch_schedule::EpochSchedule,
     solana_votor_messages::migration::MigrationStatus,
     std::sync::Arc,
     thiserror::Error,
 };
+
+/// Returns total reward, half goes to the validator and half to the leader.
+fn calculate_reward(
+    validator_stake: u64,
+    total_stake: u64,
+    slots_per_epoch: u64,
+    total_supply: u64,
+) -> u64 {
+    // XXX: find proper values below.
+    let epoch_inflation = 1;
+    let per_slot_inflation = total_supply * epoch_inflation / slots_per_epoch;
+    let fractional_stake = validator_stake / total_stake;
+    fractional_stake * per_slot_inflation
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
@@ -121,7 +139,24 @@ impl BlockComponentProcessor {
         };
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
-        Self::update_bank_with_footer(bank, footer);
+
+        let epoch_stakes = bank.epoch_stakes(bank.epoch()).unwrap();
+        let validated_reward_cert = ValidatedRewardCertificate::try_new(
+            epoch_stakes,
+            &footer.skip_reward_certificate,
+            &footer.notar_reward_certificate,
+        )
+        .unwrap();
+        let epoch_schedule = bank.epoch_schedule();
+        let total_supply = bank.capitalization();
+        Self::update_bank_with_footer(
+            bank.clone(),
+            footer,
+            validated_reward_cert,
+            epoch_stakes,
+            epoch_schedule,
+            total_supply,
+        );
 
         self.has_footer = true;
         Ok(())
@@ -189,11 +224,33 @@ impl BlockComponentProcessor {
         (min_working_bank_time, max_working_bank_time)
     }
 
-    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+    pub fn update_bank_with_footer(
+        bank: Arc<Bank>,
+        footer: &BlockFooterV1,
+        validated_reward_cert: ValidatedRewardCertificate,
+        epoch_stakes: &VersionedEpochStakes,
+        epoch_schedule: &EpochSchedule,
+        total_supply: u64,
+    ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
-        // TODO: rewards
+        let vote_accounts = epoch_stakes.stakes().vote_accounts().as_ref();
+        let total_stake = epoch_stakes.total_stake();
+        for validator in validated_reward_cert.into_validators() {
+            // XXX: find which validators got no rewards so they can be removed.
+            let (validator_stake, _) = vote_accounts.get(&validator).unwrap();
+            let reward = calculate_reward(
+                *validator_stake,
+                total_stake,
+                epoch_schedule.slots_per_epoch,
+                total_supply,
+            );
+            let validator_reward = reward / 2;
+            let _leader_reward = reward / 2;
+
+            bank.pay_vote_reward(validator, validator_reward);
+        }
     }
 }
 
