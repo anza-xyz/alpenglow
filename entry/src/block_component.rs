@@ -103,7 +103,7 @@ use {
         de::{self, Visitor},
         Deserialize, Deserializer, Serialize, Serializer,
     },
-    solana_bls_signatures::Signature as BLSSignature,
+    solana_bls_signatures::{Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed},
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::consensus_message::{Certificate, CertificateType},
@@ -287,6 +287,10 @@ pub enum VersionedBlockFooter {
 /// │ User Agent Length            (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Bytes          (0-255 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Final cert Length             (2 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Final cert Data           (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -294,7 +298,52 @@ pub struct BlockFooterV1 {
     pub bank_hash: Hash,
     pub block_producer_time_nanos: u64,
     pub block_user_agent: Vec<u8>,
+    pub final_cert: Option<FinalCertificate>,
 }
+
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct FinalCertificate {
+    pub slot: Slot,
+    pub block_id: Hash,
+    pub final_aggregate: VotesAggregate,
+    pub notar_aggregate: Option<VotesAggregate>,
+}
+
+impl FinalCertificate {
+    pub fn from_bytes(data: &[u8]) -> Result<Option<Self>, BlockComponentError> {
+        if data.is_empty() {
+            Ok(None)
+        } else {
+            let cert: FinalCertificate = bincode::deserialize(data)
+                .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
+            Ok(Some(cert))
+        }
+    }
+
+    pub fn serialized_size(&self) -> u64 {
+        bincode::serialized_size(self).unwrap_or(0)
+    }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_for_test() -> FinalCertificate {
+        FinalCertificate {
+            slot: 1234567890,
+            block_id: Hash::new_from_array([1u8; 32]),
+            final_aggregate: VotesAggregate {
+                signature: BLSSignatureCompressed::default(),
+                bitmap: vec![42; 64],
+            },
+            notar_aggregate: None,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct VotesAggregate {
+    signature: BLSSignatureCompressed,
+    bitmap: Vec<u8>,
+}
+
 
 // ============================================================================
 // Block Header Types
@@ -984,6 +1033,8 @@ impl BlockFooterV1 {
     const USER_AGENT_LEN_OFFSET: usize = Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE;
     /// Offset where user agent bytes start.
     const USER_AGENT_OFFSET: usize = Self::USER_AGENT_LEN_OFFSET + Self::LENGTH_SIZE;
+    /// We use u16 for length of final certificate
+    const FINAL_CERT_LENGTH_SIZE: usize = 2;
 
     /// Returns the version for this struct.
     pub const fn version(&self) -> u8 {
@@ -1009,6 +1060,25 @@ impl BlockFooterV1 {
         let capped_len = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN);
         buffer.push(capped_len as u8);
         buffer.extend_from_slice(&self.block_user_agent[..capped_len]);
+    
+        // Serialize final certificate if present, add a byte of 1 if present, otherwise a byte of 0
+        if let Some(final_cert) = &self.final_cert {
+            let cert_size: u16 = final_cert
+                .serialized_size()
+                .try_into()
+                .map_err(|_| BlockComponentError::DataLengthOverflow)?;
+            let cert_size_bytes = cert_size.to_le_bytes();
+            if cert_size_bytes.len() != Self::FINAL_CERT_LENGTH_SIZE {
+                return Err(BlockComponentError::DataLengthOverflow);
+            }
+            buffer.extend_from_slice(&cert_size_bytes);
+            let cert_bytes = bincode::serialize(final_cert)
+                .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?;
+            buffer.extend_from_slice(&cert_bytes);
+        } else {
+            // Push 2 bytes of 0 to indicate absence of final certificate
+            buffer.extend_from_slice(&[0; Self::FINAL_CERT_LENGTH_SIZE]);
+        }
 
         Ok(buffer)
     }
@@ -1045,20 +1115,43 @@ impl BlockFooterV1 {
         let block_user_agent =
             data[Self::USER_AGENT_OFFSET..Self::USER_AGENT_OFFSET + user_agent_len].to_vec();
 
+        // Read final certificate
+        let final_cert_length_start = Self::USER_AGENT_OFFSET + user_agent_len;
+        if data.len() < final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE {
+            return Err(BlockComponentError::InsufficientData);
+        }
+        let final_cert_length = u16::from_le_bytes(
+            data[final_cert_length_start..final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE]
+                .try_into()
+                .map_err(|_| BlockComponentError::InsufficientData)?,
+        ) as usize;
+        // If there is a byte of 0, skip final certificate reading
+        let final_cert_start = final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE;
+        let final_cert = if final_cert_length == 0 {
+            None
+        } else {
+            FinalCertificate::from_bytes(
+                &data[final_cert_start..],
+            )?
+        };
         Ok(Self {
             bank_hash,
             block_producer_time_nanos,
             block_user_agent,
+            final_cert,
         })
     }
 
     /// Returns the serialized size in bytes without actually serializing.
     fn serialized_size(&self) -> u64 {
         let user_agent_size = self.block_user_agent.len().min(Self::MAX_USER_AGENT_LEN) as u64;
+        let final_cert_size = self.final_cert.as_ref().map_or(0, |cert| cert.serialized_size());
         Self::HASH_SIZE as u64
             + Self::TIMESTAMP_SIZE as u64
             + Self::LENGTH_SIZE as u64
             + user_agent_size
+            + Self::FINAL_CERT_LENGTH_SIZE as u64
+            + final_cert_size
     }
 }
 
@@ -1535,6 +1628,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -1552,6 +1646,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"my-validator-v2.0".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -1568,6 +1663,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: Vec::new(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -1583,6 +1679,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5555555555,
             block_user_agent: vec![b'x'; 255],
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -1598,6 +1695,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7777777777,
             block_user_agent: vec![b'y'; 300], // Over 255 limit
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -1616,12 +1714,30 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1111111111,
             block_user_agent: vec![0x00, 0xFF, 0x7F, 0x80, 0x01, 0xFE],
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
         let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
 
         assert_eq!(footer, deserialized);
+        assert_eq!(footer.bank_hash, deserialized.bank_hash);
+    }
+
+    #[test]
+    fn test_block_footer_v1_no_final_cert() {
+        let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
+            block_producer_time_nanos: 1234567890,
+            block_user_agent: b"my-validator-v2.0".to_vec(),
+            final_cert: None,
+        };
+
+        let bytes = footer.to_bytes().unwrap();
+        let deserialized = BlockFooterV1::from_bytes(&bytes).unwrap();
+
+        assert_eq!(footer, deserialized);
+        // Verify bank hash round-trips correctly
         assert_eq!(footer.bank_hash, deserialized.bank_hash);
     }
 
@@ -1642,6 +1758,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 2468135790,
             block_user_agent: b"node-v2.1.0".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let versioned = VersionedBlockFooter::new(footer.clone());
 
@@ -1688,6 +1805,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 3692581470,
             block_user_agent: b"validator-client".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
 
@@ -1731,6 +1849,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 9876543210,
             block_user_agent: b"my-node".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -1776,6 +1895,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 5432109876,
             block_user_agent: b"blockchain-node-v3".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -1806,6 +1926,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1122334455,
             block_user_agent: b"serde-test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -1824,6 +1945,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 6677889900,
             block_user_agent: b"upgrade-test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let v1_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::V1(footer.clone()),
@@ -1842,6 +1964,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 7788990011,
             block_user_agent: b"footer-upgrade".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let v1_footer = VersionedBlockFooter::V1(footer.clone());
 
@@ -1879,6 +2002,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456,
             block_user_agent: b"bad-data".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -2170,6 +2294,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: b"max-time".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -2181,6 +2306,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: b"min-time".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -2192,6 +2318,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: (0..=254).collect::<Vec<u8>>(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         let bytes = footer.to_bytes().unwrap();
@@ -2404,6 +2531,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: Vec::new(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         assert_eq!(footer.version(), 1);
 
@@ -2448,6 +2576,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"serde-test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let versioned_footer = VersionedBlockFooter::new(footer);
 
@@ -2485,6 +2614,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 999999999,
             block_user_agent: b"cross-version".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
 
         // Serialize as V1
@@ -2520,6 +2650,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 12345,
                 block_user_agent: user_agent.clone(),
+                final_cert: Some(FinalCertificate::new_for_test()),
             };
 
             let bytes = footer.to_bytes().unwrap();
@@ -2653,6 +2784,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -2696,6 +2828,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -2819,6 +2952,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
 
@@ -2844,6 +2978,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
         let versioned_entry = VersionedBlockMarker::new(special_entry);
@@ -2898,6 +3033,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 12345,
             block_user_agent: b"test-agent".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let special_entry = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
         let versioned_entry = VersionedBlockMarker::new_v1(special_entry);
@@ -3048,6 +3184,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123456789,
             block_user_agent: b"test-validator".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker_v1 = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
 
@@ -3107,6 +3244,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: u64::MAX,
             block_user_agent: large_user_agent,
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(footer));
 
@@ -3127,6 +3265,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 0,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let min_marker = BlockMarkerV1::BlockFooter(VersionedBlockFooter::new(min_footer));
 
@@ -3178,6 +3317,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"multi-component-test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -3273,6 +3413,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 987654321,
             block_user_agent: b"test-validator-v2.0".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer.clone()),
@@ -3337,6 +3478,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 11111,
             block_user_agent: b"node-1".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -3396,6 +3538,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: i as u64 * 1000,
                 block_user_agent: format!("node-{i}").into_bytes(),
+                final_cert: Some(FinalCertificate::new_for_test()),
             };
             let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
                 VersionedBlockFooter::new(footer),
@@ -3444,6 +3587,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 555,
             block_user_agent: b"test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -3502,6 +3646,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"agave/2.0.0".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let footer_marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer.clone()),
@@ -3546,6 +3691,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 123,
             block_user_agent: b"test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -3583,6 +3729,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 456,
             block_user_agent: b"marker-test".to_vec(),
+            final_cert: Some(FinalCertificate::new_for_test()),
         };
         let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
             VersionedBlockFooter::new(footer),
@@ -3631,6 +3778,7 @@ mod tests {
                     bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 111,
                     block_user_agent: b"node1".to_vec(),
+                    final_cert: Some(FinalCertificate::new_for_test()),
                 })),
             )),
             BlockComponent::new_block_marker(VersionedBlockMarker::new(
@@ -3670,6 +3818,7 @@ mod tests {
                     bank_hash: Hash::new_unique(),
                     block_producer_time_nanos: 999,
                     block_user_agent: b"test".to_vec(),
+                    final_cert: Some(FinalCertificate::new_for_test()),
                 })),
             )),
         ];
@@ -3704,6 +3853,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: 123456789,
                 block_user_agent: vec![b'x'; user_agent_len],
+                final_cert: Some(FinalCertificate::new_for_test()),
             };
             let marker = VersionedBlockMarker::new(BlockMarkerV1::BlockFooter(
                 VersionedBlockFooter::new(footer),

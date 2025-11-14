@@ -396,6 +396,8 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        //TODO(wen): fill in final certificate
+        final_cert: None,
     }
 }
 
