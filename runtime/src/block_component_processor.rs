@@ -1,9 +1,11 @@
 use {
-    crate::bank::Bank,
+    crate::{
+        bank::Bank,
+        validated_block_footer::{ValidatedBlockFooter, ValidatedBlockFooterError},
+    },
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
-        VersionedBlockMarker,
+        BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader, VersionedBlockMarker,
     },
     solana_votor_messages::migration::MigrationStatus,
     std::sync::Arc,
@@ -22,8 +24,8 @@ pub enum BlockComponentProcessorError {
     MultipleBlockHeaders,
     #[error("BlockComponent detected pre-migration")]
     BlockComponentPreMigration,
-    #[error("Nanosecond clock out of bounds")]
-    NanosecondClockOutOfBounds,
+    #[error("invalid block footer")]
+    InvalidBlockFooter(#[from] ValidatedBlockFooterError),
 }
 
 #[derive(Default)]
@@ -119,9 +121,9 @@ impl BlockComponentProcessor {
         let footer = match footer {
             VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
         };
-
-        Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
-        Self::update_bank_with_footer(bank, footer);
+        let validated_block_footer =
+            ValidatedBlockFooter::try_new(&parent_bank, &bank, footer.clone())?;
+        Self::update_bank_with_footer(bank, &validated_block_footer);
 
         self.has_footer = true;
         Ok(())
@@ -137,34 +139,6 @@ impl BlockComponentProcessor {
 
         self.has_header = true;
         Ok(())
-    }
-
-    fn enforce_nanosecond_clock_bounds(
-        bank: Arc<Bank>,
-        parent_bank: Arc<Bank>,
-        footer: &BlockFooterV1,
-    ) -> Result<(), BlockComponentProcessorError> {
-        // Get parent time from nanosecond clock account
-        // If nanosecond clock hasn't been populated, don't enforce the bounds; note that the
-        // nanosecond clock is populated as soon as Alpenglow migration is complete.
-        let Some(parent_time_nanos) = parent_bank.get_nanosecond_clock() else {
-            return Ok(());
-        };
-
-        let parent_slot = parent_bank.slot();
-        let current_time_nanos = footer.block_producer_time_nanos as i64;
-        let current_slot = bank.slot();
-
-        let (lower_bound_nanos, upper_bound_nanos) =
-            Self::nanosecond_time_bounds(parent_slot, parent_time_nanos, current_slot);
-
-        let is_valid =
-            lower_bound_nanos <= current_time_nanos && current_time_nanos <= upper_bound_nanos;
-
-        match is_valid {
-            true => Ok(()),
-            false => Err(BlockComponentProcessorError::NanosecondClockOutOfBounds),
-        }
     }
 
     /// Given the parent slot, parent time, and slot, calculate the lower and upper
@@ -189,9 +163,9 @@ impl BlockComponentProcessor {
         (min_working_bank_time, max_working_bank_time)
     }
 
-    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &ValidatedBlockFooter) {
         // Update clock sysvar
-        bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
+        bank.update_clock_from_footer(footer.block_producer_time_ns());
 
         // TODO: rewards
     }
