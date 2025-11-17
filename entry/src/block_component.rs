@@ -492,6 +492,32 @@ impl BlockComponent {
     pub fn infer_is_block_marker(data: &[u8]) -> Option<bool> {
         Self::infer_is_entry_batch(data).map(|is_entry_batch| !is_entry_batch)
     }
+
+    /// Parse a `BlockHeader` marker from a data-shred payload.
+    pub fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
+        let component: BlockComponent = wincode::deserialize(data).ok()?;
+
+        match component.as_marker()? {
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(versioned_header)) => {
+                let VersionedBlockHeader::V1(header) = versioned_header.inner();
+                Some((header.parent_slot, header.parent_block_id))
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse an `UpdateParent` marker from a data-shred payload.
+    pub fn parse_update_parent_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
+        let component: BlockComponent = wincode::deserialize(data).ok()?;
+
+        match component.as_marker()? {
+            VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(versioned_update)) => {
+                let VersionedUpdateParent::V1(update) = versioned_update.inner();
+                Some((update.new_parent_slot, update.new_parent_block_id))
+            }
+            _ => None,
+        }
+    }
 }
 
 unsafe impl<C: Config> SchemaWrite<C> for BlockComponent {

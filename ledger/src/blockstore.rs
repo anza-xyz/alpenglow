@@ -18,7 +18,7 @@ use {
         next_slots_iterator::NextSlotsIterator,
         shred::{
             self, DATA_SHREDS_PER_FEC_BLOCK, ErasureSetId, ProcessShredsStats, ReedSolomonCache,
-            Shred, ShredId, ShredType, Shredder,
+            Shred, ShredFlags, ShredId, ShredType, Shredder,
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -38,9 +38,7 @@ use {
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{DEFAULT_TICKS_PER_SECOND, Slot, UnixTimestamp},
     solana_entry::{
-        block_component::{
-            BlockComponent, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
-        },
+        block_component::BlockComponent,
         entry::{Entry, MaxDataShredsLen, create_ticks},
     },
     solana_genesis_config::{DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE, GenesisConfig},
@@ -1670,24 +1668,6 @@ impl Blockstore {
         None
     }
 
-    /// Parse BlockHeader from data shred payload
-    fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
-        // Try to deserialize as BlockComponent.
-        let component: BlockComponent = wincode::deserialize(data).ok()?;
-
-        // If we were able to parse the component, it must be a block marker
-        let marker = component.as_marker()?;
-
-        // Check if it's a BlockMarker with BlockHeader
-        match marker {
-            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header)) => {
-                let VersionedBlockHeader::V1(update) = header.inner();
-                Some((update.parent_slot, update.parent_block_id))
-            }
-            _ => None,
-        }
-    }
-
     fn maybe_insert_parent_meta(
         &self,
         current_shred: &Shred,
@@ -1708,7 +1688,7 @@ impl Blockstore {
 
         // Try to parse BlockHeader from the payload
         let Some((parent_slot, parent_block_id)) =
-            Self::parse_block_header_from_data_payload(payload)
+            BlockComponent::parse_block_header_from_data_payload(payload)
         else {
             return;
         };
@@ -1722,6 +1702,80 @@ impl Blockstore {
         parent_meta_working_set
             .entry(slot)
             .or_insert(WorkingEntry::Dirty(parent_meta));
+    }
+
+    fn maybe_insert_update_parent(
+        &self,
+        current_shred: &Shred,
+        slot: Slot,
+        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
+        parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
+    ) -> bool {
+        if parent_meta_working_set
+            .get(&slot)
+            .is_some_and(|meta| meta.as_ref().populated_from_update_parent())
+        {
+            return false;
+        }
+
+        let current_index = current_shred.index();
+        let fec_set_index = current_shred.fec_set_index();
+
+        let (payload_bytes, target_fec_set_index) = if current_shred.data_complete() {
+            // Case A: end of FEC set, check the next FEC set's first shred.
+            let next_fec_set_index = fec_set_index + DATA_SHREDS_PER_FEC_BLOCK as u32;
+            let shred_id = ShredId::new(slot, next_fec_set_index, ShredType::Data);
+            let payload = self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id);
+            (payload, next_fec_set_index)
+        } else if current_index.is_multiple_of(DATA_SHREDS_PER_FEC_BLOCK as u32)
+            && current_index > 0
+        {
+            // Case B: first shred of a FEC set; check whether previous shred completed a set.
+            let prev_shred_index = current_index - 1;
+            let prev_shred_id = ShredId::new(slot, prev_shred_index, ShredType::Data);
+            let prev_payload =
+                self.get_shred_from_just_inserted_or_db(just_inserted_shreds, prev_shred_id);
+
+            let payload = prev_payload
+                .and_then(|prev| shred::wire::get_flags(&prev).ok())
+                .and_then(|flags| {
+                    flags
+                        .contains(ShredFlags::DATA_COMPLETE_SHRED)
+                        .then(|| Cow::Borrowed(current_shred.payload()))
+                });
+            (payload, fec_set_index)
+        } else {
+            return false;
+        };
+
+        let Some(payload_bytes) = payload_bytes else {
+            return false;
+        };
+
+        let Ok(payload) = shred::wire::get_data(&payload_bytes) else {
+            return false;
+        };
+
+        if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
+            return false;
+        }
+
+        let Some((new_parent_slot, new_parent_block_id)) =
+            BlockComponent::parse_update_parent_from_data_payload(payload)
+        else {
+            return false;
+        };
+
+        parent_meta_working_set.insert(
+            slot,
+            WorkingEntry::Dirty(ParentMeta {
+                parent_slot: new_parent_slot,
+                parent_block_id: new_parent_block_id,
+                replay_fec_set_index: target_fec_set_index,
+            }),
+        );
+
+        true
     }
 
     /// Create an entry to the specified `write_batch` that performs shred
@@ -1871,6 +1925,20 @@ impl Blockstore {
             write_batch,
             shred_source,
         )?;
+
+        if shred
+            .index()
+            .is_multiple_of(DATA_SHREDS_PER_FEC_BLOCK as u32)
+            || shred.data_complete()
+        {
+            let _ = self.maybe_insert_update_parent(
+                &shred,
+                slot,
+                just_inserted_shreds,
+                parent_meta_working_set,
+            );
+        }
+
         newly_completed_data_sets.extend(completed_data_sets);
         merkle_root_metas
             .entry(erasure_set)
