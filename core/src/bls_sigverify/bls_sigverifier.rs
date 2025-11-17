@@ -16,6 +16,7 @@ use {
     solana_bls_signatures::{
         pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
         signature::SignatureProjective,
+        Signature as BLSSignature,
     },
     solana_clock::Slot,
     solana_measure::measure::Measure,
@@ -65,8 +66,29 @@ fn aggregate_keys_from_bitmap(
     PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
 }
 
+pub fn verify_base2_certificate(
+    vote: Vote,
+    signature: &BLSSignature,
+    bit_vec: &BitVec<u8, Lsb0>,
+    key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
+) -> Result<(), CertVerifyError> {
+    let Ok(signed_payload) = bincode::serialize(&vote) else {
+        return Err(CertVerifyError::SerializationFailed);
+    };
+
+    let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, key_to_rank_map) else {
+        return Err(CertVerifyError::KeyAggregationFailed);
+    };
+
+    if let Ok(true) = aggregate_bls_pubkey.verify_signature(signature, &signed_payload) {
+        Ok(())
+    } else {
+        Err(CertVerifyError::SignatureVerificationFailed)
+    }
+}
+
 #[derive(Debug, Error, PartialEq)]
-enum CertVerifyError {
+pub enum CertVerifyError {
     #[error("Failed to find key to rank map for slot {0}")]
     KeyToRankMapNotFound(Slot),
 
@@ -567,9 +589,12 @@ impl BLSSigVerifier {
         };
 
         match decoded_bitmap {
-            solana_signer_store::Decoded::Base2(bit_vec) => {
-                self.verify_base2_certificate(cert_to_verify, &bit_vec, key_to_rank_map)?
-            }
+            solana_signer_store::Decoded::Base2(bit_vec) => verify_base2_certificate(
+                cert_to_verify.cert_type.to_source_vote(),
+                &cert_to_verify.signature,
+                &bit_vec,
+                key_to_rank_map,
+            )?,
             solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => self
                 .verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, key_to_rank_map)?,
         }
@@ -580,32 +605,6 @@ impl BLSSigVerifier {
             .insert(cert_to_verify.cert_type);
 
         Ok(())
-    }
-
-    fn verify_base2_certificate(
-        &self,
-        cert_to_verify: &Certificate,
-        bit_vec: &BitVec<u8, Lsb0>,
-        key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-    ) -> Result<(), CertVerifyError> {
-        let original_vote = cert_to_verify.cert_type.to_source_vote();
-
-        let Ok(signed_payload) = bincode::serialize(&original_vote) else {
-            return Err(CertVerifyError::SerializationFailed);
-        };
-
-        let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, key_to_rank_map)
-        else {
-            return Err(CertVerifyError::KeyAggregationFailed);
-        };
-
-        if let Ok(true) =
-            aggregate_bls_pubkey.verify_signature(&cert_to_verify.signature, &signed_payload)
-        {
-            Ok(())
-        } else {
-            Err(CertVerifyError::SignatureVerificationFailed)
-        }
     }
 
     fn verify_base3_certificate(
