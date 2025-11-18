@@ -38,13 +38,13 @@ impl ConsensusRewards {
     /// Returns [`true`] if the rewards container is interested in this vote else [`false`].
     pub fn wants_vote(&self, root_slot: Slot, vote: &VoteMessage) -> bool {
         let vote_slot = vote.vote.slot();
-        if vote_slot + NUM_SLOTS_FOR_REWARD < root_slot {
+        if vote_slot.saturating_add(NUM_SLOTS_FOR_REWARD) < root_slot {
             return false;
         }
         let my_pubkey = self.cluster_info.id();
         let Some(leader) = self
             .leader_schedule_cache
-            .slot_leader_at(vote_slot + NUM_SLOTS_FOR_REWARD, None)
+            .slot_leader_at(vote_slot.saturating_add(NUM_SLOTS_FOR_REWARD), None)
         else {
             return false;
         };
@@ -60,9 +60,11 @@ impl ConsensusRewards {
     /// Adds received [`VoteMessage`]s from other nodes.
     pub fn add_vote_message(&mut self, root_slot: Slot, vote: VoteMessage) {
         // drop old state no longer needed
-        self.votes = self
-            .votes
-            .split_off(&(root_slot + NUM_SLOTS_FOR_REWARD + 1));
+        self.votes = self.votes.split_off(
+            &(root_slot
+                .saturating_add(NUM_SLOTS_FOR_REWARD)
+                .saturating_add(1)),
+        );
 
         // repeat check to prevent TOCTOU issues
         if !self.wants_vote(root_slot, &vote) {

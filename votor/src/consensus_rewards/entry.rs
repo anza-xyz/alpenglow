@@ -14,9 +14,7 @@ use {
 
 /// Builds a signature and bitmap suitable for creating a rewards certificate.
 fn build_sig_bitmap(votes: &BTreeMap<u16, VoteMessage>) -> Option<(BLSSignature, Vec<u8>)> {
-    let Some(max_rank) = votes.last_key_value().map(|(rank, _)| rank).cloned() else {
-        return None;
-    };
+    let max_rank = votes.last_key_value().map(|(rank, _)| rank).cloned()?;
     let mut bitmap = BitVec::repeat(false, max_rank as usize);
     for vote in votes.keys() {
         bitmap.set(*vote as usize, true);
@@ -92,23 +90,21 @@ impl Entry {
         for (block_id, map) in &self.notar {
             match notar {
                 None => notar = Some((block_id, map)),
-                Some((_, ref notar_map)) => {
+                Some((_, notar_map)) => {
                     if map.len() > notar_map.len() {
                         notar = Some((block_id, map));
                     }
                 }
             }
         }
-        let notar = notar
-            .map(|(block_id, votes)| {
-                build_sig_bitmap(votes).map(|(signature, bitmap)| NotarRewardCertificate {
-                    slot,
-                    block_id: *block_id,
-                    signature,
-                    bitmap,
-                })
+        let notar = notar.and_then(|(block_id, votes)| {
+            build_sig_bitmap(votes).map(|(signature, bitmap)| NotarRewardCertificate {
+                slot,
+                block_id: *block_id,
+                signature,
+                bitmap,
             })
-            .flatten();
+        });
         (skip, notar)
     }
 }
