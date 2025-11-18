@@ -950,6 +950,11 @@ pub fn execute(
 
     let tpu_quic_server_config = SwQosQuicStreamerConfig {
         quic_streamer_config: QuicStreamerConfig {
+            max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
+            num_threads: tpu_transaction_receive_threads,
+            ..Default::default()
+        },
+        qos_config: SwQosConfig {
             max_connections_per_unstaked_peer: tpu_max_connections_per_unstaked_peer
                 .try_into()
                 .unwrap(),
@@ -958,15 +963,17 @@ pub fn execute(
                 .unwrap(),
             max_staked_connections: tpu_max_staked_connections.try_into().unwrap(),
             max_unstaked_connections: tpu_max_unstaked_connections.try_into().unwrap(),
-            max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
-            num_threads: tpu_transaction_receive_threads,
-            ..Default::default()
+            max_streams_per_ms,
         },
-        qos_config: SwQosConfig { max_streams_per_ms },
     };
 
     let tpu_fwd_quic_server_config = SwQosQuicStreamerConfig {
         quic_streamer_config: QuicStreamerConfig {
+            max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
+            num_threads: tpu_transaction_forward_receive_threads,
+            ..Default::default()
+        },
+        qos_config: SwQosConfig {
             max_connections_per_staked_peer: tpu_max_connections_per_staked_peer
                 .try_into()
                 .unwrap(),
@@ -975,38 +982,33 @@ pub fn execute(
                 .unwrap(),
             max_staked_connections: tpu_max_fwd_staked_connections.try_into().unwrap(),
             max_unstaked_connections: tpu_max_fwd_unstaked_connections.try_into().unwrap(),
-            max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
-            num_threads: tpu_transaction_forward_receive_threads,
-            ..Default::default()
+            max_streams_per_ms,
         },
-        qos_config: SwQosConfig { max_streams_per_ms },
     };
 
     let vote_quic_server_config = SimpleQosQuicStreamerConfig {
         quic_streamer_config: QuicStreamerConfig {
-            max_connections_per_unstaked_peer: 1,
-            max_staked_connections: tpu_max_fwd_staked_connections.try_into().unwrap(),
             max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
             num_threads: tpu_vote_transaction_receive_threads,
             ..Default::default()
         },
         qos_config: SimpleQosConfig {
             max_streams_per_second: MAX_VOTES_PER_SECOND,
+            ..Default::default()
         },
     };
 
     // Alpenglow quic config, accept 1 connection per peer and no unstaked connections.
     let alpenglow_quic_server_config = SimpleQosQuicStreamerConfig {
         quic_streamer_config: QuicStreamerConfig {
-            max_connections_per_peer: 1,
-            max_staked_connections: tpu_max_alpenglow_connections.try_into().unwrap(),
-            max_unstaked_connections: 0,
             max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
             num_threads: tpu_alpenglow_receive_threads,
             ..Default::default()
         },
         qos_config: SimpleQosConfig {
             max_streams_per_second: max_streams_per_ms * 1000,
+            max_staked_connections: tpu_max_alpenglow_connections.try_into().unwrap(),
+            max_connections_per_peer: 1,
         },
     };
 
