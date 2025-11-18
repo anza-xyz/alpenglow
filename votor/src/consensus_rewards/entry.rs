@@ -9,12 +9,14 @@ use {
         rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
         vote::Vote,
     },
-    std::collections::BTreeMap,
+    std::collections::HashMap,
 };
 
 /// Builds a signature and bitmap suitable for creating a rewards certificate.
-fn build_sig_bitmap(votes: &BTreeMap<u16, VoteMessage>) -> Option<(BLSSignature, Vec<u8>)> {
-    let max_rank = votes.last_key_value().map(|(rank, _)| rank).cloned()?;
+fn build_sig_bitmap(
+    votes: &HashMap<u16, VoteMessage>,
+    max_rank: u16,
+) -> Option<(BLSSignature, Vec<u8>)> {
     let mut bitmap = BitVec::repeat(false, max_rank as usize);
     for vote in votes.keys() {
         bitmap.set(*vote as usize, true);
@@ -29,20 +31,35 @@ fn build_sig_bitmap(votes: &BTreeMap<u16, VoteMessage>) -> Option<(BLSSignature,
 }
 
 /// Per slot container for storing notar and skip votes for creating rewards certificates.
-#[derive(Default)]
 pub(super) struct Entry {
-    /// map from validator rank to the skip vote.
-    skip: BTreeMap<u16, VoteMessage>,
-    /// notar votes are indexed by block id as different validators may vote for different blocks.
-    notar: BTreeMap<Hash, BTreeMap<u16, VoteMessage>>,
+    /// Map from validator rank to the skip vote.
+    skip: HashMap<u16, VoteMessage>,
+    /// Largest ranked validator that voted skip.
+    skip_max_rank: u16,
+    /// Notar votes are indexed by block id as different validators may vote for different blocks.
+    /// Per block id, store a map from validator rank to notar vote and also the largest ranked validator that voted notar.
+    notar: HashMap<Hash, (HashMap<u16, VoteMessage>, u16)>,
+    /// Maximum number of validators for the slot this entry is working on.
+    max_validators: usize,
 }
 
 impl Entry {
+    /// Creates a new instance of [`Entry`].
+    pub(super) fn new(max_validators: usize) -> Self {
+        Self {
+            skip: HashMap::with_capacity(max_validators),
+            skip_max_rank: 0,
+            // under normal operations, all validators should vote for a single block id, still allocate space for a few more to hopefully avoid allocations.
+            notar: HashMap::with_capacity(5),
+            max_validators,
+        }
+    }
+
     pub(super) fn wants_vote(&self, vote: &VoteMessage) -> bool {
         match vote.vote {
             Vote::Skip(_) => !self.skip.contains_key(&vote.rank),
             Vote::Notarize(notar) => {
-                let Some(notar) = self.notar.get(&notar.block_id) else {
+                let Some((notar, _)) = self.notar.get(&notar.block_id) else {
                     return true;
                 };
                 !notar.contains_key(&vote.rank)
@@ -57,13 +74,16 @@ impl Entry {
     pub(super) fn add_vote(&mut self, vote: VoteMessage) {
         match vote.vote {
             Vote::Notarize(notar) => {
-                self.notar
+                let (map, max_rank) = self
+                    .notar
                     .entry(notar.block_id)
-                    .or_default()
-                    .insert(vote.rank, vote);
+                    .or_insert((HashMap::with_capacity(self.max_validators), 0));
+                map.insert(vote.rank, vote);
+                *max_rank = (*max_rank).max(vote.rank);
             }
             Vote::Skip(_) => {
                 self.skip.insert(vote.rank, vote);
+                self.skip_max_rank = self.skip_max_rank.max(vote.rank);
             }
             _ => (),
         }
@@ -76,10 +96,12 @@ impl Entry {
         Option<SkipRewardCertificate>,
         Option<NotarRewardCertificate>,
     ) {
-        let skip = build_sig_bitmap(&self.skip).map(|(signature, bitmap)| SkipRewardCertificate {
-            slot,
-            signature,
-            bitmap,
+        let skip = build_sig_bitmap(&self.skip, self.skip_max_rank).map(|(signature, bitmap)| {
+            SkipRewardCertificate {
+                slot,
+                signature,
+                bitmap,
+            }
         });
 
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
@@ -87,18 +109,18 @@ impl Entry {
         // in practice, all validators should have voted for the same block otherwise, we have evidence of leader equivocation.
         // TODO: collect metrics for when equivocation is detected.
         let mut notar = None;
-        for (block_id, map) in &self.notar {
+        for (block_id, (map, max_rank)) in &self.notar {
             match notar {
-                None => notar = Some((block_id, map)),
-                Some((_, notar_map)) => {
+                None => notar = Some((block_id, map, max_rank)),
+                Some((_, notar_map, _)) => {
                     if map.len() > notar_map.len() {
-                        notar = Some((block_id, map));
+                        notar = Some((block_id, map, max_rank));
                     }
                 }
             }
         }
-        let notar = notar.and_then(|(block_id, votes)| {
-            build_sig_bitmap(votes).map(|(signature, bitmap)| NotarRewardCertificate {
+        let notar = notar.and_then(|(block_id, votes, max_rank)| {
+            build_sig_bitmap(votes, *max_rank).map(|(signature, bitmap)| NotarRewardCertificate {
                 slot,
                 block_id: *block_id,
                 signature,

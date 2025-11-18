@@ -58,7 +58,7 @@ impl ConsensusRewards {
     }
 
     /// Adds received [`VoteMessage`]s from other nodes.
-    pub fn add_vote_message(&mut self, root_slot: Slot, vote: VoteMessage) {
+    pub fn add_vote(&mut self, root_slot: Slot, max_validators: usize, vote: VoteMessage) {
         // drop old state no longer needed
         self.votes = self.votes.split_off(
             &(root_slot
@@ -72,7 +72,7 @@ impl ConsensusRewards {
         }
         self.votes
             .entry(vote.vote.slot())
-            .or_default()
+            .or_insert(Entry::new(max_validators))
             .add_vote(vote);
     }
 

@@ -256,7 +256,10 @@ impl BLSSigVerifier {
             let mut guard = self.consensus_rewards.write();
             let root_slot = root_bank.slot();
             for v in rewards_votes {
-                guard.add_vote_message(root_slot, v);
+                if let Some(rank_map) = get_key_to_rank_map(&root_bank, v.vote.slot()) {
+                    let max_validators = rank_map.len();
+                    guard.add_vote(root_slot, max_validators, v);
+                }
             }
         }
 
@@ -306,7 +309,7 @@ impl BLSSigVerifier {
                 .filter_map(|vote| {
                     guard
                         .wants_vote(root_slot, &vote.vote_message)
-                        .then_some(vote.vote_message.clone())
+                        .then_some(vote.vote_message)
                 })
                 .collect()
         };
