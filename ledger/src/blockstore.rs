@@ -1954,29 +1954,27 @@ impl Blockstore {
         None
     }
 
-    fn maybe_insert_parent_meta(
-        &self,
-        current_shred: &Shred,
-        entry: &mut ParentMetaWorkingSetEntry,
-    ) {
+    fn maybe_parse_block_header(&self, current_shred: &Shred) -> Option<ParentMeta> {
+        // Block headers only occur at index 0
+        if current_shred.index() != 0 {
+            return None;
+        }
+
         // The contents of BlockHeaderV1 entirely fit into a single shred. So, let's just parse the
         // first shred.
         let shred_bytes = current_shred.payload();
         let Ok(payload) = shred::wire::get_data(shred_bytes) else {
-            return;
+            return None;
         };
 
         // Check whether this is a BlockMarker
         if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
-            return;
+            return None;
         }
 
         // Try to parse BlockHeader from the payload
-        let Some((parent_slot, parent_block_id)) =
-            BlockComponent::parse_block_header_from_data_payload(payload)
-        else {
-            return;
-        };
+        let (parent_slot, parent_block_id) =
+            BlockComponent::parse_block_header_from_data_payload(payload)?;
 
         let parent_meta = ParentMeta {
             parent_slot,
@@ -1984,17 +1982,16 @@ impl Blockstore {
             replay_fec_set_index: 0,
         };
 
-        entry.parent_meta = Some(WorkingEntry::Dirty(parent_meta));
+        Some(parent_meta)
     }
 
-    fn maybe_insert_update_parent(
+    fn maybe_parse_update_parent(
         &self,
         current_shred: &Shred,
         slot: Slot,
         location: BlockLocation,
         just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
-        entry: &mut ParentMetaWorkingSetEntry,
-    ) -> bool {
+    ) -> Option<ParentMeta> {
         let current_index = current_shred.index();
         let fec_set_index = current_shred.fec_set_index();
         let data_complete = current_shred.data_complete();
@@ -2032,41 +2029,30 @@ impl Blockstore {
 
             (shred_bytes, fec_set_index)
         } else {
-            return false;
+            return None;
         };
 
         // Process the shred bytes if we have them
-        let Some(shred_bytes) = shred_bytes else {
-            return false;
-        };
-
-        let Ok(payload) = shred::wire::get_data(&shred_bytes) else {
-            return false;
-        };
+        let shred_bytes = shred_bytes?;
+        let payload = shred::wire::get_data(&shred_bytes).ok()?;
 
         // Check whether this is a BlockMarker
         if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
-            return false;
+            return None;
         }
 
         // Try to parse UpdateParent from the payload
-        let Some((new_parent_slot, new_parent_block_id)) =
-            BlockComponent::parse_update_parent_from_data_payload(payload)
-        else {
-            return false;
-        };
+        let (new_parent_slot, new_parent_block_id) =
+            BlockComponent::parse_update_parent_from_data_payload(payload)?;
 
         // First time seeing this UpdateParent
-        let parent_meta = ParentMeta {
+        let update_parent_meta = ParentMeta {
             parent_slot: new_parent_slot,
             parent_block_id: new_parent_block_id,
             replay_fec_set_index: target_fec_set_index,
         };
 
-        // Store the UpdateParent metadata
-        entry.parent_meta = Some(WorkingEntry::Dirty(parent_meta));
-
-        true
+        Some(update_parent_meta)
     }
 
     /// Create an entry to the specified `write_batch` that performs shred
@@ -2250,6 +2236,77 @@ impl Blockstore {
         Ok(())
     }
 
+    /// Validates compatibility between an UpdateParent and a BlockHeader ParentMeta.
+    ///
+    /// This function determines which ParentMeta is which (UpdateParent vs BlockHeader) and
+    /// validates that they are compatible. Works irrespective of parameter order.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if validation passed and the new ParentMeta should be written
+    /// - `Ok(false)` if the new ParentMeta should NOT be written (same type and match, or UpdateParent takes precedence)
+    /// - `Err` if validation fails
+    fn check_parent_meta_consistency(
+        slot: Slot,
+        new: &ParentMeta,
+        prev: &ParentMeta,
+    ) -> Result<bool> {
+        // Determine which is the UpdateParent and which is the BlockHeader
+        let (update_parent_meta, block_header_meta) = match (
+            new.populated_from_block_header(),
+            prev.populated_from_block_header(),
+        ) {
+            // New is BlockHeader, prev is UpdateParent
+            // UpdateParent takes precedence, so don't overwrite
+            (true, false) => return Ok(false),
+            // New is UpdateParent, prev is BlockHeader
+            // Validate and allow UpdateParent to replace BlockHeader
+            (false, true) => (new, prev),
+            // Both are the same type - ensure they match
+            _ => match new == prev {
+                true => return Ok(false),
+                false => return Err(BlockstoreError::BlockComponentMismatch(slot)),
+            },
+        };
+
+        // Validate that the UpdateParent is compatible with the BlockHeader
+        match () {
+            _ if update_parent_meta.block() == block_header_meta.block() => {
+                Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot))
+            }
+            _ if update_parent_meta.parent_slot > block_header_meta.parent_slot => Err(
+                BlockstoreError::UpdateParentSlotGreaterThanBlockHeader(slot),
+            ),
+            _ => Ok(true),
+        }
+    }
+
+    /// Fetches or retrieves the existing ParentMeta for a given slot and location.
+    ///
+    /// This method first checks the working set, and if not found there, fetches from blockstore.
+    /// Returns the existing ParentMeta if it exists, or None otherwise.
+    fn get_or_fetch_parent_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        entry: &mut ParentMetaWorkingSetEntry,
+    ) -> Result<Option<ParentMeta>> {
+        // First check working set
+        if let Some(parent_meta) = entry.parent_meta.as_ref() {
+            return Ok(Some(*parent_meta.as_ref()));
+        }
+
+        // Then fetch from blockstore if needed
+        if !entry.fetched_from_blockstore {
+            entry.fetched_from_blockstore = true;
+            if let Some(parent_meta) = self.parent_meta_cf.get((slot, location))? {
+                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta));
+                return Ok(Some(parent_meta));
+            }
+        }
+
+        Ok(None)
+    }
+
     fn maybe_update_parent_meta(
         &self,
         shred: &Shred,
@@ -2261,41 +2318,40 @@ impl Blockstore {
         let key = (location, slot);
         let entry = parent_meta_working_set.entry(key).or_default();
 
-        // If the working set ParentMeta exists and has an UpdateParent, then return early
-        if let Some(parent_meta) = entry.parent_meta.as_ref() {
-            let populated_from_update_parent = match parent_meta {
-                WorkingEntry::Dirty(parent_meta) | WorkingEntry::Clean(parent_meta) => {
-                    parent_meta.populated_from_update_parent()
-                }
-            };
+        // Fetch or retrieve existing ParentMeta (from working set or blockstore)
+        let previous_parent_meta = self.get_or_fetch_parent_meta(slot, location, entry)?;
 
-            if populated_from_update_parent {
+        // Try to parse new ParentMeta from the current shred
+        // - If shred.index() == 0, try to parse as a block header
+        // - Otherwise, try to parse as an UpdateParent (only if we don't already have one,
+        //   since UpdateParent takes precedence and parsing is expensive)
+        let new_parent_meta = match (shred.index(), &previous_parent_meta) {
+            // Always try to parse block header at index 0
+            (0, _) => self.maybe_parse_block_header(shred),
+            // Try to parse UpdateParent only if we don't have one already
+            (_, Some(pm)) if pm.populated_from_block_header() => {
+                self.maybe_parse_update_parent(shred, slot, location, just_inserted_shreds)
+            }
+            (_, None) => {
+                self.maybe_parse_update_parent(shred, slot, location, just_inserted_shreds)
+            }
+            // previous_parent_meta is UpdateParent; don't parse another one
+            _ => None,
+        };
+
+        let Some(new_parent_meta) = new_parent_meta else {
+            return Ok(());
+        };
+
+        // Validate new ParentMeta against previous (if both exist)
+        if let Some(prev) = &previous_parent_meta {
+            if !Self::check_parent_meta_consistency(slot, &new_parent_meta, prev)? {
                 return Ok(());
             }
         }
-        // If we haven't hit blockstore for this key yet...
-        else if !entry.fetched_from_blockstore {
-            entry.fetched_from_blockstore = true;
 
-            if let Some(parent_meta) = self.parent_meta_cf.get((slot, location))? {
-                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta));
-
-                if parent_meta.populated_from_update_parent() {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Run through insertion logic for update_parent. If we succeed at inserting an
-        // UpdateParent, then return.
-        if self.maybe_insert_update_parent(shred, slot, location, just_inserted_shreds, entry) {
-            return Ok(());
-        }
-
-        // If there isn't any parent_meta, then attempt to detect a block header.
-        if entry.parent_meta.is_none() && shred.index() == 0 {
-            self.maybe_insert_parent_meta(shred, entry);
-        }
+        // Update entry with new ParentMeta
+        entry.parent_meta = Some(WorkingEntry::Dirty(new_parent_meta));
 
         Ok(())
     }
