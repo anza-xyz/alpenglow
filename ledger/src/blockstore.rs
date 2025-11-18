@@ -18,8 +18,8 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredId,
-            ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
+            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredFlags,
+            ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -39,9 +39,7 @@ use {
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
     solana_entry::{
-        block_component::{
-            BlockComponent, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
-        },
+        block_component::BlockComponent,
         entry::{create_ticks, Entry},
     },
     solana_genesis_config::{GenesisConfig, DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE},
@@ -310,6 +308,32 @@ pub struct SlotMetaWorkingSetEntry {
     did_insert_occur: bool,
 }
 
+/// Cache entry for tracking parent meta state during shred insertion.
+///
+/// This structure combines two pieces of information:
+/// 1. The current parent meta value (if any) - either loaded from blockstore (Clean)
+///    or newly inserted/modified during this batch (Dirty)
+/// 2. Whether we've already checked the blockstore for this key
+///
+/// The `hit_blockstore` flag ensures we only read from the blockstore once per key.
+/// Once set to true, all subsequent accesses use the cached `parent_meta` value
+/// (which may be None if the blockstore had no entry).
+///
+/// States:
+/// - `{ parent_meta: None, hit_blockstore: false }` - Not yet checked blockstore
+/// - `{ parent_meta: None, hit_blockstore: true }` - Checked blockstore, was empty
+/// - `{ parent_meta: Some(Clean(meta)), hit_blockstore: true }` - Loaded from blockstore
+/// - `{ parent_meta: Some(Dirty(meta)), hit_blockstore: true }` - Modified in this batch
+#[derive(Default)]
+struct ParentMetaWorkingSetEntry {
+    /// The parent meta value: None if blockstore was empty, Some(Clean) if loaded
+    /// from blockstore unchanged, or Some(Dirty) if inserted/modified in this batch
+    parent_meta: Option<WorkingEntry<ParentMeta>>,
+    /// Whether we've already loaded this key from the blockstore. Once true, we use
+    /// the cached `parent_meta` value instead of hitting the blockstore again.
+    fetched_from_blockstore: bool,
+}
+
 struct ShredInsertionTracker<'a> {
     // Map which contains data shreds that have just been inserted. They will
     // later be written to `cf::ShredData` or `cf::AlternateShredData`
@@ -328,7 +352,7 @@ struct ShredInsertionTracker<'a> {
     index_working_set: HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
     // In-memory map that maintains the dirty copy of the parent meta.  It will
     // later be written to `cf::ParentMeta`
-    parent_metas: HashMap<(BlockLocation, u64), WorkingEntry<ParentMeta>>,
+    parent_metas: HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
     duplicate_shreds: Vec<PossibleDuplicateShred>,
     // Collection of the current blockstore writes which will be committed
     // atomically.
@@ -401,8 +425,6 @@ impl Blockstore {
     fn do_open(ledger_path: &Path, options: BlockstoreOptions) -> Result<Blockstore> {
         fs::create_dir_all(ledger_path)?;
         let blockstore_path = ledger_path.join(BLOCKSTORE_DIRECTORY_ROCKS_LEVEL);
-
-        adjust_ulimit_nofile(options.enforce_ulimit_nofile)?;
 
         // Open the database
         let mut measure = Measure::start("blockstore open");
@@ -1390,7 +1412,11 @@ impl Blockstore {
         }
 
         for (&(location, slot), working_parent_meta) in &shred_insertion_tracker.parent_metas {
-            if !working_parent_meta.should_write() {
+            let Some(parent_meta) = working_parent_meta.parent_meta.as_ref() else {
+                continue;
+            };
+
+            if !parent_meta.should_write() {
                 // No need to rewrite the column
                 continue;
             }
@@ -1398,7 +1424,7 @@ impl Blockstore {
             self.parent_meta_cf.put_in_batch(
                 &mut shred_insertion_tracker.write_batch,
                 (slot, location),
-                working_parent_meta.as_ref(),
+                parent_meta.as_ref(),
             )?;
         }
 
@@ -1928,40 +1954,15 @@ impl Blockstore {
         None
     }
 
-    /// Parse BlockHeader from data shred payload
-    fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
-        // Try to deserialize as BlockComponent
-        let (component, _) = BlockComponent::from_bytes(data).ok()?;
-
-        // If we were able to parse the component, it must be a block marker
-        let marker = component.as_marker()?;
-
-        // Check if it's a BlockMarker with BlockHeader
-        match marker {
-            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header))
-            | VersionedBlockMarker::Current(BlockMarkerV1::BlockHeader(header)) => {
-                // Extract the BlockHeader from the versioned wrapper
-                match header {
-                    VersionedBlockHeader::V1(update) | VersionedBlockHeader::Current(update) => {
-                        Some((update.parent_slot, update.parent_block_id))
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
-
     fn maybe_insert_parent_meta(
         &self,
         current_shred: &Shred,
-        slot: Slot,
-        location: BlockLocation,
-        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), WorkingEntry<ParentMeta>>,
+        entry: &mut ParentMetaWorkingSetEntry,
     ) {
         // The contents of BlockHeaderV1 entirely fit into a single shred. So, let's just parse the
         // first shred.
         let shred_bytes = current_shred.payload();
-        let Ok(payload) = shred::layout::get_data(shred_bytes) else {
+        let Ok(payload) = shred::wire::get_data(shred_bytes) else {
             return;
         };
 
@@ -1972,7 +1973,7 @@ impl Blockstore {
 
         // Try to parse BlockHeader from the payload
         let Some((parent_slot, parent_block_id)) =
-            Self::parse_block_header_from_data_payload(payload)
+            BlockComponent::parse_block_header_from_data_payload(payload)
         else {
             return;
         };
@@ -1983,9 +1984,89 @@ impl Blockstore {
             replay_fec_set_index: 0,
         };
 
-        parent_meta_working_set
-            .entry((location, slot))
-            .or_insert(WorkingEntry::Dirty(parent_meta));
+        entry.parent_meta = Some(WorkingEntry::Dirty(parent_meta));
+    }
+
+    fn maybe_insert_update_parent(
+        &self,
+        current_shred: &Shred,
+        slot: Slot,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        entry: &mut ParentMetaWorkingSetEntry,
+    ) -> bool {
+        let current_index = current_shred.index();
+        let fec_set_index = current_shred.fec_set_index();
+        let data_complete = current_shred.data_complete();
+
+        // Determine which shred to check for UpdateParent and which FEC set it belongs to
+        //
+        // NOTE: this only works when SIMD-0317 and SIMD-0366 have been activated!
+        let (shred_bytes, target_fec_set_index) = if data_complete {
+            // Case (a): Current shred has DATA_COMPLETE=true (end of FEC set)
+            // Check the 0th shred in the NEXT FEC set for UpdateParent
+            let next_fec_set_index = fec_set_index + DATA_SHREDS_PER_FEC_BLOCK as u32;
+            let shred_id = ShredId::new(slot, next_fec_set_index, ShredType::Data);
+            let shred_bytes =
+                self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location);
+            (shred_bytes, next_fec_set_index)
+        } else if current_index % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 && current_index > 0 {
+            // Case (b): Current shred is the 0th shred of the FEC set
+            // Check if the PREVIOUS shred had DATA_COMPLETE=true
+            let prev_shred_index = current_index - 1;
+            let shred_id = ShredId::new(slot, prev_shred_index, ShredType::Data);
+
+            let prev_payload =
+                self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location);
+
+            let shred_bytes = prev_payload
+                .and_then(|prev| {
+                    // Use get_flags to check DATA_COMPLETE without full deserialization
+                    shred::wire::get_flags(&prev).ok()
+                })
+                .and_then(|flags| {
+                    flags
+                        .contains(ShredFlags::DATA_COMPLETE_SHRED)
+                        .then(|| Cow::Borrowed(current_shred.payload()))
+                });
+
+            (shred_bytes, fec_set_index)
+        } else {
+            return false;
+        };
+
+        // Process the shred bytes if we have them
+        let Some(shred_bytes) = shred_bytes else {
+            return false;
+        };
+
+        let Ok(payload) = shred::wire::get_data(&shred_bytes) else {
+            return false;
+        };
+
+        // Check whether this is a BlockMarker
+        if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
+            return false;
+        }
+
+        // Try to parse UpdateParent from the payload
+        let Some((new_parent_slot, new_parent_block_id)) =
+            BlockComponent::parse_update_parent_from_data_payload(payload)
+        else {
+            return false;
+        };
+
+        // First time seeing this UpdateParent
+        let parent_meta = ParentMeta {
+            parent_slot: new_parent_slot,
+            parent_block_id: new_parent_block_id,
+            replay_fec_set_index: target_fec_set_index,
+        };
+
+        // Store the UpdateParent metadata
+        entry.parent_meta = Some(WorkingEntry::Dirty(parent_meta));
+
+        true
     }
 
     /// Create an entry to the specified `write_batch` that performs shred
@@ -2038,11 +2119,6 @@ impl Blockstore {
             write_batch,
             newly_completed_data_sets,
         } = shred_insertion_tracker;
-
-        // Check for block header
-        if shred.index() == 0 {
-            self.maybe_insert_parent_meta(&shred, slot, location, parent_meta_working_set);
-        }
 
         let index_meta_working_set_entry =
             self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
@@ -2140,6 +2216,17 @@ impl Blockstore {
             write_batch,
             shred_source,
         )?;
+
+        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
+            self.maybe_update_parent_meta(
+                &shred,
+                location,
+                slot,
+                just_inserted_shreds,
+                parent_meta_working_set,
+            )?;
+        }
+
         if matches!(location, BlockLocation::Original) {
             // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
             // if necessary.
@@ -2159,6 +2246,57 @@ impl Blockstore {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
+
+        Ok(())
+    }
+
+    fn maybe_update_parent_meta(
+        &self,
+        shred: &Shred,
+        location: BlockLocation,
+        slot: u64,
+        just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    ) -> Result<()> {
+        let key = (location, slot);
+        let entry = parent_meta_working_set.entry(key).or_default();
+
+        // If the working set ParentMeta exists and has an UpdateParent, then return early
+        if let Some(parent_meta) = entry.parent_meta.as_ref() {
+            let populated_from_update_parent = match parent_meta {
+                WorkingEntry::Dirty(parent_meta) | WorkingEntry::Clean(parent_meta) => {
+                    parent_meta.populated_from_update_parent()
+                }
+            };
+
+            if populated_from_update_parent {
+                return Ok(());
+            }
+        }
+        // If we haven't hit blockstore for this key yet...
+        else if !entry.fetched_from_blockstore {
+            entry.fetched_from_blockstore = true;
+
+            if let Some(parent_meta) = self.parent_meta_cf.get((slot, location))? {
+                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta));
+
+                if parent_meta.populated_from_update_parent() {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Run through insertion logic for update_parent. If we succeed at inserting an
+        // UpdateParent, then return.
+        if self.maybe_insert_update_parent(shred, slot, location, just_inserted_shreds, entry) {
+            return Ok(());
+        }
+
+        // If there isn't any parent_meta, then attempt to detect a block header.
+        if entry.parent_meta.is_none() && shred.index() == 0 {
+            self.maybe_insert_parent_meta(shred, entry);
+        }
+
         Ok(())
     }
 
@@ -5461,7 +5599,6 @@ pub fn create_new_ledger(
     let blockstore = Blockstore::open_with_options(
         ledger_path,
         BlockstoreOptions {
-            enforce_ulimit_nofile: false,
             column_options: column_options.clone(),
             ..BlockstoreOptions::default()
         },
@@ -5906,58 +6043,6 @@ pub fn make_chaining_slot_entries(
     }
 
     slots_shreds_and_entries
-}
-
-#[cfg(not(unix))]
-fn adjust_ulimit_nofile(_enforce_ulimit_nofile: bool) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn adjust_ulimit_nofile(enforce_ulimit_nofile: bool) -> Result<()> {
-    // Rocks DB likes to have many open files.  The default open file descriptor limit is
-    // usually not enough
-    // AppendVecs and disk Account Index are also heavy users of mmapped files.
-    // This should be kept in sync with published validator instructions.
-    // https://docs.anza.xyz/operations/guides/validator-start#system-tuning
-    let desired_nofile = 1_000_000;
-
-    fn get_nofile() -> libc::rlimit {
-        let mut nofile = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut nofile) } != 0 {
-            warn!("getrlimit(RLIMIT_NOFILE) failed");
-        }
-        nofile
-    }
-
-    let mut nofile = get_nofile();
-    let current = nofile.rlim_cur;
-    if current < desired_nofile {
-        nofile.rlim_cur = desired_nofile;
-        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &nofile) } != 0 {
-            error!(
-                "Unable to increase the maximum open file descriptor limit to {} from {}",
-                nofile.rlim_cur, current,
-            );
-
-            if cfg!(target_os = "macos") {
-                error!(
-                    "On mac OS you may need to run |sudo launchctl limit maxfiles \
-                     {desired_nofile} {desired_nofile}| first",
-                );
-            }
-            if enforce_ulimit_nofile {
-                return Err(BlockstoreError::UnableToSetOpenFileDescriptorLimit);
-            }
-        }
-
-        nofile = get_nofile();
-    }
-    info!("Maximum open file descriptors: {}", nofile.rlim_cur);
-    Ok(())
 }
 
 #[cfg(test)]
