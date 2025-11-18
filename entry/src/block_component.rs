@@ -59,11 +59,11 @@
 /// ├─────────────────────────────────────────┤
 /// │ Producer Time Nanos          (8 bytes)  │
 /// ├─────────────────────────────────────────┤
-/// │ User Agent Length            (1 byte)   │
+/// │ User Agent Length             (1 byte)  │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Bytes          (0-255 bytes) │
 /// ├─────────────────────────────────────────┤
-/// │ Final cert Length             (2 bytes) │
+/// │ Final cert Present             (1 byte) │
 /// ├─────────────────────────────────────────┤
 /// │ Final cert Data           (variable)    │
 /// └─────────────────────────────────────────┘
@@ -290,13 +290,13 @@ pub enum VersionedBlockFooter {
 /// ├─────────────────────────────────────────┤
 /// │ Producer Time Nanos          (8 bytes)  │
 /// ├─────────────────────────────────────────┤
-/// │ User Agent Length            (1 byte)   │
+/// │ User Agent Length             (1 byte)  │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Bytes          (0-255 bytes) │
 /// ├─────────────────────────────────────────┤
-/// │ Final cert Length             (2 bytes) │
+/// │ Final cert present            (1 byte)  │
 /// ├─────────────────────────────────────────┤
-/// │ Final cert Data           (variable)    │
+/// │ Final cert Data             (variable)  │
 /// └─────────────────────────────────────────┘
 /// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -1038,8 +1038,8 @@ impl BlockFooterV1 {
     const USER_AGENT_LEN_OFFSET: usize = Self::TIMESTAMP_OFFSET + Self::TIMESTAMP_SIZE;
     /// Offset where user agent bytes start.
     const USER_AGENT_OFFSET: usize = Self::USER_AGENT_LEN_OFFSET + Self::LENGTH_SIZE;
-    /// We use u16 for length of final certificate
-    const FINAL_CERT_LENGTH_SIZE: usize = 2;
+    /// We use 1 byte to indicate presence of final certificate (1) or absence (0)
+    const FINAL_CERT_PRESENT_SIZE: usize = 1;
 
     /// Returns the version for this struct.
     pub const fn version(&self) -> u8 {
@@ -1068,21 +1068,13 @@ impl BlockFooterV1 {
 
         // Serialize final certificate if present, add a byte of 1 if present, otherwise a byte of 0
         if let Some(final_cert) = &self.final_cert {
-            let cert_size: u16 = final_cert
-                .serialized_size()
-                .try_into()
-                .map_err(|_| BlockComponentError::DataLengthOverflow)?;
-            let cert_size_bytes = cert_size.to_le_bytes();
-            if cert_size_bytes.len() != Self::FINAL_CERT_LENGTH_SIZE {
-                return Err(BlockComponentError::DataLengthOverflow);
-            }
-            buffer.extend_from_slice(&cert_size_bytes);
+            buffer.push(1);
             let cert_bytes = bincode::serialize(final_cert)
                 .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?;
             buffer.extend_from_slice(&cert_bytes);
         } else {
-            // Push 2 bytes of 0 to indicate absence of final certificate
-            buffer.extend_from_slice(&[0; Self::FINAL_CERT_LENGTH_SIZE]);
+            // Push 1 byte of 0 to indicate absence of final certificate
+            buffer.push(0);
         }
 
         Ok(buffer)
@@ -1121,20 +1113,16 @@ impl BlockFooterV1 {
             data[Self::USER_AGENT_OFFSET..Self::USER_AGENT_OFFSET + user_agent_len].to_vec();
 
         // Read final certificate
-        let final_cert_length_start = Self::USER_AGENT_OFFSET + user_agent_len;
-        if data.len() < final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE {
+        let final_cert_present_start = Self::USER_AGENT_OFFSET + user_agent_len;
+        if data.len() < final_cert_present_start + Self::FINAL_CERT_PRESENT_SIZE {
             return Err(BlockComponentError::InsufficientData);
         }
-        let final_cert_length = u16::from_le_bytes(
-            data[final_cert_length_start..final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE]
-                .try_into()
-                .map_err(|_| BlockComponentError::InsufficientData)?,
-        ) as usize;
+        let final_cert_present = data[final_cert_present_start];
         // If there is a byte of 0, skip final certificate reading
-        let final_cert_start = final_cert_length_start + Self::FINAL_CERT_LENGTH_SIZE;
-        let final_cert = if final_cert_length == 0 {
+        let final_cert = if final_cert_present == 0 {
             None
         } else {
+            let final_cert_start = final_cert_present_start + Self::FINAL_CERT_PRESENT_SIZE;
             FinalCertificate::from_bytes(&data[final_cert_start..])?
         };
         Ok(Self {
