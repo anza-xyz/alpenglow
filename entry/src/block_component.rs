@@ -672,6 +672,49 @@ impl BlockComponent {
             }
         }
     }
+
+    /// Parse BlockHeader from bytes
+    pub fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
+        // Try to deserialize as BlockComponent
+        let (component, _) = BlockComponent::from_bytes(data).ok()?;
+
+        // If we were able to parse the component, it must be a block marker
+        let marker = component.as_marker()?;
+
+        // Check if it's a BlockMarker with BlockHeader
+        match marker {
+            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header))
+            | VersionedBlockMarker::Current(BlockMarkerV1::BlockHeader(header)) => {
+                // Extract the BlockHeader from the versioned wrapper
+                match header {
+                    VersionedBlockHeader::V1(update) | VersionedBlockHeader::Current(update) => {
+                        Some((update.parent_slot, update.parent_block_id))
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse UpdateParent from bytes
+    pub fn parse_update_parent_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
+        // Try to deserialize as BlockComponent
+        let (component, _) = BlockComponent::from_bytes(data).ok()?;
+
+        // Check if it's a BlockMarker with UpdateParent
+        match component.as_marker()? {
+            VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(versioned_update))
+            | VersionedBlockMarker::Current(BlockMarkerV1::UpdateParent(versioned_update)) => {
+                // Extract the UpdateParentV1 from the versioned wrapper
+                match versioned_update {
+                    VersionedUpdateParent::V1(update) | VersionedUpdateParent::Current(update) => {
+                        Some((update.new_parent_slot, update.new_parent_block_id))
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for BlockComponent {

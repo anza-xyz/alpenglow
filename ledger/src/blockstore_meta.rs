@@ -986,6 +986,12 @@ pub struct ParentMeta {
     pub replay_fec_set_index: u32,
 }
 
+impl ParentMeta {
+    pub fn populated_from_update_parent(&self) -> bool {
+        self.replay_fec_set_index > 0
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {
