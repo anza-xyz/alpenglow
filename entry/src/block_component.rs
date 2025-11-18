@@ -1144,7 +1144,7 @@ impl BlockFooterV1 {
             + Self::TIMESTAMP_SIZE as u64
             + Self::LENGTH_SIZE as u64
             + user_agent_size
-            + Self::FINAL_CERT_LENGTH_SIZE as u64
+            + Self::FINAL_CERT_PRESENT_SIZE as u64
             + final_cert_size
     }
 }
