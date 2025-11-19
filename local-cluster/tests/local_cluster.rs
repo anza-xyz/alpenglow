@@ -6223,9 +6223,8 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
-fn test_alpenglow_migration(num_nodes: usize) {
+fn test_alpenglow_migration(num_nodes: usize, test_name: &str) -> LocalCluster {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
-    let test_name = &format!("test_alpenglow_migration_{num_nodes}");
 
     let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
     let vote_listener_addr = vote_listener_socket.try_clone().unwrap();
@@ -6341,24 +6340,49 @@ fn test_alpenglow_migration(num_nodes: usize) {
 
     // Additionally ensure that roots are being made
     cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+    cluster
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_1() {
-    test_alpenglow_migration(1)
+    test_alpenglow_migration(1, "test_alpenglow_migration_1");
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_2() {
-    test_alpenglow_migration(2)
+    test_alpenglow_migration(2, "test_alpenglow_migration_2");
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_4() {
-    test_alpenglow_migration(4)
+    test_alpenglow_migration(4, "test_alpenglow_migration_4");
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_restart_post_migration() {
+    let test_name = "test_alpenglow_restart_post_migration";
+
+    // Start a 2 node cluster and have it go through the migration
+    let mut cluster = test_alpenglow_migration(2, test_name);
+
+    // Now restart one of the nodes. This causes the cluster to temporarily halt
+    let node_pubkey = cluster.get_node_pubkeys()[0];
+    cluster.exit_restart_node(
+        &node_pubkey,
+        safe_clone_config(&cluster.validators.get(&node_pubkey).unwrap().config),
+        SocketAddrSpace::Unspecified,
+    );
+
+    // The restarted node will startup from genesis (0) so this test verifies the following:
+    // - When processing the feature flag activation during startup increment `PreFeatureActivation` ->  `Migration`
+    // - When processing the first alpenglow block during startup increment `Migration` -> `ReadyToEnable`
+    // - If we reach `ReadyToEnable` during startup, enable alpenglow
+    // - Ensure that during startup we set ticks correctly
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
 }
 
 fn broadcast_vote(
