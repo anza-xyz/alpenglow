@@ -2236,7 +2236,7 @@ impl Blockstore {
         Ok(())
     }
 
-    /// Validates compatibility between an UpdateParent and a BlockHeader ParentMeta.
+    /// Validates compatibility between two ParentMetas.
     ///
     /// This function determines which ParentMeta is which (UpdateParent vs BlockHeader) and
     /// validates that they are compatible. Works irrespective of parameter order.
@@ -2245,11 +2245,7 @@ impl Blockstore {
     /// - `Ok(true)` if validation passed and the new ParentMeta should be written
     /// - `Ok(false)` if the new ParentMeta should NOT be written (same type and match, or UpdateParent takes precedence)
     /// - `Err` if validation fails
-    fn check_parent_meta_consistency(
-        slot: Slot,
-        new: &ParentMeta,
-        prev: &ParentMeta,
-    ) -> Result<bool> {
+    fn should_write_parent_meta(slot: Slot, new: &ParentMeta, prev: &ParentMeta) -> Result<bool> {
         // Determine which is the UpdateParent and which is the BlockHeader
         let (update_parent_meta, block_header_meta) = match (
             new.populated_from_block_header(),
@@ -2257,7 +2253,7 @@ impl Blockstore {
         ) {
             // New is BlockHeader, prev is UpdateParent
             // UpdateParent takes precedence, so don't overwrite
-            (true, false) => return Ok(false),
+            (true, false) => (prev, new),
             // New is UpdateParent, prev is BlockHeader
             // Validate and allow UpdateParent to replace BlockHeader
             (false, true) => (new, prev),
@@ -2345,7 +2341,7 @@ impl Blockstore {
 
         // Validate new ParentMeta against previous (if both exist)
         if let Some(prev) = &previous_parent_meta {
-            if !Self::check_parent_meta_consistency(slot, &new_parent_meta, prev)? {
+            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
                 return Ok(());
             }
         }
