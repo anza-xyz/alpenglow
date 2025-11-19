@@ -2826,14 +2826,20 @@ impl Bank {
     }
 
     /// If this is an alpenglow block, return the genesis certificate.
-    ///
-    /// Note: this should only be called on a frozen bank, otherwise results
-    /// might be inaccurate for the first alpenglow bank.
     pub fn get_alpenglow_genesis_certificate(&self) -> Option<Certificate> {
         self.get_account(&GENESIS_CERTIFICATE_ACCOUNT).map(|acct| {
             acct.deserialize_data()
                 .expect("Programmer error deserializing genesis certificate")
         })
+    }
+
+    /// For use in the first Alpenglow block, set the genesis certificate.
+    pub fn set_alpenglow_genesis_certificate(&self, cert: &Certificate) {
+        let cert_size = bincode::serialized_size(cert).unwrap();
+        let lamports = Rent::default().minimum_balance(cert_size as usize);
+        let cert_acct = AccountSharedData::new_data(lamports, cert, &system_program::ID).unwrap();
+
+        self.store_account_and_update_capitalization(&GENESIS_CERTIFICATE_ACCOUNT, &cert_acct);
     }
 
     pub fn confirmed_last_blockhash(&self) -> Hash {
