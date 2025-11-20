@@ -2247,16 +2247,16 @@ impl Blockstore {
     /// - `Err` if validation fails
     fn should_write_parent_meta(slot: Slot, new: &ParentMeta, prev: &ParentMeta) -> Result<bool> {
         // Determine which is the UpdateParent and which is the BlockHeader
-        let (update_parent_meta, block_header_meta) = match (
+        let (update_parent_meta, block_header_meta, should_write) = match (
             new.populated_from_block_header(),
             prev.populated_from_block_header(),
         ) {
             // New is BlockHeader, prev is UpdateParent
             // UpdateParent takes precedence, so don't overwrite
-            (true, false) => (prev, new),
+            (true, false) => (prev, new, false),
             // New is UpdateParent, prev is BlockHeader
             // Validate and allow UpdateParent to replace BlockHeader
-            (false, true) => (new, prev),
+            (false, true) => (new, prev, true),
             // Both are the same type - ensure they match
             _ => match new == prev {
                 true => return Ok(false),
@@ -2265,15 +2265,17 @@ impl Blockstore {
         };
 
         // Validate that the UpdateParent is compatible with the BlockHeader
-        match () {
-            _ if update_parent_meta.block() == block_header_meta.block() => {
-                Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot))
-            }
-            _ if update_parent_meta.parent_slot > block_header_meta.parent_slot => Err(
-                BlockstoreError::UpdateParentSlotGreaterThanBlockHeader(slot),
-            ),
-            _ => Ok(true),
+        if update_parent_meta.block() == block_header_meta.block() {
+            return Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot));
         }
+
+        if update_parent_meta.parent_slot > block_header_meta.parent_slot {
+            return Err(BlockstoreError::UpdateParentSlotGreaterThanBlockHeader(
+                slot,
+            ));
+        }
+
+        Ok(should_write)
     }
 
     /// Fetches or retrieves the existing ParentMeta for a given slot and location.
