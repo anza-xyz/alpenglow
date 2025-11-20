@@ -27,6 +27,7 @@ use {
     },
     bytes::Bytes,
     crossbeam_channel::{bounded, unbounded, Receiver, Sender},
+    parking_lot::RwLock as PLRwLock,
     solana_client::connection_cache::ConnectionCache,
     solana_clock::Slot,
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
@@ -61,6 +62,7 @@ use {
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
+        consensus_rewards::ConsensusRewards,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
@@ -216,6 +218,7 @@ impl Tvu {
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         migration_status: Arc<MigrationStatus>,
+        consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -276,6 +279,7 @@ impl Tvu {
                 consensus_message_sender.clone(),
                 consensus_metrics_sender.clone(),
                 alpenglow_last_voted.clone(),
+                consensus_rewards,
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
@@ -597,7 +601,7 @@ pub mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-        solana_votor::vote_history_storage::FileVoteHistoryStorage,
+        solana_votor::{consensus_metrics, vote_history_storage::FileVoteHistoryStorage},
         std::sync::atomic::{AtomicU64, Ordering},
     };
 

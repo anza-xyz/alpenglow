@@ -10,6 +10,7 @@ use {
         replay_stage::{Finalizer, ReplayStage},
     },
     crossbeam_channel::Receiver,
+    parking_lot::RwLock as PLRwLock,
     solana_clock::Slot,
     solana_entry::block_component::BlockFooterV1,
     solana_gossip::cluster_info::ClusterInfo,
@@ -32,7 +33,10 @@ use {
         block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
-    solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor::{
+        common::block_timeout, consensus_rewards::ConsensusRewards, event::LeaderWindowInfo,
+    },
+    solana_votor_messages::rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -78,6 +82,7 @@ pub struct BlockCreationLoopConfig {
     pub poh_recorder: Arc<RwLock<PohRecorder>>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    pub consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
 
     // Notifiers
     pub banking_tracer: Arc<BankingTracer>,
@@ -108,6 +113,7 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -159,6 +165,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         highest_parent_ready,
         optimistic_parent_receiver,
+        consensus_rewards,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -196,6 +203,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
+        consensus_rewards,
     };
 
     // Setup poh
@@ -316,6 +324,7 @@ fn produce_window(
         if let Err(e) = record_and_complete_block(
             ctx.poh_recorder.as_ref(),
             &mut ctx.record_receiver,
+            ctx.consensus_rewards.clone(),
             skip_timer,
             timeout,
         ) {
@@ -369,7 +378,11 @@ fn skew_block_producer_time_nanos(
 
 /// Produces a block footer with the current timestamp and version information.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
-fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    skip_reward_certificate: Option<SkipRewardCertificate>,
+    notar_reward_certificate: Option<NotarRewardCertificate>,
+) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Misconfigured system clock; couldn't measure block producer time.")
@@ -396,6 +409,8 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        skip_reward_certificate,
+        notar_reward_certificate,
     }
 }
 
@@ -409,9 +424,17 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
 fn record_and_complete_block(
     poh_recorder: &RwLock<PohRecorder>,
     record_receiver: &mut RecordReceiver,
+    consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
     block_timer: Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
+    // Taking a read lock on consensus_rewards can contend with the write lock in bls_sigverifier.
+    // We are ready to produce the block footer now, while we gather other bits of data, we can block on the consensus_rewards lock in a separate thread to minimise contention.
+    let handle = std::thread::spawn(move || {
+        // XXX: how to look up the slot.
+        let slot = u64::MAX;
+        consensus_rewards.read().build_rewards_certs(slot)
+    });
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
@@ -462,7 +485,12 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler());
+    let (skip_reward_certificate, notar_reward_certificate) = handle.join().unwrap();
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        skip_reward_certificate,
+        notar_reward_certificate,
+    );
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),

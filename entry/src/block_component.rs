@@ -106,7 +106,10 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::consensus_message::{Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     std::{error::Error, fmt},
 };
 
@@ -245,6 +248,7 @@ pub enum VersionedBlockMarker {
 /// The byte length field indicates the size of the variant data that follows,
 /// allowing for proper parsing even if unknown variants are encountered.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum BlockMarkerV1 {
     BlockFooter(VersionedBlockFooter),
     BlockHeader(VersionedBlockHeader),
@@ -293,6 +297,8 @@ pub enum VersionedBlockFooter {
 pub struct BlockFooterV1 {
     pub bank_hash: Hash,
     pub block_producer_time_nanos: u64,
+    pub skip_reward_certificate: Option<SkipRewardCertificate>,
+    pub notar_reward_certificate: Option<NotarRewardCertificate>,
     pub block_user_agent: Vec<u8>,
 }
 
@@ -1092,6 +1098,9 @@ impl BlockFooterV1 {
             bank_hash,
             block_producer_time_nanos,
             block_user_agent,
+            // XXX: actually deserialize the rewards
+            skip_reward_certificate: None,
+            notar_reward_certificate: None,
         })
     }
 
