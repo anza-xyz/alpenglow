@@ -1668,56 +1668,41 @@ impl Blockstore {
         None
     }
 
-    fn maybe_insert_parent_meta(
-        &self,
-        current_shred: &Shred,
-        slot: Slot,
-        parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
-    ) {
+    fn maybe_parse_block_header(&self, current_shred: &Shred) -> Option<ParentMeta> {
+        // Block headers only occur at index 0.
+        if current_shred.index() != 0 {
+            return None;
+        }
+
         // The contents of BlockHeaderV1 entirely fit into a single shred. So, let's just parse the
         // first shred.
         let shred_bytes = current_shred.payload();
         let Ok(payload) = shred::layout::get_data(shred_bytes) else {
-            return;
+            return None;
         };
 
         // Check whether this is a BlockMarker
         if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
-            return;
+            return None;
         }
 
         // Try to parse BlockHeader from the payload
-        let Some((parent_slot, parent_block_id)) =
-            BlockComponent::parse_block_header_from_data_payload(payload)
-        else {
-            return;
-        };
+        let (parent_slot, parent_block_id) =
+            BlockComponent::parse_block_header_from_data_payload(payload)?;
 
-        let parent_meta = ParentMeta {
+        Some(ParentMeta {
             parent_slot,
             parent_block_id,
             replay_fec_set_index: 0,
-        };
-
-        parent_meta_working_set
-            .entry(slot)
-            .or_insert(WorkingEntry::Dirty(parent_meta));
+        })
     }
 
-    fn maybe_insert_update_parent(
+    fn maybe_parse_update_parent(
         &self,
         current_shred: &Shred,
         slot: Slot,
         just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
-        parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
-    ) -> bool {
-        if parent_meta_working_set
-            .get(&slot)
-            .is_some_and(|meta| meta.as_ref().populated_from_update_parent())
-        {
-            return false;
-        }
-
+    ) -> Option<ParentMeta> {
         let current_index = current_shred.index();
         let fec_set_index = current_shred.fec_set_index();
 
@@ -1745,37 +1730,24 @@ impl Blockstore {
                 });
             (payload, fec_set_index)
         } else {
-            return false;
+            return None;
         };
 
-        let Some(payload_bytes) = payload_bytes else {
-            return false;
-        };
-
-        let Ok(payload) = shred::wire::get_data(&payload_bytes) else {
-            return false;
-        };
+        let payload_bytes = payload_bytes?;
+        let payload = shred::wire::get_data(&payload_bytes).ok()?;
 
         if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
-            return false;
+            return None;
         }
 
-        let Some((new_parent_slot, new_parent_block_id)) =
-            BlockComponent::parse_update_parent_from_data_payload(payload)
-        else {
-            return false;
-        };
+        let (new_parent_slot, new_parent_block_id) =
+            BlockComponent::parse_update_parent_from_data_payload(payload)?;
 
-        parent_meta_working_set.insert(
-            slot,
-            WorkingEntry::Dirty(ParentMeta {
-                parent_slot: new_parent_slot,
-                parent_block_id: new_parent_block_id,
-                replay_fec_set_index: target_fec_set_index,
-            }),
-        );
-
-        true
+        Some(ParentMeta {
+            parent_slot: new_parent_slot,
+            parent_block_id: new_parent_block_id,
+            replay_fec_set_index: target_fec_set_index,
+        })
     }
 
     /// Create an entry to the specified `write_batch` that performs shred
@@ -1826,15 +1798,6 @@ impl Blockstore {
             write_batch,
             newly_completed_data_sets,
         } = shred_insertion_tracker;
-
-        // Check for block header
-        if shred.index() == 0 {
-            self.maybe_insert_parent_meta(
-                &shred,
-                slot,
-                parent_meta_working_set,
-            );
-        }
 
         let index_meta_working_set_entry =
             self.get_index_meta_entry(slot, index_working_set, index_meta_time_us);
@@ -1931,12 +1894,12 @@ impl Blockstore {
             .is_multiple_of(DATA_SHREDS_PER_FEC_BLOCK as u32)
             || shred.data_complete()
         {
-            let _ = self.maybe_insert_update_parent(
+            self.maybe_update_parent_meta(
                 &shred,
                 slot,
                 just_inserted_shreds,
                 parent_meta_working_set,
-            );
+            )?;
         }
 
         newly_completed_data_sets.extend(completed_data_sets);
@@ -1951,6 +1914,90 @@ impl Blockstore {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
+        Ok(())
+    }
+
+    /// Validates compatibility between two ParentMetas.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if the new ParentMeta should be written.
+    /// - `Ok(false)` if the new ParentMeta should not overwrite the previous one.
+    /// - `Err` if the two ParentMetas conflict.
+    fn should_write_parent_meta(slot: Slot, new: &ParentMeta, prev: &ParentMeta) -> Result<bool> {
+        let (update_parent_meta, block_header_meta, should_write) = match (
+            new.populated_from_block_header(),
+            prev.populated_from_block_header(),
+        ) {
+            // New is BlockHeader, previous is UpdateParent.
+            (true, false) => (prev, new, false),
+            // New is UpdateParent, previous is BlockHeader.
+            (false, true) => (new, prev, true),
+            // Same component type from both observations.
+            _ => match new == prev {
+                true => return Ok(false),
+                false => return Err(BlockstoreError::BlockComponentMismatch(slot)),
+            },
+        };
+
+        if update_parent_meta.block() == block_header_meta.block() {
+            return Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot));
+        }
+
+        if update_parent_meta.parent_slot > block_header_meta.parent_slot {
+            return Err(BlockstoreError::UpdateParentSlotGreaterThanBlockHeader(
+                slot,
+            ));
+        }
+
+        Ok(should_write)
+    }
+
+    fn get_or_fetch_parent_meta(
+        &self,
+        slot: Slot,
+        parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
+    ) -> Result<Option<ParentMeta>> {
+        if let Some(parent_meta) = parent_meta_working_set.get(&slot) {
+            return Ok(Some(*parent_meta.as_ref()));
+        }
+
+        if let Some(parent_meta) = self.parent_meta_cf.get(slot)? {
+            parent_meta_working_set.insert(slot, WorkingEntry::Clean(parent_meta));
+            return Ok(Some(parent_meta));
+        }
+
+        Ok(None)
+    }
+
+    fn maybe_update_parent_meta(
+        &self,
+        shred: &Shred,
+        slot: Slot,
+        just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
+        parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
+    ) -> Result<()> {
+        let previous_parent_meta = self.get_or_fetch_parent_meta(slot, parent_meta_working_set)?;
+
+        let new_parent_meta = match (shred.index(), &previous_parent_meta) {
+            (0, _) => self.maybe_parse_block_header(shred),
+            (_, Some(parent_meta)) if parent_meta.populated_from_block_header() => {
+                self.maybe_parse_update_parent(shred, slot, just_inserted_shreds)
+            }
+            (_, None) => self.maybe_parse_update_parent(shred, slot, just_inserted_shreds),
+            _ => None,
+        };
+
+        let Some(new_parent_meta) = new_parent_meta else {
+            return Ok(());
+        };
+
+        if let Some(prev) = &previous_parent_meta {
+            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
+                return Ok(());
+            }
+        }
+
+        parent_meta_working_set.insert(slot, WorkingEntry::Dirty(new_parent_meta));
         Ok(())
     }
 

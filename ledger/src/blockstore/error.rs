@@ -57,6 +57,16 @@ pub enum BlockstoreError {
     LegacyShred(Slot, u64),
     #[error("unable to read merkle root slot {0}, index {1}")]
     MissingMerkleRoot(Slot, u64),
+    #[error("BlockComponent misalignment slot {0}, index {1}")]
+    BlockComponentMisalignment(Slot, u64),
+    #[error("Update parent matches block header slot {0}")]
+    UpdateParentMatchesBlockHeader(Slot),
+    #[error("Update parent slot greater than block header slot {0}")]
+    UpdateParentSlotGreaterThanBlockHeader(Slot),
+    #[error("Unexpected block component")]
+    UnexpectedBlockComponent,
+    #[error("Block component mismatch slot {0}")]
+    BlockComponentMismatch(Slot),
     #[error("unable to purge slots in range [{from_slot}, {to_slot}] {purge_type:?}: {inner:?}")]
     PurgeFailed {
         from_slot: Slot,
