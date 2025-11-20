@@ -35,7 +35,6 @@ use {
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
-    solana_votor_messages::consensus_message::Certificate,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -117,7 +116,7 @@ struct LeaderContext {
     slot_metrics: SlotMetrics,
 
     // Migration information
-    genesis_cert: Arc<Certificate>,
+    genesis_cert: GenesisCertificate,
 }
 
 #[derive(Default)]
@@ -190,6 +189,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         .migration_status()
         .genesis_certificate()
         .expect("Migration complete, genesis certificate must exist");
+    let genesis_cert = GenesisCertificate::try_from((*genesis_cert).clone())
+        .expect("Genesis certificate must be valid");
 
     info!("{my_pubkey}: Block creation loop starting");
 
@@ -656,10 +657,9 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
     ctx.poh_recorder.write().unwrap().set_bank(tpu_bank);
 
     // If this the very first alpenglow block, include the genesis certificate
-    if parent_slot == ctx.genesis_cert.cert_type.slot() {
+    if parent_slot == ctx.genesis_cert.slot {
         let genesis_marker = VersionedBlockMarker::Current(BlockMarkerV1::GenesisCertificate(
-            GenesisCertificate::try_from((*ctx.genesis_cert).clone())
-                .expect("Genesis certificate must be valid"),
+            ctx.genesis_cert.clone(),
         ));
         ctx.poh_recorder
             .write()
