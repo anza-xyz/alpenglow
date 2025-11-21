@@ -40,7 +40,7 @@ use {
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
         bank_forks_utils,
-        blockstore::{entries_to_test_shreds, Blockstore},
+        blockstore::{entries_to_test_shreds, Blockstore, PurgeType},
         blockstore_processor::ProcessOptions,
         leader_schedule::{FixedSchedule, IdentityKeyedLeaderSchedule},
         leader_schedule_utils::first_of_consecutive_leader_slots,
@@ -100,9 +100,9 @@ use {
     solana_votor::voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     solana_votor_messages::{
         consensus_message::{
-            CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+            Certificate, CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
-        migration::MIGRATION_SLOT_OFFSET,
+        migration::{GENESIS_CERTIFICATE_ACCOUNT, MIGRATION_SLOT_OFFSET},
         vote::Vote,
     },
     std::{
@@ -6223,7 +6223,15 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
-fn test_alpenglow_migration(num_nodes: usize, test_name: &str) -> LocalCluster {
+fn test_alpenglow_migration(
+    num_nodes: usize,
+    test_name: &str,
+    leader_schedule: &[usize],
+) -> (
+    LocalCluster,
+    Vec<Arc<Keypair>>,
+    /* migration slot */ Slot,
+) {
     solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 
     let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
@@ -6237,9 +6245,11 @@ fn test_alpenglow_migration(num_nodes: usize, test_name: &str) -> LocalCluster {
     // we can't afford any forking due to rolling start
     validator_config.wait_for_supermajority = Some(0);
 
-    let validator_keys = (0..num_nodes)
-        .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
-        .collect::<Vec<_>>();
+    let (leader_schedule, keys) = create_custom_leader_schedule_with_random_keys(leader_schedule);
+
+    validator_config.fixed_leader_schedule = Some(FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    });
     let node_stakes = vec![DEFAULT_NODE_STAKE; num_nodes];
 
     // We want the epochs to be as short as possible to reduce test time without being flaky.
@@ -6248,7 +6258,12 @@ fn test_alpenglow_migration(num_nodes: usize, test_name: &str) -> LocalCluster {
     assert!(slots_per_epoch > MIGRATION_SLOT_OFFSET);
     let mut cluster_config = ClusterConfig {
         validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
-        validator_keys: Some(validator_keys),
+        validator_keys: Some(
+            keys.iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
         node_stakes: node_stakes.clone(),
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
@@ -6340,25 +6355,25 @@ fn test_alpenglow_migration(num_nodes: usize, test_name: &str) -> LocalCluster {
 
     // Additionally ensure that roots are being made
     cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
-    cluster
+    (cluster, keys, migration_slot)
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_1() {
-    test_alpenglow_migration(1, "test_alpenglow_migration_1");
+    test_alpenglow_migration(1, "test_alpenglow_migration_1", &[4]);
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_2() {
-    test_alpenglow_migration(2, "test_alpenglow_migration_2");
+    test_alpenglow_migration(2, "test_alpenglow_migration_2", &[4, 4]);
 }
 
 #[test]
 #[serial]
 fn test_alpenglow_migration_4() {
-    test_alpenglow_migration(4, "test_alpenglow_migration_4");
+    test_alpenglow_migration(4, "test_alpenglow_migration_4", &[4, 4, 4, 4]);
 }
 
 #[test]
@@ -6367,7 +6382,7 @@ fn test_alpenglow_restart_post_migration() {
     let test_name = "test_alpenglow_restart_post_migration";
 
     // Start a 2 node cluster and have it go through the migration
-    let mut cluster = test_alpenglow_migration(2, test_name);
+    let (mut cluster, _, _) = test_alpenglow_migration(2, test_name, &[4, 4]);
 
     // Now restart one of the nodes. This causes the cluster to temporarily halt
     let node_pubkey = cluster.get_node_pubkeys()[0];
@@ -6382,6 +6397,136 @@ fn test_alpenglow_restart_post_migration() {
     // - When processing the first alpenglow block during startup increment `Migration` -> `ReadyToEnable`
     // - If we reach `ReadyToEnable` during startup, enable alpenglow
     // - Ensure that during startup we set ticks correctly
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_missed_migration_entirely() {
+    let test_name = "test_alpenglow_missed_migration_entirely";
+
+    // Start a 3 node cluster and have it go through the migration and root some slots
+    // Critical that the third node is not in the leader schedule, as since
+    // we clear blockstore later, we could end up producing duplicate blocks
+    let (mut cluster, validator_keys, migration_slot) =
+        test_alpenglow_migration(3, test_name, &[4, 4, 0]);
+
+    // Now kill the second node
+    let node_pubkey = validator_keys[2].pubkey();
+    let exit_info = cluster.exit_node(&node_pubkey);
+    let start_slot = migration_slot - 10;
+
+    // Clear blockstore to simulate the node partitioning before the migration period
+    info!("Clearing blockstore after slot {start_slot}");
+    {
+        let blockstore = Blockstore::open(&exit_info.info.ledger_path).unwrap();
+        let end_slot = blockstore.highest_slot().unwrap().unwrap();
+        blockstore.purge_from_next_slots(start_slot, end_slot);
+        blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+    }
+
+    // Restart the node.
+    // We have simulated the following situation:
+    // - Nodes 1 and 2 were enough to perform the migration. They finalized blocks after the migration
+    //   and are no longer broadcasting the GenesisCertificate.
+    // - Node 3 was completely partitioned off since 10 slots before the migration.
+    // - Node 3 now rejoins the network
+    // - It is able to use TowerBFT eager repair to fetch blocks, eventually it will see the
+    //   first Alpenglow block, attempt to process it as a TowerBFT block and switch to Alpenglow.
+    info!("Restarting node to a pre migration state");
+    cluster.restart_node(&node_pubkey, exit_info, SocketAddrSpace::Unspecified);
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
+#[test]
+// This test requires alpenglow repair
+#[ignore]
+#[serial]
+fn test_alpenglow_missed_migration_completion() {
+    let test_name = "test_alpenglow_missed_migration_completion";
+
+    // Start a 3 node cluster and have it go through the migration and root some slots
+    // Critical that the second node is not in the leader schedule, as since
+    // we clear blockstore later, we could end up producing duplicate blocks
+    let (mut cluster, validator_keys, _migration_slot) =
+        test_alpenglow_migration(3, test_name, &[4, 0, 4]);
+
+    // Figure out the genesis slot
+    info!("Determining the genesis slot");
+    let client = RpcClient::new_socket_with_commitment(
+        cluster.entry_point_info.rpc().unwrap(),
+        CommitmentConfig::processed(),
+    );
+    let genesis_slot = loop {
+        let Ok(account) = client.get_account(&GENESIS_CERTIFICATE_ACCOUNT) else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        };
+        break account
+            .deserialize_data::<Certificate>()
+            .expect("Genesis cert must be populated")
+            .cert_type
+            .slot();
+    };
+    info!("Genesis slot {genesis_slot}");
+
+    // Now kill the second node
+    let node_pubkey = validator_keys[1].pubkey();
+    let exit_info = cluster.exit_node(&node_pubkey);
+    {
+        // Clear all blocks past genesis
+        let start_slot = genesis_slot + 1;
+        let blockstore = Blockstore::open(&exit_info.info.ledger_path).unwrap();
+        let end_slot = blockstore.highest_slot().unwrap().unwrap();
+        info!("Clearing blockstore from slot {start_slot}");
+        blockstore.purge_from_next_slots(start_slot, end_slot);
+        blockstore.purge_slots(start_slot, end_slot, PurgeType::CompactionFilter);
+
+        // Now to simulate the node observing the migration insert 5 TowerBFT blocks
+        // past the alpenglow genesis
+        for slot in start_slot..start_slot + 5 {
+            let entries = create_ticks(64, 0, cluster.genesis_config.hash());
+            let last_hash = entries.last().unwrap().hash;
+            let version = solana_shred_version::version_from_hash(&last_hash);
+            // It doesn't really matter if these shreds fully check out.
+            // The key is that they occupy space in the blockstore column requiring
+            // Alpenglow repair to get the alpenglow version of these blocks
+            let shreds = Shredder::new(slot, slot - 1, 0, version)
+                .unwrap()
+                .entries_to_merkle_shreds_for_tests(
+                    &Keypair::new(),
+                    &entries,
+                    true, // is_full_slot
+                    None, // chained_merkle_root
+                    0,    // next_shred_index,
+                    0,    // next_code_index
+                    &ReedSolomonCache::default(),
+                    &mut ProcessShredsStats::default(),
+                )
+                .0;
+            blockstore
+                .insert_shreds(shreds, None, /* is_trusted */ true)
+                .unwrap();
+        }
+    }
+
+    // Restart the node - we have now simulated the following case:
+    // - All nodes entered the migration
+    // - Node 1 and 3 observed the migration success, cleared TowerBFT blocks past genesis
+    //   and are now chugging along in Alpenglow
+    // - The second node observed 5 TowerBFT blocks after the migration, but partitioned off
+    //   before it could view the Genesis Certificate. It has the Genesis block
+    //
+    // BlockID repair is necessary to progress:
+    // - Alpenglow must repair to get the Alpenglow blocks instead of the TowerBFT ones leftover from the
+    //   migrationary period.
+    // - This allows Node 2 to see the first Alpenglow block and enter alpenglow
+    //
+    // Upon observing a finalization certificate from the other nodes, Node 2 will eventually
+    // be able to trigger block id repair. The tricky part is figuring out that we need to replay
+    // these alpenglow blocks from the secondary column. If this is done, then the GenesisCertificate
+    // Marker will be observed and we will enable alpenglow.
+    cluster.restart_node(&node_pubkey, exit_info, SocketAddrSpace::Unspecified);
     cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
 }
 
