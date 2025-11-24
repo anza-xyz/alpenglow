@@ -9,7 +9,6 @@ use {
     },
     bitvec::prelude::{BitVec, Lsb0},
     crossbeam_channel::{Sender, TrySendError},
-    parking_lot::RwLock as PLRwLock,
     rayon::iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
     },
@@ -26,7 +25,7 @@ use {
     solana_streamer::packet::PacketBatch,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
-        consensus_rewards::ConsensusRewards,
+        consensus_rewards::{AddVoteEntry, AddVoteMessage},
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
@@ -88,6 +87,7 @@ enum CertVerifyError {
 
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
+    reward_votes_sender: Sender<AddVoteMessage>,
     message_sender: Sender<ConsensusMessage>,
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
@@ -96,7 +96,6 @@ pub struct BLSSigVerifier {
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
-    consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
 }
 
 impl BLSSigVerifier {
@@ -180,14 +179,8 @@ impl BLSSigVerifier {
 
                     // consensus pool does not need votes for slots other than root slot however the rewards container may still need them.
                     if vote_message.vote.slot() <= root_bank.slot() {
-                        // the only module that takes a write lock on consensus_rewards is this one and it does not take the write lock while it is verifying votes so this should never block.
-                        if self
-                            .consensus_rewards
-                            .read()
-                            .wants_vote(root_bank.slot(), &vote_message)
-                        {
-                            // XXX: actually verify and send the votes.  The verification and sending should happen off the critical path.
-                        }
+                        // XXX: actually verify and send the votes.  The verification and sending should happen off the critical path.
+
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -249,19 +242,20 @@ impl BLSSigVerifier {
             warn!("could not send consensus metrics, receive side of channel is closed");
         }
 
-        {
-            // This should be the only place that is taking a write lock on consensus_rewards.
-            // This lock should not contend with any other operations in this module.
-            // It can contend with the read lock in the block creation loop though as such we should hold it for as little time as possible.
-            let mut guard = self.consensus_rewards.write();
-            let root_slot = root_bank.slot();
-            for v in rewards_votes {
-                if let Some(rank_map) = get_key_to_rank_map(&root_bank, v.vote.slot()) {
-                    let max_validators = rank_map.len();
-                    guard.add_vote(root_slot, max_validators, v);
-                }
-            }
-        }
+        let votes = rewards_votes
+            .into_iter()
+            .filter_map(|v| {
+                get_key_to_rank_map(&root_bank, v.vote.slot()).map(|rank_map| AddVoteEntry {
+                    max_validators: rank_map.len(),
+                    vote: v,
+                })
+            })
+            .collect();
+        let msg = AddVoteMessage {
+            root_slot: root_bank.slot(),
+            votes,
+        };
+        self.reward_votes_sender.send(msg).unwrap();
 
         self.stats.maybe_report_stats();
 
@@ -273,14 +267,15 @@ impl BLSSigVerifier {
     pub fn new(
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
-        consensus_rewards: Arc<PLRwLock<ConsensusRewards>>,
     ) -> Self {
         Self {
             sharable_banks,
             verified_votes_sender,
+            reward_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
@@ -288,7 +283,6 @@ impl BLSSigVerifier {
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
-            consensus_rewards,
         }
     }
 
@@ -299,20 +293,8 @@ impl BLSSigVerifier {
         votes_to_verify: Vec<VoteToVerify>,
     ) -> Result<Vec<VoteMessage>, BLSSigVerifyServiceError<ConsensusMessage>> {
         let verified_votes = self.verify_votes(votes_to_verify);
-
-        let rewards_votes = {
-            // the only module that takes a write lock on consensus_rewards is this one and it does not take the write lock while it is verifying votes so this should never block.
-            let guard = self.consensus_rewards.read();
-            let root_slot = self.sharable_banks.root().slot();
-            verified_votes
-                .iter()
-                .filter_map(|vote| {
-                    guard
-                        .wants_vote(root_slot, &vote.vote_message)
-                        .then_some(vote.vote_message)
-                })
-                .collect()
-        };
+        // XXX: call consensus_rewards::wants_vote() to do some additional filtering here.
+        let reward_votes = verified_votes.iter().map(|v| v.vote_message).collect();
 
         self.stats
             .total_valid_packets
@@ -366,7 +348,7 @@ impl BLSSigVerifier {
             }
         }
 
-        Ok(rewards_votes)
+        Ok(reward_votes)
     }
 
     fn verify_votes(&self, votes_to_verify: Vec<VoteToVerify>) -> Vec<VoteToVerify> {
