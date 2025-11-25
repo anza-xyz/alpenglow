@@ -364,8 +364,8 @@ mod test {
     fn test_serialize_round_trip() {
         // Unfortunately doing `Keypair::new_from_array(rng.gen())` gives
         // different results, so this essentially inlines the implementation
-        // from ed25519_dalek v1:
-        // https://docs.rs/ed25519-dalek/1.0.1/src/ed25519_dalek/secret.rs.html#171
+        // from ed25519_zebra v1:
+        // https://docs.rs/ed25519-dalek/1.0.1/src/ed25519_zebra/secret.rs.html#171
         fn random_keypair<R: RngCore>(rng: &mut R) -> Keypair {
             let mut secret_bytes = [0u8; 32];
             rng.fill_bytes(&mut secret_bytes);

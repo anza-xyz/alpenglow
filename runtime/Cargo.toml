@@ -190,7 +190,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 agave-transaction-view = { workspace = true }
-ed25519-dalek = { workspace = true }
+ed25519-zebra = { workspace = true }
 libsecp256k1 = { workspace = true }
 memoffset = { workspace = true }
 rand0-7 = { package = "rand", version = "0.7" }

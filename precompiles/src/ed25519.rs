@@ -1,6 +1,6 @@
 use {
     agave_feature_set::{ed25519_precompile_verify_strict, FeatureSet},
-    ed25519_dalek::{ed25519::signature::Signature, Verifier},
+    ed25519_zebra::{ed25519::signature::Signature, Verifier},
     solana_ed25519_program::{
         Ed25519SignatureOffsets, PUBKEY_SERIALIZED_SIZE, SIGNATURE_OFFSETS_SERIALIZED_SIZE,
         SIGNATURE_OFFSETS_START, SIGNATURE_SERIALIZED_SIZE,
@@ -60,7 +60,7 @@ pub fn verify(
             PUBKEY_SERIALIZED_SIZE,
         )?;
 
-        let publickey = ed25519_dalek::PublicKey::from_bytes(pubkey)
+        let publickey = ed25519_zebra::PublicKey::from_bytes(pubkey)
             .map_err(|_| PrecompileError::InvalidPublicKey)?;
 
         // Parse out message
@@ -117,7 +117,7 @@ pub mod tests {
         super::*,
         crate::test_verify_with_alignment,
         bytemuck::bytes_of,
-        ed25519_dalek::Signer as EdSigner,
+        ed25519_zebra::Signer as EdSigner,
         hex,
         rand0_7::{thread_rng, Rng},
         solana_ed25519_program::{
@@ -339,7 +339,7 @@ pub mod tests {
     fn test_ed25519() {
         solana_logger::setup();
 
-        let privkey = ed25519_dalek::Keypair::generate(&mut thread_rng());
+        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
         let message_arr = b"hello";
         let signature = privkey.sign(message_arr).to_bytes();
         let pubkey = privkey.public.to_bytes();
@@ -377,7 +377,7 @@ pub mod tests {
     fn test_offsets_to_ed25519_instruction() {
         solana_logger::setup();
 
-        let privkey = ed25519_dalek::Keypair::generate(&mut thread_rng());
+        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
         let messages: [&[u8]; 3] = [b"hello", b"IBRL", b"goodbye"];
         let data_start =
             messages.len() * SIGNATURE_OFFSETS_SERIALIZED_SIZE + SIGNATURE_OFFSETS_START;
@@ -446,8 +446,8 @@ pub mod tests {
     fn test_ed25519_malleability() {
         solana_logger::setup();
 
-        // sig created via ed25519_dalek: both pass
-        let privkey = ed25519_dalek::Keypair::generate(&mut thread_rng());
+        // sig created via ed25519_zebra: both pass
+        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
         let message_arr = b"hello";
         let signature = privkey.sign(message_arr).to_bytes();
         let pubkey = privkey.public.to_bytes();

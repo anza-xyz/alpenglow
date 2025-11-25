@@ -244,7 +244,7 @@ criterion-stats = "0.3.0"
 crossbeam-channel = "0.5.15"
 csv = "1.3.1"
 ctrlc = "3.5.0"
-curve25519-dalek = { version = "4.1.3", features = ["digest", "rand_core"] }
+curve25519-dalek = { git = "https://github.com/zz-sol/curve25519-dalek", branch = "zz/impl_ches25", features = ["digest", "rand_core"] }
 dashmap = "5.5.3"
 derivation-path = { version = "0.2.0", default-features = false }
 derive-where = "1.6.0"
@@ -256,7 +256,7 @@ dirs-next = "2.0.0"
 dlopen2 = "0.5.0"
 dyn-clone = "1.0.20"
 eager = "0.1.0"
-ed25519-dalek = "=1.0.1"
+ed25519-zebra = { git = "https://github.com/zz-sol/ed25519-zebra", branch = "zz/impl_size_halving_verify" }
 ed25519-dalek-bip32 = "0.2.0"
 enum-iterator = "1.5.0"
 env_logger = "0.11.8"
