@@ -47,7 +47,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::{Blockstore, PurgeType},
+        blockstore::Blockstore,
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -1503,8 +1503,7 @@ impl ReplayStage {
             .expect("Highest slot must be present as blockstore is non-empty");
         if end_slot >= start_slot {
             warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
-            blockstore.purge_from_next_slots(start_slot, end_slot);
-            blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+            blockstore.clear_unconfirmed_slots(start_slot, end_slot);
         }
 
         migration_status.enable_alpenglow(exit);
