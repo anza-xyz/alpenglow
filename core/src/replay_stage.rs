@@ -1433,10 +1433,7 @@ impl ReplayStage {
             .unwrap()
             .expect("Highest slot must be present as blockstore is non-empty");
         if end_slot >= start_slot {
-            info!(
-                "{my_pubkey} Alpenglow migration: Purging shreds {start_slot} to {end_slot} from \
-                 blockstore"
-            );
+            warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
             blockstore.clear_unconfirmed_slots(start_slot, end_slot);
         }
 
