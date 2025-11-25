@@ -275,6 +275,7 @@ pub struct Blockstore {
     alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
     alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
     parent_meta_cf: LedgerColumn<cf::ParentMeta>,
+    double_merkle_meta_cf: LedgerColumn<cf::DoubleMerkleMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
     max_root: AtomicU64,
@@ -458,6 +459,7 @@ impl Blockstore {
         let alt_data_shred_cf = db.column();
         let alt_merkle_root_meta_cf = db.column();
         let parent_meta_cf = db.column();
+        let double_merkle_meta_cf = db.column();
 
         // Get max root or 0 if it doesn't exist
         let max_root = roots_cf
@@ -499,6 +501,7 @@ impl Blockstore {
             alt_data_shred_cf,
             alt_merkle_root_meta_cf,
             parent_meta_cf,
+            double_merkle_meta_cf,
 
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
