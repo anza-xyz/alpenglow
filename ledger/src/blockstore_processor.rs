@@ -2,7 +2,7 @@ use {
     crate::{
         block_error::BlockError,
         blockstore::{Blockstore, BlockstoreError},
-        blockstore_meta::SlotMeta,
+        blockstore_meta::{BlockLocation, SlotMeta},
         entry_notifier_service::{EntryNotification, EntryNotifierSender},
         leader_schedule_cache::LeaderScheduleCache,
         transaction_balances::compile_collected_balances,
@@ -845,6 +845,18 @@ pub enum BlockstoreProcessorError {
 
     #[error("block component processor error: {0}")]
     BlockComponentProcessor(#[from] BlockComponentProcessorError),
+
+    #[error("slot {0} at location {1} not full")]
+    SlotNotFull(Slot, BlockLocation),
+
+    #[error("slot {0} at location {1} missing parent")]
+    MissingParent(Slot, BlockLocation),
+
+    #[error("missing merkle root for slot {0}, index {1}")]
+    MissingMerkleRoot(Slot, u64),
+
+    #[error("double merkle root construction failure for slot {0} at location {1}")]
+    FailedDoubleMerkleRootConstruction(Slot, BlockLocation),
 }
 
 /// Callback for accessing bank state after each slot is confirmed while
