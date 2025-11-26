@@ -435,7 +435,7 @@ pub struct BlockVersions {
 }
 
 /// Which column an associated block currently resides
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BlockLocation {
     Original,
     Alternate { block_id: Hash },
@@ -979,11 +979,12 @@ impl OptimisticSlotMetaVersioned {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ParentMeta {
     pub parent_slot: Slot,
     pub parent_block_id: Hash,
     pub replay_fec_set_index: u32,
+    pub children: Vec<(Slot, BlockLocation)>,
 }
 
 impl ParentMeta {
@@ -998,6 +999,11 @@ impl ParentMeta {
     pub fn block(&self) -> (Slot, Hash) {
         (self.parent_slot, self.parent_block_id)
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PendingNextSlotsMeta {
+    pub children: Vec<(Slot, BlockLocation)>,
 }
 
 #[cfg(test)]

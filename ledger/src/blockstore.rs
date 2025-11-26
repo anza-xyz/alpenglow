@@ -275,6 +275,7 @@ pub struct Blockstore {
     alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
     alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
     parent_meta_cf: LedgerColumn<cf::ParentMeta>,
+    pending_next_slots_meta_cf: LedgerColumn<cf::PendingNextSlotsMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
     max_root: AtomicU64,
@@ -351,8 +352,18 @@ struct ShredInsertionTracker<'a> {
     // later be written to `cf::Index` or `cf::AlternateIndex`
     index_working_set: HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
     // In-memory map that maintains the dirty copy of the parent meta.  It will
+    // later be written to `cf::PendingNextSlotsMeta`
+    pending_next_slots_meta_working_set:
+        HashMap<(BlockLocation, u64), WorkingEntry<PendingNextSlotsMeta>>,
+    // In-memory map that maintains the dirty copy of the parent meta.  It will
     // later be written to `cf::ParentMeta`
-    parent_metas: HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    parent_meta_working_set: HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    // In-memory cache that maintains fetched PendingNextSlotsMeta entries from blockstore within
+    // the current shred insertion batch.
+    pending_next_slots_meta_cache: HashMap<(BlockLocation, u64), Option<PendingNextSlotsMeta>>,
+    // In-memory cache that maintains fetched ParentMeta entries from blockstore within the current
+    // shred insertion batch.
+    parent_meta_cache: HashMap<(BlockLocation, u64), Option<ParentMeta>>,
     duplicate_shreds: Vec<PossibleDuplicateShred>,
     // Collection of the current blockstore writes which will be committed
     // atomically.
@@ -371,7 +382,10 @@ impl ShredInsertionTracker<'_> {
             merkle_root_metas: HashMap::new(),
             slot_meta_working_set: HashMap::new(),
             index_working_set: HashMap::new(),
-            parent_metas: HashMap::new(),
+            pending_next_slots_meta_working_set: HashMap::new(),
+            parent_meta_working_set: HashMap::new(),
+            pending_next_slots_meta_cache: HashMap::new(),
+            parent_meta_cache: HashMap::new(),
             duplicate_shreds: vec![],
             write_batch,
             index_meta_time_us: 0,
@@ -458,6 +472,7 @@ impl Blockstore {
         let alt_data_shred_cf = db.column();
         let alt_merkle_root_meta_cf = db.column();
         let parent_meta_cf = db.column();
+        let pending_next_slots_meta_cf = db.column();
 
         // Get max root or 0 if it doesn't exist
         let max_root = roots_cf
@@ -499,6 +514,7 @@ impl Blockstore {
             alt_data_shred_cf,
             alt_merkle_root_meta_cf,
             parent_meta_cf,
+            pending_next_slots_meta_cf,
 
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
@@ -1411,7 +1427,9 @@ impl Blockstore {
             )?;
         }
 
-        for (&(location, slot), working_parent_meta) in &shred_insertion_tracker.parent_metas {
+        for (&(location, slot), working_parent_meta) in
+            &shred_insertion_tracker.parent_meta_working_set
+        {
             let Some(parent_meta) = working_parent_meta.parent_meta.as_ref() else {
                 continue;
             };
@@ -1995,6 +2013,7 @@ impl Blockstore {
             parent_slot,
             parent_block_id,
             replay_fec_set_index: 0,
+            children: vec![],
         };
 
         Some(parent_meta)
@@ -2065,6 +2084,7 @@ impl Blockstore {
             parent_slot: new_parent_slot,
             parent_block_id: new_parent_block_id,
             replay_fec_set_index: target_fec_set_index,
+            children: vec![],
         };
 
         Some(update_parent_meta)
@@ -2113,7 +2133,10 @@ impl Blockstore {
             slot_meta_working_set,
             just_inserted_shreds,
             merkle_root_metas,
-            parent_metas: parent_meta_working_set,
+            pending_next_slots_meta_working_set,
+            parent_meta_working_set,
+            pending_next_slots_meta_cache,
+            parent_meta_cache,
             duplicate_shreds,
             index_meta_time_us,
             erasure_metas,
@@ -2223,8 +2246,11 @@ impl Blockstore {
                 &shred,
                 location,
                 slot,
-                just_inserted_shreds,
+                pending_next_slots_meta_cache,
+                pending_next_slots_meta_working_set,
+                parent_meta_cache,
                 parent_meta_working_set,
+                just_inserted_shreds,
             )?;
         }
 
@@ -2297,22 +2323,31 @@ impl Blockstore {
     ///
     /// This method first checks the working set, and if not found there, fetches from blockstore.
     /// Returns the existing ParentMeta if it exists, or None otherwise.
-    fn get_or_fetch_parent_meta(
+    fn get_or_fetch_parent_meta_with_entry(
         &self,
         slot: Slot,
         location: BlockLocation,
         entry: &mut ParentMetaWorkingSetEntry,
+        parent_meta_cache: &mut HashMap<(BlockLocation, u64), Option<ParentMeta>>,
     ) -> Result<Option<ParentMeta>> {
         // First check working set
+        let key = (location, slot);
+
         if let Some(parent_meta) = entry.parent_meta.as_ref() {
-            return Ok(Some(*parent_meta.as_ref()));
+            let result = Some(parent_meta.as_ref().clone());
+            parent_meta_cache.insert(key, result.clone());
+            return Ok(result);
         }
 
         // Then fetch from blockstore if needed
         if !entry.fetched_from_blockstore {
             entry.fetched_from_blockstore = true;
-            if let Some(parent_meta) = self.parent_meta_cf.get((slot, location))? {
-                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta));
+
+            let result = self.parent_meta_cf.get((slot, location))?;
+            parent_meta_cache.insert(key, result.clone());
+
+            if let Some(parent_meta) = result {
+                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta.clone()));
                 return Ok(Some(parent_meta));
             }
         }
@@ -2320,19 +2355,127 @@ impl Blockstore {
         Ok(None)
     }
 
+    fn get_or_fetch_pending_next_slots_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        pending_next_slots_meta_cache: &mut HashMap<
+            (BlockLocation, u64),
+            Option<PendingNextSlotsMeta>,
+        >,
+        pending_next_slots_meta_working_set: &mut HashMap<
+            (BlockLocation, u64),
+            WorkingEntry<PendingNextSlotsMeta>,
+        >,
+    ) -> Result<Option<PendingNextSlotsMeta>> {
+        let key = (location, slot);
+
+        // First check working set for dirty entry
+        if let Some(WorkingEntry::Dirty(pending_children)) =
+            pending_next_slots_meta_working_set.get(&key)
+        {
+            return Ok(Some(pending_children.clone()));
+        }
+
+        // Then check cache, fetching from blockstore if needed
+        if let Some(cached) = pending_next_slots_meta_cache.get(&key) {
+            return Ok(cached.clone());
+        }
+
+        let result = self.pending_next_slots_meta_cf.get((slot, location))?;
+        pending_next_slots_meta_cache.insert(key, result.clone());
+        Ok(result)
+    }
+
+    fn get_or_fetch_parent_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        parent_meta_cache: &mut HashMap<(BlockLocation, u64), Option<ParentMeta>>,
+        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    ) -> Result<Option<ParentMeta>> {
+        let key = (location, slot);
+
+        // First check working set for dirty entry
+        if let Some(ws) = parent_meta_working_set.get(&key) {
+            if let Some(WorkingEntry::Dirty(parent_meta)) = ws.parent_meta.as_ref() {
+                return Ok(Some(parent_meta.clone()));
+            }
+        }
+
+        // Then check cache, fetching from blockstore if needed
+        if let Some(cached) = parent_meta_cache.get(&key) {
+            return Ok(cached.clone());
+        }
+
+        let result = self.parent_meta_cf.get((slot, location))?;
+        parent_meta_cache.insert(key, result.clone());
+        Ok(result)
+    }
+
+    fn fetch_children_on_new_parent_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        pending_next_slots_meta_cache: &mut HashMap<
+            (BlockLocation, u64),
+            Option<PendingNextSlotsMeta>,
+        >,
+        pending_next_slots_meta_working_set: &mut HashMap<
+            (BlockLocation, u64),
+            WorkingEntry<PendingNextSlotsMeta>,
+        >,
+        new_parent_meta: &mut ParentMeta,
+    ) -> Result<()> {
+        // Fetch or retrieve existing PendingNextSlotsMeta (from working set or blockstore)
+        let pending_next_slots_meta = self.get_or_fetch_pending_next_slots_meta(
+            slot,
+            location,
+            pending_next_slots_meta_cache,
+            pending_next_slots_meta_working_set,
+        )?;
+
+        // Initialize the children for the new parent meta
+        let pending_children = pending_next_slots_meta
+            .map(|pending| pending.children.clone())
+            .unwrap_or(vec![]);
+
+        new_parent_meta.children = pending_children;
+
+        // Clear the pending next slots meta working set for the new parent meta
+        pending_next_slots_meta_working_set.insert(
+            (location, slot),
+            WorkingEntry::Dirty(PendingNextSlotsMeta { children: vec![] }),
+        );
+
+        Ok(())
+    }
+
     fn maybe_update_parent_meta(
         &self,
         shred: &Shred,
         location: BlockLocation,
         slot: u64,
-        just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        pending_next_slots_meta_cache: &mut HashMap<
+            (BlockLocation, u64),
+            Option<PendingNextSlotsMeta>,
+        >,
+        pending_next_slots_meta_working_set: &mut HashMap<
+            (BlockLocation, u64),
+            WorkingEntry<PendingNextSlotsMeta>,
+        >,
+        parent_meta_cache: &mut HashMap<(BlockLocation, u64), Option<ParentMeta>>,
         parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+        just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
     ) -> Result<()> {
         let key = (location, slot);
-        let entry = parent_meta_working_set.entry(key).or_default();
 
-        // Fetch or retrieve existing ParentMeta (from working set or blockstore)
-        let previous_parent_meta = self.get_or_fetch_parent_meta(slot, location, entry)?;
+        let previous_parent_meta = {
+            let entry = parent_meta_working_set.entry(key).or_default();
+
+            // Fetch or retrieve existing ParentMeta (from working set or blockstore)
+            self.get_or_fetch_parent_meta_with_entry(slot, location, entry, parent_meta_cache)?
+        };
 
         // Try to parse new ParentMeta from the current shred
         // - If shred.index() == 0, try to parse as a block header
@@ -2352,7 +2495,7 @@ impl Blockstore {
             _ => None,
         };
 
-        let Some(new_parent_meta) = new_parent_meta else {
+        let Some(mut new_parent_meta) = new_parent_meta else {
             return Ok(());
         };
 
@@ -2361,10 +2504,200 @@ impl Blockstore {
             if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
                 return Ok(());
             }
+
+            // If the previous parent meta was populated from a BlockHeader and the current parent
+            // meta was populated from an UpdateParent, then we need to update the children of the
+            // previous parent meta's parent.
+            if prev.populated_from_block_header() && new_parent_meta.populated_from_update_parent()
+            {
+                self.remove_stale_parent_meta_children(
+                    location,
+                    slot,
+                    prev,
+                    pending_next_slots_meta_cache,
+                    pending_next_slots_meta_working_set,
+                    parent_meta_cache,
+                    parent_meta_working_set,
+                )?;
+            }
+        }
+        // We're about to create a new ParentMeta; initialize its children from PendingNextSlotsMeta.
+        else {
+            self.fetch_children_on_new_parent_meta(
+                slot,
+                location,
+                pending_next_slots_meta_cache,
+                pending_next_slots_meta_working_set,
+                &mut new_parent_meta,
+            )?;
         }
 
         // Update entry with new ParentMeta
-        entry.parent_meta = Some(WorkingEntry::Dirty(new_parent_meta));
+        match parent_meta_working_set.entry(key) {
+            HashMapEntry::Occupied(mut x) => {
+                x.get_mut().parent_meta = Some(WorkingEntry::Dirty(new_parent_meta.clone()));
+            }
+            // This can't happen, since
+            HashMapEntry::Vacant(_) => unreachable!(),
+        };
+
+        self.modify_parent_meta_children(
+            &new_parent_meta,
+            location,
+            slot,
+            pending_next_slots_meta_cache,
+            pending_next_slots_meta_working_set,
+            parent_meta_cache,
+            parent_meta_working_set,
+        )
+    }
+
+    fn remove_stale_child(
+        stale_child: (u64, BlockLocation),
+        children: &mut Vec<(u64, BlockLocation)>,
+    ) -> bool {
+        if let Some(ix) = children.iter().position(|&x| x == stale_child) {
+            children.remove(ix);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove_stale_parent_meta_children(
+        &self,
+        location: BlockLocation,
+        slot: u64,
+        prev_parent_meta: &ParentMeta,
+        pending_next_slots_meta_cache: &mut HashMap<
+            (BlockLocation, u64),
+            Option<PendingNextSlotsMeta>,
+        >,
+        pending_next_slots_meta_working_set: &mut HashMap<
+            (BlockLocation, u64),
+            WorkingEntry<PendingNextSlotsMeta>,
+        >,
+        parent_meta_cache: &mut HashMap<(BlockLocation, u64), Option<ParentMeta>>,
+        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    ) -> Result<()> {
+        let old_parent_slot = prev_parent_meta.parent_slot;
+        let old_parent_location = match matches!(location, BlockLocation::Original) {
+            true => BlockLocation::Original,
+            false => BlockLocation::Alternate {
+                block_id: prev_parent_meta.parent_block_id,
+            },
+        };
+
+        // If the old parent meta is found, then remove the child (i.e., the block associated with
+        // this shred) from the children list. We don't need to check pending next slots, since
+        // once a parent meta is created, the children in its associated pending next slots are
+        // emptied into the parent meta's children list.
+        if let Some(mut old_parent_meta) = self.get_or_fetch_parent_meta(
+            old_parent_slot,
+            old_parent_location,
+            parent_meta_cache,
+            parent_meta_working_set,
+        )? {
+            if Self::remove_stale_child((slot, location), &mut old_parent_meta.children) {
+                parent_meta_working_set.insert(
+                    (location, slot),
+                    ParentMetaWorkingSetEntry {
+                        parent_meta: Some(WorkingEntry::Dirty(old_parent_meta)),
+                        fetched_from_blockstore: true,
+                    },
+                );
+            }
+
+            return Ok(());
+        }
+
+        // We couldn't find an old parent meta, so we need to check if the old parent slot has an
+        // entry in pending next slots meta.
+        let Some(mut old_pending_next_slots) = self.get_or_fetch_pending_next_slots_meta(
+            old_parent_slot,
+            old_parent_location,
+            pending_next_slots_meta_cache,
+            pending_next_slots_meta_working_set,
+        )?
+        else {
+            return Ok(());
+        };
+
+        if Self::remove_stale_child((slot, location), &mut old_pending_next_slots.children) {
+            pending_next_slots_meta_working_set.insert(
+                (location, slot),
+                WorkingEntry::Dirty(old_pending_next_slots),
+            );
+        }
+
+        Ok(())
+    }
+
+    fn modify_parent_meta_children(
+        &self,
+        new_parent_meta: &ParentMeta,
+        location: BlockLocation,
+        slot: u64,
+        pending_next_slots_meta_cache: &mut HashMap<
+            (BlockLocation, u64),
+            Option<PendingNextSlotsMeta>,
+        >,
+        pending_next_slots_meta_working_set: &mut HashMap<
+            (BlockLocation, u64),
+            WorkingEntry<PendingNextSlotsMeta>,
+        >,
+        parent_meta_cache: &mut HashMap<(BlockLocation, u64), Option<ParentMeta>>,
+        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    ) -> Result<()> {
+        let parent_slot = new_parent_meta.parent_slot;
+        let parent_location = match matches!(location, BlockLocation::Original) {
+            true => BlockLocation::Original,
+            false => BlockLocation::Alternate {
+                block_id: new_parent_meta.parent_block_id,
+            },
+        };
+
+        let parent_parent_meta = self.get_or_fetch_parent_meta(
+            slot,
+            location,
+            parent_meta_cache,
+            parent_meta_working_set,
+        )?;
+
+        // If the parent block's ParentMeta does not exist, then we need to register this current
+        // block as a "pending child" for the parent block. Once the parent block shows up, we'll
+        // initialize the ParentMeta for the parent block with all of the pending children.
+        let Some(mut parent_parent_meta) = parent_parent_meta else {
+            let mut pending_next_slots_meta = self
+                .get_or_fetch_pending_next_slots_meta(
+                    parent_slot,
+                    parent_location,
+                    pending_next_slots_meta_cache,
+                    pending_next_slots_meta_working_set,
+                )?
+                .unwrap_or(PendingNextSlotsMeta { children: vec![] });
+
+            pending_next_slots_meta.children.push((slot, location));
+
+            pending_next_slots_meta_working_set.insert(
+                (parent_location, parent_slot),
+                WorkingEntry::Dirty(pending_next_slots_meta),
+            );
+
+            return Ok(());
+        };
+
+        // If the parent block's parent meta exists, then we similarly need to register this current
+        // block as a child of the parent block via parent_parent_meta.
+        parent_parent_meta.children.push((slot, location));
+
+        parent_meta_working_set.insert(
+            (parent_location, parent_slot),
+            ParentMetaWorkingSetEntry {
+                parent_meta: Some(WorkingEntry::Dirty(parent_parent_meta)),
+                fetched_from_blockstore: true,
+            },
+        );
 
         Ok(())
     }
