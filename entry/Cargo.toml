@@ -42,6 +42,7 @@ solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
 solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
+wincode = { workspace = true }
 
 [dev-dependencies]
 agave-reserved-account-keys = { workspace = true }
