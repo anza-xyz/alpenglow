@@ -652,7 +652,9 @@ opt-level = 3
 [patch.crates-io]
 # for details, see https://github.com/anza-xyz/crossbeam/commit/fd279d707025f0e60951e429bf778b4813d1b6bf
 crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "fd279d707025f0e60951e429bf778b4813d1b6bf" }
-
+curve25519-dalek = { git = "https://github.com/zz-sol/curve25519-dalek.git", branch = "zz/impl_ches25" }
+solana-keypair = { git = "https://github.com/anza-xyz/solana-sdk", branch = "zz/integrate-ed25519-heea" }
+# solana-curve25519 = { git = "https://github.com/anza-xyz/solana-sdk", branch = "zz/integrate-ed25519-heea" }
 # We include the following crates as our dependencies above from crates.io:
 #
 #  * spl-associated-token-account-interface
@@ -686,3 +688,4 @@ crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "fd279d
 # There is a similar override in `programs/sbf/Cargo.toml`.  Please keep both
 # comments and the overrides in sync.
 solana-curve25519 = { path = "curves/curve25519" }
+

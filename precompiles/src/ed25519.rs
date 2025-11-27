@@ -1,6 +1,6 @@
 use {
     agave_feature_set::{ed25519_precompile_verify_strict, FeatureSet},
-    ed25519_zebra::{ed25519::signature::Signature, Verifier},
+    ed25519_zebra::Signature,
     solana_ed25519_program::{
         Ed25519SignatureOffsets, PUBKEY_SERIALIZED_SIZE, SIGNATURE_OFFSETS_SERIALIZED_SIZE,
         SIGNATURE_OFFSETS_START, SIGNATURE_SERIALIZED_SIZE,
@@ -48,8 +48,11 @@ pub fn verify(
             SIGNATURE_SERIALIZED_SIZE,
         )?;
 
-        let signature =
-            Signature::from_bytes(signature).map_err(|_| PrecompileError::InvalidSignature)?;
+        let signature = Signature::from_bytes(
+            signature
+                .try_into()
+                .map_err(|_| PrecompileError::InvalidSignature)?,
+        );
 
         // Parse out pubkey
         let pubkey = get_data_slice(
@@ -60,7 +63,7 @@ pub fn verify(
             PUBKEY_SERIALIZED_SIZE,
         )?;
 
-        let publickey = ed25519_zebra::PublicKey::from_bytes(pubkey)
+        let publickey = ed25519_zebra::VerificationKey::try_from(pubkey)
             .map_err(|_| PrecompileError::InvalidPublicKey)?;
 
         // Parse out message
@@ -74,11 +77,11 @@ pub fn verify(
 
         if feature_set.is_active(&ed25519_precompile_verify_strict::id()) {
             publickey
-                .verify_strict(message, &signature)
+                .verify_heea(&signature, message)
                 .map_err(|_| PrecompileError::InvalidSignature)?;
         } else {
             publickey
-                .verify(message, &signature)
+                .verify(&signature, message)
                 .map_err(|_| PrecompileError::InvalidSignature)?;
         }
     }
@@ -117,9 +120,9 @@ pub mod tests {
         super::*,
         crate::test_verify_with_alignment,
         bytemuck::bytes_of,
-        ed25519_zebra::Signer as EdSigner,
         hex,
         rand0_7::{thread_rng, Rng},
+        rand_chacha::rand_core::SeedableRng,
         solana_ed25519_program::{
             new_ed25519_instruction_with_signature, offsets_to_ed25519_instruction, DATA_START,
         },
@@ -339,10 +342,11 @@ pub mod tests {
     fn test_ed25519() {
         solana_logger::setup();
 
-        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
+        let mut chacha_rng = rand_chacha::ChaCha20Rng::from_seed([0; 32]);
+        let privkey = ed25519_zebra::SigningKey::new(&mut chacha_rng);
         let message_arr = b"hello";
         let signature = privkey.sign(message_arr).to_bytes();
-        let pubkey = privkey.public.to_bytes();
+        let pubkey = privkey.verification_key().try_into().unwrap();
         let mut instruction =
             new_ed25519_instruction_with_signature(message_arr, &signature, &pubkey);
         let feature_set = FeatureSet::all_enabled();
@@ -377,7 +381,8 @@ pub mod tests {
     fn test_offsets_to_ed25519_instruction() {
         solana_logger::setup();
 
-        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
+        let mut chacha_rng = rand_chacha::ChaCha20Rng::from_seed([0; 32]);
+        let privkey = ed25519_zebra::SigningKey::new(&mut chacha_rng);
         let messages: [&[u8]; 3] = [b"hello", b"IBRL", b"goodbye"];
         let data_start =
             messages.len() * SIGNATURE_OFFSETS_SERIALIZED_SIZE + SIGNATURE_OFFSETS_START;
@@ -405,8 +410,8 @@ pub mod tests {
 
         let mut instruction = offsets_to_ed25519_instruction(&offsets);
 
-        let pubkey = privkey.public.as_ref();
-        instruction.data.extend_from_slice(pubkey);
+        let pubkey = privkey.verification_key();
+        instruction.data.extend_from_slice(pubkey.as_ref());
 
         for message in messages {
             let signature = privkey.sign(message).to_bytes();
@@ -447,10 +452,11 @@ pub mod tests {
         solana_logger::setup();
 
         // sig created via ed25519_zebra: both pass
-        let privkey = ed25519_zebra::Keypair::generate(&mut thread_rng());
+        let mut chacha_rng = rand_chacha::ChaCha20Rng::from_seed([0; 32]);
+        let privkey = ed25519_zebra::SigningKey::new(&mut chacha_rng);
         let message_arr = b"hello";
         let signature = privkey.sign(message_arr).to_bytes();
-        let pubkey = privkey.public.to_bytes();
+        let pubkey = privkey.verification_key().try_into().unwrap();
         let instruction = new_ed25519_instruction_with_signature(message_arr, &signature, &pubkey);
 
         let feature_set = FeatureSet::default();

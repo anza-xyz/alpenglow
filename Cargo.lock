@@ -297,6 +297,7 @@ dependencies = [
  "libsecp256k1",
  "openssl",
  "rand 0.7.3",
+ "rand_chacha 0.3.1",
  "sha3",
  "solana-ed25519-program",
  "solana-instruction",
@@ -2178,29 +2179,11 @@ dependencies = [
 [[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+source = "git+https://github.com/zz-sol/curve25519-dalek.git?branch=zz%2Fimpl_ches25#f2ba667d323e977801d393baf23bcc2c6c210e0e"
 dependencies = [
  "cfg-if 1.0.3",
  "cpufeatures",
- "curve25519-dalek-derive 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "digest 0.10.7",
- "fiat-crypto",
- "rand_core 0.6.4",
- "rustc_version",
- "serde",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "curve25519-dalek"
-version = "4.1.3"
-source = "git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25#382e8dd3e3ee8968ae07dce96f902286b16bd9ee"
-dependencies = [
- "cfg-if 1.0.3",
- "cpufeatures",
- "curve25519-dalek-derive 0.1.1 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek-derive",
  "digest 0.10.7",
  "fiat-crypto",
  "rand_core 0.6.4",
@@ -2213,18 +2196,7 @@ dependencies = [
 [[package]]
 name = "curve25519-dalek-derive"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
-name = "curve25519-dalek-derive"
-version = "0.1.1"
-source = "git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25#382e8dd3e3ee8968ae07dce96f902286b16bd9ee"
+source = "git+https://github.com/zz-sol/curve25519-dalek.git?branch=zz%2Fimpl_ches25#f2ba667d323e977801d393baf23bcc2c6c210e0e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2576,7 +2548,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "ed25519",
  "rand_core 0.6.4",
  "serde",
@@ -2600,9 +2572,9 @@ dependencies = [
 [[package]]
 name = "ed25519-zebra"
 version = "4.2.0"
-source = "git+https://github.com/zz-sol/ed25519-zebra?branch=zz%2Fimpl_size_halving_verify#1e2d67c667704376665364009a2f9688bd799235"
+source = "git+https://github.com/zz-sol/ed25519-zebra?branch=zz%2Fimpl_size_halving_verify#222acb94a389f5139a66a8515103bf3e51b95c8f"
 dependencies = [
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "ed25519",
  "ethnum",
  "hashbrown 0.16.1",
@@ -7036,7 +7008,7 @@ dependencies = [
  "borsh",
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "five8",
  "five8_const",
  "rand 0.8.5",
@@ -8278,7 +8250,7 @@ checksum = "be0f4b325ca71954295690acab6e2bc6a969ff0d3b028b20ba41f7906bd4044a"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "solana-define-syscall 2.3.0",
  "subtle",
  "thiserror 2.0.16",
@@ -8290,7 +8262,7 @@ version = "3.1.0"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek",
  "solana-curve-traits",
  "solana-define-syscall 3.0.0",
  "subtle",
@@ -9482,7 +9454,7 @@ dependencies = [
  "bv",
  "bytes",
  "caps",
- "curve25519-dalek 4.1.3 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek",
  "dlopen2",
  "fnv",
  "libc",
@@ -12000,7 +11972,7 @@ dependencies = [
  "agave-feature-set",
  "bytemuck",
  "criterion",
- "curve25519-dalek 4.1.3 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek",
  "num-derive",
  "num-traits",
  "solana-instruction",
@@ -12040,7 +12012,7 @@ dependencies = [
  "bincode",
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "getrandom 0.2.16",
  "itertools 0.12.1",
  "js-sys",
@@ -12073,7 +12045,7 @@ dependencies = [
  "agave-feature-set",
  "bytemuck",
  "criterion",
- "curve25519-dalek 4.1.3 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek",
  "num-derive",
  "num-traits",
  "solana-instruction",
@@ -12092,7 +12064,7 @@ dependencies = [
  "bincode",
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3 (git+https://github.com/zz-sol/curve25519-dalek?branch=zz%2Fimpl_ches25)",
+ "curve25519-dalek",
  "itertools 0.12.1",
  "merlin",
  "num-derive",
@@ -12295,7 +12267,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f63a2b41095945dc15274b924b21ccae9b3ec9dc2fdd43dbc08de8c33bbcd915"
 dependencies = [
- "curve25519-dalek 4.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "curve25519-dalek",
  "solana-zk-sdk",
  "thiserror 2.0.16",
 ]
@@ -14426,3 +14398,8 @@ dependencies = [
 name = "crossbeam-epoch"
 version = "0.9.5"
 source = "git+https://github.com/anza-xyz/crossbeam?rev=fd279d707025f0e60951e429bf778b4813d1b6bf#fd279d707025f0e60951e429bf778b4813d1b6bf"
+
+[[patch.unused]]
+name = "solana-keypair"
+version = "3.1.0"
+source = "git+https://github.com/anza-xyz/solana-sdk?branch=zz%2Fintegrate-ed25519-heea#b802218cbb112ccef6354b68dc11336190fa9a33"
