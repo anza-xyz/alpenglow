@@ -4299,13 +4299,7 @@ impl Blockstore {
         let components =
             self.get_slot_components_in_block(slot, &completed_ranges, Some(&slot_meta))?;
 
-        // TODO(ksn): get rid of this once we remove BlockComponent::from_bytes_multiple
-        if completed_ranges.len() != components.len() {
-            return Err(BlockstoreError::BlockComponentMisalignment(
-                slot,
-                start_index,
-            ));
-        }
+        debug_assert_eq!(completed_ranges.len(), components.len());
 
         Ok((components, completed_ranges, slot_meta.is_full()))
     }
@@ -4420,7 +4414,7 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    /// Note that one CompletedRanges corresponds to one BlockComponent.
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn process_slot_data_in_block<T, I, F>(
         &self,
         slot: Slot,
@@ -4512,7 +4506,7 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    /// Note that one CompletedRanges corresponds to one BlockComponent.
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_components_in_block(
         &self,
         slot: Slot,
@@ -4530,7 +4524,7 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
-    /// Note that one CompletedRanges corresponds to one BlockComponent.
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_entries_in_block(
         &self,
         slot: Slot,

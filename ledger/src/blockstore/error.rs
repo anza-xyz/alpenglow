@@ -56,8 +56,6 @@ pub enum BlockstoreError {
     LegacyShred(Slot, u64),
     #[error("unable to read merkle root slot {0}, index {1}")]
     MissingMerkleRoot(Slot, u64),
-    #[error("BlockComponent misalignment slot {0}, index {1}")]
-    BlockComponentMisalignment(Slot, u64),
     #[error("Update parent matches block header slot {0}")]
     UpdateParentMatchesBlockHeader(Slot),
     #[error("Update parent slot greater than block header slot {0}")]
