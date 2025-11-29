@@ -81,13 +81,11 @@ impl BlockComponentProcessor {
         }
 
         // Here onwards, Alpenglow is enabled
-        let marker = match marker {
-            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
-        };
+        let VersionedBlockMarker::V1(marker) = marker;
 
         match marker {
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer),
-            BlockMarkerV1::BlockHeader(header) => self.on_header(header),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
+            BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
             // TODO(ashwin): update genesis certificate account / ticks
@@ -116,9 +114,7 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
 
-        let footer = match footer {
-            VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
-        };
+        let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
         Self::update_bank_with_footer(bank, footer);
@@ -346,7 +342,7 @@ mod tests {
     fn test_on_marker_processes_header() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -378,7 +374,7 @@ mod tests {
         let footer_time_nanos = parent_time_nanos + 300_000_000; // parent + 300ms
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -443,7 +439,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Try to process a block header marker pre-migration - should fail
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -479,7 +475,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Process header marker
-        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -504,7 +500,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -565,7 +561,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker with slot_full=true
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,

@@ -658,9 +658,8 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
 
     // If this the very first alpenglow block, include the genesis certificate
     if parent_slot == ctx.genesis_cert.slot {
-        let genesis_marker = VersionedBlockMarker::Current(BlockMarkerV1::GenesisCertificate(
-            ctx.genesis_cert.clone(),
-        ));
+        let genesis_marker = BlockMarkerV1::new_genesis_certificate(ctx.genesis_cert.clone());
+        let genesis_marker = VersionedBlockMarker::V1(genesis_marker);
         ctx.poh_recorder
             .write()
             .unwrap()

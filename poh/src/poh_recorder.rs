@@ -600,9 +600,9 @@ impl PohRecorder {
         let mut footer = footer.clone();
         footer.bank_hash = working_bank.bank.hash();
 
-        let footer = VersionedBlockFooter::Current(footer.clone());
-        let footer = BlockMarkerV1::BlockFooter(footer);
-        let footer = VersionedBlockMarker::Current(footer);
+        let footer = VersionedBlockFooter::V1(footer.clone());
+        let footer = BlockMarkerV1::new_block_footer(footer);
+        let footer = VersionedBlockMarker::V1(footer);
 
         let footer_entry_marker = (
             EntryMarker::Marker(footer),

@@ -197,10 +197,10 @@ pub fn produce_block_header(parent_slot: Slot, parent_block_id: Hash) -> Version
         parent_block_id,
     };
 
-    let header = VersionedBlockHeader::Current(header);
-    let header = BlockMarkerV1::BlockHeader(header);
+    let header = VersionedBlockHeader::V1(header);
+    let header = BlockMarkerV1::new_block_header(header);
 
-    VersionedBlockMarker::Current(header)
+    VersionedBlockMarker::V1(header)
 }
 
 trait BroadcastRun {
