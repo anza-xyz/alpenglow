@@ -1593,6 +1593,7 @@ impl Validator {
             };
             (tower, VoteHistory::new(identity_keypair.pubkey(), 0))
         };
+        migration_status.log_phase();
 
         let last_vote = tower.last_vote();
 
