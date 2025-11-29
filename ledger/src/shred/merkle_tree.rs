@@ -108,7 +108,6 @@ pub fn get_merkle_tree_size(num_shreds: usize) -> usize {
 }
 
 // Maps number of (code + data) shreds to merkle_proof.len().
-#[cfg(test)]
 pub(crate) const fn get_proof_size(num_shreds: usize) -> u8 {
     let bits = usize::BITS - num_shreds.leading_zeros();
     let proof_size = if num_shreds.is_power_of_two() {

@@ -85,7 +85,7 @@ use {solana_keypair::Keypair, solana_perf::packet::Packet, solana_signer::Signer
 
 mod common;
 pub(crate) mod merkle;
-mod merkle_tree;
+pub(crate) mod merkle_tree;
 mod payload;
 mod shred_code;
 mod shred_data;
