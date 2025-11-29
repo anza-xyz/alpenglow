@@ -698,7 +698,7 @@ impl VersionedBlockMarker {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let marker_bytes = match self {
             Self::V1(marker) | Self::Current(marker) => marker.to_bytes(),
         }?;
@@ -882,7 +882,7 @@ impl BlockMarkerV1 {
     const LENGTH_FIELD_SIZE: u64 = 2;
 
     /// Serializes to bytes with variant ID and byte length prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let (variant_id, data_bytes) = match self {
             Self::BlockFooter(footer) => (0_u8, footer.to_bytes()?),
             Self::BlockHeader(header) => (1_u8, header.to_bytes()?),
@@ -997,7 +997,7 @@ impl BlockFooterV1 {
     }
 
     /// Serializes to bytes with user agent length capping.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let mut buffer = Vec::with_capacity(
             Self::HASH_SIZE
                 + Self::TIMESTAMP_SIZE
@@ -1090,7 +1090,7 @@ impl VersionedBlockFooter {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let footer = match self {
             Self::V1(footer) | Self::Current(footer) => footer,
         };
@@ -1174,13 +1174,13 @@ impl BlockHeaderV1 {
     }
 
     /// Serializes to bytes using bincode.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         bincode::serialize(self)
             .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
     }
 
     /// Deserializes from bytes using bincode.
-    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         bincode::deserialize(data)
             .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))
     }
@@ -1213,7 +1213,7 @@ impl VersionedBlockHeader {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let header = match self {
             Self::V1(header) | Self::Current(header) => header,
         };
@@ -1227,7 +1227,7 @@ impl VersionedBlockHeader {
     }
 
     /// Deserializes from bytes, always creating Current variant.
-    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         let (_version, remaining) = data
             .split_first()
             .ok_or(BlockComponentError::InsufficientData)?;
@@ -1297,13 +1297,13 @@ impl UpdateParentV1 {
     }
 
     /// Serializes to bytes using bincode.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         bincode::serialize(self)
             .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
     }
 
     /// Deserializes from bytes using bincode.
-    fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
         bincode::deserialize(data)
             .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))
     }
@@ -1336,7 +1336,7 @@ impl VersionedUpdateParent {
     }
 
     /// Serializes to bytes with version prefix.
-    fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
         let update = match self {
             Self::V1(update) | Self::Current(update) => update,
         };
