@@ -96,9 +96,7 @@ impl BlockComponentProcessor {
         is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
-        let marker = match marker {
-            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
-        };
+        let VersionedBlockMarker::V1(marker) = marker;
 
         let markers_fully_enabled = migration_status.should_allow_block_markers(slot);
         let in_migration = migration_status.is_in_migration();
@@ -203,9 +201,7 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
 
-        let footer = match footer {
-            VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
-        };
+        let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
         Self::update_bank_with_footer(bank, footer);
@@ -433,7 +429,7 @@ mod tests {
     fn test_on_marker_processes_header() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -465,7 +461,7 @@ mod tests {
         let footer_time_nanos = parent_time_nanos + 300_000_000; // parent + 300ms
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -530,7 +526,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Try to process a block header marker pre-migration - should fail
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -566,7 +562,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Process header marker
-        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -591,7 +587,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -652,7 +648,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker with slot_full=true
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,

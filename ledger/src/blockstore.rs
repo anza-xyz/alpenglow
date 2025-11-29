@@ -4650,7 +4650,12 @@ impl Blockstore {
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
         self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |c| {
-            Ok(c.as_entry_batch_owned().into_iter().flatten())
+            let entries = match c {
+                BlockComponent::EntryBatch(entries) => Some(entries),
+                BlockComponent::BlockMarker(_) => None,
+            };
+
+            Ok(entries.into_iter().flatten())
         })
     }
 
