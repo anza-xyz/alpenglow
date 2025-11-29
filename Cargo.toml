@@ -15,6 +15,7 @@ members = [
     "bench-tps",
     "bench-vote",
     "bloom",
+    "bls-cert-verify",
     "bucket_map",
     "builtins",
     "builtins-default-costs",
@@ -176,6 +177,7 @@ used_underscore_binding = "deny"
 Inflector = "0.11.4"
 aes-gcm-siv = "0.11.1"
 agave-banking-stage-ingress-types = { path = "banking-stage-ingress-types", version = "=3.1.0" }
+agave-bls-cert-verify = { path = "bls-cert-verify" }
 agave-cargo-registry = { path = "cargo-registry", version = "=3.1.0" }
 agave-feature-set = { path = "feature-set", version = "=3.1.0" }
 agave-geyser-plugin-interface = { path = "geyser-plugin-interface", version = "=3.1.0" }
