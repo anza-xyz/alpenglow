@@ -84,6 +84,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "agave-bls-cert-verify"
+version = "3.1.0"
+dependencies = [
+ "bincode",
+ "bitvec",
+ "rayon",
+ "serde",
+ "solana-bls-signatures",
+ "solana-hash",
+ "solana-logger",
+ "solana-signer-store",
+ "solana-votor",
+ "solana-votor-messages",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "agave-cargo-registry"
 version = "3.1.0"
 dependencies = [
@@ -8016,6 +8033,7 @@ name = "solana-core"
 version = "3.1.0"
 dependencies = [
  "agave-banking-stage-ingress-types",
+ "agave-bls-cert-verify",
  "agave-feature-set",
  "agave-reserved-account-keys",
  "agave-transaction-view",
