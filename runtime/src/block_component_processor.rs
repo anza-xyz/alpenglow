@@ -1,12 +1,15 @@
 use {
-    crate::bank::Bank,
+    crate::{
+        bank::{Bank, NewBankOptions},
+        bank_forks::BankForks,
+    },
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
-        VersionedBlockMarker,
+        VersionedBlockMarker, VersionedUpdateParent,
     },
     solana_votor_messages::migration::MigrationStatus,
-    std::sync::Arc,
+    std::sync::{Arc, RwLock},
     thiserror::Error,
 };
 
@@ -69,6 +72,7 @@ impl BlockComponentProcessor {
 
     pub fn on_marker(
         &mut self,
+        bank_forks: &RwLock<BankForks>,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: &VersionedBlockMarker,
@@ -88,8 +92,9 @@ impl BlockComponentProcessor {
         match marker {
             BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer),
             BlockMarkerV1::BlockHeader(header) => self.on_header(header),
-            // We process UpdateParent messages on shred ingest, so no callback needed here
-            BlockMarkerV1::UpdateParent(_) => Ok(()),
+            BlockMarkerV1::UpdateParent(update_parent) => {
+                self.on_update_parent(bank_forks, parent_bank, bank.slot(), update_parent)
+            }
             // TODO(ashwin): update genesis certificate account / ticks
             BlockMarkerV1::GenesisCertificate(_) => Ok(()),
         }?;
@@ -136,6 +141,28 @@ impl BlockComponentProcessor {
         }
 
         self.has_header = true;
+        Ok(())
+    }
+
+    fn on_update_parent(
+        &mut self,
+        bank_forks: &RwLock<BankForks>,
+        parent_bank: Arc<Bank>,
+        slot: Slot,
+        _update_parent: &VersionedUpdateParent,
+    ) -> Result<(), BlockComponentProcessorError> {
+        clear_bank(bank_forks, slot);
+
+        let new_bank = Bank::new_from_parent_with_options(
+            parent_bank.clone(),
+            // TODO(ksn): ensure that we verify on shred ingest that 1 <= slot - parent_slot < 4
+            parent_bank.collector_id(),
+            slot,
+            NewBankOptions::default(),
+        );
+
+        bank_forks.write().unwrap().insert(new_bank);
+
         Ok(())
     }
 
@@ -197,14 +224,29 @@ impl BlockComponentProcessor {
     }
 }
 
+pub fn clear_bank(bank_forks: &RwLock<BankForks>, slot: u64) {
+    let mut w_bank_forks = bank_forks.write().unwrap();
+    let (slots_to_purge, removed_banks) = w_bank_forks.dump_slots(std::iter::once(&slot));
+
+    let root_bank = w_bank_forks.root_bank();
+    root_bank.remove_unrooted_slots(&slots_to_purge);
+
+    drop(removed_banks);
+
+    for (slot, _) in slots_to_purge {
+        root_bank.clear_slot_signatures(slot);
+        root_bank.prune_program_cache_by_deployment_slot(slot);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::{bank::Bank, genesis_utils::create_genesis_config},
+        crate::{bank::Bank, bank_forks::BankForks, genesis_utils::create_genesis_config},
         solana_entry::block_component::{BlockFooterV1, BlockHeaderV1},
         solana_program::{hash::Hash, pubkey::Pubkey},
-        std::sync::Arc,
+        std::sync::{Arc, RwLock},
     };
 
     fn create_test_bank() -> Arc<Bank> {
@@ -218,6 +260,12 @@ mod tests {
             &Pubkey::new_unique(),
             slot,
         ))
+    }
+
+    fn create_bank_forks() -> Arc<RwLock<BankForks>> {
+        let genesis_config_info = create_genesis_config(10_000);
+        let bank = Bank::new_for_tests(&genesis_config_info.genesis_config);
+        BankForks::new_rw_arc(bank)
     }
 
     #[test]
@@ -355,9 +403,10 @@ mod tests {
 
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         processor
-            .on_marker(bank, parent, &marker, &migration_status, false)
+            .on_marker(&bank_forks, bank, parent, &marker, &migration_status, false)
             .unwrap();
         assert!(processor.has_header);
     }
@@ -372,6 +421,7 @@ mod tests {
 
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Calculate valid timestamp based on parent's time
         let parent_time_nanos = parent.clock().unix_timestamp.saturating_mul(1_000_000_000);
@@ -387,7 +437,14 @@ mod tests {
         ));
 
         processor
-            .on_marker(bank.clone(), parent, &marker, &migration_status, false)
+            .on_marker(
+                &bank_forks,
+                bank.clone(),
+                parent,
+                &marker,
+                &migration_status,
+                false,
+            )
             .unwrap();
         assert!(processor.has_footer);
 
@@ -441,6 +498,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Try to process a block header marker pre-migration - should fail
         let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
@@ -450,7 +508,8 @@ mod tests {
             }),
         ));
 
-        let result = processor.on_marker(bank, parent, &marker, &migration_status, false);
+        let result =
+            processor.on_marker(&bank_forks, bank, parent, &marker, &migration_status, false);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -477,6 +536,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Process header marker
         let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
@@ -487,6 +547,7 @@ mod tests {
         ));
         processor
             .on_marker(
+                &bank_forks,
                 bank.clone(),
                 parent.clone(),
                 &header_marker,
@@ -513,6 +574,7 @@ mod tests {
         ));
         processor
             .on_marker(
+                &bank_forks,
                 bank.clone(),
                 parent,
                 &footer_marker,
@@ -555,6 +617,7 @@ mod tests {
         let mut processor = BlockComponentProcessor::default();
         let parent = create_test_bank();
         let bank = create_child_bank(&parent, 1);
+        let bank_forks = create_bank_forks();
 
         // Process header first
         processor.has_header = true;
@@ -575,6 +638,7 @@ mod tests {
 
         // Should succeed - footer is processed and slot_full validation passes
         let result = processor.on_marker(
+            &bank_forks,
             bank.clone(),
             parent,
             &footer_marker,

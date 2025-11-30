@@ -13,7 +13,7 @@ pub struct CompletedBlock {
     pub bank: Arc<Bank>,
 }
 
-/// Context for the block creation loop to start a leader window
+/// Context for the block creation loop to start a leader window. end_slot is inclusive.
 #[derive(Copy, Clone, Debug)]
 pub struct LeaderWindowInfo {
     pub start_slot: Slot,

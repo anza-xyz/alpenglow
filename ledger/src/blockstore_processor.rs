@@ -939,6 +939,7 @@ pub(crate) fn process_blockstore_for_bank_0(
     info!("Processing ledger for slot 0...");
     let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
     process_bank_0(
+        &bank_forks,
         &bank_forks
             .read()
             .unwrap()
@@ -1126,6 +1127,7 @@ fn verify_ticks(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn confirm_full_slot(
+    bank_forks: &RwLock<BankForks>,
     blockstore: &Blockstore,
     bank: &BankWithScheduler,
     replay_tx_thread_pool: &ThreadPool,
@@ -1143,6 +1145,7 @@ fn confirm_full_slot(
     let ignored_prioritization_fee_cache = PrioritizationFeeCache::new(0u64);
 
     confirm_slot(
+        bank_forks,
         blockstore,
         bank,
         replay_tx_thread_pool,
@@ -1483,6 +1486,7 @@ impl ConfirmationProgress {
 
 #[allow(clippy::too_many_arguments)]
 pub fn confirm_slot(
+    bank_forks: &RwLock<BankForks>,
     blockstore: &Blockstore,
     bank: &BankWithScheduler,
     replay_tx_thread_pool: &ThreadPool,
@@ -1577,6 +1581,7 @@ pub fn confirm_slot(
                 if let Some(parent_bank) = bank.parent() {
                     processor
                         .on_marker(
+                            bank_forks,
                             bank.clone_without_scheduler(),
                             parent_bank,
                             &marker,
@@ -1816,6 +1821,7 @@ fn confirm_slot_entries(
 // Special handling required for processing the entries in slot 0
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn process_bank_0(
+    bank_forks: &RwLock<BankForks>,
     bank0: &BankWithScheduler,
     blockstore: &Blockstore,
     replay_tx_thread_pool: &ThreadPool,
@@ -1828,6 +1834,7 @@ fn process_bank_0(
     assert_eq!(bank0.slot(), 0);
     let mut progress = ConfirmationProgress::new(bank0.last_blockhash());
     confirm_full_slot(
+        bank_forks,
         blockstore,
         bank0,
         replay_tx_thread_pool,
@@ -2027,6 +2034,7 @@ fn load_frozen_forks(
             let mut m = Measure::start("process_single_slot");
             let bank = bank_forks.write().unwrap().insert_from_ledger(bank);
             if let Err(error) = process_single_slot(
+                bank_forks,
                 blockstore,
                 &bank,
                 replay_tx_thread_pool,
@@ -2215,6 +2223,7 @@ fn supermajority_root_from_vote_accounts(
 // if failed to play the slot
 #[allow(clippy::too_many_arguments)]
 pub fn process_single_slot(
+    bank_forks: &RwLock<BankForks>,
     blockstore: &Blockstore,
     bank: &BankWithScheduler,
     replay_tx_thread_pool: &ThreadPool,
@@ -2231,6 +2240,7 @@ pub fn process_single_slot(
     // Mark corrupt slots as dead so validators don't replay this slot and
     // see AlreadyProcessed errors later in ReplayStage
     confirm_full_slot(
+        bank_forks,
         blockstore,
         bank,
         replay_tx_thread_pool,
@@ -4303,6 +4313,7 @@ pub mod tests {
         let recyclers = VerifyRecyclers::default();
         let replay_tx_thread_pool = create_thread_pool(1);
         process_bank_0(
+            &bank_forks,
             &bank0,
             &blockstore,
             &replay_tx_thread_pool,
@@ -4320,6 +4331,7 @@ pub mod tests {
             1,
         ));
         confirm_full_slot(
+            &bank_forks,
             &blockstore,
             &bank1,
             &replay_tx_thread_pool,
