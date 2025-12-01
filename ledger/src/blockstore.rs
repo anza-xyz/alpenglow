@@ -874,73 +874,69 @@ impl Blockstore {
         }
     }
 
-    /// Fetches (and populates if needed) the DoubleMerkleMeta for the given block.
-    /// Returns the double_merkle_root
-    ///
-    /// Should only be used on full blocks.
-    pub fn get_or_compute_double_merkle_root(
+    /// Gets the double merkle root for the given block, computing it if necessary.
+    /// Fails and returns `None` if the block is missing or not full
+    pub fn get_double_merkle_root(
         &self,
         slot: Slot,
         block_location: BlockLocation,
-    ) -> std::result::Result<Hash, BlockstoreProcessorError> {
+    ) -> Option<Hash> {
         if let Some(double_merkle_meta) = self
             .double_merkle_meta_cf
             .get((slot, block_location))
             .expect("Blockstore operations must succeed")
         {
-            return Ok(double_merkle_meta.double_merkle_root);
+            return Some(double_merkle_meta.double_merkle_root);
         }
 
-        // Compute double merkle - slot must be full at this point
-        let Some(slot_meta) = self
+        self.compute_double_merkle_root(slot, block_location)
+    }
+
+    /// Computes the double merkle root & proofs for the given block and inserts the DoubleMerkleMeta.
+    /// Fails if the slot is not full returning `None` otherwise returns the double merkle root
+    fn compute_double_merkle_root(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Option<Hash> {
+        let slot_meta = self
             .meta_cf
             .get(slot)
-            .expect("Blockstore operations must succeed")
-        else {
-            return Err(BlockstoreProcessorError::FailedToLoadMeta);
-        };
+            .expect("Blockstore operations must succeed")?;
 
         if !slot_meta.is_full() {
-            return Err(BlockstoreProcessorError::SlotNotFull(slot, block_location));
+            return None;
         }
 
-        let Some(last_index) = slot_meta.last_index else {
-            return Err(BlockstoreProcessorError::SlotNotFull(slot, block_location));
-        };
+        let last_index = slot_meta.last_index.expect("Slot is full");
 
         // This function is only used post Alpenglow, so implicitely gated by SIMD-0317 as that is a prereq
         let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
 
-        let Some(parent_meta) = self
+        let parent_meta = self
             .parent_meta_cf
             .get((slot, block_location))
             .expect("Blockstore operations must succeed")
-        else {
-            return Err(BlockstoreProcessorError::MissingParent(
-                slot,
-                block_location,
-            ));
-        };
+            .expect("Slot cannot be full without parent");
 
         // Collect merkle roots for each FEC set
-        let mut merkle_tree_leaves = Vec::with_capacity(fec_set_count + 1);
-
-        for i in 0..fec_set_count {
-            let fec_set_index = (i * DATA_SHREDS_PER_FEC_BLOCK) as u32;
-            let erasure_set_id = ErasureSetId::new(slot, fec_set_index);
-
-            let Some(merkle_root) = self
-                .merkle_root_meta_from_location(erasure_set_id, block_location)
-                .expect("Blockstore operations must succeed")
-                .and_then(|mrm| mrm.merkle_root())
-            else {
-                return Err(BlockstoreProcessorError::MissingMerkleRoot(
-                    slot,
-                    fec_set_index as u64,
-                ));
-            };
-            merkle_tree_leaves.push(Ok(merkle_root));
-        }
+        let fec_set_indices =
+            (0..fec_set_count).map(|i| (slot, (i * DATA_SHREDS_PER_FEC_BLOCK) as u32));
+        let keys = self.merkle_root_meta_cf.multi_get_keys(fec_set_indices);
+        let mut merkle_tree_leaves = self
+            .merkle_root_meta_cf
+            .multi_get_bytes(&keys)
+            .map(|get_result| {
+                let bytes = get_result
+                    .expect("Blockstore operations must succeed")
+                    .expect("Merkle root meta must exist for all fec sets in full slot");
+                let merkle_root = bincode::deserialize::<MerkleRootMeta>(bytes.as_ref())
+                    .expect("Merkle root meta column only contains valid MerkleRootMetas")
+                    .merkle_root()
+                    .expect("Legacy shreds no longer exist, merkle root must be present");
+                Ok(merkle_root)
+            })
+            .collect::<Vec<_>>();
 
         // Add parent info as the last leaf
         let parent_info_hash = hashv(&[
@@ -950,9 +946,8 @@ impl Blockstore {
         merkle_tree_leaves.push(Ok(parent_info_hash));
 
         // Build the merkle tree
-        let merkle_tree = make_merkle_tree(merkle_tree_leaves).map_err(|_| {
-            BlockstoreProcessorError::FailedDoubleMerkleRootConstruction(slot, block_location)
-        })?;
+        let merkle_tree = make_merkle_tree(merkle_tree_leaves)
+            .expect("Merkle tree construction cannot have failed");
         let double_merkle_root = *merkle_tree
             .last()
             .expect("Merkle tree cannot be empty as fec_set_count is > 0");
@@ -964,20 +959,16 @@ impl Blockstore {
         for leaf_index in 0..tree_size {
             let proof_iter = make_merkle_proof(leaf_index, tree_size, &merkle_tree);
             let proof: Vec<u8> = proof_iter
-                .map(|proof| proof.map(|p| p.as_slice()))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|_| {
-                    BlockstoreProcessorError::FailedDoubleMerkleRootConstruction(
-                        slot,
-                        block_location,
-                    )
-                })?
-                .into_iter()
-                .flatten()
+                .flat_map(|proof| {
+                    proof
+                        .expect("Merkle proof construction cannot have failed")
+                        .as_slice()
+                })
                 .copied()
                 .collect();
-            debug_assert!(
-                proof.len() == get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
+            debug_assert_eq!(
+                proof.len(),
+                get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
             );
             proofs.push(proof);
         }
@@ -993,7 +984,7 @@ impl Blockstore {
             .put((slot, block_location), &double_merkle_meta)
             .expect("Blockstore operations must succeed");
 
-        Ok(double_merkle_root)
+        Some(double_merkle_root)
     }
 
     /// Check whether the specified slot is an orphan slot which does not
@@ -12929,7 +12920,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_get_or_compute_double_merkle_root() {
+    fn test_get_double_merkle_root() {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -12971,7 +12962,7 @@ pub mod tests {
         // Test getting the double merkle root
         let block_location = BlockLocation::Original;
         let double_merkle_root = blockstore
-            .get_or_compute_double_merkle_root(slot, block_location)
+            .get_double_merkle_root(slot, block_location)
             .unwrap();
 
         let double_merkle_meta = blockstore
@@ -13035,14 +13026,8 @@ pub mod tests {
             assert!(duplicates.is_empty());
         }
 
-        let result = blockstore.get_or_compute_double_merkle_root(incomplete_slot, block_location);
-        match result {
-            Err(BlockstoreProcessorError::SlotNotFull(slot, loc)) => {
-                assert_eq!(slot, incomplete_slot);
-                assert_eq!(loc, block_location);
-            } // This is the expected error
-            Err(e) => panic!("Unexpected error: {e:?}"),
-            Ok(_) => panic!("Expected error but got Ok"),
-        }
+        assert!(blockstore
+            .get_double_merkle_root(incomplete_slot, block_location)
+            .is_none());
     }
 }
