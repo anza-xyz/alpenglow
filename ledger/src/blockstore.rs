@@ -4299,13 +4299,7 @@ impl Blockstore {
         let components =
             self.get_slot_components_in_block(slot, &completed_ranges, Some(&slot_meta))?;
 
-        // TODO(ksn): get rid of this once we remove BlockComponent::from_bytes_multiple
-        if completed_ranges.len() != components.len() {
-            return Err(BlockstoreError::BlockComponentMisalignment(
-                slot,
-                start_index,
-            ));
-        }
+        debug_assert_eq!(completed_ranges.len(), components.len());
 
         Ok((components, completed_ranges, slot_meta.is_full()))
     }
@@ -4420,6 +4414,7 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn process_slot_data_in_block<T, I, F>(
         &self,
         slot: Slot,
@@ -4429,7 +4424,7 @@ impl Blockstore {
     ) -> Result<Vec<T>>
     where
         I: IntoIterator<Item = T>,
-        F: Fn(Vec<BlockComponent>) -> Result<I>,
+        F: Fn(BlockComponent) -> Result<I>,
     {
         debug_assert!(completed_ranges
             .iter()
@@ -4474,30 +4469,29 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        let components =
-                            BlockComponent::from_bytes_multiple(&payload).map_err(|e| {
+                        let (component, bytes_consumed) = BlockComponent::from_bytes(&payload)
+                            .map_err(|e| {
                                 BlockstoreError::InvalidShredData(Box::new(
                                     bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct block components: {e:?}"
+                                        "could not reconstruct block component: {e:?}"
                                     )),
                                 ))
                             })?;
 
                         // Enforce that completed ranges have precisely one BlockComponent.
-                        // TODO(ksn): we can substantially clean up the parsing logic because of
-                        // this assumption.
-                        if components.len() != 1 {
+                        if bytes_consumed != payload.len() {
                             return Err(BlockstoreError::InvalidShredData(Box::new(
                                 bincode::ErrorKind::Custom(format!(
-                                    "expected 1 component, but got {}",
-                                    components.len()
+                                    "expected 1 component consuming {} bytes, but only consumed {}",
+                                    payload.len(),
+                                    bytes_consumed
                                 )),
                             )));
                         }
 
-                        transform(components).map_err(|e| {
+                        transform(component).map_err(|e| {
                             BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                                format!("could not transform block components: {e:?}"),
+                                format!("could not transform block component: {e:?}"),
                             )))
                         })
                     })
@@ -4512,13 +4506,16 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<BlockComponent>> {
-        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| Ok(cs.into_iter()))
+        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |c| {
+            Ok(std::iter::once(c))
+        })
     }
 
     /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
@@ -4527,17 +4524,15 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_entries_in_block(
         &self,
         slot: Slot,
         completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
-        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| {
-            Ok(cs
-                .into_iter()
-                .filter_map(|bc| bc.as_entry_batch_owned())
-                .flatten())
+        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |c| {
+            Ok(c.as_entry_batch_owned().into_iter().flatten())
         })
     }
 
