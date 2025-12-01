@@ -79,29 +79,21 @@ fn verify_base3_certificate<F>(
 where
     F: Fn(usize) -> Option<BlsPubkey> + Sync,
 {
-    let Some((vote1, vote2)) = cert_to_verify.cert_type.to_source_votes() else {
-        return Err(CertVerifyError::Base3EncodingOnUnexpectedCert(
-            cert_to_verify.cert_type,
-        ));
-    };
-
-    let Ok(signed_payload1) = bincode::serialize(&vote1) else {
-        return Err(CertVerifyError::SerializationFailed);
-    };
-    let Ok(signed_payload2) = bincode::serialize(&vote2) else {
-        return Err(CertVerifyError::SerializationFailed);
-    };
+    let (vote1, vote2) = cert_to_verify.cert_type.to_source_votes().ok_or(
+        CertVerifyError::Base3EncodingOnUnexpectedCert(cert_to_verify.cert_type),
+    )?;
+    let signed_payload1 =
+        bincode::serialize(&vote1).map_err(|_| CertVerifyError::SerializationFailed)?;
+    let signed_payload2 =
+        bincode::serialize(&vote2).map_err(|_| CertVerifyError::SerializationFailed)?;
 
     let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
 
     // Aggregate the two sets of public keys separately from the two bitmaps.
-    let Some(agg_pk1) = aggregate_keys_from_bitmap(bit_vec1, rank_to_pubkey) else {
-        return Err(CertVerifyError::KeyAggregationFailed);
-    };
-    let Some(agg_pk2) = aggregate_keys_from_bitmap(bit_vec2, rank_to_pubkey) else {
-        return Err(CertVerifyError::KeyAggregationFailed);
-    };
-
+    let agg_pk1 = aggregate_keys_from_bitmap(bit_vec1, rank_to_pubkey)
+        .ok_or(CertVerifyError::KeyAggregationFailed)?;
+    let agg_pk2 = aggregate_keys_from_bitmap(bit_vec2, rank_to_pubkey)
+        .ok_or(CertVerifyError::KeyAggregationFailed)?;
     let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
 
     match SignatureProjective::par_verify_distinct_aggregated(
