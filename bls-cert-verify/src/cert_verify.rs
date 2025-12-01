@@ -37,12 +37,11 @@ fn aggregate_keys_from_bitmap<F>(
 where
     F: Fn(usize) -> Option<BlsPubkey> + Sync,
 {
-    let pubkeys: Result<Vec<_>, _> = bit_vec
+    let pubkeys: Vec<_> = bit_vec
         .iter_ones()
         .filter_map(rank_to_pubkey)
-        .map(PubkeyProjective::try_from)
+        .filter_map(|pk| PubkeyProjective::try_from(pk).ok())
         .collect();
-    let pubkeys = pubkeys.ok()?;
     PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
 }
 
