@@ -55,13 +55,11 @@ where
 {
     let original_vote = cert_to_verify.cert_type.to_source_vote();
 
-    let Ok(signed_payload) = bincode::serialize(&original_vote) else {
-        return Err(CertVerifyError::SerializationFailed);
-    };
+    let signed_payload =
+        bincode::serialize(&original_vote).map_err(|_| CertVerifyError::SerializationFailed)?;
 
-    let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, rank_to_pubkey) else {
-        return Err(CertVerifyError::KeyAggregationFailed);
-    };
+    let aggregate_bls_pubkey = aggregate_keys_from_bitmap(bit_vec, rank_to_pubkey)
+        .ok_or(CertVerifyError::KeyAggregationFailed)?;
 
     if let Ok(true) =
         aggregate_bls_pubkey.verify_signature(&cert_to_verify.signature, &signed_payload)
