@@ -125,12 +125,8 @@ pub fn verify_votor_message_certificate<F>(
 where
     F: Fn(usize) -> Option<BlsPubkey> + Sync,
 {
-    let decoded_bitmap = match decode(&cert_to_verify.bitmap, max_len) {
-        Ok(decoded) => decoded,
-        Err(e) => {
-            return Err(CertVerifyError::BitmapDecodingFailed(e));
-        }
-    };
+    let decoded_bitmap =
+        decode(&cert_to_verify.bitmap, max_len).map_err(CertVerifyError::BitmapDecodingFailed)?;
 
     match decoded_bitmap {
         solana_signer_store::Decoded::Base2(bit_vec) => {
