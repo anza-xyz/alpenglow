@@ -910,7 +910,7 @@ impl Blockstore {
 
         let last_index = slot_meta.last_index.expect("Slot is full");
 
-        // This function is only used post Alpenglow, so implicitely gated by SIMD-0317 as that is a prereq
+        // This function is only used post Alpenglow, so implicitly gated by SIMD-0317 as that is a prereq
         let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
 
         let parent_meta = self
@@ -923,7 +923,7 @@ impl Blockstore {
         let fec_set_indices =
             (0..fec_set_count).map(|i| (slot, (i * DATA_SHREDS_PER_FEC_BLOCK) as u32));
         let keys = self.merkle_root_meta_cf.multi_get_keys(fec_set_indices);
-        let mut merkle_tree_leaves = self
+        let merkle_tree_leaves: Vec<_> = self
             .merkle_root_meta_cf
             .multi_get_bytes(&keys)
             .map(|get_result| {
@@ -936,14 +936,12 @@ impl Blockstore {
                     .expect("Legacy shreds no longer exist, merkle root must be present");
                 Ok(merkle_root)
             })
-            .collect::<Vec<_>>();
-
-        // Add parent info as the last leaf
-        let parent_info_hash = hashv(&[
-            &parent_meta.parent_slot.to_le_bytes(),
-            parent_meta.parent_block_id.as_ref(),
-        ]);
-        merkle_tree_leaves.push(Ok(parent_info_hash));
+            // Add parent info as the last leaf
+            .chain(std::iter::once(Ok(hashv(&[
+                &parent_meta.parent_slot.to_le_bytes(),
+                parent_meta.parent_block_id.as_ref(),
+            ]))))
+            .collect();
 
         // Build the merkle tree
         let merkle_tree = make_merkle_tree(merkle_tree_leaves)
@@ -954,24 +952,23 @@ impl Blockstore {
 
         // Build proofs
         let tree_size = fec_set_count + 1;
-        let mut proofs = Vec::with_capacity(tree_size);
-
-        for leaf_index in 0..tree_size {
-            let proof_iter = make_merkle_proof(leaf_index, tree_size, &merkle_tree);
-            let proof: Vec<u8> = proof_iter
-                .flat_map(|proof| {
-                    proof
-                        .expect("Merkle proof construction cannot have failed")
-                        .as_slice()
-                })
-                .copied()
-                .collect();
-            debug_assert_eq!(
-                proof.len(),
-                get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
-            );
-            proofs.push(proof);
-        }
+        let proofs: Vec<Vec<u8>> = (0..tree_size)
+            .map(|leaf_index| {
+                make_merkle_proof(leaf_index, tree_size, &merkle_tree)
+                    .map(|proof_entry| {
+                        proof_entry.expect("Merkle proof construction cannot have failed")
+                    })
+                    .flat_map(|proof_entry| proof_entry.as_slice())
+                    .copied()
+                    .collect()
+            })
+            .inspect(|proof: &Vec<u8>| {
+                debug_assert_eq!(
+                    proof.len(),
+                    get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
+                );
+            })
+            .collect();
 
         // Create and store DoubleMerkleMeta
         let double_merkle_meta = DoubleMerkleMeta {
