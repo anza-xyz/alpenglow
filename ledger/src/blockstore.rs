@@ -44,8 +44,7 @@ use {
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
     solana_entry::{
         block_component::{
-            BlockComponent, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
-            VersionedUpdateParent,
+            BlockComponent, VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
         },
         entry::{create_ticks, Entry},
     },
@@ -2110,12 +2109,8 @@ impl Blockstore {
 
         // Try to parse BlockHeader from the payload
         let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
-        let VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header)) = component.as_marker()?
-        else {
-            return None;
-        };
-
-        let VersionedBlockHeader::V1(header) = header.inner();
+        let VersionedBlockMarker::V1(marker) = component.as_marker()?;
+        let VersionedBlockHeader::V1(header) = marker.as_block_header()?;
 
         let parent_meta = ParentMeta {
             parent_slot: header.parent_slot,
@@ -2184,13 +2179,8 @@ impl Blockstore {
 
         // Try to parse UpdateParent from the payload
         let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
-        let VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(update_parent)) =
-            component.as_marker()?
-        else {
-            return None;
-        };
-
-        let VersionedUpdateParent::V1(update_parent) = update_parent.inner();
+        let VersionedBlockMarker::V1(marker) = component.as_marker()?;
+        let VersionedUpdateParent::V1(update_parent) = marker.as_update_parent()?;
 
         // First time seeing this UpdateParent
         let update_parent_meta = ParentMeta {
