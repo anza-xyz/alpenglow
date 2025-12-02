@@ -199,6 +199,16 @@ pub enum BlockComponentError {
     EmptyEntryBatch,
 }
 
+/// Block production metadata. User agent is capped at 255 bytes.
+#[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
+pub struct BlockFooterV1 {
+    #[wincode(with = "Pod<Hash>")]
+    pub bank_hash: Hash,
+    pub block_producer_time_nanos: u64,
+    #[wincode(with = "WincodeVec<u8, U8Len>")]
+    pub block_user_agent: Vec<u8>,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
 pub struct BlockHeaderV1 {
     pub parent_slot: Slot,
@@ -211,16 +221,6 @@ pub struct UpdateParentV1 {
     pub new_parent_slot: Slot,
     #[wincode(with = "Pod<Hash>")]
     pub new_parent_block_id: Hash,
-}
-
-/// Block production metadata. User agent is capped at 255 bytes.
-#[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
-pub struct BlockFooterV1 {
-    #[wincode(with = "Pod<Hash>")]
-    pub bank_hash: Hash,
-    pub block_producer_time_nanos: u64,
-    #[wincode(with = "WincodeVec<u8, U8Len>")]
-    pub block_user_agent: Vec<u8>,
 }
 
 /// Attests to genesis block finalization with a BLS aggregate signature.
@@ -401,7 +401,7 @@ impl BlockComponent {
     }
 
     pub fn infer_is_entry_batch(data: &[u8]) -> Option<bool> {
-        data.get(..8)?
+        data.get(..Self::ENTRY_COUNT_SIZE)?
             .try_into()
             .ok()
             .map(|b| u64::from_le_bytes(b) != 0)
