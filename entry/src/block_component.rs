@@ -97,12 +97,13 @@ use {
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::consensus_message::{Certificate, CertificateType},
-    std::{error::Error, fmt, marker::PhantomData, mem::MaybeUninit},
+    std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
+        error::write_length_encoding_overflow,
         io::{Reader, Writer},
         len::{BincodeLen, SeqLen},
-        ReadResult, SchemaRead, SchemaWrite, WriteError, WriteResult,
+        ReadResult, SchemaRead, SchemaWrite, TypeMeta, WriteResult,
     },
 };
 
@@ -112,16 +113,14 @@ pub struct U8Len;
 
 impl SeqLen for U8Len {
     fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
-        let mut buf = [MaybeUninit::uninit(); 1];
-        reader.copy_into_slice(&mut buf)?;
-        Ok(unsafe { buf[0].assume_init() } as usize)
+        u8::get(reader).map(|len| len as usize)
     }
 
     fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
-        if len > u8::MAX as usize {
-            return Err(WriteError::Custom("Length exceeds u8::MAX"));
-        }
-        writer.write(&[len as u8]).map_err(WriteError::Io)
+        let Ok(len) = len.try_into() else {
+            return Err(write_length_encoding_overflow("u8::MAX"));
+        };
+        Ok(writer.write(&[len])?)
     }
 
     fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
@@ -129,46 +128,17 @@ impl SeqLen for U8Len {
     }
 }
 
-/// 2-byte length prefix (max 65535 elements).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct U16Len;
-
-impl SeqLen for U16Len {
-    fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
-        let mut len_bytes = [MaybeUninit::uninit(); 2];
-        reader.copy_into_slice(&mut len_bytes)?;
-        // UNSAFE: copy_into_slice initializes all bytes
-        let bytes = unsafe { [len_bytes[0].assume_init(), len_bytes[1].assume_init()] };
-        Ok(u16::from_le_bytes(bytes) as usize)
-    }
-
-    fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
-        if len > u16::MAX as usize {
-            return Err(WriteError::Custom("Length exceeds u16::MAX"));
-        }
-        writer
-            .write(&(len as u16).to_le_bytes())
-            .map_err(WriteError::Io)
-    }
-
-    fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
-        Ok(2)
-    }
-}
-
-/// Wraps a value with a length prefix for TLV-style serialization.
+/// Wraps a value with a u16 length prefix for TLV-style serialization.
+///
+/// The length prefix represents the serialized byte size of the inner value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LengthPrefixed<T, L: SeqLen = U16Len> {
+pub struct LengthPrefixed<T> {
     inner: T,
-    _marker: PhantomData<L>,
 }
 
-impl<T, L: SeqLen> LengthPrefixed<T, L> {
+impl<T> LengthPrefixed<T> {
     pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+        Self { inner }
     }
 
     pub fn inner(&self) -> &T {
@@ -176,66 +146,58 @@ impl<T, L: SeqLen> LengthPrefixed<T, L> {
     }
 }
 
-impl<T: SchemaWrite<Src = T>, L: SeqLen> SchemaWrite for LengthPrefixed<T, L> {
+impl<T: SchemaWrite<Src = T>> SchemaWrite for LengthPrefixed<T> {
     type Src = Self;
+
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: size + std::mem::size_of::<u16>(),
+            zero_copy,
+        },
+        TypeMeta::Dynamic => TypeMeta::Dynamic,
+    };
 
     fn size_of(src: &Self::Src) -> WriteResult<usize> {
         let inner_size = T::size_of(&src.inner)?;
-        let len_size = L::write_bytes_needed(inner_size)?;
-        Ok(len_size + inner_size)
+        Ok(std::mem::size_of::<u16>() + inner_size)
     }
 
     fn write(writer: &mut impl Writer, src: &Self::Src) -> WriteResult<()> {
         let inner_size = T::size_of(&src.inner)?;
-        L::write(writer, inner_size)?;
+        let Ok(len): Result<u16, _> = inner_size.try_into() else {
+            return Err(write_length_encoding_overflow("u16::MAX"));
+        };
+        u16::write(writer, &len)?;
         T::write(writer, &src.inner)
     }
 }
 
-impl<'de, T: SchemaRead<'de, Dst = T>, L: SeqLen> SchemaRead<'de> for LengthPrefixed<T, L> {
+impl<'de, T: SchemaRead<'de, Dst = T>> SchemaRead<'de> for LengthPrefixed<T> {
     type Dst = Self;
 
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: size + std::mem::size_of::<u16>(),
+            zero_copy,
+        },
+        TypeMeta::Dynamic => TypeMeta::Dynamic,
+    };
+
     fn read(reader: &mut impl Reader<'de>, dst: &mut MaybeUninit<Self::Dst>) -> ReadResult<()> {
-        let _len = L::read::<Self>(reader)?;
-        let mut inner_dst = MaybeUninit::uninit();
-        T::read(reader, &mut inner_dst)?;
-        dst.write(Self::new(unsafe { inner_dst.assume_init() }));
+        let _len = u16::get(reader)?;
+        let inner_dst = unsafe { &mut *(&raw mut (*dst.as_mut_ptr()).inner).cast() };
+        T::read(reader, inner_dst)?;
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum BlockComponentError {
-    InsufficientData,
+    #[error("Entry count {count} exceeds max {max}")]
     TooManyEntries { count: usize, max: usize },
+    #[error("Entry batch cannot be empty")]
     EmptyEntryBatch,
-    UnknownVariant { variant_type: String, id: u8 },
-    UnsupportedVersion { version: u16 },
-    CursorOutOfBounds,
-    SerializationFailed(String),
-    DeserializationFailed(String),
 }
-
-impl fmt::Display for BlockComponentError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InsufficientData => write!(f, "Insufficient data"),
-            Self::TooManyEntries { count, max } => {
-                write!(f, "Entry count {count} exceeds max {max}")
-            }
-            Self::EmptyEntryBatch => write!(f, "Entry batch cannot be empty"),
-            Self::UnknownVariant { variant_type, id } => {
-                write!(f, "Unknown {variant_type} variant: {id}")
-            }
-            Self::UnsupportedVersion { version } => write!(f, "Unsupported version: {version}"),
-            Self::CursorOutOfBounds => write!(f, "Cursor out of bounds"),
-            Self::SerializationFailed(msg) => write!(f, "Serialization failed: {msg}"),
-            Self::DeserializationFailed(msg) => write!(f, "Deserialization failed: {msg}"),
-        }
-    }
-}
-
-impl Error for BlockComponentError {}
 
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
 pub struct BlockHeaderV1 {
@@ -257,7 +219,7 @@ pub struct BlockFooterV1 {
     #[wincode(with = "Pod<Hash>")]
     pub bank_hash: Hash,
     pub block_producer_time_nanos: u64,
-    #[wincode(with = "WincodeVec<Pod<u8>, U8Len>")]
+    #[wincode(with = "WincodeVec<u8, U8Len>")]
     pub block_user_agent: Vec<u8>,
 }
 
@@ -269,7 +231,7 @@ pub struct GenesisCertificate {
     pub block_id: Hash,
     #[wincode(with = "Pod<BLSSignature>")]
     pub bls_signature: BLSSignature,
-    #[wincode(with = "WincodeVec<Pod<u8>, BincodeLen>")]
+    #[wincode(with = "WincodeVec<u8, BincodeLen>")]
     pub bitmap: Vec<u8>,
 }
 
@@ -336,14 +298,10 @@ pub enum VersionedUpdateParent {
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
-    #[wincode(tag = 0)]
-    BlockFooter(LengthPrefixed<VersionedBlockFooter, U16Len>),
-    #[wincode(tag = 1)]
-    BlockHeader(LengthPrefixed<VersionedBlockHeader, U16Len>),
-    #[wincode(tag = 2)]
-    UpdateParent(LengthPrefixed<VersionedUpdateParent, U16Len>),
-    #[wincode(tag = 3)]
-    GenesisCertificate(LengthPrefixed<GenesisCertificate, U16Len>),
+    BlockFooter(LengthPrefixed<VersionedBlockFooter>),
+    BlockHeader(LengthPrefixed<VersionedBlockHeader>),
+    UpdateParent(LengthPrefixed<VersionedUpdateParent>),
+    GenesisCertificate(LengthPrefixed<GenesisCertificate>),
 }
 
 impl BlockMarkerV1 {
@@ -403,16 +361,6 @@ impl VersionedBlockMarker {
     pub const fn new(marker: BlockMarkerV1) -> Self {
         Self::V1(marker)
     }
-
-    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        wincode::serialize(self)
-            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))
-    }
-
-    pub fn from_bytes(data: &[u8]) -> Result<Self, BlockComponentError> {
-        wincode::deserialize(data)
-            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,50 +400,6 @@ impl BlockComponent {
         }
     }
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>, BlockComponentError> {
-        match self {
-            Self::EntryBatch(entries) => bincode::serialize(entries)
-                .map_err(|e| BlockComponentError::SerializationFailed(e.to_string())),
-            Self::BlockMarker(marker) => {
-                let mut buf = 0u64.to_le_bytes().to_vec();
-                buf.extend(marker.to_bytes()?);
-                Ok(buf)
-            }
-        }
-    }
-
-    pub fn from_bytes(data: &[u8]) -> Result<(Self, usize), BlockComponentError> {
-        let entries: Vec<Entry> = bincode::deserialize(data)
-            .map_err(|e| BlockComponentError::DeserializationFailed(e.to_string()))?;
-
-        if entries.len() >= Self::MAX_ENTRIES {
-            return Err(BlockComponentError::TooManyEntries {
-                count: entries.len(),
-                max: Self::MAX_ENTRIES,
-            });
-        }
-
-        let cursor = bincode::serialized_size(&entries)
-            .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?
-            as usize;
-
-        let remaining = data
-            .get(cursor..)
-            .ok_or(BlockComponentError::CursorOutOfBounds)?;
-
-        match (entries.is_empty(), remaining.is_empty()) {
-            (true, true) => Err(BlockComponentError::EmptyEntryBatch),
-            (true, false) => {
-                let marker = VersionedBlockMarker::from_bytes(remaining)?;
-                let marker_size = wincode::serialized_size(&marker)
-                    .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?
-                    as usize;
-                Ok((Self::BlockMarker(marker), cursor + marker_size))
-            }
-            _ => Ok((Self::EntryBatch(entries), cursor)),
-        }
-    }
-
     pub fn infer_is_entry_batch(data: &[u8]) -> Option<bool> {
         data.get(..8)?
             .try_into()
@@ -504,64 +408,111 @@ impl BlockComponent {
     }
 
     pub fn infer_is_block_marker(data: &[u8]) -> Option<bool> {
-        Self::infer_is_entry_batch(data).map(|result| !result)
+        Self::infer_is_entry_batch(data).map(|is_entry_batch| !is_entry_batch)
     }
+}
 
-    pub fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
-        // Try to deserialize as BlockComponent
-        let (component, _) = BlockComponent::from_bytes(data).ok()?;
+impl SchemaWrite for BlockComponent {
+    type Src = Self;
 
-        // Check if it's a BlockMarker with BlockHeader
-        match component.as_marker()? {
-            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header)) => {
-                // Extract the BlockHeader from the versioned wrapper
-                match header.inner() {
-                    VersionedBlockHeader::V1(update) => {
-                        Some((update.parent_slot, update.parent_block_id))
-                    }
-                }
+    fn size_of(src: &Self::Src) -> WriteResult<usize> {
+        match src {
+            Self::EntryBatch(entries) => {
+                // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes
+                // the map_err.
+                let size = bincode::serialized_size(entries).map_err(|_| {
+                    wincode::WriteError::Custom("Couldn't invoke bincode::serialized_size")
+                })?;
+                Ok(size as usize)
             }
-            _ => None,
+            Self::BlockMarker(marker) => {
+                let marker_size = wincode::serialized_size(marker)? as usize;
+                Ok(Self::ENTRY_COUNT_SIZE + marker_size)
+            }
         }
     }
 
-    pub fn parse_update_parent_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
-        // Try to deserialize as BlockComponent
-        let (component, _) = BlockComponent::from_bytes(data).ok()?;
-
-        // Check if it's a BlockMarker with UpdateParent
-        match component.as_marker()? {
-            VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(versioned_update)) => {
-                // Extract the UpdateParentV1 from the versioned wrapper
-                match versioned_update.inner() {
-                    VersionedUpdateParent::V1(update) => {
-                        Some((update.new_parent_slot, update.new_parent_block_id))
-                    }
-                }
+    fn write(writer: &mut impl Writer, src: &Self::Src) -> WriteResult<()> {
+        match src {
+            Self::EntryBatch(entries) => {
+                // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes
+                // the map_err.
+                let bytes = bincode::serialize(entries).map_err(|_| {
+                    wincode::WriteError::Custom("Couldn't invoke bincode::serialize")
+                })?;
+                writer.write(&bytes)?;
+                Ok(())
             }
-            _ => None,
-        }
-    }
-
-    pub fn serialized_size(&self) -> Result<u64, BlockComponentError> {
-        match self {
-            Self::EntryBatch(e) => bincode::serialized_size(e)
-                .map_err(|e| BlockComponentError::SerializationFailed(e.to_string())),
-            Self::BlockMarker(m) => {
-                let marker_size = wincode::serialized_size(m)
-                    .map_err(|e| BlockComponentError::SerializationFailed(e.to_string()))?;
-                Ok(Self::ENTRY_COUNT_SIZE as u64 + marker_size)
+            Self::BlockMarker(marker) => {
+                writer.write(&0u64.to_le_bytes())?;
+                <VersionedBlockMarker as SchemaWrite>::write(writer, marker)
             }
         }
     }
 }
 
+impl<'de> SchemaRead<'de> for BlockComponent {
+    type Dst = Self;
+
+    fn read(reader: &mut impl Reader<'de>, dst: &mut MaybeUninit<Self::Dst>) -> ReadResult<()> {
+        // Read the entry count (first 8 bytes) to determine variant
+        let count_bytes = reader.fill_array::<8>()?;
+        let entry_count = u64::from_le_bytes(*count_bytes);
+
+        if entry_count == 0 {
+            // This is a BlockMarker - consume the count bytes and read the marker
+            reader.consume(8)?;
+            dst.write(Self::BlockMarker(VersionedBlockMarker::get(reader)?));
+        } else {
+            // This is an EntryBatch - read in the rest of the data. We do not anticipate having
+            // cases where we need to deserialize multiple BlockComponents from a single slice, and
+            // do not know where the delimiters are ahead of time.
+            // First, get all remaining bytes to deserialize
+            let data = reader.fill_buf(usize::MAX)?;
+
+            // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes the
+            // map_err.
+            let entries: Vec<Entry> = bincode::deserialize(data)
+                .map_err(|_| wincode::ReadError::Custom("Couldn't deserialize entries."))?;
+
+            if entries.len() >= Self::MAX_ENTRIES {
+                return Err(wincode::ReadError::Custom("Too many entries"));
+            }
+
+            // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes the
+            // map_err.
+            let consumed = bincode::serialized_size(&entries)
+                .map_err(|_| wincode::ReadError::Custom("Couldn't determine serialized size."))?
+                as usize;
+            reader.consume(consumed)?;
+
+            dst.write(Self::EntryBatch(entries));
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use {super::*, std::iter::repeat_n};
+    use {super::*, crate::block_component as v1, std::iter::repeat_n};
 
     fn mock_entries(n: usize) -> Vec<Entry> {
         repeat_n(Entry::default(), n).collect()
+    }
+
+    fn sample_footer() -> (v1::BlockFooterV1, BlockFooterV1) {
+        let v1 = v1::BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
+            block_producer_time_nanos: 1234567890,
+            block_user_agent: b"test-agent".to_vec(),
+        };
+        let v2 = BlockFooterV1 {
+            bank_hash: v1.bank_hash,
+            block_producer_time_nanos: v1.block_producer_time_nanos,
+            block_user_agent: v1.block_user_agent.clone(),
+        };
+        (v1, v2)
     }
 
     #[test]
@@ -576,11 +527,7 @@ mod tests {
             wincode::deserialize::<BlockHeaderV1>(&bytes).unwrap()
         );
 
-        let footer = BlockFooterV1 {
-            bank_hash: Hash::new_unique(),
-            block_producer_time_nanos: 1234567890,
-            block_user_agent: b"test-agent".to_vec(),
-        };
+        let (_, footer) = sample_footer();
         let bytes = wincode::serialize(&footer).unwrap();
         assert_eq!(
             footer,
@@ -602,19 +549,20 @@ mod tests {
         let marker = VersionedBlockMarker::new(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(footer.clone()),
         ));
-        let bytes = marker.to_bytes().unwrap();
-        assert_eq!(marker, VersionedBlockMarker::from_bytes(&bytes).unwrap());
+        let bytes = wincode::serialize(&marker).unwrap();
+        assert_eq!(
+            marker,
+            wincode::deserialize::<VersionedBlockMarker>(&bytes).unwrap()
+        );
 
         let comp = BlockComponent::new_entry_batch(mock_entries(5)).unwrap();
-        let bytes = comp.to_bytes().unwrap();
-        let (deser, consumed) = BlockComponent::from_bytes(&bytes).unwrap();
+        let bytes = wincode::serialize(&comp).unwrap();
+        let deser: BlockComponent = wincode::deserialize(&bytes).unwrap();
         assert_eq!(comp, deser);
-        assert_eq!(consumed, bytes.len());
 
         let comp = BlockComponent::new_block_marker(marker);
-        let bytes = comp.to_bytes().unwrap();
-        let (deser, consumed) = BlockComponent::from_bytes(&bytes).unwrap();
+        let bytes = wincode::serialize(&comp).unwrap();
+        let deser: BlockComponent = wincode::deserialize(&bytes).unwrap();
         assert_eq!(comp, deser);
-        assert_eq!(consumed, bytes.len());
     }
 }

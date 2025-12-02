@@ -43,7 +43,10 @@ use {
     solana_address_lookup_table_interface::state::AddressLookupTable,
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
     solana_entry::{
-        block_component::BlockComponent,
+        block_component::{
+            BlockComponent, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
+            VersionedUpdateParent,
+        },
         entry::{create_ticks, Entry},
     },
     solana_genesis_config::{GenesisConfig, DEFAULT_GENESIS_ARCHIVE, DEFAULT_GENESIS_FILE},
@@ -2106,12 +2109,17 @@ impl Blockstore {
         }
 
         // Try to parse BlockHeader from the payload
-        let (parent_slot, parent_block_id) =
-            BlockComponent::parse_block_header_from_data_payload(payload)?;
+        let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
+        let VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header)) = component.as_marker()?
+        else {
+            return None;
+        };
+
+        let VersionedBlockHeader::V1(header) = header.inner();
 
         let parent_meta = ParentMeta {
-            parent_slot,
-            parent_block_id,
+            parent_slot: header.parent_slot,
+            parent_block_id: header.parent_block_id,
             replay_fec_set_index: 0,
         };
 
@@ -2175,13 +2183,19 @@ impl Blockstore {
         }
 
         // Try to parse UpdateParent from the payload
-        let (new_parent_slot, new_parent_block_id) =
-            BlockComponent::parse_update_parent_from_data_payload(payload)?;
+        let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
+        let VersionedBlockMarker::V1(BlockMarkerV1::UpdateParent(update_parent)) =
+            component.as_marker()?
+        else {
+            return None;
+        };
+
+        let VersionedUpdateParent::V1(update_parent) = update_parent.inner();
 
         // First time seeing this UpdateParent
         let update_parent_meta = ParentMeta {
-            parent_slot: new_parent_slot,
-            parent_block_id: new_parent_block_id,
+            parent_slot: update_parent.new_parent_slot,
+            parent_block_id: update_parent.new_parent_block_id,
             replay_fec_set_index: target_fec_set_index,
         };
 
@@ -4587,25 +4601,11 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        let (component, bytes_consumed) = BlockComponent::from_bytes(&payload)
-                            .map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct block component: {e:?}"
-                                    )),
-                                ))
-                            })?;
-
-                        // Enforce that completed ranges have precisely one BlockComponent.
-                        if bytes_consumed != payload.len() {
-                            return Err(BlockstoreError::InvalidShredData(Box::new(
-                                bincode::ErrorKind::Custom(format!(
-                                    "expected 1 component consuming {} bytes, but only consumed {}",
-                                    payload.len(),
-                                    bytes_consumed
-                                )),
-                            )));
-                        }
+                        let component = wincode::deserialize(&payload).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not reconstruct block component: {e:?}"),
+                            )))
+                        })?;
 
                         transform(component).map_err(|e| {
                             BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(

@@ -9149,6 +9149,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "trees",
+ "wincode",
 ]
 
 [[package]]

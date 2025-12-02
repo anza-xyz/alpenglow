@@ -76,7 +76,7 @@ impl Shredder {
         stats: &mut ProcessShredsStats,
     ) -> impl Iterator<Item = Shred> {
         let now = Instant::now();
-        let bytes = component.to_bytes().unwrap();
+        let bytes = wincode::serialize(component).unwrap();
         stats.serialize_elapsed += now.elapsed().as_micros() as u64;
         Self::make_shreds_from_data_slice(
             self,
