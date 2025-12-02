@@ -249,7 +249,7 @@ pub struct BlockFooterV1 {
     #[wincode(with = "Pod<Hash>")]
     pub bank_hash: Hash,
     pub block_producer_time_nanos: u64,
-    #[wincode(with = "WincodeVec<Pod<u8>, U8Len>")]
+    #[wincode(with = "WincodeVec<u8, U8Len>")]
     pub block_user_agent: Vec<u8>,
 }
 
@@ -261,7 +261,7 @@ pub struct GenesisCertificate {
     pub block_id: Hash,
     #[wincode(with = "Pod<BLSSignature>")]
     pub bls_signature: BLSSignature,
-    #[wincode(with = "WincodeVec<Pod<u8>, BincodeLen>")]
+    #[wincode(with = "WincodeVec<u8, BincodeLen>")]
     pub bitmap: Vec<u8>,
 }
 
@@ -328,13 +328,9 @@ pub enum VersionedUpdateParent {
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
-    #[wincode(tag = 0)]
     BlockFooter(LengthPrefixed<VersionedBlockFooter, U16Len>),
-    #[wincode(tag = 1)]
     BlockHeader(LengthPrefixed<VersionedBlockHeader, U16Len>),
-    #[wincode(tag = 2)]
     UpdateParent(LengthPrefixed<VersionedUpdateParent, U16Len>),
-    #[wincode(tag = 3)]
     GenesisCertificate(LengthPrefixed<GenesisCertificate, U16Len>),
 }
 
@@ -448,9 +444,10 @@ impl SchemaWrite for BlockComponent {
     fn size_of(src: &Self::Src) -> WriteResult<usize> {
         match src {
             Self::EntryBatch(entries) => {
-                // TODO(ksn): replace with wincode:: upon upstreaming to Agave.
-                let size = bincode::serialized_size(entries).map_err(|e| {
-                    wincode::WriteError::Custom(Box::leak(e.to_string().into_boxed_str()))
+                // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes
+                // the map_err.
+                let size = bincode::serialized_size(entries).map_err(|_| {
+                    wincode::WriteError::Custom("Couldn't invoke bincode::serialized_size")
                 })?;
                 Ok(size as usize)
             }
@@ -464,9 +461,10 @@ impl SchemaWrite for BlockComponent {
     fn write(writer: &mut impl Writer, src: &Self::Src) -> WriteResult<()> {
         match src {
             Self::EntryBatch(entries) => {
-                // TODO(ksn): replace with wincode:: upon upstreaming to Agave.
-                let bytes = bincode::serialize(entries).map_err(|e| {
-                    wincode::WriteError::Custom(Box::leak(e.to_string().into_boxed_str()))
+                // TODO(ksn): replace with wincode:: upon upstreaming to Agave. This also removes
+                // the map_err.
+                let bytes = bincode::serialize(entries).map_err(|_| {
+                    wincode::WriteError::Custom("Couldn't invoke bincode::serialize")
                 })?;
                 writer.write(&bytes)?;
                 Ok(())
@@ -490,9 +488,7 @@ impl<'de> SchemaRead<'de> for BlockComponent {
         if entry_count == 0 {
             // This is a BlockMarker - consume the count bytes and read the marker
             reader.consume(8)?;
-            let mut marker_dst = MaybeUninit::uninit();
-            <VersionedBlockMarker as SchemaRead>::read(reader, &mut marker_dst)?;
-            dst.write(Self::BlockMarker(unsafe { marker_dst.assume_init() }));
+            dst.write(Self::BlockMarker(VersionedBlockMarker::get(reader)?));
         } else {
             // This is an EntryBatch - read in the rest of the data. We do not anticipate having
             // cases where we need to deserialize multiple BlockComponents from a single slice, and
