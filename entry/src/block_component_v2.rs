@@ -97,13 +97,13 @@ use {
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::consensus_message::{Certificate, CertificateType},
-    std::{marker::PhantomData, mem::MaybeUninit},
+    std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
-        error::{preallocation_size_limit, write_length_encoding_overflow},
+        error::write_length_encoding_overflow,
         io::{Reader, Writer},
         len::{BincodeLen, SeqLen},
-        ReadResult, SchemaRead, SchemaWrite, WriteResult,
+        ReadResult, SchemaRead, SchemaWrite, TypeMeta, WriteResult,
     },
 };
 
@@ -128,51 +128,17 @@ impl SeqLen for U8Len {
     }
 }
 
-/// Default maximum preallocation size for U16Len (4 MiB).
-/// This is a safety precaution against malicious input causing OOM.
-const DEFAULT_U16_LEN_MAX_SIZE: usize = 4 << 20;
-
-/// 2-byte length prefix (max 65535 elements).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct U16Len<const MAX_SIZE: usize = DEFAULT_U16_LEN_MAX_SIZE>;
-
-impl<const MAX_SIZE: usize> SeqLen for U16Len<MAX_SIZE> {
-    fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
-        let len = u16::get(reader)? as usize;
-        let needed = len
-            .checked_mul(std::mem::size_of::<T>())
-            .ok_or_else(|| preallocation_size_limit(usize::MAX, MAX_SIZE))?;
-        if needed > MAX_SIZE {
-            return Err(preallocation_size_limit(needed, MAX_SIZE));
-        }
-        Ok(len)
-    }
-
-    fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
-        let Ok(len): Result<u16, _> = len.try_into() else {
-            return Err(write_length_encoding_overflow("u16::MAX"));
-        };
-        Ok(writer.write(&len.to_le_bytes())?)
-    }
-
-    fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
-        Ok(2)
-    }
-}
-
-/// Wraps a value with a length prefix for TLV-style serialization.
+/// Wraps a value with a u16 length prefix for TLV-style serialization.
+///
+/// The length prefix represents the serialized byte size of the inner value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LengthPrefixed<T, L: SeqLen = U16Len> {
+pub struct LengthPrefixed<T> {
     inner: T,
-    _marker: PhantomData<L>,
 }
 
-impl<T, L: SeqLen> LengthPrefixed<T, L> {
+impl<T> LengthPrefixed<T> {
     pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+        Self { inner }
     }
 
     pub fn inner(&self) -> &T {
@@ -180,27 +146,45 @@ impl<T, L: SeqLen> LengthPrefixed<T, L> {
     }
 }
 
-impl<T: SchemaWrite<Src = T>, L: SeqLen> SchemaWrite for LengthPrefixed<T, L> {
+impl<T: SchemaWrite<Src = T>> SchemaWrite for LengthPrefixed<T> {
     type Src = Self;
+
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: size + std::mem::size_of::<u16>(),
+            zero_copy,
+        },
+        TypeMeta::Dynamic => TypeMeta::Dynamic,
+    };
 
     fn size_of(src: &Self::Src) -> WriteResult<usize> {
         let inner_size = T::size_of(&src.inner)?;
-        let len_size = L::write_bytes_needed(inner_size)?;
-        Ok(len_size + inner_size)
+        Ok(std::mem::size_of::<u16>() + inner_size)
     }
 
     fn write(writer: &mut impl Writer, src: &Self::Src) -> WriteResult<()> {
         let inner_size = T::size_of(&src.inner)?;
-        L::write(writer, inner_size)?;
+        let Ok(len): Result<u16, _> = inner_size.try_into() else {
+            return Err(write_length_encoding_overflow("u16::MAX"));
+        };
+        u16::write(writer, &len)?;
         T::write(writer, &src.inner)
     }
 }
 
-impl<'de, T: SchemaRead<'de, Dst = T>, L: SeqLen> SchemaRead<'de> for LengthPrefixed<T, L> {
+impl<'de, T: SchemaRead<'de, Dst = T>> SchemaRead<'de> for LengthPrefixed<T> {
     type Dst = Self;
 
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: size + std::mem::size_of::<u16>(),
+            zero_copy,
+        },
+        TypeMeta::Dynamic => TypeMeta::Dynamic,
+    };
+
     fn read(reader: &mut impl Reader<'de>, dst: &mut MaybeUninit<Self::Dst>) -> ReadResult<()> {
-        let _len = L::read::<Self>(reader)?;
+        let _len = u16::get(reader)?;
         let inner_dst = unsafe { &mut *(&raw mut (*dst.as_mut_ptr()).inner).cast() };
         T::read(reader, inner_dst)?;
         Ok(())
@@ -328,10 +312,10 @@ pub enum VersionedUpdateParent {
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
-    BlockFooter(LengthPrefixed<VersionedBlockFooter, U16Len>),
-    BlockHeader(LengthPrefixed<VersionedBlockHeader, U16Len>),
-    UpdateParent(LengthPrefixed<VersionedUpdateParent, U16Len>),
-    GenesisCertificate(LengthPrefixed<GenesisCertificate, U16Len>),
+    BlockFooter(LengthPrefixed<VersionedBlockFooter>),
+    BlockHeader(LengthPrefixed<VersionedBlockHeader>),
+    UpdateParent(LengthPrefixed<VersionedUpdateParent>),
+    GenesisCertificate(LengthPrefixed<GenesisCertificate>),
 }
 
 impl BlockMarkerV1 {
