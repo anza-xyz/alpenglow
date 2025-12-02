@@ -943,6 +943,21 @@ impl ParentMeta {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DoubleMerkleMeta {
+    /// The double merkle root computed as the root of a merkle tree that
+    /// contains all FEC-set merkle roots and parent info as leaves.
+    pub double_merkle_root: Hash,
+
+    /// Number of FEC sets in the block.
+    pub fec_set_count: usize,
+
+    /// Merkle proofs per leaf:
+    /// - indices [0, fec_set_count) are proofs for each FEC-set merkle root leaf
+    /// - index fec_set_count is the proof for the parent-info leaf
+    pub proofs: Vec<Vec<u8>>,
+}
+
 #[cfg(test)]
 mod test {
     use {

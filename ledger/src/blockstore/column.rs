@@ -228,6 +228,16 @@ pub mod columns {
     /// * index type: `u64` (see [`SlotColumn`])
     /// * value type: [`blockstore_meta::ParentMeta`]
     pub struct ParentMeta;
+
+    #[derive(Debug)]
+    /// The double merkle root metadata column
+    ///
+    /// This column stores details about the double merkle root of a block.
+    /// We update this column when we finish ingesting all the shreds of the block.
+    ///
+    /// * index type: `u64` (see [`SlotColumn`])
+    /// * value type: [`blockstore_meta::DoubleMerkleMeta`]
+    pub struct DoubleMerkleMeta;
 }
 
 macro_rules! convert_column_index_to_key_bytes {
@@ -873,4 +883,14 @@ impl ColumnName for columns::ParentMeta {
 
 impl TypedColumn for columns::ParentMeta {
     type Type = blockstore_meta::ParentMeta;
+}
+
+impl SlotColumn for columns::DoubleMerkleMeta {}
+
+impl ColumnName for columns::DoubleMerkleMeta {
+    const NAME: &'static str = "double_merkle_meta";
+}
+
+impl TypedColumn for columns::DoubleMerkleMeta {
+    type Type = blockstore_meta::DoubleMerkleMeta;
 }

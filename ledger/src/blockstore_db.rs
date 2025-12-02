@@ -195,6 +195,7 @@ impl Rocks {
             new_cf_descriptor::<columns::MerkleRootMeta>(options, oldest_slot),
             new_cf_descriptor::<columns::SlotCertificates>(options, oldest_slot),
             new_cf_descriptor::<columns::ParentMeta>(options, oldest_slot),
+            new_cf_descriptor::<columns::DoubleMerkleMeta>(options, oldest_slot),
         ];
 
         // When remaining columns are optional we can just return immediately here.
@@ -239,7 +240,7 @@ impl Rocks {
         cf_descriptors
     }
 
-    const fn columns() -> [&'static str; 22] {
+    const fn columns() -> [&'static str; 23] {
         [
             columns::ErasureMeta::NAME,
             columns::DeadSlots::NAME,
@@ -263,6 +264,7 @@ impl Rocks {
             columns::MerkleRootMeta::NAME,
             columns::SlotCertificates::NAME,
             columns::ParentMeta::NAME,
+            columns::DoubleMerkleMeta::NAME,
         ]
     }
 
