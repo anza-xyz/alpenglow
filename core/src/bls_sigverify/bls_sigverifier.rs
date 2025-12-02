@@ -7,7 +7,9 @@ use {
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
-    agave_bls_cert_verify::cert_verify::{verify_votor_message_certificate, CertVerifyError},
+    agave_bls_cert_verify::cert_verify::{
+        verify_votor_message_certificate, CertVerifyError as BLSCertVerifyError,
+    },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
@@ -48,12 +50,12 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMa
 }
 
 #[derive(Debug, Error, PartialEq)]
-enum CertVerificationError {
+enum CertVerifyError {
     #[error("Failed to find key to rank map for slot {0}")]
     KeyToRankMapNotFound(Slot),
 
     #[error("Cert Verification Error {0:?}")]
-    CertVerifyFailed(#[from] CertVerifyError),
+    CertVerifyFailed(#[from] BLSCertVerifyError),
 }
 
 pub struct BLSSigVerifier {
@@ -471,7 +473,7 @@ impl BLSSigVerifier {
         &self,
         cert_to_verify: &Certificate,
         bank: &Bank,
-    ) -> Result<(), CertVerificationError> {
+    ) -> Result<(), CertVerifyError> {
         if self
             .verified_certs
             .read()
@@ -484,7 +486,7 @@ impl BLSSigVerifier {
 
         let slot = cert_to_verify.cert_type.slot();
         let Some(key_to_rank_map) = get_key_to_rank_map(bank, slot) else {
-            return Err(CertVerificationError::KeyToRankMapNotFound(slot));
+            return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
         verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
