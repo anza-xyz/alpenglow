@@ -15,7 +15,6 @@ bitvec = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 solana-bls-signatures = { workspace = true, features = ["parallel"] }
-solana-logger = { workspace = true }
 solana-signer-store = { workspace = true }
 solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }

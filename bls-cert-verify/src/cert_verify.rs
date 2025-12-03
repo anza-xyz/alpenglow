@@ -37,11 +37,12 @@ fn aggregate_keys_from_bitmap<F>(
 where
     F: Fn(usize) -> Option<BlsPubkey> + Sync,
 {
-    let pubkeys: Vec<_> = bit_vec
+    let pubkeys: Vec<PubkeyProjective> = bit_vec
         .iter_ones()
-        .filter_map(rank_to_pubkey)
-        .filter_map(|pk| PubkeyProjective::try_from(pk).ok())
-        .collect();
+        .map(|rank| {
+            rank_to_pubkey(rank).and_then(|pubkey| PubkeyProjective::try_from(&pubkey).ok())
+        })
+        .collect::<Option<Vec<_>>>()?;
     PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
 }
 
@@ -132,7 +133,8 @@ mod test {
     use {
         super::*,
         solana_bls_signatures::{
-            keypair::Keypair as BLSKeypair, signature::Signature as BLSSignature,
+            keypair::Keypair as BLSKeypair, pubkey::Pubkey as BLSPubkey,
+            signature::Signature as BLSSignature,
         },
         solana_hash::Hash,
         solana_signer_store::encode_base2,
@@ -251,5 +253,38 @@ mod test {
             }),
             Err(CertVerifyError::SignatureVerificationFailed)
         );
+    }
+
+    fn rank_to_pubkey(
+        bls_keypairs: &[BLSKeypair],
+        bad_pubkey_rank: usize,
+    ) -> impl Fn(usize) -> Option<BlsPubkey> + Sync + '_ {
+        move |rank| {
+            if rank == bad_pubkey_rank {
+                BLSPubkey::default().into()
+            } else {
+                bls_keypairs
+                    .get(rank)
+                    .map(|keypair: &BLSKeypair| keypair.public)
+            }
+        }
+    }
+
+    #[test]
+    fn test_aggregate_keys_from_bitmap() {
+        let bls_keypairs = create_bls_keypairs(4);
+        let mut bitmap = BitVec::<u8, Lsb0>::new();
+        bitmap.resize(10, false);
+        bitmap.set(1, true);
+        bitmap.set(3, true);
+
+        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_some());
+
+        bitmap.set(4, true); // rank 4 gets us a bad pubkey
+        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_none());
+
+        bitmap.set(4, false);
+        bitmap.set(6, true); // rank 6 does not have a corresponding pubkey
+        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_none());
     }
 }
