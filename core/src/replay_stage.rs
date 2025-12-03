@@ -922,6 +922,9 @@ impl ReplayStage {
 
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !migration_status.is_alpenglow_enabled() {
+                    // Will address this in https://github.com/anza-xyz/alpenglow/issues/619
+                    debug_assert!(!votor_event_receiver.is_full());
+
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
