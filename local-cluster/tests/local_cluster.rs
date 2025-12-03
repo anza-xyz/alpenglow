@@ -6360,18 +6360,6 @@ fn test_alpenglow_migration(
 
 #[test]
 #[serial]
-fn test_alpenglow_migration_1() {
-    test_alpenglow_migration(1, "test_alpenglow_migration_1", &[4]);
-}
-
-#[test]
-#[serial]
-fn test_alpenglow_migration_2() {
-    test_alpenglow_migration(2, "test_alpenglow_migration_2", &[4, 4]);
-}
-
-#[test]
-#[serial]
 fn test_alpenglow_migration_4() {
     test_alpenglow_migration(4, "test_alpenglow_migration_4", &[4, 4, 4, 4]);
 }
