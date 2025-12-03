@@ -1857,6 +1857,10 @@ fn process_bank_0(
 }
 
 /// Clean up a failed slot and restart processing from the given genesis slot
+///
+/// `first_alpenglow_bank` is removed from runtime caches, and its dead status is reset
+/// `pending_slots` is the current child blocks left to be processed. We clear and update
+/// this with the children of `genesis_slot` instead.
 fn cleanup_and_populate_pending_from_alpenglow_genesis(
     first_alpenglow_bank: &BankWithScheduler,
     genesis_slot: Slot,
@@ -1880,7 +1884,7 @@ fn cleanup_and_populate_pending_from_alpenglow_genesis(
     let genesis_slot_meta = blockstore
         .meta(genesis_slot)
         .map_err(|err| {
-            warn!("Failed to load meta for slot {genesis_slot}: {err:?}");
+            error!("Failed to load meta for slot {genesis_slot}: {err:?}");
             BlockstoreProcessorError::FailedToLoadMeta
         })?
         .unwrap();
@@ -1890,7 +1894,9 @@ fn cleanup_and_populate_pending_from_alpenglow_genesis(
          as Alpenglow banks",
         migration_status.my_pubkey()
     );
+    // Clear current child bank frontier
     pending_slots.clear();
+    // And queue up children of genesis instead
     process_next_slots(
         &bank_forks.read().unwrap().get(genesis_slot).unwrap(),
         &genesis_slot_meta,
@@ -2007,7 +2013,7 @@ fn load_frozen_forks(
     let mut root = bank_forks.read().unwrap().root();
     let max_root = std::cmp::max(root, blockstore_max_root);
     info!(
-        "load_frozen_forks() bank forks root {root}, latest root from blockstore: \
+        "load_frozen_forks() bank forks root: {root}, latest root from blockstore: \
          {blockstore_max_root}, max_root: {max_root}",
     );
 
@@ -2089,7 +2095,7 @@ fn load_frozen_forks(
             ) {
                 assert!(bank_forks.write().unwrap().remove(bank.slot()).is_some());
                 if opts.abort_on_invalid_block {
-                    Err(error)?
+                    return Err(error);
                 }
 
                 // If this block was the first alpenglow block and advanced the migration phase, we can enable alpenglow.
@@ -2100,6 +2106,10 @@ fn load_frozen_forks(
                 //
                 // We are safe to cleanly transition to alpenglow here
                 if migration_status.is_ready_to_enable() {
+                    debug_assert!(matches!(
+                        error,
+                        BlockstoreProcessorError::InvalidBlock(BlockError::TooFewTicks),
+                    ));
                     let genesis_slot = migration_status.enable_alpenglow_during_startup();
 
                     // We need to clear pending_slots as it might contain Alpenglow blocks initialized as TowerBFT banks.
