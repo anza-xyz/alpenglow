@@ -676,8 +676,9 @@ fn maybe_include_genesis_certificate(parent_slot: Slot, ctx: &LeaderContext) {
     if parent_slot != ctx.genesis_cert.slot || parent_slot == 0 {
         return;
     }
-    let genesis_marker =
-        VersionedBlockMarker::Current(BlockMarkerV1::GenesisCertificate(ctx.genesis_cert.clone()));
+    let genesis_marker = VersionedBlockMarker::new(BlockMarkerV1::new_genesis_certificate(
+        ctx.genesis_cert.clone(),
+    ));
 
     let mut poh_recorder = ctx.poh_recorder.write().unwrap();
     // Send the genesis certificate

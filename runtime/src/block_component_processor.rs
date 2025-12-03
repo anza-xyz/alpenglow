@@ -106,16 +106,16 @@ impl BlockComponentProcessor {
             // - once migration is fully enabled, or
             // - while we're still in the migration phase (to let us advance it)
             BlockMarkerV1::BlockHeader(header) if markers_fully_enabled || in_migration => {
-                self.on_header(&header)
+                self.on_header(header.inner())
             }
             BlockMarkerV1::GenesisCertificate(genesis_cert)
                 if markers_fully_enabled || in_migration =>
             {
-                self.on_genesis_certificate(bank, genesis_cert, migration_status)
+                self.on_genesis_certificate(bank, genesis_cert.inner().clone(), migration_status)
             }
 
             // Everything else is only valid once migration is complete
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, &footer),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
 
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
