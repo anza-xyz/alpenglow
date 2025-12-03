@@ -40,6 +40,10 @@ fn aggregate_keys_from_bitmap<F>(
 where
     F: Fn(usize) -> Option<BlsPubkey> + Sync,
 {
+    // This function should return None if any of the following happens:
+    // - A rank in the bitmap does not have a corresponding pubkey.
+    // - A pubkey fails to convert to projective form.
+    // It only returns Some(aggregated_pubkey) if all pubkeys are found and valid.
     let pubkeys: Vec<PubkeyProjective> = bit_vec
         .iter_ones()
         .map(|rank| {
