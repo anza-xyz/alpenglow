@@ -48,6 +48,7 @@ use {
     solana_ledger::{
         block_error::BlockError,
         blockstore::Blockstore,
+        blockstore_meta::BlockLocation,
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -3639,15 +3640,27 @@ impl ReplayStage {
                     }
                 }
 
+                let is_leader_block = bank.collector_id() == my_pubkey;
+                let block_id = if migration_status.should_use_double_merkle_block_id(bank.slot()) {
+                    let block_id =
+                        blockstore.get_double_merkle_root(bank.slot(), BlockLocation::Original);
+                    // The *only* reason this can be none is because we are the leader. Unlike CMR there are no checks performed in `get_double_merkle_root`.
+                    debug_assert!(block_id.is_some() || is_leader_block);
+                    Ok(block_id)
+                } else {
+                    // Once SIMD-0317 is activated, this can simply grab the merkle root of the last shred.
+                    // Then there is no need for the error checking or to potentially mark the slot as dead below.
+                    blockstore.check_last_fec_set_and_get_block_id(
+                        bank.slot(),
+                        bank.hash(),
+                        false,
+                        &bank.feature_set,
+                    )
+                };
+
                 // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
                 // shreds in the last FEC set, mark it dead.
-                let is_leader_block = bank.collector_id() == my_pubkey;
-                let block_id = match blockstore.check_last_fec_set_and_get_block_id(
-                    bank.slot(),
-                    bank.hash(),
-                    false,
-                    &bank.feature_set,
-                ) {
+                let block_id = match block_id {
                     Ok(block_id) => block_id,
                     Err(result_err) => {
                         if is_leader_block {
@@ -3673,7 +3686,7 @@ impl ReplayStage {
                     }
                 };
 
-                if bank.block_id().is_none() {
+                if block_id.is_some() {
                     bank.set_block_id(block_id);
                 }
 

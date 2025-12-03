@@ -248,6 +248,12 @@ impl MigrationPhase {
         self.should_send_votor_event(slot)
     }
 
+    /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
+    fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool {
+        // Same as votor events, all alpenglow blocks should use double merkle
+        self.should_send_votor_event(slot)
+    }
+
     /// Check if we are in the full alpenglow epoch
     fn is_full_alpenglow_epoch(&self) -> bool {
         matches!(self, MigrationPhase::FullAlpenglowEpoch { .. })
@@ -401,6 +407,7 @@ impl MigrationStatus {
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_allow_block_markers(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
     dispatch!(pub fn is_ready_to_enable(&self) -> bool);
