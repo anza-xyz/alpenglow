@@ -8,7 +8,10 @@ use {
         signature::SignatureProjective,
     },
     solana_signer_store::{decode, DecodeError},
-    solana_votor_messages::consensus_message::{Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        vote::Vote,
+    },
     thiserror::Error,
 };
 
@@ -46,6 +49,10 @@ where
     PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
 }
 
+fn serialize_vote(vote: &Vote) -> Result<Vec<u8>, CertVerifyError> {
+    bincode::serialize(vote).map_err(|_| CertVerifyError::SerializationFailed)
+}
+
 pub fn verify_base2_certificate<F>(
     cert_to_verify: &Certificate,
     bit_vec: &BitVec<u8, Lsb0>,
@@ -56,8 +63,7 @@ where
 {
     let original_vote = cert_to_verify.cert_type.to_source_vote();
 
-    let signed_payload =
-        bincode::serialize(&original_vote).map_err(|_| CertVerifyError::SerializationFailed)?;
+    let signed_payload = serialize_vote(&original_vote)?;
 
     let aggregate_bls_pubkey = aggregate_keys_from_bitmap(bit_vec, rank_to_pubkey)
         .ok_or(CertVerifyError::KeyAggregationFailed)?;
@@ -83,10 +89,8 @@ where
     let (vote1, vote2) = cert_to_verify.cert_type.to_source_votes().ok_or(
         CertVerifyError::Base3EncodingOnUnexpectedCert(cert_to_verify.cert_type),
     )?;
-    let signed_payload1 =
-        bincode::serialize(&vote1).map_err(|_| CertVerifyError::SerializationFailed)?;
-    let signed_payload2 =
-        bincode::serialize(&vote2).map_err(|_| CertVerifyError::SerializationFailed)?;
+    let signed_payload1 = serialize_vote(&vote1)?;
+    let signed_payload2 = serialize_vote(&vote2)?;
 
     let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
 
