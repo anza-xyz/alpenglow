@@ -10,10 +10,15 @@ use {
     solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
     solana_keypair::Keypair,
-    solana_ledger::shred::{
-        ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder, MAX_CODE_SHREDS_PER_SLOT,
-        MAX_DATA_SHREDS_PER_SLOT,
+    solana_ledger::{
+        blockstore_meta::BlockLocation,
+        shred::{
+            ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder,
+            MAX_CODE_SHREDS_PER_SLOT, MAX_DATA_SHREDS_PER_SLOT,
+        },
     },
+    solana_runtime::bank::Bank,
+    solana_sha256_hasher::hashv,
     solana_time_utils::AtomicInterval,
     solana_votor::event::VotorEventSender,
     solana_votor_messages::migration::MigrationStatus,
@@ -25,7 +30,9 @@ use {
 pub struct StandardBroadcastRun {
     slot: Slot,
     parent: Slot,
+    parent_block_id: Hash,
     chained_merkle_root: Hash,
+    double_merkle_leaves: Vec<Hash>,
     carryover_entry: Option<WorkingBankEntryMarker>,
     next_shred_index: u32,
     next_code_index: u32,
@@ -58,7 +65,9 @@ impl StandardBroadcastRun {
         Self {
             slot: Slot::MAX,
             parent: Slot::MAX,
+            parent_block_id: Hash::default(),
             chained_merkle_root: Hash::default(),
+            double_merkle_leaves: vec![],
             carryover_entry: None,
             next_shred_index: 0,
             next_code_index: 0,
@@ -74,6 +83,57 @@ impl StandardBroadcastRun {
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
             migration_status,
         }
+    }
+
+    /// Upon recieval of shreds from a new bank (bank.slot() != self.slot)
+    /// reinitialize any necessary state and stats.
+    fn reinitialize_state(
+        &mut self,
+        blockstore: &Blockstore,
+        bank: &Bank,
+        process_stats: &mut ProcessShredsStats,
+    ) {
+        debug_assert_ne!(bank.slot(), self.slot);
+
+        let chained_merkle_root = if self.slot == bank.parent_slot() {
+            self.chained_merkle_root
+        } else {
+            broadcast_utils::get_chained_merkle_root_from_parent(
+                bank.slot(),
+                bank.parent_slot(),
+                blockstore,
+            )
+            .unwrap_or_else(|err: Error| {
+                error!("Unknown chained Merkle root: {err:?}");
+                process_stats.err_unknown_chained_merkle_root += 1;
+                Hash::default()
+            })
+        };
+
+        let parent_block_id = bank.parent_block_id().unwrap_or_else(|| {
+            // Once SIMD-0333 is active, we can just hard unwrap here.
+            error!(
+                "Parent block id missing for slot {} parent {}",
+                bank.slot(),
+                bank.parent_slot()
+            );
+            process_stats.err_unknown_parent_block_id += 1;
+            Hash::default()
+        });
+
+        self.slot = bank.slot();
+        self.parent = bank.parent_slot();
+        self.parent_block_id = parent_block_id;
+        self.chained_merkle_root = chained_merkle_root;
+        self.double_merkle_leaves.clear();
+        self.next_shred_index = 0u32;
+        self.next_code_index = 0u32;
+        self.completed = false;
+        self.slot_broadcast_start = Instant::now();
+        self.num_batches = 0;
+
+        process_stats.receive_elapsed = 0;
+        process_stats.coalesce_elapsed = 0;
     }
 
     // If the current slot has changed, generates an empty shred indicating
@@ -146,8 +206,17 @@ impl StandardBroadcastRun {
                     *next_index = (*next_index).max(shred.index() + 1);
                 })
                 .collect();
-        if let Some(shred) = shreds.iter().max_by_key(|shred| shred.fec_set_index()) {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+
+        let fec_set_roots = shreds
+            .iter()
+            .unique_by(|shred| shred.fec_set_index())
+            .sorted_unstable_by_key(|shred| shred.fec_set_index())
+            .map(|shred| shred.merkle_root().expect("no more legacy shreds"));
+        // If necessary for perf, these leaves could start being joined in the background
+        self.double_merkle_leaves.extend(fec_set_roots);
+
+        if let Some(fec_set_root) = self.double_merkle_leaves.last() {
+            self.chained_merkle_root = *fec_set_root;
         }
         if self.next_shred_index > max_data_shreds_per_slot {
             return Err(BroadcastError::TooManyShreds);
@@ -244,31 +313,9 @@ impl StandardBroadcastRun {
                 // Refrain from generating shreds for the slot.
                 return Err(Error::DuplicateSlotBroadcast(bank.slot()));
             }
+
             // Reinitialize state for this slot.
-            let chained_merkle_root = if self.slot == bank.parent_slot() {
-                self.chained_merkle_root
-            } else {
-                broadcast_utils::get_chained_merkle_root_from_parent(
-                    bank.slot(),
-                    bank.parent_slot(),
-                    blockstore,
-                )
-                .unwrap_or_else(|err: Error| {
-                    error!("Unknown chained Merkle root: {err:?}");
-                    process_stats.err_unknown_chained_merkle_root += 1;
-                    Hash::default()
-                })
-            };
-            self.slot = bank.slot();
-            self.parent = bank.parent_slot();
-            self.chained_merkle_root = chained_merkle_root;
-            self.next_shred_index = 0u32;
-            self.next_code_index = 0u32;
-            self.completed = false;
-            self.slot_broadcast_start = Instant::now();
-            self.num_batches = 0;
-            process_stats.receive_elapsed = 0;
-            process_stats.coalesce_elapsed = 0;
+            self.reinitialize_state(blockstore, &bank, process_stats);
 
             self.migration_status.is_alpenglow_enabled()
         } else {
@@ -284,7 +331,7 @@ impl StandardBroadcastRun {
             .saturating_sub(bank.max_tick_height());
 
         let mut header_shreds = if send_header {
-            let header = produce_block_header(self.parent, self.chained_merkle_root);
+            let header = produce_block_header(self.parent, self.parent_block_id);
             self.component_to_shreds(
                 keypair,
                 &BlockComponent::BlockMarker(header),
@@ -372,12 +419,33 @@ impl StandardBroadcastRun {
             self.completed = true;
 
             // Populate the block id and send for voting
-            // The block id is the merkle root of the last FEC set which is now the chained merkle root
+            let block_id = if self
+                .migration_status
+                .should_use_double_merkle_block_id(bank.slot())
+            {
+                // Block id is the double merkle root
+                let fec_set_count = self.double_merkle_leaves.len();
+                // Add the final leaf (parent info)
+                let parent_info_leaf =
+                    hashv(&[&self.parent.to_le_bytes(), self.parent_block_id.as_ref()]);
+                self.double_merkle_leaves.push(parent_info_leaf);
+                // Future perf improvement, the blockstore insert can happen async
+                blockstore.build_and_insert_double_merkle_meta(
+                    bank.slot(),
+                    BlockLocation::Original,
+                    fec_set_count,
+                    self.double_merkle_leaves.drain(..).map(Ok),
+                )
+            } else {
+                // The block id is the merkle root of the last FEC set which is now the chained merkle root
+                self.chained_merkle_root
+            };
+
             broadcast_utils::set_block_id_and_send(
                 &self.migration_status,
                 votor_event_sender,
                 bank.clone(),
-                self.chained_merkle_root,
+                block_id,
             )?;
         }
 
