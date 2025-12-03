@@ -87,28 +87,30 @@ impl BlockComponentProcessor {
             VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
         };
 
-        match (marker, migration_status.should_allow_block_markers(slot)) {
-            // The first alpenglow block can be ingested before migration is complete if our node is having issues
-            // observing the migration. Thus we allow the header and genesis certificate during the migration period
-            // in order to increment the migration phase.
-            (BlockMarkerV1::BlockHeader(header), allowed)
-                if allowed || migration_status.is_in_migration() =>
-            {
+        let markers_fully_enabled = migration_status.should_allow_block_markers(slot);
+        let in_migration = migration_status.is_in_migration();
+
+        match marker {
+            // Header and genesis cert can be processed either:
+            // - once migration is fully enabled, or
+            // - while we're still in the migration phase (to let us advance it)
+            BlockMarkerV1::BlockHeader(header) if markers_fully_enabled || in_migration => {
                 self.on_header(&header)
             }
-            (BlockMarkerV1::GenesisCertificate(genesis_cert), allowed)
-                if allowed || migration_status.is_in_migration() =>
+            BlockMarkerV1::GenesisCertificate(genesis_cert)
+                if markers_fully_enabled || in_migration =>
             {
                 self.on_genesis_certificate(bank, genesis_cert, migration_status)
             }
 
-            // The remaining block components should only be present if the migration is complete
-            (BlockMarkerV1::BlockFooter(footer), true) => {
-                self.on_footer(bank, parent_bank, &footer)
-            }
+            // Everything else is only valid once migration is complete
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, &footer),
+
             // We process UpdateParent messages on shred ingest, so no callback needed here
-            (BlockMarkerV1::UpdateParent(_), true) => Ok(()),
-            (_, _) => Err(BlockComponentProcessorError::BlockComponentPreMigration),
+            BlockMarkerV1::UpdateParent(_) => Ok(()),
+
+            // Any other combination means we saw a marker too early
+            _ => Err(BlockComponentProcessorError::BlockComponentPreMigration),
         }?;
 
         if is_final && migration_status.should_allow_block_markers(slot) {
