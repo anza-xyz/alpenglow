@@ -53,6 +53,10 @@ impl BlockComponentProcessor {
         Ok(())
     }
 
+    /// Process an entry batch.
+    ///
+    /// `is_final` indicates that this is the last component of the block,
+    /// in which case we run the block level checks (has header / has footer)
     pub fn on_entry_batch(
         &mut self,
         migration_status: &MigrationStatus,
@@ -74,6 +78,15 @@ impl BlockComponentProcessor {
         }
     }
 
+    /// Process a block marker:
+    /// - Pre migration, no block markers are allowed
+    /// - During the migration only header and genesis certificate are allowed:
+    ///     - This is in case our node was slow in observing the completion of the migration
+    ///     - By seeing the first alpenglow block, we can advance the migration phase
+    /// - Once the migration is complete all markers are allowed
+    ///
+    /// `is_final` indicates whether this is the last component of the block,
+    /// in which case we run the block level checks (has header / has footer).
     pub fn on_marker(
         &mut self,
         bank: Arc<Bank>,
