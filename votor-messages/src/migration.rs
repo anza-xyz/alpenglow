@@ -193,9 +193,9 @@ impl MigrationPhase {
     /// want to root any slots >= migraiton_slot
     fn should_root_during_startup(&self, slot: Slot) -> bool {
         match self {
-            MigrationPhase::PreFeatureActivation => true,
             MigrationPhase::Migration { migration_slot, .. } => slot < *migration_slot,
-            MigrationPhase::ReadyToEnable { .. }
+            MigrationPhase::PreFeatureActivation
+            | MigrationPhase::ReadyToEnable { .. }
             | MigrationPhase::AlpenglowEnabled { .. }
             | MigrationPhase::FullAlpenglowEpoch { .. } => true,
         }
