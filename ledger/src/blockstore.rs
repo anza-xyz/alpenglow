@@ -5259,20 +5259,29 @@ impl Blockstore {
                 .parent_metas
                 .iter()
                 .filter_map(|((location, slot), wse)| match &wse.parent_meta {
-                    Some(WorkingEntry::Dirty(parent_meta)) => {
-                        Some((*location, *slot, parent_meta.parent_slot))
-                    }
+                    Some(WorkingEntry::Dirty(parent_meta)) => Some((
+                        *location,
+                        *slot,
+                        parent_meta.parent_slot,
+                        parent_meta.populated_from_update_parent(),
+                    )),
                     _ => None,
                 });
 
-        for (location, slot, parent_slot) in dirty_parent_metas {
+        for (location, slot, parent_slot, populated_from_update_parent) in dirty_parent_metas {
             let slot_meta_wse = self.get_slot_meta_entry(
                 &mut shred_insertion_tracker.slot_meta_working_set,
                 slot,
                 location,
                 parent_slot,
             );
-            slot_meta_wse.old_slot_meta = None;
+
+            // When an UpdateParent shows up, set old_slot_meta to None to force handle_chaining to
+            // run.
+            if populated_from_update_parent {
+                slot_meta_wse.old_slot_meta = None;
+            }
+
             slot_meta_wse.new_slot_meta.borrow_mut().parent_slot = Some(parent_slot);
         }
     }
