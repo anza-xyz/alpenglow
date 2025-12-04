@@ -2370,6 +2370,7 @@ impl Blockstore {
                 slot,
                 just_inserted_shreds,
                 parent_meta_working_set,
+                write_batch,
             )?;
         }
 
@@ -2472,6 +2473,7 @@ impl Blockstore {
         slot: u64,
         just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+        write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let key = (location, slot);
         let entry = parent_meta_working_set.entry(key).or_default();
@@ -2512,20 +2514,12 @@ impl Blockstore {
                 // Update next_slots in SlotsMeta
                 let prev_parent_slot = prev.parent_slot;
                 if let Some(mut parent_slot_meta) = self.meta(prev_parent_slot)? {
-                    let mut write_batch = self.get_write_batch()?;
-
                     parent_slot_meta
                         .next_slots
                         .retain(|&next_slot| next_slot != slot);
 
-                    self.meta_cf.put_in_batch(
-                        &mut write_batch,
-                        prev_parent_slot,
-                        &parent_slot_meta,
-                    )?;
-
-                    // Write the batch to persist the changes
-                    self.write_batch(write_batch)?;
+                    self.meta_cf
+                        .put_in_batch(write_batch, prev_parent_slot, &parent_slot_meta)?;
                 }
             }
         }
