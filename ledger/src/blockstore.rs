@@ -1687,6 +1687,9 @@ impl Blockstore {
                 metrics,
             );
         }
+
+        self.synchronize_slot_meta_with_parent_meta(&mut shred_insertion_tracker);
+
         // Handle chaining for the members of the slot_meta_working_set that
         // were inserted into, drop the others.
         self.handle_chaining(
@@ -2502,6 +2505,28 @@ impl Blockstore {
         if let Some(prev) = &previous_parent_meta {
             if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
                 return Ok(());
+            }
+
+            if prev.populated_from_block_header() && new_parent_meta.populated_from_update_parent()
+            {
+                // Update next_slots in SlotsMeta
+                let prev_parent_slot = prev.parent_slot;
+                if let Some(mut parent_slot_meta) = self.meta(prev_parent_slot)? {
+                    let mut write_batch = self.get_write_batch()?;
+
+                    parent_slot_meta
+                        .next_slots
+                        .retain(|&next_slot| next_slot != slot);
+
+                    self.meta_cf.put_in_batch(
+                        &mut write_batch,
+                        prev_parent_slot,
+                        &parent_slot_meta,
+                    )?;
+
+                    // Write the batch to persist the changes
+                    self.write_batch(write_batch)?;
+                }
             }
         }
 
@@ -5229,6 +5254,35 @@ impl Blockstore {
         Ok(())
     }
 
+    /// Synchronizes slot meta with parent meta when an UpdateParent marker
+    /// overrides a previously set parent from a BlockHeader.
+    fn synchronize_slot_meta_with_parent_meta(
+        &self,
+        shred_insertion_tracker: &mut ShredInsertionTracker,
+    ) {
+        let dirty_parent_metas =
+            shred_insertion_tracker
+                .parent_metas
+                .iter()
+                .filter_map(|((location, slot), wse)| match &wse.parent_meta {
+                    Some(WorkingEntry::Dirty(parent_meta)) => {
+                        Some((*location, *slot, parent_meta.parent_slot))
+                    }
+                    _ => None,
+                });
+
+        for (location, slot, parent_slot) in dirty_parent_metas {
+            let slot_meta_wse = self.get_slot_meta_entry(
+                &mut shred_insertion_tracker.slot_meta_working_set,
+                slot,
+                location,
+                parent_slot,
+            );
+            slot_meta_wse.old_slot_meta = None;
+            slot_meta_wse.new_slot_meta.borrow_mut().parent_slot = Some(parent_slot);
+        }
+    }
+
     /// For each entry in `working_set` whose `did_insert_occur` is true, this
     /// function handles its chaining effect by updating the SlotMeta of both
     /// the slot and its parent slot to reflect the slot descends from the
@@ -6264,7 +6318,13 @@ pub mod tests {
             open_genesis_config, MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
         },
         solana_clock::{DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT},
-        solana_entry::entry::{next_entry, next_entry_mut},
+        solana_entry::{
+            block_component::{
+                BlockHeaderV1, BlockMarkerV1, UpdateParentV1, VersionedBlockHeader,
+                VersionedBlockMarker, VersionedUpdateParent,
+            },
+            entry::{next_entry, next_entry_mut},
+        },
         solana_hash::Hash,
         solana_message::{compiled_instruction::CompiledInstruction, v0::LoadedAddresses},
         solana_packet::PACKET_DATA_SIZE,
@@ -13041,5 +13101,238 @@ pub mod tests {
         assert!(blockstore
             .get_double_merkle_root(incomplete_slot, block_location)
             .is_none());
+    }
+
+    fn create_update_parent_shreds(
+        slot: Slot,
+        parent_slot: Slot,
+        parent_block_id: Hash,
+        shred_index: u32,
+    ) -> Vec<Shred> {
+        let component = UpdateParentV1 {
+            new_parent_slot: parent_slot,
+            new_parent_block_id: parent_block_id,
+        };
+        let component = VersionedUpdateParent::V1(component);
+        let component = BlockMarkerV1::new_update_parent(component);
+        let component = VersionedBlockMarker::V1(component);
+        let component = BlockComponent::new_block_marker(component);
+
+        Shredder::new(slot, 0, 0, 0)
+            .unwrap()
+            .make_merkle_shreds_from_component(
+                &Keypair::new(),
+                &component,
+                true,
+                Some(Hash::new_unique()),
+                shred_index,
+                shred_index,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            )
+            .collect()
+    }
+
+    fn create_block_header_shreds(
+        slot: Slot,
+        parent_slot: Slot,
+        parent_block_id: Hash,
+    ) -> Vec<Shred> {
+        let component = BlockHeaderV1 {
+            parent_slot,
+            parent_block_id,
+        };
+        let component = VersionedBlockHeader::V1(component);
+        let component = BlockMarkerV1::new_block_header(component);
+        let component = VersionedBlockMarker::V1(component);
+        let component = BlockComponent::new_block_marker(component);
+
+        Shredder::new(slot, parent_slot, 0, 0)
+            .unwrap()
+            .make_merkle_shreds_from_component(
+                &Keypair::new(),
+                &component,
+                false, // Not last in slot - allows adding update parent shreds later
+                Some(Hash::new_unique()),
+                0,
+                0,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            )
+            .collect()
+    }
+
+    fn verify_next_slots(blockstore: &Blockstore, parent_slot: Slot, expected: &[Slot]) {
+        let meta = blockstore.meta(parent_slot).unwrap();
+        let actual = meta.as_ref().map(|m| {
+            let mut slots = m.next_slots.clone();
+            slots.sort_unstable();
+            slots
+        });
+
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+
+        match (actual, expected.is_empty()) {
+            (Some(actual), _) => assert_eq!(
+                actual, expected,
+                "Parent slot {parent_slot} next_slots mismatch",
+            ),
+            (None, false) => panic!("Slot {parent_slot} meta doesn't exist"),
+            (None, true) => {} // OK - no meta and no expected children
+        }
+    }
+
+    #[test]
+    fn test_block_header_followed_by_update_parent() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let parent_5_id = Hash::new_unique();
+        blockstore
+            .insert_shreds(create_block_header_shreds(10, 5, parent_5_id), None, true)
+            .unwrap();
+
+        assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(5));
+        verify_next_slots(&blockstore, 5, &[10]);
+
+        let parent_3_id = Hash::new_unique();
+        blockstore
+            .insert_shreds(
+                create_update_parent_shreds(10, 3, parent_3_id, 32),
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(3));
+
+        let parent_meta = blockstore
+            .get_parent_meta(10, Some(BlockLocation::Original))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parent_meta.parent_slot, 3);
+        assert_eq!(parent_meta.parent_block_id, parent_3_id);
+        assert!(parent_meta.populated_from_update_parent());
+
+        verify_next_slots(&blockstore, 5, &[]);
+        verify_next_slots(&blockstore, 3, &[10]);
+    }
+
+    #[test]
+    fn test_update_parent_overrides_block_header() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        blockstore
+            .insert_shreds(
+                create_block_header_shreds(20, 18, Hash::new_unique()),
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(blockstore.meta(20).unwrap().unwrap().parent_slot, Some(18));
+        verify_next_slots(&blockstore, 18, &[20]);
+
+        blockstore
+            .insert_shreds(
+                create_update_parent_shreds(20, 15, Hash::new_unique(), 32),
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(blockstore.meta(20).unwrap().unwrap().parent_slot, Some(15));
+        verify_next_slots(&blockstore, 18, &[]);
+        verify_next_slots(&blockstore, 15, &[20]);
+    }
+
+    #[test]
+    fn test_reparenting_via_update_parent() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        blockstore
+            .insert_shreds(
+                create_block_header_shreds(30, 25, Hash::new_unique()),
+                None,
+                true,
+            )
+            .unwrap();
+        verify_next_slots(&blockstore, 25, &[30]);
+
+        blockstore
+            .insert_shreds(
+                create_update_parent_shreds(30, 22, Hash::new_unique(), 32),
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(blockstore.meta(30).unwrap().unwrap().parent_slot, Some(22));
+        verify_next_slots(&blockstore, 25, &[]);
+        verify_next_slots(&blockstore, 22, &[30]);
+    }
+
+    #[test]
+    fn test_multiple_children_reparenting() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let parent_id = Hash::new_unique();
+        for slot in [41, 40, 42] {
+            blockstore
+                .insert_shreds(create_block_header_shreds(slot, 35, parent_id), None, true)
+                .unwrap();
+        }
+        verify_next_slots(&blockstore, 35, &[40, 41, 42]);
+
+        blockstore
+            .insert_shreds(
+                create_update_parent_shreds(41, 32, Hash::new_unique(), 32),
+                None,
+                true,
+            )
+            .unwrap();
+        verify_next_slots(&blockstore, 35, &[40, 42]);
+        verify_next_slots(&blockstore, 32, &[41]);
+
+        blockstore
+            .insert_shreds(
+                create_update_parent_shreds(40, 33, Hash::new_unique(), 32),
+                None,
+                true,
+            )
+            .unwrap();
+        verify_next_slots(&blockstore, 35, &[42]);
+        verify_next_slots(&blockstore, 33, &[40]);
+    }
+
+    #[test]
+    fn test_interleaved_shred_arrival() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        blockstore
+            .insert_shreds(
+                create_block_header_shreds(50, 48, Hash::new_unique()),
+                None,
+                true,
+            )
+            .unwrap();
+        assert_eq!(blockstore.meta(50).unwrap().unwrap().parent_slot, Some(48));
+
+        // Split update parent shreds across two batches
+        let mut update_shreds = create_update_parent_shreds(50, 45, Hash::new_unique(), 32);
+        let mid = update_shreds.len() / 2;
+        let first_half: Vec<_> = update_shreds.drain(..mid).collect();
+
+        blockstore.insert_shreds(first_half, None, true).unwrap();
+        blockstore.insert_shreds(update_shreds, None, true).unwrap();
+
+        assert_eq!(blockstore.meta(50).unwrap().unwrap().parent_slot, Some(45));
+        verify_next_slots(&blockstore, 48, &[]);
+        verify_next_slots(&blockstore, 45, &[50]);
     }
 }
