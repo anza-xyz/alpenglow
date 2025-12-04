@@ -111,7 +111,7 @@ impl BlockComponentProcessor {
             BlockMarkerV1::GenesisCertificate(genesis_cert)
                 if markers_fully_enabled || in_migration =>
             {
-                self.on_genesis_certificate(bank, genesis_cert.inner().clone(), migration_status)
+                self.on_genesis_certificate(bank, genesis_cert.into_inner(), migration_status)
             }
 
             // Everything else is only valid once migration is complete

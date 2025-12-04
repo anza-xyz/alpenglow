@@ -144,6 +144,10 @@ impl<T> LengthPrefixed<T> {
     pub fn inner(&self) -> &T {
         &self.inner
     }
+
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
 }
 
 impl<T: SchemaWrite<Src = T>> SchemaWrite for LengthPrefixed<T> {
