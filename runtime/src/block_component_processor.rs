@@ -285,7 +285,7 @@ mod tests {
     use {
         super::*,
         crate::{bank::Bank, genesis_utils::create_genesis_config},
-        solana_entry::block_component::{BlockFooterV1, BlockHeaderV1},
+        solana_entry::block_component::{BlockFooterV1, BlockHeaderV1, FinalCertificate},
         solana_program::{hash::Hash, pubkey::Pubkey},
         std::sync::Arc,
     };
@@ -369,6 +369,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         // First footer should succeed
@@ -403,6 +404,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -466,6 +468,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
 
@@ -505,6 +508,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
         processor
             .on_footer(bank.clone(), parent.clone(), &footer)
@@ -592,6 +596,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
         processor
@@ -622,6 +627,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1_000_000_000,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         // Try to process footer without header - should fail
@@ -653,6 +659,7 @@ mod tests {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
 
@@ -724,6 +731,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -763,6 +771,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         let result = processor.on_footer(bank, parent, &footer);
