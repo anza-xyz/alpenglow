@@ -19,6 +19,8 @@ use {
         signature::SignatureProjective,
     },
     solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
@@ -26,7 +28,7 @@ use {
     solana_streamer::packet::PacketBatch,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
-        consensus_rewards::{AddVoteEntry, AddVoteMessage},
+        consensus_rewards::{self, AddVoteEntry, AddVoteMessage},
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
@@ -72,6 +74,8 @@ pub struct BLSSigVerifier {
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+    cluster_info: Arc<ClusterInfo>,
+    leader_schedule: Arc<LeaderScheduleCache>,
 }
 
 impl BLSSigVerifier {
@@ -153,10 +157,15 @@ impl BLSSigVerifier {
                         vote: vote_message.vote,
                     });
 
-                    // consensus pool does not need votes for slots other than root slot however the rewards container may still need them.
-                    if vote_message.vote.slot() <= root_bank.slot() {
-                        // XXX: actually verify and send the votes.  The verification and sending should happen off the critical path.
-
+                    // consensus pool does not need votes for slots older than root slot however the rewards container may still need them.
+                    if vote_message.vote.slot() <= root_bank.slot()
+                        && !consensus_rewards::wants_vote(
+                            &self.cluster_info,
+                            &self.leader_schedule,
+                            root_bank.slot(),
+                            &vote_message,
+                        )
+                    {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -198,7 +207,7 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         let (votes_result, certs_result) = rayon::join(
-            || self.verify_and_send_votes(votes_to_verify),
+            || self.verify_and_send_votes(votes_to_verify, root_bank.slot()),
             || self.verify_and_send_certificates(certs_to_verify, &root_bank),
         );
 
@@ -247,6 +256,8 @@ impl BLSSigVerifier {
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        cluster_info: Arc<ClusterInfo>,
+        leader_schedule: Arc<LeaderScheduleCache>,
     ) -> Self {
         Self {
             sharable_banks,
@@ -259,6 +270,8 @@ impl BLSSigVerifier {
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
+            cluster_info,
+            leader_schedule,
         }
     }
 
@@ -267,10 +280,22 @@ impl BLSSigVerifier {
     fn verify_and_send_votes(
         &self,
         votes_to_verify: Vec<VoteToVerify>,
+        root_slot: Slot,
     ) -> Result<Vec<VoteMessage>, BLSSigVerifyServiceError<ConsensusMessage>> {
         let verified_votes = self.verify_votes(votes_to_verify);
-        // XXX: call consensus_rewards::wants_vote() to do some additional filtering here.
-        let reward_votes = verified_votes.iter().map(|v| v.vote_message).collect();
+        let reward_votes = verified_votes
+            .iter()
+            .filter_map(|v| {
+                let vote = v.vote_message;
+                consensus_rewards::wants_vote(
+                    &self.cluster_info,
+                    &self.leader_schedule,
+                    root_slot,
+                    &vote,
+                )
+                .then_some(vote)
+            })
+            .collect();
 
         self.stats
             .total_valid_packets
