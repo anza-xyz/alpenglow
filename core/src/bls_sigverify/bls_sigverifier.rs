@@ -207,11 +207,11 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         let (votes_result, certs_result) = rayon::join(
-            || self.verify_and_send_votes(votes_to_verify, root_bank.slot()),
+            || self.verify_and_send_votes(votes_to_verify, &root_bank),
             || self.verify_and_send_certificates(certs_to_verify, &root_bank),
         );
 
-        let rewards_votes = votes_result?;
+        let add_vote_msg = votes_result?;
         let () = certs_result?;
 
         // Send to RPC service for last voted tracking
@@ -227,20 +227,9 @@ impl BLSSigVerifier {
             warn!("could not send consensus metrics, receive side of channel is closed");
         }
 
-        let votes = rewards_votes
-            .into_iter()
-            .filter_map(|v| {
-                get_key_to_rank_map(&root_bank, v.vote.slot()).map(|rank_map| AddVoteEntry {
-                    max_validators: rank_map.len(),
-                    vote: v,
-                })
-            })
-            .collect();
-        let msg = AddVoteMessage {
-            root_slot: root_bank.slot(),
-            votes,
-        };
-        self.reward_votes_sender.send(msg).unwrap();
+        if self.reward_votes_sender.send(add_vote_msg).is_err() {
+            warn!("could not send votes to reward container, receive side of channel is closed");
+        }
 
         self.stats.maybe_report_stats();
 
@@ -280,22 +269,31 @@ impl BLSSigVerifier {
     fn verify_and_send_votes(
         &self,
         votes_to_verify: Vec<VoteToVerify>,
-        root_slot: Slot,
-    ) -> Result<Vec<VoteMessage>, BLSSigVerifyServiceError<ConsensusMessage>> {
+        root_bank: &Bank,
+    ) -> Result<AddVoteMessage, BLSSigVerifyServiceError<ConsensusMessage>> {
         let verified_votes = self.verify_votes(votes_to_verify);
+
         let reward_votes = verified_votes
             .iter()
             .filter_map(|v| {
                 let vote = v.vote_message;
+                let rank_map = get_key_to_rank_map(root_bank, vote.vote.slot())?;
                 consensus_rewards::wants_vote(
                     &self.cluster_info,
                     &self.leader_schedule,
-                    root_slot,
+                    root_bank.slot(),
                     &vote,
                 )
-                .then_some(vote)
+                .then_some(AddVoteEntry {
+                    max_validators: rank_map.len(),
+                    vote,
+                })
             })
             .collect();
+        let add_vote_msg = AddVoteMessage {
+            root_slot: root_bank.slot(),
+            votes: reward_votes,
+        };
 
         self.stats
             .total_valid_packets
@@ -349,7 +347,7 @@ impl BLSSigVerifier {
             }
         }
 
-        Ok(reward_votes)
+        Ok(add_vote_msg)
     }
 
     fn verify_votes(&self, votes_to_verify: Vec<VoteToVerify>) -> Vec<VoteToVerify> {

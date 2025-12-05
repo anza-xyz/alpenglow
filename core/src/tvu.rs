@@ -607,7 +607,7 @@ pub mod tests {
         solana_signer::Signer,
         solana_streamer::socket::SocketAddrSpace,
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
-        solana_votor::{consensus_metrics, vote_history_storage::FileVoteHistoryStorage},
+        solana_votor::vote_history_storage::FileVoteHistoryStorage,
         std::sync::atomic::{AtomicU64, Ordering},
     };
 
