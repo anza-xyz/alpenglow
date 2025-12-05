@@ -18,8 +18,12 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            self, ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredId,
-            ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
+            self,
+            merkle_tree::{
+                get_proof_size, make_merkle_proof, make_merkle_tree, SIZE_OF_MERKLE_PROOF_ENTRY,
+            },
+            ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredFlags,
+            ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -40,7 +44,7 @@ use {
     solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
     solana_entry::{
         block_component::{
-            BlockComponent, BlockMarkerV1, VersionedBlockHeader, VersionedBlockMarker,
+            BlockComponent, VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
         },
         entry::{create_ticks, Entry},
     },
@@ -51,6 +55,7 @@ use {
     solana_metrics::datapoint_error,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
+    solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_signer::Signer,
     solana_storage_proto::{StoredExtendedRewards, StoredTransactionStatusMeta},
@@ -277,6 +282,7 @@ pub struct Blockstore {
     alt_data_shred_cf: LedgerColumn<cf::AlternateShredData>,
     alt_merkle_root_meta_cf: LedgerColumn<cf::AlternateMerkleRootMeta>,
     parent_meta_cf: LedgerColumn<cf::ParentMeta>,
+    double_merkle_meta_cf: LedgerColumn<cf::DoubleMerkleMeta>,
 
     highest_primary_index_slot: RwLock<Option<Slot>>,
     max_root: AtomicU64,
@@ -310,6 +316,32 @@ pub struct SlotMetaWorkingSetEntry {
     did_insert_occur: bool,
 }
 
+/// Cache entry for tracking parent meta state during shred insertion.
+///
+/// This structure combines two pieces of information:
+/// 1. The current parent meta value (if any) - either loaded from blockstore (Clean)
+///    or newly inserted/modified during this batch (Dirty)
+/// 2. Whether we've already checked the blockstore for this key
+///
+/// The `hit_blockstore` flag ensures we only read from the blockstore once per key.
+/// Once set to true, all subsequent accesses use the cached `parent_meta` value
+/// (which may be None if the blockstore had no entry).
+///
+/// States:
+/// - `{ parent_meta: None, hit_blockstore: false }` - Not yet checked blockstore
+/// - `{ parent_meta: None, hit_blockstore: true }` - Checked blockstore, was empty
+/// - `{ parent_meta: Some(Clean(meta)), hit_blockstore: true }` - Loaded from blockstore
+/// - `{ parent_meta: Some(Dirty(meta)), hit_blockstore: true }` - Modified in this batch
+#[derive(Default)]
+struct ParentMetaWorkingSetEntry {
+    /// The parent meta value: None if blockstore was empty, Some(Clean) if loaded
+    /// from blockstore unchanged, or Some(Dirty) if inserted/modified in this batch
+    parent_meta: Option<WorkingEntry<ParentMeta>>,
+    /// Whether we've already loaded this key from the blockstore. Once true, we use
+    /// the cached `parent_meta` value instead of hitting the blockstore again.
+    fetched_from_blockstore: bool,
+}
+
 struct ShredInsertionTracker<'a> {
     // Map which contains data shreds that have just been inserted. They will
     // later be written to `cf::ShredData` or `cf::AlternateShredData`
@@ -328,7 +360,7 @@ struct ShredInsertionTracker<'a> {
     index_working_set: HashMap<(BlockLocation, u64), IndexMetaWorkingSetEntry>,
     // In-memory map that maintains the dirty copy of the parent meta.  It will
     // later be written to `cf::ParentMeta`
-    parent_metas: HashMap<(BlockLocation, u64), WorkingEntry<ParentMeta>>,
+    parent_metas: HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
     duplicate_shreds: Vec<PossibleDuplicateShred>,
     // Collection of the current blockstore writes which will be committed
     // atomically.
@@ -402,8 +434,6 @@ impl Blockstore {
         fs::create_dir_all(ledger_path)?;
         let blockstore_path = ledger_path.join(BLOCKSTORE_DIRECTORY_ROCKS_LEVEL);
 
-        adjust_ulimit_nofile(options.enforce_ulimit_nofile)?;
-
         // Open the database
         let mut measure = Measure::start("blockstore open");
         info!("Opening blockstore at {blockstore_path:?}");
@@ -436,6 +466,7 @@ impl Blockstore {
         let alt_data_shred_cf = db.column();
         let alt_merkle_root_meta_cf = db.column();
         let parent_meta_cf = db.column();
+        let double_merkle_meta_cf = db.column();
 
         // Get max root or 0 if it doesn't exist
         let max_root = roots_cf
@@ -477,6 +508,7 @@ impl Blockstore {
             alt_data_shred_cf,
             alt_merkle_root_meta_cf,
             parent_meta_cf,
+            double_merkle_meta_cf,
 
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
@@ -842,6 +874,116 @@ impl Blockstore {
                 merkle_root_meta,
             ),
         }
+    }
+
+    /// Gets the double merkle root for the given block, computing it if necessary.
+    /// Fails and returns `None` if the block is missing or not full
+    pub fn get_double_merkle_root(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Option<Hash> {
+        if let Some(double_merkle_meta) = self
+            .double_merkle_meta_cf
+            .get((slot, block_location))
+            .expect("Blockstore operations must succeed")
+        {
+            return Some(double_merkle_meta.double_merkle_root);
+        }
+
+        self.compute_double_merkle_root(slot, block_location)
+    }
+
+    /// Computes the double merkle root & proofs for the given block and inserts the DoubleMerkleMeta.
+    /// Fails if the slot is not full returning `None` otherwise returns the double merkle root
+    fn compute_double_merkle_root(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Option<Hash> {
+        let slot_meta = self
+            .meta_cf
+            .get(slot)
+            .expect("Blockstore operations must succeed")?;
+
+        if !slot_meta.is_full() {
+            return None;
+        }
+
+        let last_index = slot_meta.last_index.expect("Slot is full");
+
+        // This function is only used post Alpenglow, so implicitly gated by SIMD-0317 as that is a prereq
+        let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
+
+        let parent_meta = self
+            .parent_meta_cf
+            .get((slot, block_location))
+            .expect("Blockstore operations must succeed")
+            .expect("Slot cannot be full without parent");
+
+        // Collect merkle roots for each FEC set
+        let fec_set_indices =
+            (0..fec_set_count).map(|i| (slot, (i * DATA_SHREDS_PER_FEC_BLOCK) as u32));
+        let keys = self.merkle_root_meta_cf.multi_get_keys(fec_set_indices);
+        let merkle_tree_leaves: Vec<_> = self
+            .merkle_root_meta_cf
+            .multi_get_bytes(&keys)
+            .map(|get_result| {
+                let bytes = get_result
+                    .expect("Blockstore operations must succeed")
+                    .expect("Merkle root meta must exist for all fec sets in full slot");
+                let merkle_root = bincode::deserialize::<MerkleRootMeta>(bytes.as_ref())
+                    .expect("Merkle root meta column only contains valid MerkleRootMetas")
+                    .merkle_root()
+                    .expect("Legacy shreds no longer exist, merkle root must be present");
+                Ok(merkle_root)
+            })
+            // Add parent info as the last leaf
+            .chain(std::iter::once(Ok(hashv(&[
+                &parent_meta.parent_slot.to_le_bytes(),
+                parent_meta.parent_block_id.as_ref(),
+            ]))))
+            .collect();
+
+        // Build the merkle tree
+        let merkle_tree = make_merkle_tree(merkle_tree_leaves)
+            .expect("Merkle tree construction cannot have failed");
+        let double_merkle_root = *merkle_tree
+            .last()
+            .expect("Merkle tree cannot be empty as fec_set_count is > 0");
+
+        // Build proofs
+        let tree_size = fec_set_count + 1;
+        let proofs: Vec<Vec<u8>> = (0..tree_size)
+            .map(|leaf_index| {
+                make_merkle_proof(leaf_index, tree_size, &merkle_tree)
+                    .map(|proof_entry| {
+                        proof_entry.expect("Merkle proof construction cannot have failed")
+                    })
+                    .flat_map(|proof_entry| proof_entry.as_slice())
+                    .copied()
+                    .collect()
+            })
+            .inspect(|proof: &Vec<u8>| {
+                debug_assert_eq!(
+                    proof.len(),
+                    get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
+                );
+            })
+            .collect();
+
+        // Create and store DoubleMerkleMeta
+        let double_merkle_meta = DoubleMerkleMeta {
+            double_merkle_root,
+            fec_set_count,
+            proofs,
+        };
+
+        self.double_merkle_meta_cf
+            .put((slot, block_location), &double_merkle_meta)
+            .expect("Blockstore operations must succeed");
+
+        Some(double_merkle_root)
     }
 
     /// Check whether the specified slot is an orphan slot which does not
@@ -1390,7 +1532,11 @@ impl Blockstore {
         }
 
         for (&(location, slot), working_parent_meta) in &shred_insertion_tracker.parent_metas {
-            if !working_parent_meta.should_write() {
+            let Some(parent_meta) = working_parent_meta.parent_meta.as_ref() else {
+                continue;
+            };
+
+            if !parent_meta.should_write() {
                 // No need to rewrite the column
                 continue;
             }
@@ -1398,7 +1544,7 @@ impl Blockstore {
             self.parent_meta_cf.put_in_batch(
                 &mut shred_insertion_tracker.write_batch,
                 (slot, location),
-                working_parent_meta.as_ref(),
+                parent_meta.as_ref(),
             )?;
         }
 
@@ -1673,6 +1819,21 @@ impl Blockstore {
         }
     }
 
+    /// Atomically clear a range of `slot` inclusive, similar to `Blockstore::clear_unconfirmed_slot`
+    /// Holds the shred lock during the entire purge.
+    pub fn clear_unconfirmed_slots(&self, start: Slot, end: Slot) {
+        let _lock = self.insert_shreds_lock.lock().unwrap();
+        for slot in start..=end {
+            match self.purge_slot_cleanup_chaining(slot) {
+                Ok(_) => {}
+                Err(BlockstoreError::SlotUnavailable) => {
+                    error!("clear_unconfirmed_slots() called on slot {slot} with no SlotMeta")
+                }
+                Err(e) => panic!("Purge database operations failed {e}"),
+            }
+        }
+    }
+
     // Bypasses erasure recovery becuase it is called from broadcast stage
     // when inserting own shreds during leader slots. Stores all shreds in the original column.
     pub fn insert_cow_shreds<'a>(
@@ -1928,64 +2089,107 @@ impl Blockstore {
         None
     }
 
-    /// Parse BlockHeader from data shred payload
-    fn parse_block_header_from_data_payload(data: &[u8]) -> Option<(Slot, Hash)> {
-        // Try to deserialize as BlockComponent
-        let (component, _) = BlockComponent::from_bytes(data).ok()?;
-
-        // If we were able to parse the component, it must be a block marker
-        let marker = component.as_marker()?;
-
-        // Check if it's a BlockMarker with BlockHeader
-        match marker {
-            VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(header))
-            | VersionedBlockMarker::Current(BlockMarkerV1::BlockHeader(header)) => {
-                // Extract the BlockHeader from the versioned wrapper
-                match header {
-                    VersionedBlockHeader::V1(update) | VersionedBlockHeader::Current(update) => {
-                        Some((update.parent_slot, update.parent_block_id))
-                    }
-                }
-            }
-            _ => None,
+    fn maybe_parse_block_header(&self, current_shred: &Shred) -> Option<ParentMeta> {
+        // Block headers only occur at index 0
+        if current_shred.index() != 0 {
+            return None;
         }
-    }
 
-    fn maybe_insert_parent_meta(
-        &self,
-        current_shred: &Shred,
-        slot: Slot,
-        location: BlockLocation,
-        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), WorkingEntry<ParentMeta>>,
-    ) {
         // The contents of BlockHeaderV1 entirely fit into a single shred. So, let's just parse the
         // first shred.
         let shred_bytes = current_shred.payload();
-        let Ok(payload) = shred::layout::get_data(shred_bytes) else {
-            return;
+        let Ok(payload) = shred::wire::get_data(shred_bytes) else {
+            return None;
         };
 
         // Check whether this is a BlockMarker
         if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
-            return;
+            return None;
         }
 
         // Try to parse BlockHeader from the payload
-        let Some((parent_slot, parent_block_id)) =
-            Self::parse_block_header_from_data_payload(payload)
-        else {
-            return;
-        };
+        let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
+        let VersionedBlockMarker::V1(marker) = component.as_marker()?;
+        let VersionedBlockHeader::V1(header) = marker.as_block_header()?;
 
         let parent_meta = ParentMeta {
-            parent_slot,
-            parent_block_id,
+            parent_slot: header.parent_slot,
+            parent_block_id: header.parent_block_id,
             replay_fec_set_index: 0,
         };
 
-        parent_meta_working_set
-            .entry((location, slot))
-            .or_insert(WorkingEntry::Dirty(parent_meta));
+        Some(parent_meta)
+    }
+
+    fn maybe_parse_update_parent(
+        &self,
+        current_shred: &Shred,
+        slot: Slot,
+        location: BlockLocation,
+        just_inserted_shreds: &HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+    ) -> Option<ParentMeta> {
+        let current_index = current_shred.index();
+        let fec_set_index = current_shred.fec_set_index();
+        let data_complete = current_shred.data_complete();
+
+        // Determine which shred to check for UpdateParent and which FEC set it belongs to
+        //
+        // NOTE: this only works when SIMD-0317 and SIMD-0366 have been activated!
+        let (shred_bytes, target_fec_set_index) = if data_complete {
+            // Case (a): Current shred has DATA_COMPLETE=true (end of FEC set)
+            // Check the 0th shred in the NEXT FEC set for UpdateParent
+            let next_fec_set_index = fec_set_index + DATA_SHREDS_PER_FEC_BLOCK as u32;
+            let shred_id = ShredId::new(slot, next_fec_set_index, ShredType::Data);
+            let shred_bytes =
+                self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location);
+            (shred_bytes, next_fec_set_index)
+        } else if current_index % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 && current_index > 0 {
+            // Case (b): Current shred is the 0th shred of the FEC set
+            // Check if the PREVIOUS shred had DATA_COMPLETE=true
+            let prev_shred_index = current_index - 1;
+            let shred_id = ShredId::new(slot, prev_shred_index, ShredType::Data);
+
+            let prev_payload =
+                self.get_shred_from_just_inserted_or_db(just_inserted_shreds, shred_id, location);
+
+            let shred_bytes = prev_payload
+                .and_then(|prev| {
+                    // Use get_flags to check DATA_COMPLETE without full deserialization
+                    shred::wire::get_flags(&prev).ok()
+                })
+                .and_then(|flags| {
+                    flags
+                        .contains(ShredFlags::DATA_COMPLETE_SHRED)
+                        .then(|| Cow::Borrowed(current_shred.payload()))
+                });
+
+            (shred_bytes, fec_set_index)
+        } else {
+            return None;
+        };
+
+        // Process the shred bytes if we have them
+        let shred_bytes = shred_bytes?;
+        let payload = shred::wire::get_data(&shred_bytes).ok()?;
+
+        // Check whether this is a BlockMarker
+        if !BlockComponent::infer_is_block_marker(payload).unwrap_or(false) {
+            return None;
+        }
+
+        // Try to parse UpdateParent from the payload
+        let component = wincode::deserialize::<BlockComponent>(payload).ok()?;
+        let VersionedBlockMarker::V1(marker) = component.as_marker()?;
+        let VersionedUpdateParent::V1(update_parent) = marker.as_update_parent()?;
+
+        // First time seeing this UpdateParent
+        let update_parent_meta = ParentMeta {
+            parent_slot: update_parent.new_parent_slot,
+            parent_block_id: update_parent.new_parent_block_id,
+            replay_fec_set_index: target_fec_set_index,
+        };
+
+        Some(update_parent_meta)
     }
 
     /// Create an entry to the specified `write_batch` that performs shred
@@ -2038,11 +2242,6 @@ impl Blockstore {
             write_batch,
             newly_completed_data_sets,
         } = shred_insertion_tracker;
-
-        // Check for block header
-        if shred.index() == 0 {
-            self.maybe_insert_parent_meta(&shred, slot, location, parent_meta_working_set);
-        }
 
         let index_meta_working_set_entry =
             self.get_index_meta_entry(slot, location, index_working_set, index_meta_time_us);
@@ -2140,6 +2339,17 @@ impl Blockstore {
             write_batch,
             shred_source,
         )?;
+
+        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
+            self.maybe_update_parent_meta(
+                &shred,
+                location,
+                slot,
+                just_inserted_shreds,
+                parent_meta_working_set,
+            )?;
+        }
+
         if matches!(location, BlockLocation::Original) {
             // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
             // if necessary.
@@ -2159,6 +2369,125 @@ impl Blockstore {
                 entry.insert(WorkingEntry::Clean(meta));
             }
         }
+
+        Ok(())
+    }
+
+    /// Validates compatibility between two ParentMetas.
+    ///
+    /// This function determines which ParentMeta is which (UpdateParent vs BlockHeader) and
+    /// validates that they are compatible. Works irrespective of parameter order.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if validation passed and the new ParentMeta should be written
+    /// - `Ok(false)` if the new ParentMeta should NOT be written (same type and match, or UpdateParent takes precedence)
+    /// - `Err` if validation fails
+    fn should_write_parent_meta(slot: Slot, new: &ParentMeta, prev: &ParentMeta) -> Result<bool> {
+        // Determine which is the UpdateParent and which is the BlockHeader
+        let (update_parent_meta, block_header_meta, should_write) = match (
+            new.populated_from_block_header(),
+            prev.populated_from_block_header(),
+        ) {
+            // New is BlockHeader, prev is UpdateParent
+            // UpdateParent takes precedence, so don't overwrite
+            (true, false) => (prev, new, false),
+            // New is UpdateParent, prev is BlockHeader
+            // Validate and allow UpdateParent to replace BlockHeader
+            (false, true) => (new, prev, true),
+            // Both are the same type - ensure they match
+            _ => match new == prev {
+                true => return Ok(false),
+                false => return Err(BlockstoreError::BlockComponentMismatch(slot)),
+            },
+        };
+
+        // Validate that the UpdateParent is compatible with the BlockHeader
+        if update_parent_meta.block() == block_header_meta.block() {
+            return Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot));
+        }
+
+        if update_parent_meta.parent_slot > block_header_meta.parent_slot {
+            return Err(BlockstoreError::UpdateParentSlotGreaterThanBlockHeader(
+                slot,
+            ));
+        }
+
+        Ok(should_write)
+    }
+
+    /// Fetches or retrieves the existing ParentMeta for a given slot and location.
+    ///
+    /// This method first checks the working set, and if not found there, fetches from blockstore.
+    /// Returns the existing ParentMeta if it exists, or None otherwise.
+    fn get_or_fetch_parent_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        entry: &mut ParentMetaWorkingSetEntry,
+    ) -> Result<Option<ParentMeta>> {
+        // First check working set
+        if let Some(parent_meta) = entry.parent_meta.as_ref() {
+            return Ok(Some(*parent_meta.as_ref()));
+        }
+
+        // Then fetch from blockstore if needed
+        if !entry.fetched_from_blockstore {
+            entry.fetched_from_blockstore = true;
+            if let Some(parent_meta) = self.parent_meta_cf.get((slot, location))? {
+                entry.parent_meta = Some(WorkingEntry::Clean(parent_meta));
+                return Ok(Some(parent_meta));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn maybe_update_parent_meta(
+        &self,
+        shred: &Shred,
+        location: BlockLocation,
+        slot: u64,
+        just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
+        parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+    ) -> Result<()> {
+        let key = (location, slot);
+        let entry = parent_meta_working_set.entry(key).or_default();
+
+        // Fetch or retrieve existing ParentMeta (from working set or blockstore)
+        let previous_parent_meta = self.get_or_fetch_parent_meta(slot, location, entry)?;
+
+        // Try to parse new ParentMeta from the current shred
+        // - If shred.index() == 0, try to parse as a block header
+        // - Otherwise, try to parse as an UpdateParent (only if we don't already have one,
+        //   since UpdateParent takes precedence and parsing is expensive)
+        let new_parent_meta = match (shred.index(), &previous_parent_meta) {
+            // Always try to parse block header at index 0
+            (0, _) => self.maybe_parse_block_header(shred),
+            // Try to parse UpdateParent only if we don't have one already
+            (_, Some(pm)) if pm.populated_from_block_header() => {
+                self.maybe_parse_update_parent(shred, slot, location, just_inserted_shreds)
+            }
+            (_, None) => {
+                self.maybe_parse_update_parent(shred, slot, location, just_inserted_shreds)
+            }
+            // previous_parent_meta is UpdateParent; don't parse another one
+            _ => None,
+        };
+
+        let Some(new_parent_meta) = new_parent_meta else {
+            return Ok(());
+        };
+
+        // Validate new ParentMeta against previous (if both exist)
+        if let Some(prev) = &previous_parent_meta {
+            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
+                return Ok(());
+            }
+        }
+
+        // Update entry with new ParentMeta
+        entry.parent_meta = Some(WorkingEntry::Dirty(new_parent_meta));
+
         Ok(())
     }
 
@@ -4092,13 +4421,7 @@ impl Blockstore {
         let components =
             self.get_slot_components_in_block(slot, &completed_ranges, Some(&slot_meta))?;
 
-        // TODO(ksn): get rid of this once we remove BlockComponent::from_bytes_multiple
-        if completed_ranges.len() != components.len() {
-            return Err(BlockstoreError::BlockComponentMisalignment(
-                slot,
-                start_index,
-            ));
-        }
+        debug_assert_eq!(completed_ranges.len(), components.len());
 
         Ok((components, completed_ranges, slot_meta.is_full()))
     }
@@ -4213,6 +4536,7 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn process_slot_data_in_block<T, I, F>(
         &self,
         slot: Slot,
@@ -4222,7 +4546,7 @@ impl Blockstore {
     ) -> Result<Vec<T>>
     where
         I: IntoIterator<Item = T>,
-        F: Fn(Vec<BlockComponent>) -> Result<I>,
+        F: Fn(BlockComponent) -> Result<I>,
     {
         debug_assert!(completed_ranges
             .iter()
@@ -4267,30 +4591,15 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
-                        let components =
-                            BlockComponent::from_bytes_multiple(&payload).map_err(|e| {
-                                BlockstoreError::InvalidShredData(Box::new(
-                                    bincode::ErrorKind::Custom(format!(
-                                        "could not reconstruct block components: {e:?}"
-                                    )),
-                                ))
-                            })?;
-
-                        // Enforce that completed ranges have precisely one BlockComponent.
-                        // TODO(ksn): we can substantially clean up the parsing logic because of
-                        // this assumption.
-                        if components.len() != 1 {
-                            return Err(BlockstoreError::InvalidShredData(Box::new(
-                                bincode::ErrorKind::Custom(format!(
-                                    "expected 1 component, but got {}",
-                                    components.len()
-                                )),
-                            )));
-                        }
-
-                        transform(components).map_err(|e| {
+                        let component = wincode::deserialize(&payload).map_err(|e| {
                             BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                                format!("could not transform block components: {e:?}"),
+                                format!("could not reconstruct block component: {e:?}"),
+                            )))
+                        })?;
+
+                        transform(component).map_err(|e| {
+                            BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                                format!("could not transform block component: {e:?}"),
                             )))
                         })
                     })
@@ -4305,13 +4614,16 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_components_in_block(
         &self,
         slot: Slot,
         completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<BlockComponent>> {
-        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| Ok(cs.into_iter()))
+        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |c| {
+            Ok(std::iter::once(c))
+        })
     }
 
     /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
@@ -4320,17 +4632,20 @@ impl Blockstore {
     ///   completed_ranges = [..., (s_i..e_i), (s_i+1..e_i+1), ...]
     /// Then, the following statements are true:
     ///   s_i < e_i == s_i+1 < e_i+1
+    /// Note that one range in CompletedRanges corresponds to one BlockComponent.
     fn get_slot_entries_in_block(
         &self,
         slot: Slot,
         completed_ranges: &CompletedRanges,
         slot_meta: Option<&SlotMeta>,
     ) -> Result<Vec<Entry>> {
-        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |cs| {
-            Ok(cs
-                .into_iter()
-                .filter_map(|bc| bc.as_entry_batch_owned())
-                .flatten())
+        self.process_slot_data_in_block(slot, completed_ranges, slot_meta, |c| {
+            let entries = match c {
+                BlockComponent::EntryBatch(entries) => Some(entries),
+                BlockComponent::BlockMarker(_) => None,
+            };
+
+            Ok(entries.into_iter().flatten())
         })
     }
 
@@ -5461,7 +5776,6 @@ pub fn create_new_ledger(
     let blockstore = Blockstore::open_with_options(
         ledger_path,
         BlockstoreOptions {
-            enforce_ulimit_nofile: false,
             column_options: column_options.clone(),
             ..BlockstoreOptions::default()
         },
@@ -5908,58 +6222,6 @@ pub fn make_chaining_slot_entries(
     slots_shreds_and_entries
 }
 
-#[cfg(not(unix))]
-fn adjust_ulimit_nofile(_enforce_ulimit_nofile: bool) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn adjust_ulimit_nofile(enforce_ulimit_nofile: bool) -> Result<()> {
-    // Rocks DB likes to have many open files.  The default open file descriptor limit is
-    // usually not enough
-    // AppendVecs and disk Account Index are also heavy users of mmapped files.
-    // This should be kept in sync with published validator instructions.
-    // https://docs.anza.xyz/operations/guides/validator-start#system-tuning
-    let desired_nofile = 1_000_000;
-
-    fn get_nofile() -> libc::rlimit {
-        let mut nofile = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut nofile) } != 0 {
-            warn!("getrlimit(RLIMIT_NOFILE) failed");
-        }
-        nofile
-    }
-
-    let mut nofile = get_nofile();
-    let current = nofile.rlim_cur;
-    if current < desired_nofile {
-        nofile.rlim_cur = desired_nofile;
-        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &nofile) } != 0 {
-            error!(
-                "Unable to increase the maximum open file descriptor limit to {} from {}",
-                nofile.rlim_cur, current,
-            );
-
-            if cfg!(target_os = "macos") {
-                error!(
-                    "On mac OS you may need to run |sudo launchctl limit maxfiles \
-                     {desired_nofile} {desired_nofile}| first",
-                );
-            }
-            if enforce_ulimit_nofile {
-                return Err(BlockstoreError::UnableToSetOpenFileDescriptorLimit);
-            }
-        }
-
-        nofile = get_nofile();
-    }
-    info!("Maximum open file descriptors: {}", nofile.rlim_cur);
-    Ok(())
-}
-
 #[cfg(test)]
 pub mod tests {
     use {
@@ -5967,7 +6229,11 @@ pub mod tests {
         crate::{
             genesis_utils::{create_genesis_config, GenesisConfigInfo},
             leader_schedule::{FixedSchedule, IdentityKeyedLeaderSchedule},
-            shred::{max_ticks_per_n_shreds, MAX_DATA_SHREDS_PER_SLOT},
+            shred::{
+                max_ticks_per_n_shreds,
+                merkle_tree::{get_merkle_root, MerkleProofEntry},
+                MAX_DATA_SHREDS_PER_SLOT,
+            },
         },
         assert_matches::assert_matches,
         bincode::{serialize, Options},
@@ -12643,5 +12909,117 @@ pub mod tests {
             tx_status2.status,
             Err(TransactionError::InsufficientFundsForFee)
         );
+    }
+
+    #[test]
+    fn test_get_double_merkle_root() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let parent_slot = 990;
+        let slot = 1000;
+        let num_entries = 200;
+
+        // Create a set of shreds for a complete block
+        let (data_shreds, coding_shreds, leader_schedule) =
+            setup_erasure_shreds(slot, parent_slot, num_entries);
+
+        // Create ParentMeta
+        let parent_meta = ParentMeta {
+            parent_slot,
+            parent_block_id: Hash::default(),
+            replay_fec_set_index: 0,
+        };
+        blockstore
+            .parent_meta_cf
+            .put((slot, BlockLocation::Original), &parent_meta)
+            .unwrap();
+
+        // Insert shreds into blockstore
+        let mut fec_set_roots = [Hash::default(); 3];
+        for shred in data_shreds.iter().chain(coding_shreds.iter()) {
+            if shred.is_data() && shred.index() % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0 {
+                // store fec set merkle roots for later
+                fec_set_roots[(shred.index() as usize) / DATA_SHREDS_PER_FEC_BLOCK] =
+                    shred.merkle_root().unwrap();
+            }
+            let duplicates =
+                blockstore.insert_shred_return_duplicate(shred.clone(), &leader_schedule);
+            assert!(duplicates.is_empty());
+        }
+
+        let slot_meta = blockstore.meta(slot).unwrap().unwrap();
+        assert!(slot_meta.is_full());
+
+        // Test getting the double merkle root
+        let block_location = BlockLocation::Original;
+        let double_merkle_root = blockstore
+            .get_double_merkle_root(slot, block_location)
+            .unwrap();
+
+        let double_merkle_meta = blockstore
+            .double_merkle_meta_cf
+            .get((slot, block_location))
+            .unwrap()
+            .unwrap();
+
+        // Verify meta
+        assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+        assert_eq!(double_merkle_meta.fec_set_count, 3); // With 200 entries, we should have 3 FEC sets
+        assert_eq!(double_merkle_meta.proofs.len(), 4); // 3 FEC set, 1 parent info
+
+        // Verify the proofs
+        let proof_size = get_proof_size(double_merkle_meta.fec_set_count + 1) as usize;
+
+        // Fec sets
+        for (fec_set, root) in fec_set_roots.iter().enumerate() {
+            let proof = &double_merkle_meta.proofs[fec_set];
+            let proof = proof
+                .chunks(SIZE_OF_MERKLE_PROOF_ENTRY)
+                .map(<&MerkleProofEntry>::try_from)
+                .map(std::result::Result::unwrap);
+            assert_eq!(proof_size, proof.clone().count());
+
+            let double_merkle_root = get_merkle_root(fec_set, *root, proof).unwrap();
+            assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+        }
+
+        // Parent info - final proof
+        let parent_info_hash = hashv(&[
+            &parent_slot.to_le_bytes(),
+            parent_meta.parent_block_id.as_ref(),
+        ]);
+        let parent_info_proof = &double_merkle_meta.proofs[double_merkle_meta.fec_set_count];
+        let proof = parent_info_proof
+            .chunks(SIZE_OF_MERKLE_PROOF_ENTRY)
+            .map(<&MerkleProofEntry>::try_from)
+            .map(std::result::Result::unwrap);
+        assert_eq!(proof_size, proof.clone().count());
+
+        let double_merkle_root =
+            get_merkle_root(double_merkle_meta.fec_set_count, parent_info_hash, proof).unwrap();
+        assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+
+        // Slot not full should fail
+        let incomplete_slot = 1001; // Make it a child of slot 1000
+        let (partial_shreds, _, leader_schedule) =
+            setup_erasure_shreds_with_index_and_chained_merkle_and_last_in_slot(
+                incomplete_slot,
+                slot, // parent is 1000
+                5,
+                0,
+                Some(Hash::new_from_array(rand::thread_rng().gen())),
+                false, // not last in slot
+            );
+
+        for shred in partial_shreds.iter().take(3) {
+            let duplicates =
+                blockstore.insert_shred_return_duplicate(shred.clone(), &leader_schedule);
+            assert!(duplicates.is_empty());
+        }
+
+        assert!(blockstore
+            .get_double_merkle_root(incomplete_slot, block_location)
+            .is_none());
     }
 }

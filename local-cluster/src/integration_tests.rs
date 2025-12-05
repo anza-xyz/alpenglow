@@ -71,7 +71,7 @@ pub const AG_DEBUG_LOG_FILTER: &str =
      solana_core::block_creation_loop=trace,solana_votor=trace,solana_votor::voting_service=info,\
      solana_votor::vote_history_storage=info,solana_core::validator=info,\
      solana_votor::consensus_metrics=info,solana_core::consensus=info,\
-     solana_ledger::blockstore_processor=info";
+     solana_ledger::blockstore_processor=info,solana_ledger::blockstore=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {
@@ -116,7 +116,6 @@ pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
         BlockstoreOptions {
             access_type: AccessType::Primary,
             recovery_mode: None,
-            enforce_ulimit_nofile: true,
             ..BlockstoreOptions::default()
         },
     )
@@ -128,7 +127,6 @@ pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
             BlockstoreOptions {
                 access_type: AccessType::Secondary,
                 recovery_mode: None,
-                enforce_ulimit_nofile: true,
                 ..BlockstoreOptions::default()
             },
         )

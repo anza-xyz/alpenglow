@@ -1,17 +1,26 @@
 use {
     crate::bank::Bank,
+    log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
-        VersionedBlockMarker,
+        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
+        VersionedBlockHeader, VersionedBlockMarker,
     },
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{consensus_message::Certificate, migration::MigrationStatus},
     std::sync::Arc,
     thiserror::Error,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
+    #[error("BlockComponent detected pre-migration")]
+    BlockComponentPreMigration,
+    #[error("GenesisCertificate marker detected when GenesisCertificate is already populated")]
+    GenesisCertificateAlreadyPopulated,
+    #[error("GenesisCertificate marker detected when the cluster has Alpenglow enabled at slot 0")]
+    GenesisCertificateInAlpenglowCluster,
+    #[error("GenesisCertificate marker detected on a block which is not a child of genesis")]
+    GenesisCertificateOnNonChild,
     #[error("Missing block footer")]
     MissingBlockFooter,
     #[error("Missing block header")]
@@ -20,8 +29,6 @@ pub enum BlockComponentProcessorError {
     MultipleBlockFooters,
     #[error("Multiple block headers detected")]
     MultipleBlockHeaders,
-    #[error("BlockComponent detected pre-migration")]
-    BlockComponentPreMigration,
     #[error("Nanosecond clock out of bounds")]
     NanosecondClockOutOfBounds,
 }
@@ -46,6 +53,10 @@ impl BlockComponentProcessor {
         Ok(())
     }
 
+    /// Process an entry batch.
+    ///
+    /// `is_final` indicates that this is the last component of the block,
+    /// in which case we run the block level checks (has header / has footer)
     pub fn on_entry_batch(
         &mut self,
         migration_status: &MigrationStatus,
@@ -67,38 +78,112 @@ impl BlockComponentProcessor {
         }
     }
 
+    /// Process a block marker:
+    /// - Pre migration, no block markers are allowed
+    /// - During the migration only header and genesis certificate are allowed:
+    ///     - This is in case our node was slow in observing the completion of the migration
+    ///     - By seeing the first alpenglow block, we can advance the migration phase
+    /// - Once the migration is complete all markers are allowed
+    ///
+    /// `is_final` indicates whether this is the last component of the block,
+    /// in which case we run the block level checks (has header / has footer).
     pub fn on_marker(
         &mut self,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
-        marker: &VersionedBlockMarker,
+        marker: VersionedBlockMarker,
         migration_status: &MigrationStatus,
         is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
-        // Pre-migration: blocks with block components should be marked as dead
-        if !migration_status.is_alpenglow_enabled() {
-            return Err(BlockComponentProcessorError::BlockComponentPreMigration);
-        }
+        let slot = bank.slot();
+        let VersionedBlockMarker::V1(marker) = marker;
 
-        // Here onwards, Alpenglow is enabled
-        let marker = match marker {
-            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
-        };
+        let markers_fully_enabled = migration_status.should_allow_block_markers(slot);
+        let in_migration = migration_status.is_in_migration();
 
         match marker {
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer),
-            BlockMarkerV1::BlockHeader(header) => self.on_header(header),
+            // Header and genesis cert can be processed either:
+            // - once migration is fully enabled, or
+            // - while we're still in the migration phase (to let us advance it)
+            BlockMarkerV1::BlockHeader(header) if markers_fully_enabled || in_migration => {
+                self.on_header(header.inner())
+            }
+            BlockMarkerV1::GenesisCertificate(genesis_cert)
+                if markers_fully_enabled || in_migration =>
+            {
+                self.on_genesis_certificate(bank, genesis_cert.into_inner(), migration_status)
+            }
+
+            // Everything else is only valid once migration is complete
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
+
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
-            // TODO(ashwin): update genesis certificate account / ticks
-            BlockMarkerV1::GenesisCertificate(_) => Ok(()),
+
+            // Any other combination means we saw a marker too early
+            _ => Err(BlockComponentProcessorError::BlockComponentPreMigration),
         }?;
 
-        if is_final {
+        if is_final && migration_status.should_allow_block_markers(slot) {
             self.on_final()
         } else {
             Ok(())
         }
+    }
+
+    pub fn on_genesis_certificate(
+        &self,
+        bank: Arc<Bank>,
+        genesis_cert: GenesisCertificate,
+        migration_status: &MigrationStatus,
+    ) -> Result<(), BlockComponentProcessorError> {
+        // Genesis Certificate is only allowed for direct child of genesis
+        if bank.parent_slot() == 0 {
+            return Err(BlockComponentProcessorError::GenesisCertificateInAlpenglowCluster);
+        }
+
+        let parent_block_id = bank
+            .parent_block_id()
+            .expect("Block id is populated for all slots > 0");
+        if (bank.parent_slot(), parent_block_id) != (genesis_cert.slot, genesis_cert.block_id) {
+            return Err(BlockComponentProcessorError::GenesisCertificateOnNonChild);
+        }
+
+        if bank.get_alpenglow_genesis_certificate().is_some() {
+            return Err(BlockComponentProcessorError::GenesisCertificateAlreadyPopulated);
+        }
+
+        let genesis_cert = Certificate::from(genesis_cert);
+        // TODO(ashwin): verify genesis cert using bls sigverify and bank
+
+        bank.set_alpenglow_genesis_certificate(&genesis_cert);
+
+        if migration_status.is_alpenglow_enabled() {
+            // We participated in the migration, nothing to do
+            return Ok(());
+        }
+
+        // We missed the migration however we ingested the first alpenglow block.
+        // This is either a result of startup replay, or in some weird cases steady state replay after a network partition.
+        // Either way we ingest the genesis block details moving us to `ReadyToEnable`.
+        // Since this is a direct child of genesis, and we are replaying, we know we have frozen the genesis block.
+        // Then `load_frozen_forks` or `replay_stage` will take care of the rest.
+        warn!(
+            "{}: Alpenglow genesis marker processed during replay of {}. Transitioning Alpenglow \
+             to ReadyToEnable",
+            migration_status.my_pubkey(),
+            bank.slot()
+        );
+        migration_status.set_genesis_block(
+            genesis_cert
+                .cert_type
+                .to_block()
+                .expect("Genesis cert must correspond to a block"),
+        );
+        migration_status.set_genesis_certificate(Arc::new(genesis_cert));
+        assert!(migration_status.is_ready_to_enable());
+
+        Ok(())
     }
 
     fn on_footer(
@@ -116,9 +201,7 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
 
-        let footer = match footer {
-            VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
-        };
+        let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
         Self::update_bank_with_footer(bank, footer);
@@ -346,7 +429,7 @@ mod tests {
     fn test_on_marker_processes_header() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -357,7 +440,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         processor
-            .on_marker(bank, parent, &marker, &migration_status, false)
+            .on_marker(bank, parent, marker, &migration_status, false)
             .unwrap();
         assert!(processor.has_header);
     }
@@ -378,7 +461,7 @@ mod tests {
         let footer_time_nanos = parent_time_nanos + 300_000_000; // parent + 300ms
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -387,7 +470,7 @@ mod tests {
         ));
 
         processor
-            .on_marker(bank.clone(), parent, &marker, &migration_status, false)
+            .on_marker(bank.clone(), parent, marker, &migration_status, false)
             .unwrap();
         assert!(processor.has_footer);
 
@@ -443,14 +526,14 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Try to process a block header marker pre-migration - should fail
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
             }),
         ));
 
-        let result = processor.on_marker(bank, parent, &marker, &migration_status, false);
+        let result = processor.on_marker(bank, parent, marker, &migration_status, false);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -479,7 +562,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Process header marker
-        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -489,7 +572,7 @@ mod tests {
             .on_marker(
                 bank.clone(),
                 parent.clone(),
-                &header_marker,
+                header_marker,
                 &migration_status,
                 false,
             )
@@ -504,7 +587,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -515,7 +598,7 @@ mod tests {
             .on_marker(
                 bank.clone(),
                 parent,
-                &footer_marker,
+                footer_marker,
                 &migration_status,
                 false,
             )
@@ -565,7 +648,7 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker with slot_full=true
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
@@ -574,13 +657,8 @@ mod tests {
         ));
 
         // Should succeed - footer is processed and slot_full validation passes
-        let result = processor.on_marker(
-            bank.clone(),
-            parent,
-            &footer_marker,
-            &migration_status,
-            true,
-        );
+        let result =
+            processor.on_marker(bank.clone(), parent, footer_marker, &migration_status, true);
         assert!(result.is_ok());
         assert!(processor.has_footer);
 

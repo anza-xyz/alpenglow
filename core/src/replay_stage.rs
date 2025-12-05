@@ -47,7 +47,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::{Blockstore, PurgeType},
+        blockstore::Blockstore,
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
             ReplaySlotStats, TransactionStatusSender,
@@ -932,7 +932,9 @@ impl ReplayStage {
 
                 let forks_root = bank_forks.read().unwrap().root();
                 let start_leader_time = if !migration_status.is_alpenglow_enabled() {
-                    debug_assert!(votor_event_receiver.is_empty());
+                    // Will address this in https://github.com/anza-xyz/alpenglow/issues/619
+                    debug_assert!(!votor_event_receiver.is_full());
+
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
@@ -1513,8 +1515,7 @@ impl ReplayStage {
             .expect("Highest slot must be present as blockstore is non-empty");
         if end_slot >= start_slot {
             warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
-            blockstore.purge_from_next_slots(start_slot, end_slot);
-            blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+            blockstore.clear_unconfirmed_slots(start_slot, end_slot);
         }
 
         migration_status.enable_alpenglow(exit);

@@ -11,6 +11,7 @@ use {
     solana_hash::Hash,
     std::{
         collections::BTreeSet,
+        fmt::Display,
         ops::{Range, RangeBounds},
     },
 };
@@ -461,6 +462,15 @@ impl BlockVersions {
                 }
                 _ => None,
             })
+    }
+}
+
+impl Display for BlockLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockLocation::Original => write!(f, "Original"),
+            BlockLocation::Alternate { block_id } => write!(f, "Alternate({block_id})"),
+        }
     }
 }
 
@@ -984,6 +994,38 @@ pub struct ParentMeta {
     pub parent_slot: Slot,
     pub parent_block_id: Hash,
     pub replay_fec_set_index: u32,
+}
+
+impl ParentMeta {
+    pub fn populated_from_update_parent(&self) -> bool {
+        self.replay_fec_set_index > 0
+    }
+
+    pub fn populated_from_block_header(&self) -> bool {
+        self.replay_fec_set_index == 0
+    }
+
+    pub fn block(&self) -> (Slot, Hash) {
+        (self.parent_slot, self.parent_block_id)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DoubleMerkleMeta {
+    /// The double merkle root computed as the root of the merkle tree
+    /// containing the merkle roots of each fec set + the parent info (parent_slot, parent_double_merkle_root)
+    pub double_merkle_root: Hash,
+
+    /// The number of fec sets in this block
+    pub fec_set_count: usize,
+
+    /// The merkle proofs
+    /// index of [0, fec_set_count) corresponds to the proofs for each fec set leaf node
+    /// index of fec_set_count corresponds to the proof for the parent info node
+    ///
+    /// The size of this vec is `fec_set_count + 1`
+    /// Each inner Vec<u8> contains concatenated proof entries for that leaf
+    pub proofs: Vec<Vec<u8>>,
 }
 
 #[cfg(test)]

@@ -371,8 +371,14 @@ impl ClusterInfoVoteListener {
             );
             match confirmed_slots {
                 Ok(confirmed_slots) => {
+                    let confirmed_slots = confirmed_slots
+                        .into_iter()
+                        .filter(|(slot, _)| {
+                            migration_status.should_report_commitment_or_root(*slot)
+                        })
+                        .collect();
                     confirmation_verifier
-                        .add_new_optimistic_confirmed_slots(confirmed_slots.clone(), &blockstore);
+                        .add_new_optimistic_confirmed_slots(confirmed_slots, &blockstore);
                 }
                 Err(e) => match e {
                     Error::RecvTimeout(RecvTimeoutError::Disconnected) => {

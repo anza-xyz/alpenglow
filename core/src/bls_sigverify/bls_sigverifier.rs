@@ -7,7 +7,9 @@ use {
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
-    bitvec::prelude::{BitVec, Lsb0},
+    agave_bls_cert_verify::cert_verify::{
+        verify_votor_message_certificate, CertVerifyError as BLSCertVerifyError,
+    },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
@@ -21,7 +23,6 @@ use {
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
-    solana_signer_store::{decode, DecodeError},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
@@ -51,38 +52,13 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMa
         .map(|stake| stake.bls_pubkey_to_rank_map())
 }
 
-fn aggregate_keys_from_bitmap(
-    bit_vec: &BitVec<u8, Lsb0>,
-    key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-) -> Option<PubkeyProjective> {
-    let pubkeys: Result<Vec<_>, _> = bit_vec
-        .iter_ones()
-        .filter_map(|rank| key_to_rank_map.get_pubkey(rank))
-        .map(|(_, bls_pubkey)| PubkeyProjective::try_from(*bls_pubkey))
-        .collect();
-    let pubkeys = pubkeys.ok()?;
-    PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
-}
-
 #[derive(Debug, Error, PartialEq)]
 enum CertVerifyError {
     #[error("Failed to find key to rank map for slot {0}")]
     KeyToRankMapNotFound(Slot),
 
-    #[error("Failed to decode bitmap {0:?}")]
-    BitmapDecodingFailed(DecodeError),
-
-    #[error("Failed to aggregate public keys")]
-    KeyAggregationFailed,
-
-    #[error("Failed to serialize original vote")]
-    SerializationFailed,
-
-    #[error("The signature doesn't match")]
-    SignatureVerificationFailed,
-
-    #[error("Base 3 encoding on unexpected cert {0:?}")]
-    Base3EncodingOnUnexpectedCert(CertificateType),
+    #[error("Cert Verification Error {0:?}")]
+    CertVerifyFailed(#[from] BLSCertVerifyError),
 }
 
 pub struct BLSSigVerifier {
@@ -542,22 +518,11 @@ impl BLSSigVerifier {
             return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
-        let max_len = key_to_rank_map.len();
-
-        let decoded_bitmap = match decode(&cert_to_verify.bitmap, max_len) {
-            Ok(decoded) => decoded,
-            Err(e) => {
-                return Err(CertVerifyError::BitmapDecodingFailed(e));
-            }
-        };
-
-        match decoded_bitmap {
-            solana_signer_store::Decoded::Base2(bit_vec) => {
-                self.verify_base2_certificate(cert_to_verify, &bit_vec, key_to_rank_map)?
-            }
-            solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => self
-                .verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, key_to_rank_map)?,
-        }
+        verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
+            key_to_rank_map
+                .get_pubkey(rank)
+                .map(|(_, bls_pubkey)| *bls_pubkey)
+        })?;
 
         self.verified_certs
             .write()
@@ -565,74 +530,6 @@ impl BLSSigVerifier {
             .insert(cert_to_verify.cert_type);
 
         Ok(())
-    }
-
-    fn verify_base2_certificate(
-        &self,
-        cert_to_verify: &Certificate,
-        bit_vec: &BitVec<u8, Lsb0>,
-        key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-    ) -> Result<(), CertVerifyError> {
-        let original_vote = cert_to_verify.cert_type.to_source_vote();
-
-        let Ok(signed_payload) = bincode::serialize(&original_vote) else {
-            return Err(CertVerifyError::SerializationFailed);
-        };
-
-        let Some(aggregate_bls_pubkey) = aggregate_keys_from_bitmap(bit_vec, key_to_rank_map)
-        else {
-            return Err(CertVerifyError::KeyAggregationFailed);
-        };
-
-        if let Ok(true) =
-            aggregate_bls_pubkey.verify_signature(&cert_to_verify.signature, &signed_payload)
-        {
-            Ok(())
-        } else {
-            Err(CertVerifyError::SignatureVerificationFailed)
-        }
-    }
-
-    fn verify_base3_certificate(
-        &self,
-        cert_to_verify: &Certificate,
-        bit_vec1: &BitVec<u8, Lsb0>,
-        bit_vec2: &BitVec<u8, Lsb0>,
-        key_to_rank_map: &Arc<BLSPubkeyToRankMap>,
-    ) -> Result<(), CertVerifyError> {
-        let Some((vote1, vote2)) = cert_to_verify.cert_type.to_source_votes() else {
-            return Err(CertVerifyError::Base3EncodingOnUnexpectedCert(
-                cert_to_verify.cert_type,
-            ));
-        };
-
-        let Ok(signed_payload1) = bincode::serialize(&vote1) else {
-            return Err(CertVerifyError::SerializationFailed);
-        };
-        let Ok(signed_payload2) = bincode::serialize(&vote2) else {
-            return Err(CertVerifyError::SerializationFailed);
-        };
-
-        let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
-
-        // Aggregate the two sets of public keys separately from the two bitmaps.
-        let Some(agg_pk1) = aggregate_keys_from_bitmap(bit_vec1, key_to_rank_map) else {
-            return Err(CertVerifyError::KeyAggregationFailed);
-        };
-        let Some(agg_pk2) = aggregate_keys_from_bitmap(bit_vec2, key_to_rank_map) else {
-            return Err(CertVerifyError::KeyAggregationFailed);
-        };
-
-        let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
-
-        match SignatureProjective::par_verify_distinct_aggregated(
-            &pubkeys_affine,
-            &cert_to_verify.signature,
-            &messages_to_verify,
-        ) {
-            Ok(true) => Ok(()),
-            _ => Err(CertVerifyError::SignatureVerificationFailed),
-        }
     }
 
     fn get_vote_payload(&self, vote: &Vote) -> Arc<Vec<u8>> {
@@ -667,6 +564,7 @@ mod tests {
     use {
         super::*,
         crate::bls_sigverify::stats::STATS_INTERVAL_DURATION,
+        bitvec::prelude::{BitVec, Lsb0},
         solana_bls_signatures::{Signature, Signature as BLSSignature},
         solana_hash::Hash,
         solana_perf::packet::{Packet, PinnedPacketBatch},

@@ -187,6 +187,20 @@ impl MigrationPhase {
         }
     }
 
+    /// Should we root this slot when loading frozen slots during startup?
+    /// Similar to `should_report_commitment_or_root`, but we also continue root post migration.
+    /// This is only relevant if we restart during the migration period before it completes, we don't
+    /// want to root any slots >= migraiton_slot
+    fn should_root_during_startup(&self, slot: Slot) -> bool {
+        match self {
+            MigrationPhase::Migration { migration_slot, .. } => slot < *migration_slot,
+            MigrationPhase::PreFeatureActivation
+            | MigrationPhase::ReadyToEnable { .. }
+            | MigrationPhase::AlpenglowEnabled { .. }
+            | MigrationPhase::FullAlpenglowEpoch { .. } => true,
+        }
+    }
+
     /// Should we publish epoch slots for this slot?
     /// We publish epoch slots for all slots until we enable alpenglow.
     /// Once alpenglow is enabled in the mixed migration epoch we should still be publishing for TowerBFT slots
@@ -225,6 +239,12 @@ impl MigrationPhase {
     /// Should this block only have an alpentick (1 tick at the end of the block)?
     fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool {
         // Same as votor events, all other blocks are expected to have normal PoH ticks
+        self.should_send_votor_event(slot)
+    }
+
+    /// Should this block be allowed to have block markers?
+    fn should_allow_block_markers(&self, slot: Slot) -> bool {
+        // Same as votor events, TowerBFT blocks should not have markers
         self.should_send_votor_event(slot)
     }
 
@@ -350,7 +370,7 @@ impl MigrationStatus {
             }
         };
 
-        warn!("Initializing alpenglow migration {phase:?}");
+        warn!("Pre startup initializing alpenglow migration from root bank: {phase:?}");
         Self::new(phase)
     }
 
@@ -359,18 +379,28 @@ impl MigrationStatus {
         *self.my_pubkey.write().unwrap() = my_pubkey;
     }
 
-    fn my_pubkey(&self) -> Pubkey {
+    /// For use in logging, the current pubkey
+    pub fn my_pubkey(&self) -> Pubkey {
         *self.my_pubkey.read().unwrap()
+    }
+
+    /// Print a log about the current phase of migration
+    pub fn log_phase(&self) {
+        let my_pubkey = self.my_pubkey();
+        let phase = self.phase.read().unwrap();
+        warn!("{my_pubkey}: Alpenglow migration phase {phase:?}");
     }
 
     dispatch!(pub fn is_alpenglow_enabled(&self) -> bool);
     dispatch!(pub fn qualifies_for_genesis_discovery(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_bank_be_vote_only(&self, bank_slot: Slot) -> bool);
     dispatch!(pub fn should_report_commitment_or_root(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_root_during_startup(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_publish_epoch_slots(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_send_votor_event(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_allow_block_markers(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
     dispatch!(pub fn is_ready_to_enable(&self) -> bool);
@@ -575,6 +605,34 @@ impl MigrationStatus {
         condvar.notify_all();
     }
 
+    /// Enables alpenglow in the startup pathway. This is pre `PohService` so we can do this from a single thread.
+    /// Returns the genesis slot
+    ///
+    /// Transition the phase from `ReadyToEnable` to `AlpenglowEnabled`
+    pub fn enable_alpenglow_during_startup(&self) -> Slot {
+        warn!("{}: Enabling alpenglow during startup", self.my_pubkey());
+        let MigrationPhase::ReadyToEnable { genesis_cert } = self.phase.read().unwrap().clone()
+        else {
+            unreachable!(
+                "{}: Programmer error, Attempting to enable alpenglow during startup without \
+                 being ReadyToEnable",
+                self.my_pubkey()
+            );
+        };
+
+        let genesis_slot = genesis_cert.cert_type.slot();
+        self.shutdown_poh.store(true, Ordering::Release);
+        *self.phase.write().unwrap() = MigrationPhase::AlpenglowEnabled { genesis_cert };
+        let (is_alpenglow_enabled, _condvar) = &self.migration_wait;
+        *is_alpenglow_enabled.lock().unwrap() = true;
+        // No need to condvar as we're in startup and no one is waiting for us.
+        warn!(
+            "{}: Alpenglow enabled during startup! Genesis slot {genesis_slot}",
+            self.my_pubkey()
+        );
+        genesis_slot
+    }
+
     /// Alpenglow has rooted a block in a new epoch. This indicates the migration epoch has completed.
     ///
     /// Transitions from `AlpenglowEnabled` to `FullAlpenglowEpoch`
@@ -601,6 +659,15 @@ impl MigrationStatus {
 
     /// The alpenglow genesis block. This should only be used when we are in `ReadyToEnable` or further
     pub fn genesis_block(&self) -> Option<Block> {
+        self.genesis_certificate().map(|cert| {
+            cert.cert_type
+                .to_block()
+                .expect("Must be a genesis certificate")
+        })
+    }
+
+    /// The alpenglow genesis certificate. Only relevant when we are in `ReadyToEnable` or further
+    pub fn genesis_certificate(&self) -> Option<Arc<Certificate>> {
         let phase = self.phase.read().unwrap();
         match &*phase {
             MigrationPhase::PreFeatureActivation | MigrationPhase::Migration { .. } => None,
@@ -613,12 +680,7 @@ impl MigrationStatus {
             | MigrationPhase::FullAlpenglowEpoch {
                 genesis_cert: certificate,
                 ..
-            } => Some(
-                certificate
-                    .cert_type
-                    .to_block()
-                    .expect("Must be a genesis certificate"),
-            ),
+            } => Some(certificate.clone()),
         }
     }
 
