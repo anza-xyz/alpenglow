@@ -22,6 +22,7 @@ use {
 
 mod entry;
 
+/// Number of slots in the past that the the current leader is responsible for producing the reward certificates.
 const NUM_SLOTS_FOR_REWARD: u64 = 8;
 
 /// Returns [`false`] if the rewards container is not interested in the [`VoteMessage`].
@@ -55,6 +56,7 @@ pub fn wants_vote(
     true
 }
 
+/// Container to storing state needed to generate reward certificates.
 struct ConsensusRewards {
     /// Per [`Slot`], stores skip and notar votes.
     votes: BTreeMap<Slot, Entry>,
@@ -62,13 +64,18 @@ struct ConsensusRewards {
     cluster_info: Arc<ClusterInfo>,
     /// Stores the leader schedules.
     leader_schedule: Arc<LeaderScheduleCache>,
+    /// Flag to indicate when the channel receiving loop should exit.
     exit: Arc<AtomicBool>,
+    /// Channel to receive messages to build reward certificates.
     build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
+    /// Channel send the built reward certificates.
     reward_certs_sender: Sender<BuildRewardCertsResponse>,
+    /// Channel to receive verified votes.
     votes_receiver: Receiver<AddVoteMessage>,
 }
 
 impl ConsensusRewards {
+    /// Constructs a new instance of [`ConsensusRewards`].
     fn new(
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
@@ -88,13 +95,15 @@ impl ConsensusRewards {
         }
     }
 
-    fn run(mut self) {
+    /// Runs a loop receiving and handling messages over different channels.
+    fn run(&mut self) {
         while !self.exit.load(Ordering::Relaxed) {
+            // bias messages to build certificates as that is on the critical path
             select_biased! {
                 recv(self.build_reward_certs_receiver) -> msg => {
                     match msg {
                         Ok(msg) => {
-                            let (skip, notar) = self.build_rewards_certs(msg.slot);
+                            let (skip, notar) = self.build_certs(msg.slot);
                             let resp = BuildRewardCertsResponse {
                                 skip,
                                 notar,
@@ -114,7 +123,7 @@ impl ConsensusRewards {
                     match msg {
                         Ok(msg) => {
                             for entry in msg.votes {
-                                self.add_vote(msg.root_slot, entry.max_validators, entry.vote);
+                                self.add_vote(msg.root_slot, entry.max_validators, &entry.vote);
                             }
                         }
                         Err(_) => {
@@ -141,8 +150,8 @@ impl ConsensusRewards {
         entry.wants_vote(vote)
     }
 
-    /// Adds received [`VoteMessage`]s from other nodes.
-    fn add_vote(&mut self, root_slot: Slot, max_validators: usize, vote: VoteMessage) {
+    /// Adds received [`VoteMessage`]s from other validators.
+    fn add_vote(&mut self, root_slot: Slot, max_validators: usize, vote: &VoteMessage) {
         // drop old state no longer needed
         self.votes = self.votes.split_off(
             &(root_slot
@@ -150,17 +159,24 @@ impl ConsensusRewards {
                 .saturating_add(1)),
         );
 
-        if !self.wants_vote(root_slot, &vote) {
+        if !self.wants_vote(root_slot, vote) {
             return;
         }
-        self.votes
+        match self
+            .votes
             .entry(vote.vote.slot())
             .or_insert(Entry::new(max_validators))
-            .add_vote(vote);
+            .add_vote(vote)
+        {
+            Ok(()) => (),
+            Err(e) => {
+                warn!("Adding vote {vote:?} failed with {e}");
+            }
+        }
     }
 
-    /// Builds [`RewardsCertificates`] from the receives votes.
-    fn build_rewards_certs(
+    /// Builds reward certificates.
+    fn build_certs(
         &self,
         slot: Slot,
     ) -> (
@@ -169,29 +185,58 @@ impl ConsensusRewards {
     ) {
         match self.votes.get(&slot) {
             None => (None, None),
-            Some(entry) => entry.build_certs(slot),
+            Some(entry) => {
+                let (skip, notar) = entry.build_certs(slot);
+                let skip = match skip {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Build skip reward cert failed with {e}");
+                        None
+                    }
+                };
+                let notar = match notar {
+                    Ok(n) => n,
+                    Err(e) => {
+                        warn!("Build notar reward cert failed with {e}");
+                        None
+                    }
+                };
+                (skip, notar)
+            }
         }
     }
 }
 
-pub struct AddVoteEntry {
-    pub max_validators: usize,
-    pub vote: VoteMessage,
-}
+/// Message to add votes to the rewards container.
 pub struct AddVoteMessage {
+    /// The current root slot.
     pub root_slot: Slot,
+    /// List of [`AddVoteEntry`], one per vote.
     pub votes: Vec<AddVoteEntry>,
 }
 
+/// Data structure for sending per vote state in the [`AddVoteMessage`].
+pub struct AddVoteEntry {
+    /// Maximum number of validators in the slot that this vote is for.
+    pub max_validators: usize,
+    /// The actual vote.
+    pub vote: VoteMessage,
+}
+
+/// Request to build reward certificates.
 pub struct BuildRewardCertsRequest {
     pub slot: Slot,
 }
 
+/// Response of building reward certificates.
 pub struct BuildRewardCertsResponse {
+    /// Skip reward certificate.  None if building failed or no skip votes were registered.
     pub skip: Option<SkipRewardCertificate>,
+    /// Notar reward certificate.  None if building failed or no notar votes were registered.
     pub notar: Option<NotarRewardCertificate>,
 }
 
+/// Service to run the consensus reward container in a dedicated thread.
 pub struct ConsensusRewardsService {
     handle: JoinHandle<()>,
 }
