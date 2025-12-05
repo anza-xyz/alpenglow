@@ -3535,6 +3535,51 @@ impl ReplayStage {
             });
     }
 
+    /// Computes and sets the block ID for a bank based on migration status and block validity.
+    /// Returns Ok(()) if the block ID was successfully computed and set, or Err(error) if the slot should be marked dead.
+    fn determine_and_set_block_id(
+        bank: &BankWithScheduler,
+        blockstore: &Blockstore,
+        migration_status: &MigrationStatus,
+        is_leader_block: bool,
+    ) -> Result<(), BlockstoreProcessorError> {
+        let block_id = if migration_status.should_use_double_merkle_block_id(bank.slot()) {
+            let block_id = blockstore.get_double_merkle_root(bank.slot(), BlockLocation::Original);
+            // The *only* reason this can be none is because we are the leader.
+            // Unlike CMR there are no checks performed in `get_double_merkle_root`.
+            debug_assert!(block_id.is_some() || is_leader_block);
+            Ok(block_id)
+        } else {
+            // Once SIMD-0317 is activated, this can simply grab the merkle root of the last shred.
+            // Then there is no need for the error checking or to potentially mark the slot as dead below.
+            blockstore.check_last_fec_set_and_get_block_id(
+                bank.slot(),
+                bank.hash(),
+                false,
+                &bank.feature_set,
+            )
+        };
+
+        // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
+        // shreds in the last FEC set, return the Error and mark it dead in the caller
+        let block_id = match block_id {
+            Ok(block_id) => block_id,
+            Err(result_err) => {
+                if is_leader_block {
+                    // Our leader block has not finished shredding
+                    None
+                } else {
+                    return Err(result_err);
+                }
+            }
+        };
+
+        if block_id.is_some() {
+            bank.set_block_id(block_id);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn process_replay_results(
         blockstore: &Blockstore,
@@ -3641,54 +3686,34 @@ impl ReplayStage {
                 }
 
                 let is_leader_block = bank.collector_id() == my_pubkey;
-                let block_id = if migration_status.should_use_double_merkle_block_id(bank.slot()) {
-                    let block_id =
-                        blockstore.get_double_merkle_root(bank.slot(), BlockLocation::Original);
-                    // The *only* reason this can be none is because we are the leader. Unlike CMR there are no checks performed in `get_double_merkle_root`.
-                    debug_assert!(block_id.is_some() || is_leader_block);
-                    Ok(block_id)
-                } else {
-                    // Once SIMD-0317 is activated, this can simply grab the merkle root of the last shred.
-                    // Then there is no need for the error checking or to potentially mark the slot as dead below.
-                    blockstore.check_last_fec_set_and_get_block_id(
-                        bank.slot(),
-                        bank.hash(),
-                        false,
-                        &bank.feature_set,
-                    )
-                };
-
-                // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
-                // shreds in the last FEC set, mark it dead.
-                let block_id = match block_id {
-                    Ok(block_id) => block_id,
-                    Err(result_err) => {
-                        if is_leader_block {
-                            // Our leader block has not finished shredding
-                            None
-                        } else {
-                            let root = bank_forks.read().unwrap().root();
-                            Self::mark_dead_slot(
-                                blockstore,
-                                bank,
-                                root,
-                                &result_err,
-                                rpc_subscriptions,
-                                slot_status_notifier,
-                                progress,
-                                duplicate_slots_to_repair,
-                                ancestor_hashes_replay_update_sender,
-                                purge_repair_slot_counter,
-                                &mut tbft_structs,
-                            );
-                            continue;
-                        }
-                    }
-                };
-
-                if block_id.is_some() {
-                    bank.set_block_id(block_id);
+                if let Err(result_err) = Self::determine_and_set_block_id(
+                    bank,
+                    blockstore,
+                    migration_status,
+                    is_leader_block,
+                ) {
+                    // Once SIMD-0317 is activated, this can be removed as block_id computation can no longer fail
+                    let root = bank_forks.read().unwrap().root();
+                    Self::mark_dead_slot(
+                        blockstore,
+                        bank,
+                        root,
+                        &result_err,
+                        rpc_subscriptions,
+                        slot_status_notifier,
+                        progress,
+                        duplicate_slots_to_repair,
+                        ancestor_hashes_replay_update_sender,
+                        purge_repair_slot_counter,
+                        &mut tbft_structs,
+                    );
+                    continue;
                 }
+
+                let bank_progress = progress
+                    .get_mut(&bank.slot())
+                    .expect("Bank fork progress entry missing for completed bank");
+                let replay_stats = bank_progress.replay_stats.clone();
 
                 let r_replay_stats = replay_stats.read().unwrap();
                 let replay_progress = bank_progress.replay_progress.clone();
