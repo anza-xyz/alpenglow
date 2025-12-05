@@ -5663,9 +5663,9 @@ impl Bank {
         let mut block_id_w = self.block_id.write().unwrap();
         if block_id_w.is_some() {
             debug_assert_eq!(*block_id_w, block_id);
-            return;
+        } else {
+            *block_id_w = block_id;
         }
-        *block_id_w = block_id;
     }
 
     pub fn compute_budget(&self) -> Option<ComputeBudget> {
