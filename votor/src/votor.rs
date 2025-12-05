@@ -47,6 +47,10 @@ use {
             ConsensusMetrics, ConsensusMetricsEventReceiver, ConsensusMetricsEventSender,
         },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
+        consensus_rewards::{
+            AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse,
+            ConsensusRewardsService,
+        },
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
@@ -111,11 +115,14 @@ pub struct VotorConfig {
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
+    pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
 
     // Receivers
     pub event_receiver: VotorEventReceiver,
     pub consensus_message_receiver: Receiver<ConsensusMessage>,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
+    pub reward_votes_receiver: Receiver<AddVoteMessage>,
+    pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
@@ -133,6 +140,7 @@ pub struct Votor {
     event_handler: EventHandler,
     consensus_pool_service: ConsensusPoolService,
     timer_manager: Arc<PlRwLock<TimerManager>>,
+    consensus_rewards_service: ConsensusRewardsService,
 }
 
 impl Votor {
@@ -164,6 +172,9 @@ impl Votor {
             consensus_message_receiver: bls_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
+            reward_certs_sender,
+            build_reward_certs_receiver,
+            reward_votes_receiver,
         } = config;
 
         let identity_keypair = cluster_info.keypair().clone();
@@ -229,7 +240,7 @@ impl Votor {
             my_vote_pubkey: vote_account,
             blockstore,
             sharable_banks,
-            leader_schedule_cache,
+            leader_schedule_cache: leader_schedule_cache.clone(),
             consensus_message_receiver: bls_receiver,
             bls_sender,
             event_sender,
@@ -240,15 +251,26 @@ impl Votor {
         let event_handler = EventHandler::new(event_handler_context);
         let consensus_pool_service = ConsensusPoolService::new(consensus_pool_context);
 
+        let consensus_rewards_service = ConsensusRewardsService::new(
+            cluster_info,
+            leader_schedule_cache,
+            reward_votes_receiver,
+            build_reward_certs_receiver,
+            reward_certs_sender,
+            exit,
+        );
+
         Self {
             event_handler,
             consensus_pool_service,
             timer_manager,
+            consensus_rewards_service,
         }
     }
 
     pub fn join(self) -> thread::Result<()> {
         self.consensus_pool_service.join()?;
+        self.consensus_rewards_service.join()?;
 
         // Loop till we manage to unwrap the Arc and then we can join.
         let mut timer_manager = self.timer_manager;

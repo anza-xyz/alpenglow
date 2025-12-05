@@ -9,7 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::Receiver,
+    crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockMarker,
@@ -34,7 +34,12 @@ use {
         block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
-    solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor::{
+        common::block_timeout,
+        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+        event::LeaderWindowInfo,
+    },
+    solana_votor_messages::rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -93,6 +98,9 @@ pub struct BlockCreationLoopConfig {
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
     pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
+
+    pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 }
 
 struct LeaderContext {
@@ -110,6 +118,8 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -164,6 +174,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         highest_parent_ready,
         optimistic_parent_receiver,
+        build_reward_certs_sender,
+        reward_certs_receiver,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -210,6 +222,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
+        build_reward_certs_sender,
+        reward_certs_receiver,
         genesis_cert,
     };
 
@@ -331,6 +345,8 @@ fn produce_window(
         if let Err(e) = record_and_complete_block(
             ctx.poh_recorder.as_ref(),
             &mut ctx.record_receiver,
+            &ctx.build_reward_certs_sender,
+            &ctx.reward_certs_receiver,
             skip_timer,
             timeout,
         ) {
@@ -384,7 +400,11 @@ fn skew_block_producer_time_nanos(
 
 /// Produces a block footer with the current timestamp and version information.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
-fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    skip_reward_certificate: Option<SkipRewardCertificate>,
+    notar_reward_certificate: Option<NotarRewardCertificate>,
+) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Misconfigured system clock; couldn't measure block producer time.")
@@ -411,6 +431,8 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        skip_reward_certificate,
+        notar_reward_certificate,
     }
 }
 
@@ -424,9 +446,17 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
 fn record_and_complete_block(
     poh_recorder: &RwLock<PohRecorder>,
     record_receiver: &mut RecordReceiver,
+    build_reward_certs_sender: &Sender<BuildRewardCertsRequest>,
+    cert_receiver: &Receiver<BuildRewardCertsResponse>,
     block_timer: Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
+    // XXX: how to look up the slot.
+    let slot = u64::MAX;
+    // XXX: handle error below.
+    build_reward_certs_sender
+        .send(BuildRewardCertsRequest { slot })
+        .unwrap();
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
@@ -477,7 +507,13 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler());
+    /// XXX: handle error below
+    let resp = cert_receiver.recv().unwrap();
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        resp.skip,
+        resp.notar,
+    );
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),

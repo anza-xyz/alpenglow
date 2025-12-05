@@ -1438,6 +1438,9 @@ impl Validator {
 
         let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
 
+        let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
+        let (reward_certs_sender, reward_certs_receiver) = bounded(1);
+
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
             bank_forks: bank_forks.clone(),
@@ -1453,6 +1456,8 @@ impl Validator {
             replay_highest_frozen: replay_highest_frozen.clone(),
             highest_parent_ready: highest_parent_ready.clone(),
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
+            build_reward_certs_sender,
+            reward_certs_receiver,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1710,6 +1715,8 @@ impl Validator {
             key_notifiers.clone(),
             alpenglow_last_voted.clone(),
             migration_status.clone(),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .map_err(ValidatorError::Other)?;
 

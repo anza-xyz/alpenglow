@@ -96,7 +96,10 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::consensus_message::{Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        rewards_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
@@ -211,6 +214,8 @@ pub struct BlockFooterV1 {
     pub block_producer_time_nanos: u64,
     #[wincode(with = "WincodeVec<u8, U8Len>")]
     pub block_user_agent: Vec<u8>,
+    pub skip_reward_certificate: Option<SkipRewardCertificate>,
+    pub notar_reward_certificate: Option<NotarRewardCertificate>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
@@ -299,6 +304,7 @@ pub enum VersionedUpdateParent {
 }
 
 /// TLV-encoded marker variants.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
