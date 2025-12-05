@@ -3710,11 +3710,6 @@ impl ReplayStage {
                     continue;
                 }
 
-                let bank_progress = progress
-                    .get_mut(&bank.slot())
-                    .expect("Bank fork progress entry missing for completed bank");
-                let replay_stats = bank_progress.replay_stats.clone();
-
                 let r_replay_stats = replay_stats.read().unwrap();
                 let replay_progress = bank_progress.replay_progress.clone();
                 let r_replay_progress = replay_progress.read().unwrap();
