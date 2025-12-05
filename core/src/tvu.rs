@@ -281,6 +281,8 @@ impl Tvu {
                 consensus_message_sender.clone(),
                 consensus_metrics_sender.clone(),
                 alpenglow_last_voted.clone(),
+                cluster_info.clone(),
+                leader_schedule_cache.clone(),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
