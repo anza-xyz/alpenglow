@@ -627,7 +627,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1_000_000_000,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
         });
 
         // Try to process footer without header - should fail
