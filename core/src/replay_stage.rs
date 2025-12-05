@@ -3555,7 +3555,7 @@ impl ReplayStage {
             blockstore.check_last_fec_set_and_get_block_id(
                 bank.slot(),
                 bank.hash(),
-                false,
+                is_leader_block,
                 &bank.feature_set,
             )
         };
