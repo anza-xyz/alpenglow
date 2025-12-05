@@ -453,6 +453,7 @@ fn record_and_complete_block(
 ) -> Result<(), PohRecorderError> {
     // XXX: how to look up the slot.
     let slot = u64::MAX;
+    // XXX: handle error below.
     build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
         .unwrap();
@@ -506,6 +507,7 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
+    /// XXX: handle error below
     let resp = cert_receiver.recv().unwrap();
     let footer = produce_block_footer(
         working_bank.bank.clone_without_scheduler(),
