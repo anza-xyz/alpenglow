@@ -135,6 +135,20 @@ enum MigrationPhase {
 }
 
 impl MigrationPhase {
+    /// Is this block an alpenglow block?
+    /// We only treat blocks as alpenglow after the migration has succeeded and slot > genesis_slot
+    fn is_alpenglow_block(&self, slot: Slot) -> bool {
+        match self {
+            MigrationPhase::PreFeatureActivation
+            | MigrationPhase::Migration { .. }
+            | MigrationPhase::ReadyToEnable { .. } => false,
+            MigrationPhase::AlpenglowEnabled { genesis_cert } => {
+                slot > genesis_cert.cert_type.slot()
+            }
+            MigrationPhase::FullAlpenglowEpoch { .. } => true,
+        }
+    }
+
     /// Is alpenglow enabled. This can be either in the migration epoch after we have certified
     /// the Alpenglow genesis or in a future epoch.
     fn is_alpenglow_enabled(&self) -> bool {
@@ -217,17 +231,9 @@ impl MigrationPhase {
     }
 
     /// Should we send `VotorEvent`s for this slot?
-    /// Only send events once alpenglow is enabled for slots > alpenglow genesis
+    /// Only send events for alpenglow blocks
     fn should_send_votor_event(&self, slot: Slot) -> bool {
-        match self {
-            MigrationPhase::PreFeatureActivation
-            | MigrationPhase::Migration { .. }
-            | MigrationPhase::ReadyToEnable { .. } => false,
-            MigrationPhase::AlpenglowEnabled { genesis_cert } => {
-                slot > genesis_cert.cert_type.slot()
-            }
-            MigrationPhase::FullAlpenglowEpoch { .. } => true,
-        }
+        self.is_alpenglow_block(slot)
     }
 
     /// Should we respond to ancestor hashes repair requests  for this slot?
@@ -238,20 +244,18 @@ impl MigrationPhase {
 
     /// Should this block only have an alpentick (1 tick at the end of the block)?
     fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool {
-        // Same as votor events, all other blocks are expected to have normal PoH ticks
-        self.should_send_votor_event(slot)
+        self.is_alpenglow_block(slot)
     }
 
     /// Should this block be allowed to have block markers?
     fn should_allow_block_markers(&self, slot: Slot) -> bool {
-        // Same as votor events, TowerBFT blocks should not have markers
-        self.should_send_votor_event(slot)
+        // Only allow for alpenglow blocks, TowerBFT blocks should not have markers
+        self.is_alpenglow_block(slot)
     }
 
     /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
     fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool {
-        // Same as votor events, all alpenglow blocks should use double merkle
-        self.should_send_votor_event(slot)
+        self.is_alpenglow_block(slot)
     }
 
     /// Check if we are in the full alpenglow epoch
