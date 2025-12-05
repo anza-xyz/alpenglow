@@ -733,6 +733,24 @@ impl Blockstore {
             ]))))
             .collect();
 
+        Some(self.build_and_insert_double_merkle_meta(
+            slot,
+            fec_set_count,
+            merkle_tree_leaves,
+        ))
+    }
+
+    /// Given the leaves of the double merkle tree, build the tree and proofs and insert them.
+    pub fn build_and_insert_double_merkle_meta<I>(
+        &self,
+        slot: Slot,
+        fec_set_count: usize,
+        merkle_tree_leaves: I,
+    ) -> Hash
+    where
+        I: IntoIterator<Item = std::result::Result<Hash, crate::shred::Error>>,
+        <I as IntoIterator>::IntoIter: ExactSizeIterator,
+    {
         let merkle_tree = MerkleTree::try_new(merkle_tree_leaves.into_iter())
             .expect("Merkle tree construction must succeed");
         let double_merkle_root = *merkle_tree.root();
@@ -765,7 +783,7 @@ impl Blockstore {
             .put(slot, &double_merkle_meta)
             .expect("Blockstore operations must succeed");
 
-        Some(double_merkle_root)
+        double_merkle_root
     }
 
     /// Check whether the specified slot is an orphan slot which does not
