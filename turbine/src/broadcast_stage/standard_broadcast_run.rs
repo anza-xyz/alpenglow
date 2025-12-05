@@ -85,7 +85,7 @@ impl StandardBroadcastRun {
         }
     }
 
-    /// Upon recieval of shreds from a new bank (bank.slot() != self.slot)
+    /// Upon receipt of shreds from a new bank (bank.slot() != self.slot)
     /// reinitialize any necessary state and stats.
     fn reinitialize_state(
         &mut self,
