@@ -6,7 +6,7 @@ use {
         blockstore::Blockstore,
         shred::{Nonce, SIZE_OF_DATA_SHRED_HEADERS},
     },
-    solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler},
+    solana_perf::packet::Packet,
     std::{net::SocketAddr, sync::Arc},
 };
 
@@ -63,18 +63,5 @@ impl RepairHandler for MaliciousRepairHandler {
             shred[Self::BAD_DATA_INDEX] = shred[Self::BAD_DATA_INDEX].wrapping_add(1);
         }
         repair_response_packet_from_bytes(shred, dest, nonce)
-    }
-
-    fn run_orphan(
-        &self,
-        _recycler: &PacketBatchRecycler,
-        _from_addr: &SocketAddr,
-        _slot: Slot,
-        _block_id: Option<Hash>,
-        _max_responses: usize,
-        _nonce: Nonce,
-    ) -> Option<PacketBatch> {
-        // Malicious orphan response will come later
-        None
     }
 }
