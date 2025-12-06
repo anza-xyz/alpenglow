@@ -1688,13 +1688,12 @@ impl Blockstore {
             );
         }
 
-        self.synchronize_slot_meta_with_parent_meta(&mut shred_insertion_tracker);
-
         // Handle chaining for the members of the slot_meta_working_set that
         // were inserted into, drop the others.
         self.handle_chaining(
             &mut shred_insertion_tracker.write_batch,
             &mut shred_insertion_tracker.slot_meta_working_set,
+            &shred_insertion_tracker.parent_metas,
             metrics,
         )?;
 
@@ -2370,7 +2369,6 @@ impl Blockstore {
                 slot,
                 just_inserted_shreds,
                 parent_meta_working_set,
-                write_batch,
             )?;
         }
 
@@ -2473,7 +2471,6 @@ impl Blockstore {
         slot: u64,
         just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
-        write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let key = (location, slot);
         let entry = parent_meta_working_set.entry(key).or_default();
@@ -2507,20 +2504,6 @@ impl Blockstore {
         if let Some(prev) = &previous_parent_meta {
             if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
                 return Ok(());
-            }
-
-            if prev.populated_from_block_header() && new_parent_meta.populated_from_update_parent()
-            {
-                // Update next_slots in SlotsMeta
-                let prev_parent_slot = prev.parent_slot;
-                if let Some(mut parent_slot_meta) = self.meta(prev_parent_slot)? {
-                    parent_slot_meta
-                        .next_slots
-                        .retain(|&next_slot| next_slot != slot);
-
-                    self.meta_cf
-                        .put_in_batch(write_batch, prev_parent_slot, &parent_slot_meta)?;
-                }
             }
         }
 
@@ -5248,50 +5231,16 @@ impl Blockstore {
         Ok(())
     }
 
-    /// Synchronizes slot meta with parent meta when an UpdateParent marker
-    /// overrides a previously set parent from a BlockHeader.
-    fn synchronize_slot_meta_with_parent_meta(
-        &self,
-        shred_insertion_tracker: &mut ShredInsertionTracker,
-    ) {
-        let dirty_parent_metas =
-            shred_insertion_tracker
-                .parent_metas
-                .iter()
-                .filter_map(|((location, slot), wse)| match &wse.parent_meta {
-                    Some(WorkingEntry::Dirty(parent_meta)) => Some((
-                        *location,
-                        *slot,
-                        parent_meta.parent_slot,
-                        parent_meta.populated_from_update_parent(),
-                    )),
-                    _ => None,
-                });
-
-        for (location, slot, parent_slot, populated_from_update_parent) in dirty_parent_metas {
-            let slot_meta_wse = self.get_slot_meta_entry(
-                &mut shred_insertion_tracker.slot_meta_working_set,
-                slot,
-                location,
-                parent_slot,
-            );
-
-            // When an UpdateParent shows up, set old_slot_meta to None to force handle_chaining to
-            // run.
-            if populated_from_update_parent {
-                slot_meta_wse.old_slot_meta = None;
-            }
-
-            slot_meta_wse.new_slot_meta.borrow_mut().parent_slot = Some(parent_slot);
-        }
-    }
-
     /// For each entry in `working_set` whose `did_insert_occur` is true, this
     /// function handles its chaining effect by updating the SlotMeta of both
     /// the slot and its parent slot to reflect the slot descends from the
     /// parent slot.  In addition, when a slot is newly connected, it also
     /// checks whether any of its direct and indirect children slots are connected
     /// or not.
+    ///
+    /// This function also handles chaining updates when an UpdateParent marker
+    /// overrides a previously set parent from a BlockHeader. The dirty ParentMetas
+    /// identify slots that need reparenting.
     ///
     /// Note: This chaining only occurs for `SlotMeta`s in the column associated with
     /// `BlockLocation::Original`
@@ -5308,10 +5257,12 @@ impl Blockstore {
     ///   the current write and ensures their atomicity.
     /// - `working_set`: a (location, slot-id) to SlotMetaWorkingSetEntry map.  This function
     ///   will remove all entries which insertion did not actually occur.
+    /// - `parent_metas`: the dirty ParentMetas that need chaining updates.
     fn handle_chaining(
         &self,
         write_batch: &mut WriteBatch,
         working_set: &mut HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
+        parent_metas: &HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
         metrics: &mut BlockstoreInsertionMetrics,
     ) -> Result<()> {
         let mut start = Measure::start("Shred chaining");
@@ -5329,6 +5280,9 @@ impl Blockstore {
             }
             self.handle_chaining_for_slot(write_batch, working_set, &mut new_chained_slots, *slot)?;
         }
+
+        // Handle chaining updates from dirty ParentMetas (UpdateParent overriding BlockHeader)
+        self.update_chaining_for_parent_metas(working_set, parent_metas, &mut new_chained_slots)?;
 
         // Write all the newly changed slots in new_chained_slots to the write_batch
         for (slot, meta) in new_chained_slots.iter() {
@@ -5442,6 +5396,62 @@ impl Blockstore {
                 new_chained_slots,
                 SlotMeta::set_parent_connected,
             )?;
+        }
+
+        Ok(())
+    }
+
+    /// Handles chaining updates when an UpdateParent marker overrides a previously
+    /// set parent from a BlockHeader.
+    ///
+    /// TODO(ashwin, ksn): this chaining only occurs for `SlotMeta`s in the column associated with
+    /// `BlockLocation::Original`
+    fn update_chaining_for_parent_metas(
+        &self,
+        working_set: &mut HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
+        parent_metas: &HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+        new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
+    ) -> Result<()> {
+        // Filter to dirty UpdateParent entries for Original location only
+        let update_parent_entries = parent_metas.iter().filter_map(|((location, slot), wse)| {
+            if !matches!(location, BlockLocation::Original) {
+                return None;
+            }
+
+            match &wse.parent_meta {
+                Some(WorkingEntry::Dirty(pm)) if pm.populated_from_update_parent() => {
+                    Some((*slot, pm.parent_slot))
+                }
+                _ => None,
+            }
+        });
+
+        for (slot, new_parent_slot) in update_parent_entries {
+            // Get old parent from slot meta; update parent_slot to new value
+            let old_parent_slot =
+                if let Some(entry) = working_set.get_mut(&(BlockLocation::Original, slot)) {
+                    let old = entry.old_slot_meta.as_ref().and_then(|m| m.parent_slot);
+                    entry.new_slot_meta.borrow_mut().parent_slot = Some(new_parent_slot);
+                    old
+                } else {
+                    None
+                };
+
+            // Remove slot from old parent's next_slots if parent changed
+            if let Some(old_parent) = old_parent_slot.filter(|&old| old != new_parent_slot) {
+                self.find_slot_meta_else_create(working_set, new_chained_slots, old_parent)?
+                    .borrow_mut()
+                    .next_slots
+                    .retain(|&s| s != slot);
+            }
+
+            // Add slot to new parent's next_slots
+            let new_parent_meta =
+                self.find_slot_meta_else_create(working_set, new_chained_slots, new_parent_slot)?;
+            let mut new_parent = new_parent_meta.borrow_mut();
+            if !new_parent.next_slots.contains(&slot) {
+                new_parent.next_slots.push(slot);
+            }
         }
 
         Ok(())
