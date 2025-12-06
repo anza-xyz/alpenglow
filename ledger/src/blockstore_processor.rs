@@ -1547,10 +1547,7 @@ pub fn confirm_slot(
         let num_shreds = completed_range.end - completed_range.start;
         let is_final = slot_full && ix == completed_ranges.len() - 1;
 
-        println!(
-            "!!!!! blockstore processor - running component {} = {:?}",
-            ix, component
-        );
+        println!("!!!!! blockstore processor - running component {ix} = {component:?}");
 
         match component {
             BlockComponent::EntryBatch(entries) => {

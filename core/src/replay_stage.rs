@@ -3667,7 +3667,8 @@ impl ReplayStage {
                             .expect("Couldn't fetch slot meta");
 
                         println!(
-                            "!!!!! Abandoned bank at slot {bank_slot}\n :: slot_meta {cur_slot_meta:?}\n :: parent_slot_meta {parent_slot_meta:?}"
+                            "!!!!! Abandoned bank at slot {bank_slot}\n :: slot_meta \
+                             {cur_slot_meta:?}\n :: parent_slot_meta {parent_slot_meta:?}"
                         );
 
                         Self::clear_bank(bank_forks, bank_slot);

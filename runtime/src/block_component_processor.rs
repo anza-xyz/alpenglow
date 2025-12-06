@@ -235,7 +235,7 @@ impl BlockComponentProcessor {
 
         match self.has_header {
             true => {
-                println!("Abandoned bank :: {:?}", update_parent);
+                println!("Abandoned bank :: {update_parent:?}");
                 Err(BlockComponentProcessorError::AbandonedBank(
                     update_parent.clone(),
                 ))

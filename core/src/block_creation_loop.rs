@@ -587,7 +587,8 @@ fn record_and_complete_block(
                 }
             } else {
                 trace!(
-                    "!!!!! {} :: slot = {} parent ready not found yet! optimistic_parent_block = {:?}",
+                    "!!!!! {} :: slot = {} parent ready not found yet! optimistic_parent_block = \
+                     {:?}",
                     ctx.poh_recorder
                         .read()
                         .unwrap()
@@ -694,18 +695,14 @@ fn record_and_complete_block(
         &footer,
     );
 
-    let collector_id = bank.collector_id().clone();
+    let collector_id = *bank.collector_id();
     let slot = bank.slot();
-    trace!("!!!!! {}: slot = {} writing alpentick", collector_id, slot);
+    trace!("!!!!! {collector_id}: slot = {slot} writing alpentick");
 
     drop(bank);
     w_poh_recorder.tick_alpenglow(max_tick_height, footer);
 
-    trace!(
-        "!!!!! {}: slot = {} finished writing alpentick",
-        collector_id,
-        slot
-    );
+    trace!("!!!!! {collector_id}: slot = {slot} finished writing alpentick");
 
     Ok(())
 }
@@ -752,23 +749,16 @@ fn sad_leader_handover(
     _old_parent_slot: u64,
     new_parent_slot: u64,
 ) -> Result<(), StartLeaderError> {
-    trace!("!!!!! sad_leader_handover slot = {} :: clear bank", slot);
+    trace!("!!!!! sad_leader_handover slot = {slot} :: clear bank");
     ReplayStage::clear_bank(&ctx.bank_forks, slot);
 
     let Some(parent_bank) = ctx.bank_forks.read().unwrap().get(new_parent_slot) else {
         ctx.slot_metrics.replay_is_behind_count += 1;
-        trace!(
-            "!!!!! REPLAY IS BEHIND - (1) {}, {} !!!!!",
-            new_parent_slot,
-            slot
-        );
+        trace!("!!!!! REPLAY IS BEHIND - (1) {new_parent_slot}, {slot} !!!!!");
         return Err(StartLeaderError::ReplayIsBehind(new_parent_slot, slot));
     };
 
-    trace!(
-        "!!!!! sad_leader_handover slot = {} :: create and insert leader bank",
-        slot
-    );
+    trace!("!!!!! sad_leader_handover slot = {slot} :: create and insert leader bank");
     create_and_insert_leader_bank(slot, parent_bank, ctx);
 
     Ok(())
@@ -890,31 +880,19 @@ fn maybe_start_leader(
 ) -> Result<(), StartLeaderError> {
     if ctx.bank_forks.read().unwrap().get(slot).is_some() {
         ctx.slot_metrics.already_have_bank_count += 1;
-        trace!(
-            "!!!!! MAYBE START LEADER - (0) {}, {} !!!!!",
-            parent_slot,
-            slot
-        );
+        trace!("!!!!! MAYBE START LEADER - (0) {parent_slot}, {slot} !!!!!");
         return Err(StartLeaderError::AlreadyHaveBank(slot));
     }
 
     let Some(parent_bank) = ctx.bank_forks.read().unwrap().get(parent_slot) else {
         ctx.slot_metrics.replay_is_behind_count += 1;
-        trace!(
-            "!!!!! REPLAY IS BEHIND - (1) {}, {} !!!!!",
-            parent_slot,
-            slot
-        );
+        trace!("!!!!! REPLAY IS BEHIND - (1) {parent_slot}, {slot} !!!!!");
         return Err(StartLeaderError::ReplayIsBehind(parent_slot, slot));
     };
 
     if !parent_bank.is_frozen() {
         ctx.slot_metrics.replay_is_behind_count += 1;
-        trace!(
-            "!!!!! REPLAY IS BEHIND - (2) {}, {} !!!!!",
-            parent_slot,
-            slot
-        );
+        trace!("!!!!! REPLAY IS BEHIND - (2) {parent_slot}, {slot} !!!!!");
         return Err(StartLeaderError::ReplayIsBehind(parent_slot, slot));
     }
 

@@ -125,6 +125,7 @@ pub type CompletedSlotsReceiver = Receiver<Vec<Slot>>;
 //     completed_ranges[i].end - 1
 // has DATA_COMPLETE_SHRED flag.
 type CompletedRanges = Vec<Range<u32>>;
+type UpdateParentSignal = (Slot, Slot, Hash, u32);
 
 #[derive(Default)]
 pub struct SignatureInfosForAddress {
@@ -289,7 +290,7 @@ pub struct Blockstore {
     insert_shreds_lock: Mutex<()>,
     new_shreds_signals: Mutex<Vec<Sender<bool>>>,
     completed_slots_senders: Mutex<Vec<CompletedSlotsSender>>,
-    update_parent_signals: Mutex<Vec<Sender<(Slot, Slot, Hash, u32)>>>,
+    update_parent_signals: Mutex<Vec<Sender<UpdateParentSignal>>>,
     pub lowest_cleanup_slot: RwLock<Slot>,
     pub slots_stats: SlotsStats,
     rpc_api_metrics: BlockstoreRpcApiMetrics,
@@ -4756,15 +4757,15 @@ impl Blockstore {
         // We compare the merkle roots of the last `DATA_SHREDS_PER_FEC_BLOCK` shreds in this block.
         // Since the merkle root contains the fec_set_index, if all of them match, we know that the last fec set has
         // at least `DATA_SHREDS_PER_FEC_BLOCK` shreds.
-        println!("!!!!! CHK 0 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 0 CHECK_LAST_FEC_SET {slot}");
         let slot_meta = self.meta(slot)?.ok_or(BlockstoreError::SlotUnavailable)?;
-        println!("!!!!! CHK 0.1 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 0.1 CHECK_LAST_FEC_SET {slot}");
         let last_shred_index = slot_meta
             .last_index
             .ok_or(BlockstoreError::UnknownLastIndex(slot))?;
-        println!("!!!!! CHK 0.2 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 0.2 CHECK_LAST_FEC_SET {slot}");
 
-        println!("!!!!! CHK 1 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 1 CHECK_LAST_FEC_SET {slot}");
 
         const MINIMUM_INDEX: u64 = DATA_SHREDS_PER_FEC_BLOCK as u64 - 1;
         #[cfg(test)]
@@ -4784,7 +4785,7 @@ impl Blockstore {
             .data_shred_cf
             .multi_get_keys((start_index..=last_shred_index).map(|index| (slot, index)));
 
-        println!("!!!!! CHK 2 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 2 CHECK_LAST_FEC_SET {slot}");
 
         let deduped_shred_checks: Vec<(Hash, bool)> = self
             .data_shred_cf
@@ -4813,7 +4814,7 @@ impl Blockstore {
             .dedup_by(|res1, res2| res1.as_ref().ok() == res2.as_ref().ok())
             .collect::<Result<Vec<(Hash, bool)>>>()?;
 
-        println!("!!!!! CHK 3 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 3 CHECK_LAST_FEC_SET {slot}");
 
         // After the dedup there should be exactly one Hash left and one true value
         let &[(block_id, is_retransmitter_signed)] = deduped_shred_checks.as_slice() else {
@@ -4823,7 +4824,7 @@ impl Blockstore {
             });
         };
 
-        println!("!!!!! CHK 4 CHECK_LAST_FEC_SET {}", slot);
+        println!("!!!!! CHK 4 CHECK_LAST_FEC_SET {slot}");
 
         Ok(LastFECSetCheckResults {
             last_fec_set_merkle_root: Some(block_id),
