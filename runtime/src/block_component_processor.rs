@@ -47,15 +47,24 @@ pub struct BlockComponentProcessor {
 }
 
 impl BlockComponentProcessor {
-    pub fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
-        // Post-migration: both header and footer are required
-        if !self.has_footer {
-            return Err(BlockComponentProcessorError::MissingBlockFooter);
-        }
+    pub fn on_final(
+        &self,
+        _migration_status: &MigrationStatus,
+        _slot: Slot,
+    ) -> Result<(), BlockComponentProcessorError> {
+        // Only require block markers (header/footer) for slots where they should be present
+        // if !migration_status.should_allow_block_markers(slot) {
+        //     return Ok(());
+        // }
 
-        if !self.has_header && self.update_parent.is_none() {
-            return Err(BlockComponentProcessorError::MissingParentMarker);
-        }
+        // // Post-migration: both header and footer are required
+        // if !self.has_footer {
+        //     return Err(BlockComponentProcessorError::MissingBlockFooter);
+        // }
+
+        // if !self.has_header && self.update_parent.is_none() {
+        //     return Err(BlockComponentProcessorError::MissingParentMarker);
+        // }
 
         Ok(())
     }

@@ -247,7 +247,13 @@ fn start_loop(config: BlockCreationLoopConfig) {
 
         // Race between parent ready notification and optimistic parent events
         // Parent ready is checked first and has priority if both channels are ready
-        let window_source = {
+        let window_source = if ctx
+            .bank_forks
+            .read()
+            .unwrap()
+            .migration_status()
+            .should_allow_block_markers(ctx.bank_forks.read().unwrap().root())
+        {
             select_biased! {
                 recv(ctx.leader_window_info_receiver) -> msg => {
                     // Drain all pending messages and keep the latest one
@@ -273,6 +279,18 @@ fn start_loop(config: BlockCreationLoopConfig) {
                 },
                 default(Duration::from_secs(1)) => None,
             }
+        } else {
+            // Pre-Alpenglow: no fast leader handover
+            ctx.leader_window_info_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .ok()
+                .and_then(|window| {
+                    ctx.leader_window_info_receiver
+                        .try_iter()
+                        .last()
+                        .or(Some(window))
+                })
+                .map(ParentSource::ParentReady)
         };
 
         let Some(window_source) = window_source else {
@@ -585,19 +603,6 @@ fn record_and_complete_block(
 
                     optimistic_parent = None;
                 }
-            } else {
-                trace!(
-                    "!!!!! {} :: slot = {} parent ready not found yet! optimistic_parent_block = \
-                     {:?}",
-                    ctx.poh_recorder
-                        .read()
-                        .unwrap()
-                        .bank()
-                        .unwrap()
-                        .collector_id(),
-                    ctx.poh_recorder.read().unwrap().bank().unwrap().slot(),
-                    optimistic_parent_block,
-                );
             }
         }
 

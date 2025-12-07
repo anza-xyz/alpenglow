@@ -4819,11 +4819,6 @@ impl ReplayStage {
             next_slots.sort();
             next_slots
         });
-        info!("generate new forks {:?}", {
-            let mut next_slots = next_slots.iter().collect::<Vec<_>>();
-            next_slots.sort();
-            next_slots
-        });
         let mut generate_new_bank_forks_loop = Measure::start("generate_new_bank_forks_loop");
         let mut new_banks = HashMap::new();
         for (parent_slot, children) in next_slots {

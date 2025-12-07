@@ -253,6 +253,13 @@ impl MigrationPhase {
         self.is_alpenglow_block(slot)
     }
 
+    /// Should this block allow the UpdateParent marker, i.e., support fast leader handover?
+    fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool {
+        // Only allow for alpenglow blocks, 2 leader windows after after migration
+        // TODO(ksn): replace 8 with 2 * leader_window_size
+        self.is_alpenglow_block(slot - 8)
+    }
+
     /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
     fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool {
         self.is_alpenglow_block(slot)
@@ -411,6 +418,7 @@ impl MigrationStatus {
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_allow_block_markers(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
