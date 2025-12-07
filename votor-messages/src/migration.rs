@@ -257,7 +257,7 @@ impl MigrationPhase {
     fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool {
         // Only allow for alpenglow blocks, 2 leader windows after after migration
         // TODO(ksn): replace 8 with 2 * leader_window_size
-        self.is_alpenglow_block(slot - 8)
+        self.is_alpenglow_block(slot.saturating_sub(8))
     }
 
     /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
