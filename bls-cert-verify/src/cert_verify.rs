@@ -131,7 +131,9 @@ where
 
     if let Some(required_stake) = required_stake {
         // Base3 encoding doesn't allow (true, true), so we can add without checking overlap.
-        let total_stake = stake1.checked_add(stake2).expect("Stake addition should never overflow");
+        let total_stake = stake1
+            .checked_add(stake2)
+            .expect("Stake addition should never overflow");
         if total_stake < required_stake {
             return Err(CertVerifyError::NotEnoughStake(total_stake, required_stake));
         }
