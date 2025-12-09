@@ -37,6 +37,8 @@ pub struct ProcessShredsStats {
     pub num_extant_slots: u64,
     // When looking up chained merkle root from parent slot fails.
     pub err_unknown_chained_merkle_root: u64,
+    // When looking up the block id from the parent slot fails.
+    pub err_unknown_parent_block_id: u64,
     pub(crate) padding_bytes: usize,
     pub(crate) data_bytes: usize,
     num_merkle_data_shreds: usize,
@@ -106,6 +108,11 @@ impl ProcessShredsStats {
             (
                 "err_unknown_chained_merkle_root",
                 self.err_unknown_chained_merkle_root,
+                i64
+            ),
+            (
+                "err_unknown_parent_block_id",
+                self.err_unknown_parent_block_id,
                 i64
             ),
             ("padding_bytes", self.padding_bytes, i64),
@@ -212,6 +219,7 @@ impl AddAssign<ProcessShredsStats> for ProcessShredsStats {
             num_data_shreds_hist,
             num_extant_slots,
             err_unknown_chained_merkle_root,
+            err_unknown_parent_block_id,
             padding_bytes,
             data_bytes,
             num_merkle_data_shreds,
@@ -232,6 +240,7 @@ impl AddAssign<ProcessShredsStats> for ProcessShredsStats {
         self.coalesce_exited_rcv_timeout += coalesce_exited_rcv_timeout;
         self.num_extant_slots += num_extant_slots;
         self.err_unknown_chained_merkle_root += err_unknown_chained_merkle_root;
+        self.err_unknown_parent_block_id += err_unknown_parent_block_id;
         self.padding_bytes += padding_bytes;
         self.data_bytes += data_bytes;
         self.num_merkle_data_shreds += num_merkle_data_shreds;

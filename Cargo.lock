@@ -9149,6 +9149,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "trees",
+ "wincode",
 ]
 
 [[package]]
@@ -11611,6 +11612,7 @@ dependencies = [
  "solana-rpc",
  "solana-rpc-client-api",
  "solana-runtime",
+ "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
  "solana-streamer",

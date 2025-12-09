@@ -411,6 +411,8 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
+        // TODO(ksn, wen): fill this field
+        final_cert: None,
     }
 }
 
@@ -676,8 +678,9 @@ fn maybe_include_genesis_certificate(parent_slot: Slot, ctx: &LeaderContext) {
     if parent_slot != ctx.genesis_cert.slot || parent_slot == 0 {
         return;
     }
-    let genesis_marker =
-        VersionedBlockMarker::Current(BlockMarkerV1::GenesisCertificate(ctx.genesis_cert.clone()));
+    let genesis_marker = VersionedBlockMarker::new(BlockMarkerV1::new_genesis_certificate(
+        ctx.genesis_cert.clone(),
+    ));
 
     let mut poh_recorder = ctx.poh_recorder.write().unwrap();
     // Send the genesis certificate

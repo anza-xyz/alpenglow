@@ -96,9 +96,7 @@ impl BlockComponentProcessor {
         is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
-        let marker = match marker {
-            VersionedBlockMarker::V1(marker) | VersionedBlockMarker::Current(marker) => marker,
-        };
+        let VersionedBlockMarker::V1(marker) = marker;
 
         let markers_fully_enabled = migration_status.should_allow_block_markers(slot);
         let in_migration = migration_status.is_in_migration();
@@ -108,16 +106,16 @@ impl BlockComponentProcessor {
             // - once migration is fully enabled, or
             // - while we're still in the migration phase (to let us advance it)
             BlockMarkerV1::BlockHeader(header) if markers_fully_enabled || in_migration => {
-                self.on_header(&header)
+                self.on_header(header.inner())
             }
             BlockMarkerV1::GenesisCertificate(genesis_cert)
                 if markers_fully_enabled || in_migration =>
             {
-                self.on_genesis_certificate(bank, genesis_cert, migration_status)
+                self.on_genesis_certificate(bank, genesis_cert.into_inner(), migration_status)
             }
 
             // Everything else is only valid once migration is complete
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, &footer),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
 
             // We process UpdateParent messages on shred ingest, so no callback needed here
             BlockMarkerV1::UpdateParent(_) => Ok(()),
@@ -203,9 +201,7 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockFooters);
         }
 
-        let footer = match footer {
-            VersionedBlockFooter::V1(footer) | VersionedBlockFooter::Current(footer) => footer,
-        };
+        let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
         Self::update_bank_with_footer(bank, footer);
@@ -289,7 +285,7 @@ mod tests {
     use {
         super::*,
         crate::{bank::Bank, genesis_utils::create_genesis_config},
-        solana_entry::block_component::{BlockFooterV1, BlockHeaderV1},
+        solana_entry::block_component::{BlockFooterV1, BlockHeaderV1, FinalCertificate},
         solana_program::{hash::Hash, pubkey::Pubkey},
         std::sync::Arc,
     };
@@ -373,6 +369,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         // First footer should succeed
@@ -407,6 +404,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -433,7 +431,7 @@ mod tests {
     fn test_on_marker_processes_header() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -465,11 +463,12 @@ mod tests {
         let footer_time_nanos = parent_time_nanos + 300_000_000; // parent + 300ms
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
 
@@ -509,6 +508,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
         processor
             .on_footer(bank.clone(), parent.clone(), &footer)
@@ -530,7 +530,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Try to process a block header marker pre-migration - should fail
-        let marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -566,7 +566,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         // Process header marker
-        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockHeader(
+        let header_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_header(
             VersionedBlockHeader::V1(BlockHeaderV1 {
                 parent_slot: 0,
                 parent_block_id: Hash::default(),
@@ -591,11 +591,12 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
         processor
@@ -626,6 +627,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1_000_000_000,
             block_user_agent: vec![],
+            final_cert: None,
         });
 
         // Try to process footer without header - should fail
@@ -652,11 +654,12 @@ mod tests {
         let expected_time_secs = footer_time_nanos / 1_000_000_000;
 
         // Process footer marker with slot_full=true
-        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::BlockFooter(
+        let footer_marker = VersionedBlockMarker::V1(BlockMarkerV1::new_block_footer(
             VersionedBlockFooter::V1(BlockFooterV1 {
                 bank_hash: Hash::new_unique(),
                 block_producer_time_nanos: footer_time_nanos as u64,
                 block_user_agent: vec![],
+                final_cert: Some(FinalCertificate::new_for_tests()),
             }),
         ));
 
@@ -728,6 +731,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -767,6 +771,7 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
+            final_cert: Some(FinalCertificate::new_for_tests()),
         });
 
         let result = processor.on_footer(bank, parent, &footer);

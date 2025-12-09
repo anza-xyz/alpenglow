@@ -17,6 +17,7 @@ pub enum EntryMarkerError {
 /// The PoH recorder uses this type to stream both transaction-containing entries and block markers
 /// through a unified channel to downstream consumers, e.g., broadcast stage.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum EntryMarker {
     /// A regular entry containing transactions and/or ticks
     Entry(Entry),

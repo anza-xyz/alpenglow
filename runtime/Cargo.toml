@@ -20,6 +20,7 @@ name = "solana_runtime"
 dev-context-only-utils = [
     "dep:solana-system-program",
     "solana-accounts-db/dev-context-only-utils",
+    "solana-entry/dev-context-only-utils",
     "solana-svm/dev-context-only-utils",
     "solana-runtime-transaction/dev-context-only-utils",
     "solana-vote/dev-context-only-utils",

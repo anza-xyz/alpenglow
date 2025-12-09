@@ -2,7 +2,7 @@ use {
     crate::{
         block_error::BlockError,
         blockstore::{Blockstore, BlockstoreError},
-        blockstore_meta::SlotMeta,
+        blockstore_meta::{BlockLocation, SlotMeta},
         entry_notifier_service::{EntryNotification, EntryNotifierSender},
         leader_schedule_cache::LeaderScheduleCache,
         transaction_balances::compile_collected_balances,
@@ -2368,21 +2368,26 @@ pub fn process_single_slot(
         result?
     }
 
-    let block_id = blockstore
-        .check_last_fec_set_and_get_block_id(slot, bank.hash(), false, &bank.feature_set)
-        .inspect_err(|err| {
-            warn!("slot {slot} failed last fec set checks: {err}");
-            if blockstore.is_primary_access() {
-                blockstore
-                    .set_dead_slot(slot)
-                    .expect("Failed to mark slot as dead in blockstore");
-            } else {
-                info!(
-                    "Failed last fec set checks slot {slot} won't be marked dead due to being \
-                     secondary blockstore access"
-                );
-            }
-        })?;
+    let block_id = if migration_status.should_use_double_merkle_block_id(slot) {
+        blockstore.get_double_merkle_root(slot, BlockLocation::Original)
+    } else {
+        // Once SIMD-0317 is active, the checking done here / marking dead can be removed
+        blockstore
+            .check_last_fec_set_and_get_block_id(slot, bank.hash(), false, &bank.feature_set)
+            .inspect_err(|err| {
+                warn!("slot {slot} failed last fec set checks: {err}");
+                if blockstore.is_primary_access() {
+                    blockstore
+                        .set_dead_slot(slot)
+                        .expect("Failed to mark slot as dead in blockstore");
+                } else {
+                    info!(
+                        "Failed last fec set checks slot {slot} won't be marked dead due to being \
+                         secondary blockstore access"
+                    );
+                }
+            })?
+    };
     bank.set_block_id(block_id);
     bank.freeze(); // all banks handled by this routine are created from complete slots
 
