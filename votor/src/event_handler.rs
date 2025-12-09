@@ -263,6 +263,7 @@ impl EventHandler {
                     .map_err(|_| SendError(()))?;
                 let (block, parent_block) = Self::get_block_parent_block(&bank);
                 info!("{my_pubkey}: Block {block:?} parent {parent_block:?}");
+
                 if Self::try_notar(
                     my_pubkey,
                     block,
@@ -1043,7 +1044,7 @@ mod tests {
                 start_slot,
                 end_slot,
                 parent_block,
-                skip_timer: Instant::now(),
+                skip_timer: Some(Instant::now()),
             }))
             .unwrap();
     }
