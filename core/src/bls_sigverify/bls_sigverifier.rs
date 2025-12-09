@@ -1302,7 +1302,7 @@ mod tests {
         assert_eq!(
             message_receiver.try_iter().count(),
             0,
-            "This certificsate should be invalid"
+            "This certificate should be invalid"
         );
         assert_eq!(
             verifier
