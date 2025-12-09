@@ -31,26 +31,40 @@ pub enum CertVerifyError {
 
     #[error("Base 3 encoding on unexpected cert {0:?}")]
     Base3EncodingOnUnexpectedCert(CertificateType),
+
+    #[error("Not enough stake {0} < {1}")]
+    NotEnoughStake(u64, u64),
 }
 
-fn aggregate_keys_from_bitmap<F>(
+fn aggregate_keys_and_stakes_from_bitmap<F>(
     bit_vec: &BitVec<u8, Lsb0>,
-    rank_to_pubkey: &F,
-) -> Option<PubkeyProjective>
+    rank_to_pubkey_and_stake: &F,
+) -> Option<(PubkeyProjective, u64)>
 where
-    F: Fn(usize) -> Option<BlsPubkey> + Sync,
+    F: Fn(usize) -> Option<(BlsPubkey, u64)> + Sync,
 {
     // This function should return None if any of the following happens:
     // - A rank in the bitmap does not have a corresponding pubkey.
     // - A pubkey fails to convert to projective form.
     // It only returns Some(aggregated_pubkey) if all pubkeys are found and valid.
-    let pubkeys: Vec<PubkeyProjective> = bit_vec
+    let results: Option<Vec<_>> = bit_vec
         .iter_ones()
+        .collect::<Vec<_>>()
+        .into_par_iter()
         .map(|rank| {
-            rank_to_pubkey(rank).and_then(|pubkey| PubkeyProjective::try_from(&pubkey).ok())
+            let (pubkey, stake) = rank_to_pubkey_and_stake(rank)?;
+            let pk_proj = PubkeyProjective::try_from(&pubkey).ok()?;
+            Some((pk_proj, stake))
         })
-        .collect::<Option<Vec<_>>>()?;
-    PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()
+        .collect();
+
+    let results = results?; // fail-fast
+
+    let total_stake = results.iter().map(|(_, stake)| *stake).sum::<u64>();
+    let pubkeys: Vec<_> = results.into_iter().map(|(pk, _)| pk).collect();
+
+    let aggregated = PubkeyProjective::par_aggregate(pubkeys.par_iter()).ok()?;
+    Some((aggregated, total_stake))
 }
 
 fn serialize_vote(vote: &Vote) -> Result<Vec<u8>, CertVerifyError> {
@@ -60,17 +74,25 @@ fn serialize_vote(vote: &Vote) -> Result<Vec<u8>, CertVerifyError> {
 pub fn verify_base2_certificate<F>(
     cert_to_verify: &Certificate,
     bit_vec: &BitVec<u8, Lsb0>,
-    rank_to_pubkey: &F,
+    required_stake: Option<u64>,
+    rank_to_pubkey_and_stake: &F,
 ) -> Result<(), CertVerifyError>
 where
-    F: Fn(usize) -> Option<BlsPubkey> + Sync,
+    F: Fn(usize) -> Option<(BlsPubkey, u64)> + Sync,
 {
     let original_vote = cert_to_verify.cert_type.to_source_vote();
 
     let signed_payload = serialize_vote(&original_vote)?;
 
-    let aggregate_bls_pubkey = aggregate_keys_from_bitmap(bit_vec, rank_to_pubkey)
-        .ok_or(CertVerifyError::KeyAggregationFailed)?;
+    let (aggregate_bls_pubkey, total_stake) =
+        aggregate_keys_and_stakes_from_bitmap(bit_vec, rank_to_pubkey_and_stake)
+            .ok_or(CertVerifyError::KeyAggregationFailed)?;
+
+    if let Some(required_stake) = required_stake {
+        if total_stake < required_stake {
+            return Err(CertVerifyError::NotEnoughStake(total_stake, required_stake));
+        }
+    }
 
     if let Ok(true) =
         aggregate_bls_pubkey.verify_signature(&cert_to_verify.signature, &signed_payload)
@@ -85,10 +107,11 @@ fn verify_base3_certificate<F>(
     cert_to_verify: &Certificate,
     bit_vec1: &BitVec<u8, Lsb0>,
     bit_vec2: &BitVec<u8, Lsb0>,
-    rank_to_pubkey: &F,
+    required_stake: Option<u64>,
+    rank_to_pubkey_and_stake: &F,
 ) -> Result<(), CertVerifyError>
 where
-    F: Fn(usize) -> Option<BlsPubkey> + Sync,
+    F: Fn(usize) -> Option<(BlsPubkey, u64)> + Sync,
 {
     let (vote1, vote2) = cert_to_verify.cert_type.to_source_votes().ok_or(
         CertVerifyError::Base3EncodingOnUnexpectedCert(cert_to_verify.cert_type),
@@ -99,10 +122,20 @@ where
     let messages_to_verify: Vec<&[u8]> = vec![&signed_payload1, &signed_payload2];
 
     // Aggregate the two sets of public keys separately from the two bitmaps.
-    let agg_pk1 = aggregate_keys_from_bitmap(bit_vec1, rank_to_pubkey)
-        .ok_or(CertVerifyError::KeyAggregationFailed)?;
-    let agg_pk2 = aggregate_keys_from_bitmap(bit_vec2, rank_to_pubkey)
-        .ok_or(CertVerifyError::KeyAggregationFailed)?;
+    let (agg_pk1, stake1) =
+        aggregate_keys_and_stakes_from_bitmap(bit_vec1, rank_to_pubkey_and_stake)
+            .ok_or(CertVerifyError::KeyAggregationFailed)?;
+    let (agg_pk2, stake2) =
+        aggregate_keys_and_stakes_from_bitmap(bit_vec2, rank_to_pubkey_and_stake)
+            .ok_or(CertVerifyError::KeyAggregationFailed)?;
+
+    if let Some(required_stake) = required_stake {
+        let total_stake = stake1.saturating_add(stake2);
+        if total_stake < required_stake {
+            return Err(CertVerifyError::NotEnoughStake(total_stake, required_stake));
+        }
+    }
+
     let pubkeys_affine: Vec<BlsPubkey> = vec![agg_pk1.into(), agg_pk2.into()];
 
     match SignatureProjective::par_verify_distinct_aggregated(
@@ -118,21 +151,29 @@ where
 pub fn verify_votor_message_certificate<F>(
     cert_to_verify: &Certificate,
     max_len: usize,
-    rank_to_pubkey: F,
+    required_stake: Option<u64>,
+    rank_to_pubkey_and_stake: F,
 ) -> Result<(), CertVerifyError>
 where
-    F: Fn(usize) -> Option<BlsPubkey> + Sync,
+    F: Fn(usize) -> Option<(BlsPubkey, u64)> + Sync,
 {
     let decoded_bitmap =
         decode(&cert_to_verify.bitmap, max_len).map_err(CertVerifyError::BitmapDecodingFailed)?;
 
     match decoded_bitmap {
-        solana_signer_store::Decoded::Base2(bit_vec) => {
-            verify_base2_certificate(cert_to_verify, &bit_vec, &rank_to_pubkey)
-        }
-        solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => {
-            verify_base3_certificate(cert_to_verify, &bit_vec1, &bit_vec2, &rank_to_pubkey)
-        }
+        solana_signer_store::Decoded::Base2(bit_vec) => verify_base2_certificate(
+            cert_to_verify,
+            &bit_vec,
+            required_stake,
+            &rank_to_pubkey_and_stake,
+        ),
+        solana_signer_store::Decoded::Base3(bit_vec1, bit_vec2) => verify_base3_certificate(
+            cert_to_verify,
+            &bit_vec1,
+            &bit_vec2,
+            required_stake,
+            &rank_to_pubkey_and_stake,
+        ),
     }
 }
 
@@ -197,12 +238,31 @@ mod test {
         let cert = create_signed_certificate_message(
             &bls_keypairs,
             cert_type,
+            &(0..6).collect::<Vec<_>>(),
+        );
+        assert!(
+            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
+                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base2_not_enough_stake() {
+        let bls_keypairs = create_bls_keypairs(10);
+        let cert_type = CertificateType::Notarize(10, Hash::new_unique());
+        let cert = create_signed_certificate_message(
+            &bls_keypairs,
+            cert_type,
             &(0..5).collect::<Vec<_>>(),
         );
-        assert!(verify_votor_message_certificate(&cert, 10, |rank| {
-            bls_keypairs.get(rank).map(|kp| kp.public)
-        })
-        .is_ok());
+        assert_eq!(
+            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
+                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
+            }),
+            Err(CertVerifyError::NotEnoughStake(500, 600))
+        );
     }
 
     #[test]
@@ -229,10 +289,44 @@ mod test {
             .aggregate(&all_vote_messages)
             .expect("Failed to aggregate votes");
         let cert = builder.build().expect("Failed to build certificate");
-        assert!(verify_votor_message_certificate(&cert, 10, |rank| {
-            bls_keypairs.get(rank).map(|kp| kp.public)
-        })
-        .is_ok());
+        assert!(
+            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
+                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base3_not_enough_stake() {
+        let bls_keypairs = create_bls_keypairs(10);
+        let slot = 20;
+        let block_hash = Hash::new_unique();
+        let notarize_vote = Vote::new_notarization_vote(slot, block_hash);
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, block_hash);
+        let mut all_vote_messages = Vec::new();
+        (0..4).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(&bls_keypairs, notarize_vote, i))
+        });
+        (4..5).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &bls_keypairs,
+                notarize_fallback_vote,
+                i,
+            ))
+        });
+        let cert_type = CertificateType::NotarizeFallback(slot, block_hash);
+        let mut builder = CertificateBuilder::new(cert_type);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert = builder.build().expect("Failed to build certificate");
+        assert_eq!(
+            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
+                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
+            }),
+            Err(CertVerifyError::NotEnoughStake(500, 600))
+        );
     }
 
     #[test]
@@ -256,43 +350,55 @@ mod test {
             bitmap: encoded_bitmap,
         };
         assert_eq!(
-            verify_votor_message_certificate(&cert, 10, |rank| {
-                bls_keypairs.get(rank).map(|kp| kp.public)
+            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
+                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
             }),
             Err(CertVerifyError::SignatureVerificationFailed)
         );
     }
 
-    fn rank_to_pubkey(
+    fn rank_to_pubkey_and_stake(
         bls_keypairs: &[BLSKeypair],
         bad_pubkey_rank: usize,
-    ) -> impl Fn(usize) -> Option<BlsPubkey> + Sync + '_ {
+    ) -> impl Fn(usize) -> Option<(BlsPubkey, u64)> + Sync + '_ {
         move |rank| {
             if rank == bad_pubkey_rank {
-                BLSPubkey::default().into()
+                Some((BLSPubkey::default(), 100))
             } else {
                 bls_keypairs
                     .get(rank)
-                    .map(|keypair: &BLSKeypair| keypair.public)
+                    .map(|keypair: &BLSKeypair| (keypair.public, 100))
             }
         }
     }
 
     #[test]
-    fn test_aggregate_keys_from_bitmap() {
+    fn test_aggregate_keys_and_stakes_from_bitmap() {
         let bls_keypairs = create_bls_keypairs(4);
         let mut bitmap = BitVec::<u8, Lsb0>::new();
         bitmap.resize(10, false);
         bitmap.set(1, true);
         bitmap.set(3, true);
 
-        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_some());
+        assert!(aggregate_keys_and_stakes_from_bitmap(
+            &bitmap,
+            &rank_to_pubkey_and_stake(&bls_keypairs, 4)
+        )
+        .is_some());
 
         bitmap.set(4, true); // rank 4 gets us a bad pubkey
-        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_none());
+        assert!(aggregate_keys_and_stakes_from_bitmap(
+            &bitmap,
+            &rank_to_pubkey_and_stake(&bls_keypairs, 4)
+        )
+        .is_none());
 
         bitmap.set(4, false);
         bitmap.set(6, true); // rank 6 does not have a corresponding pubkey
-        assert!(aggregate_keys_from_bitmap(&bitmap, &rank_to_pubkey(&bls_keypairs, 4)).is_none());
+        assert!(aggregate_keys_and_stakes_from_bitmap(
+            &bitmap,
+            &rank_to_pubkey_and_stake(&bls_keypairs, 4)
+        )
+        .is_none());
     }
 }
