@@ -14,12 +14,12 @@ use {
     thiserror::Error,
 };
 
-fn round(input: f64) -> Option<u64> {
-    if !input.is_finite() || input < 0.0 || input > u64::MAX as f64 {
+fn round(input: f64) -> Option<u128> {
+    if !input.is_finite() || input < 0.0 || input > u128::MAX as f64 {
         return None;
     }
     let rounded = input.round();
-    Some(rounded as u64)
+    Some(rounded as u128)
 }
 
 /// Returns voting reward in Lamports.
@@ -32,7 +32,7 @@ fn calculate_voting_reward(
     total_supply_lamports: u64,
     slots_per_year: f64,
     yearly_inflation: f64,
-) -> u64 {
+) -> u128 {
     // Some assertions to catch issues of the caller incorrectly using the function.
     debug_assert!(validator_stake_lamports <= total_stake_lamports);
     debug_assert!(total_stake_lamports <= total_supply_lamports);

@@ -162,7 +162,6 @@ use {
     solana_transaction_context::{transaction_accounts::TransactionAccount, TransactionReturnData},
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
-    solana_vote_interface::state::VoteStateV3,
     solana_votor_messages::{
         consensus_message::Certificate, migration::GENESIS_CERTIFICATE_ACCOUNT,
     },
@@ -209,6 +208,7 @@ mod fee_distribution;
 mod metrics;
 pub(crate) mod partitioned_epoch_rewards;
 mod recent_blockhashes_account;
+mod reward_pda;
 mod serde_snapshot;
 mod sysvar_cache;
 pub(crate) mod tests;
@@ -2141,17 +2141,17 @@ impl Bank {
         });
     }
 
-    pub(crate) fn pay_vote_reward(&self, voter: Pubkey, reward: u64) {
-        let mut accounts = Arc::unwrap_or_clone(self.vote_accounts());
-        let (_stake, account) = accounts.remove(&voter).unwrap();
-        let data = account.account().data_clone();
-        let mut vote_state: VoteStateV3 = bincode::deserialize(&data).unwrap();
-        vote_state.increment_credits(self.epoch(), reward);
-        let shared_account =
-            AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap();
-        // XXX: is the stake getting set properly?
-        self.store_account(&voter, &shared_account);
-    }
+    // pub(crate) fn pay_vote_reward(&self, voter: Pubkey, reward: u64) {
+    //     let mut accounts = Arc::unwrap_or_clone(self.vote_accounts());
+    //     let (_stake, account) = accounts.remove(&voter).unwrap();
+    //     let data = account.account().data_clone();
+    //     let mut vote_state: VoteStateV3 = bincode::deserialize(&data).unwrap();
+    //     vote_state.increment_credits(self.epoch(), reward);
+    //     let shared_account =
+    //         AccountSharedData::new_data(account.lamports(), &vote_state, account.owner()).unwrap();
+    //     // XXX: is the stake getting set properly?
+    //     self.store_account(&voter, &shared_account);
+    // }
 
     pub fn update_last_restart_slot(&self) {
         let feature_flag = self
