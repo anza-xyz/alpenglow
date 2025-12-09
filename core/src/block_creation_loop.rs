@@ -424,6 +424,26 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
     let block_producer_time_nanos = u64::try_from(block_producer_time_nanos).unwrap_or_default();
     produce_block_footer_with_timestamp(block_producer_time_nanos)
 }
+/// Shutdowns the record receiver and drains any remaining records.
+fn shutdown_and_drain_record_receiver(
+    poh_recorder: &RwLock<PohRecorder>,
+    record_receiver: &mut RecordReceiver,
+) -> Result<(), PohRecorderError> {
+    record_receiver.shutdown();
+
+    while !record_receiver.is_safe_to_restart() {
+        let Ok(record) = record_receiver.recv_timeout(Duration::ZERO) else {
+            continue;
+        };
+        poh_recorder.write().unwrap().record(
+            record.bank_id,
+            record.mixins,
+            record.transaction_batches,
+        )?;
+    }
+
+    Ok(())
+}
 /// Records incoming transactions until we reach the block timeout.
 /// Afterwards:
 /// - Shutdown the record receiver
@@ -453,14 +473,8 @@ fn record_and_complete_block(
     }
 
     // Shutdown and clear any inflight records
-    record_receiver.shutdown();
-    for record in record_receiver.drain() {
-        poh_recorder.write().unwrap().record(
-            record.bank_id,
-            record.mixins,
-            record.transaction_batches,
-        )?;
-    }
+    // TODO: do we need to lower the block timeout from 400ms to account for this / insertion of the block footer
+    shutdown_and_drain_record_receiver(poh_recorder, record_receiver)?;
 
     // Construct and send the block footer
     let mut w_poh_recorder = poh_recorder.write().unwrap();
