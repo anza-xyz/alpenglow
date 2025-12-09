@@ -2634,7 +2634,6 @@ impl ReplayStage {
 
     #[allow(clippy::too_many_arguments)]
     fn replay_blockstore_into_bank(
-        bank_forks: &RwLock<BankForks>,
         bank: &BankWithScheduler,
         blockstore: &Blockstore,
         replay_tx_thread_pool: &ThreadPool,
@@ -2655,7 +2654,6 @@ impl ReplayStage {
         // the `check_slot_agrees_with_cluster()` called by `replay_active_banks()`
         // will break!
         blockstore_processor::confirm_slot(
-            bank_forks,
             blockstore,
             bank,
             replay_tx_thread_pool,
@@ -3388,7 +3386,6 @@ impl ReplayStage {
                         let mut replay_blockstore_time =
                             Measure::start("replay_blockstore_into_bank");
                         let blockstore_result = Self::replay_blockstore_into_bank(
-                            bank_forks,
                             &bank,
                             blockstore,
                             replay_tx_thread_pool,
@@ -3480,7 +3477,6 @@ impl ReplayStage {
             if bank.collector_id() != my_pubkey {
                 let mut replay_blockstore_time = Measure::start("replay_blockstore_into_bank");
                 let blockstore_result = Self::replay_blockstore_into_bank(
-                    bank_forks,
                     &bank,
                     blockstore,
                     replay_tx_thread_pool,
@@ -5760,7 +5756,6 @@ pub(crate) mod tests {
                 .build()
                 .expect("new rayon threadpool");
             let res = ReplayStage::replay_blockstore_into_bank(
-                &bank_forks,
                 &bank1,
                 &blockstore,
                 &replay_tx_thread_pool,
@@ -9881,7 +9876,6 @@ pub(crate) mod tests {
             .expect("new rayon threadpool");
 
         process_bank_0(
-            &bank_forks,
             &bank0,
             &blockstore,
             &replay_tx_thread_pool,
@@ -9905,7 +9899,6 @@ pub(crate) mod tests {
             1,
         ));
         confirm_full_slot(
-            &bank_forks,
             &blockstore,
             &bank1,
             &replay_tx_thread_pool,

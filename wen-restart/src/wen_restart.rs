@@ -640,7 +640,6 @@ pub(crate) fn find_bankhash_of_heaviest_fork(
         } else {
             let mut progress = ConfirmationProgress::new(parent_bank.last_blockhash());
             if let Err(e) = process_single_slot(
-                &bank_forks,
                 &blockstore,
                 &bank_with_scheduler,
                 &replay_tx_thread_pool,
@@ -2024,7 +2023,6 @@ mod tests {
             .unwrap()
             .insert_from_ledger(new_root_bank);
         if let Err(e) = process_single_slot(
-            &test_state.bank_forks,
             &test_state.blockstore,
             &bank_with_scheduler,
             &replay_tx_thread_pool,
