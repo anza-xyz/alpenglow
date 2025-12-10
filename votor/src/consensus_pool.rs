@@ -207,8 +207,7 @@ impl ConsensusPool {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let ((limit_num, limit_denom), vote_types) =
-                certificate_limits_and_vote_types(&cert_type);
+            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_type);
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
@@ -224,7 +223,7 @@ impl ConsensusPool {
                 })
                 .sum::<Stake>();
 
-            if fraction_less_than((accumulated_stake, total_stake), (limit_num, limit_denom)) {
+            if fraction_less_than((accumulated_stake, total_stake), limit) {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
