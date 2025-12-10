@@ -1,7 +1,7 @@
 use {
     crate::{
         common::{
-            Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+            fraction_greater_than_or_equal_to, Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
             SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
             SAFE_TO_SKIP_THRESHOLD,
         },
@@ -94,10 +94,26 @@ impl SlotStakeCounters {
         let notarized_ratio = *stake as f64 / self.total_stake as f64;
         trace!("safe_to_notar {block_id:?} {skip_ratio} {notarized_ratio}");
         // Check if the block fits condition (i) 40% of stake holders voted notarize
-        notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
-            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-            || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
-                && notarized_ratio + skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP)
+        let notarized_ratio = (*stake, self.total_stake);
+        let notarized_plus_skip_ratio = (
+            // UNWRAP: the total stake shouldn't overflow a u64
+            self.skip_total.checked_add(*stake).unwrap(),
+            self.total_stake,
+        );
+
+        let a = fraction_greater_than_or_equal_to(notarized_ratio, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY);
+        let b = fraction_greater_than_or_equal_to(
+            notarized_ratio,
+            SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
+        );
+        let c = fraction_greater_than_or_equal_to(
+            notarized_plus_skip_ratio,
+            SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+        );
+
+        a ||
+        // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+        (b && c)
     }
 
     fn is_safe_to_skip(&self) -> bool {
@@ -113,11 +129,12 @@ impl SlotStakeCounters {
                 self.notarize_total,
                 self.top_notarized_stake
             );
-            self.skip_total
-                .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake))
-                as f64
-                / self.total_stake as f64
-                >= SAFE_TO_SKIP_THRESHOLD
+
+            let num_stake = self
+                .skip_total
+                .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake));
+
+            fraction_greater_than_or_equal_to((num_stake, self.total_stake), SAFE_TO_SKIP_THRESHOLD)
         } else {
             false
         }

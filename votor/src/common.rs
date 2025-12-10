@@ -37,16 +37,64 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
 /// Must be in sync with `vote_to_cert_types`
 pub const fn certificate_limits_and_vote_types(
     cert_type: &CertificateType,
-) -> (f64, &'static [VoteType]) {
+) -> ((u64, u64), &'static [VoteType]) {
     match cert_type {
-        CertificateType::Notarize(_, _) => (0.6, &[VoteType::Notarize]),
+        CertificateType::Notarize(_, _) => ((3, 5), &[VoteType::Notarize]),
         CertificateType::NotarizeFallback(_, _) => {
-            (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
+            ((3, 5), &[VoteType::Notarize, VoteType::NotarizeFallback])
         }
-        CertificateType::FinalizeFast(_, _) => (0.8, &[VoteType::Notarize]),
-        CertificateType::Finalize(_) => (0.6, &[VoteType::Finalize]),
-        CertificateType::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+        CertificateType::FinalizeFast(_, _) => ((4, 5), &[VoteType::Notarize]),
+        CertificateType::Finalize(_) => ((3, 5), &[VoteType::Finalize]),
+        CertificateType::Skip(_) => ((3, 5), &[VoteType::Skip, VoteType::SkipFallback]),
         CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
+    }
+}
+
+fn bowtie(lhs: (u64, u64), rhs: (u64, u64)) -> Option<(u128, u128)> {
+    let (lhs_num, lhs_denom) = lhs;
+    let (rhs_num, rhs_denom) = rhs;
+
+    if lhs_denom == 0 || rhs_denom == 0 {
+        return None;
+    }
+
+    // UNWRAP: the values being multipled in both cases are u64, so casting to u128 and storing as
+    // u128 will not overflow.
+    let ret_lhs = (lhs_num as u128).checked_mul(rhs_denom as u128).unwrap();
+    let ret_rhs = (rhs_num as u128).checked_mul(lhs_denom as u128).unwrap();
+
+    Some((ret_lhs, ret_rhs))
+}
+
+#[inline]
+pub fn fraction_less_than(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
+    match bowtie(lhs, rhs) {
+        Some((lhs, rhs)) => lhs < rhs,
+        None => false,
+    }
+}
+
+#[inline]
+pub fn fraction_less_than_or_equal_to(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
+    match bowtie(lhs, rhs) {
+        Some((lhs, rhs)) => lhs <= rhs,
+        None => false,
+    }
+}
+
+#[inline]
+pub fn fraction_greater_than(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
+    match bowtie(lhs, rhs) {
+        Some((lhs, rhs)) => lhs > rhs,
+        None => false,
+    }
+}
+
+#[inline]
+pub fn fraction_greater_than_or_equal_to(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
+    match bowtie(lhs, rhs) {
+        Some((lhs, rhs)) => lhs >= rhs,
+        None => false,
     }
 }
 
@@ -73,11 +121,11 @@ pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
 
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: f64 = 0.4;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: (u64, u64) = (2, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: (u64, u64) = (1, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: (u64, u64) = (3, 5);
 
-pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
+pub const SAFE_TO_SKIP_THRESHOLD: (u64, u64) = (2, 5);
 
 /// Time bound assumed on network transmission delays during periods of synchrony.
 pub(crate) const DELTA: Duration = Duration::from_millis(250);

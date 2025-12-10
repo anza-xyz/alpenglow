@@ -2,8 +2,9 @@ use {
     crate::{
         commitment::CommitmentError,
         common::{
-            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Stake,
-            MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            certificate_limits_and_vote_types, conflicting_types, fraction_less_than,
+            vote_to_cert_types, Stake, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
@@ -206,7 +207,8 @@ impl ConsensusPool {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_type);
+            let ((limit_num, limit_denom), vote_types) =
+                certificate_limits_and_vote_types(&cert_type);
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
@@ -221,7 +223,8 @@ impl ConsensusPool {
                     })
                 })
                 .sum::<Stake>();
-            if accumulated_stake as f64 / (total_stake as f64) < limit {
+
+            if fraction_less_than((accumulated_stake, total_stake), (limit_num, limit_denom)) {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
