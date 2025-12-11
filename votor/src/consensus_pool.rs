@@ -2,8 +2,8 @@ use {
     crate::{
         commitment::CommitmentError,
         common::{
-            certificate_limits_and_vote_types, conflicting_types, fraction_less_than,
-            vote_to_cert_types, Stake, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Fraction,
+            Stake, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
             MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
@@ -223,7 +223,7 @@ impl ConsensusPool {
                 })
                 .sum::<Stake>();
 
-            if fraction_less_than((accumulated_stake, total_stake), limit) {
+            if Fraction::new(accumulated_stake, total_stake) < limit {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);

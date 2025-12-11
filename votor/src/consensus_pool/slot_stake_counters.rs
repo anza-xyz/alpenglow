@@ -1,7 +1,7 @@
 use {
     crate::{
         common::{
-            fraction_greater_than_or_equal_to, Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+            Fraction, Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
             SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
             SAFE_TO_SKIP_THRESHOLD,
         },
@@ -94,22 +94,16 @@ impl SlotStakeCounters {
         let notarized_ratio = *stake as f64 / self.total_stake as f64;
         trace!("safe_to_notar {block_id:?} {skip_ratio} {notarized_ratio}");
         // Check if the block fits condition (i) 40% of stake holders voted notarize
-        let notarized_ratio = (*stake, self.total_stake);
-        let notarized_plus_skip_ratio = (
+        let notarized_ratio = Fraction::new(*stake, self.total_stake);
+        let notarized_plus_skip_ratio = Fraction::new(
             // UNWRAP: the total stake shouldn't overflow a u64
             self.skip_total.checked_add(*stake).unwrap(),
             self.total_stake,
         );
 
-        let a = fraction_greater_than_or_equal_to(notarized_ratio, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY);
-        let b = fraction_greater_than_or_equal_to(
-            notarized_ratio,
-            SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP,
-        );
-        let c = fraction_greater_than_or_equal_to(
-            notarized_plus_skip_ratio,
-            SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
-        );
+        let a = notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY;
+        let b = notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP;
+        let c = notarized_plus_skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP;
 
         a ||
         // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
@@ -134,7 +128,7 @@ impl SlotStakeCounters {
                 .skip_total
                 .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake));
 
-            fraction_greater_than_or_equal_to((num_stake, self.total_stake), SAFE_TO_SKIP_THRESHOLD)
+            Fraction::new(num_stake, self.total_stake) >= SAFE_TO_SKIP_THRESHOLD
         } else {
             false
         }

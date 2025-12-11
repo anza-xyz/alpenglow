@@ -37,64 +37,65 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
 /// Must be in sync with `vote_to_cert_types`
 pub const fn certificate_limits_and_vote_types(
     cert_type: &CertificateType,
-) -> ((u64, u64), &'static [VoteType]) {
+) -> (Fraction, &'static [VoteType]) {
     match cert_type {
-        CertificateType::Notarize(_, _) => ((3, 5), &[VoteType::Notarize]),
-        CertificateType::NotarizeFallback(_, _) => {
-            ((3, 5), &[VoteType::Notarize, VoteType::NotarizeFallback])
+        CertificateType::Notarize(_, _) => (Fraction::new(3, 5), &[VoteType::Notarize]),
+        CertificateType::NotarizeFallback(_, _) => (
+            Fraction::new(3, 5),
+            &[VoteType::Notarize, VoteType::NotarizeFallback],
+        ),
+        CertificateType::FinalizeFast(_, _) => (Fraction::new(4, 5), &[VoteType::Notarize]),
+        CertificateType::Finalize(_) => (Fraction::new(3, 5), &[VoteType::Finalize]),
+        CertificateType::Skip(_) => (
+            Fraction::new(3, 5),
+            &[VoteType::Skip, VoteType::SkipFallback],
+        ),
+        CertificateType::Genesis(_, _) => (
+            Fraction::from_tuple(GENESIS_VOTE_THRESHOLD),
+            &[VoteType::Genesis],
+        ),
+    }
+}
+
+/// Numerator / denominator, with denominator != 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fraction {
+    pub numerator: u64,
+    pub denominator: u64,
+}
+
+impl Fraction {
+    #[inline]
+    pub const fn new(numerator: u64, denominator: u64) -> Self {
+        debug_assert!(denominator != 0);
+        Self {
+            numerator,
+            denominator,
         }
-        CertificateType::FinalizeFast(_, _) => ((4, 5), &[VoteType::Notarize]),
-        CertificateType::Finalize(_) => ((3, 5), &[VoteType::Finalize]),
-        CertificateType::Skip(_) => ((3, 5), &[VoteType::Skip, VoteType::SkipFallback]),
-        CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
+    }
+
+    #[inline]
+    pub const fn from_tuple((numerator, denominator): (u64, u64)) -> Self {
+        Self::new(numerator, denominator)
     }
 }
 
-fn bowtie(lhs: (u64, u64), rhs: (u64, u64)) -> Option<(u128, u128)> {
-    let (lhs_num, lhs_denom) = lhs;
-    let (rhs_num, rhs_denom) = rhs;
-
-    if lhs_denom == 0 || rhs_denom == 0 {
-        return None;
-    }
-
-    // UNWRAP: the values being multipled in both cases are u64, so casting to u128 and storing as
-    // u128 will not overflow.
-    let ret_lhs = (lhs_num as u128).checked_mul(rhs_denom as u128).unwrap();
-    let ret_rhs = (rhs_num as u128).checked_mul(lhs_denom as u128).unwrap();
-
-    Some((ret_lhs, ret_rhs))
-}
-
-#[inline]
-pub fn fraction_less_than(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
-    match bowtie(lhs, rhs) {
-        Some((lhs, rhs)) => lhs < rhs,
-        None => false,
+impl PartialOrd for Fraction {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
-#[inline]
-pub fn fraction_less_than_or_equal_to(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
-    match bowtie(lhs, rhs) {
-        Some((lhs, rhs)) => lhs <= rhs,
-        None => false,
-    }
-}
-
-#[inline]
-pub fn fraction_greater_than(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
-    match bowtie(lhs, rhs) {
-        Some((lhs, rhs)) => lhs > rhs,
-        None => false,
-    }
-}
-
-#[inline]
-pub fn fraction_greater_than_or_equal_to(lhs: (u64, u64), rhs: (u64, u64)) -> bool {
-    match bowtie(lhs, rhs) {
-        Some((lhs, rhs)) => lhs >= rhs,
-        None => false,
+impl Ord for Fraction {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Bowtie method to avoid division
+        let lhs = (self.numerator as u128)
+            .checked_mul(other.denominator as u128)
+            .unwrap();
+        let rhs = (other.numerator as u128)
+            .checked_mul(self.denominator as u128)
+            .unwrap();
+        lhs.cmp(&rhs)
     }
 }
 
@@ -121,11 +122,11 @@ pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
 
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: (u64, u64) = (2, 5);
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: (u64, u64) = (1, 5);
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: (u64, u64) = (3, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: Fraction = Fraction::new(2, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: Fraction = Fraction::new(1, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: Fraction = Fraction::new(3, 5);
 
-pub const SAFE_TO_SKIP_THRESHOLD: (u64, u64) = (2, 5);
+pub const SAFE_TO_SKIP_THRESHOLD: Fraction = Fraction::new(2, 5);
 
 /// Time bound assumed on network transmission delays during periods of synchrony.
 pub(crate) const DELTA: Duration = Duration::from_millis(250);
