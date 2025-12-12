@@ -186,7 +186,8 @@ impl ConsensusRewards {
         match self.votes.get(&slot) {
             None => (None, None),
             Some(entry) => {
-                let (skip, notar) = entry.build_certs(slot);
+                let skip = entry.build_skip_cert(slot);
+                let notar = entry.build_notar_cert(slot);
                 let skip = match skip {
                     Ok(s) => s,
                     Err(e) => {

@@ -22,6 +22,8 @@ pub(super) enum AddVoteError {
     Duplicate,
     #[error("BLS error: {0}")]
     Bls(#[from] BlsError),
+    #[error("Encoding failed: {0:?}")]
+    Encode(EncodeError),
 }
 
 /// Different types of errors that can be returned from building reward certs.
@@ -31,8 +33,8 @@ pub(super) enum BuildCertError {
     Encode(EncodeError),
 }
 
-/// Struct to hold state for building a single reward cert.
-struct PartialCert {
+/// State for when we have not seen votes from all validators.
+struct InProgressState {
     /// In progress signature aggregate.
     signature: SignatureProjective,
     /// bitvec of ranks whose signatures is included in the aggregate above.
@@ -43,38 +45,73 @@ struct PartialCert {
     cnt: usize,
 }
 
+/// State for when we have seen votes from all the validators so we can build the certificate already.
+struct DoneState {
+    /// The final aggregate signature.
+    signature: BLSSignature,
+    /// Bitmap of rank of validators included in the aggregate above.
+    bitmap: Vec<u8>,
+    /// max number of validators for this slot.
+    max_validators: usize,
+}
+
+/// Struct to hold state for building a single reward cert.
+enum PartialCert {
+    /// Variant for when we have not seen votes from all validators.
+    InProgress(InProgressState),
+    /// Variant for when we have seen votes from all the validators.
+    Done(DoneState),
+}
+
 impl PartialCert {
     /// Returns a new instance of [`PartialCert`].
-    fn new(max_validator: usize) -> Self {
-        Self {
+    fn new(max_validators: usize) -> Self {
+        let state = InProgressState {
             signature: SignatureProjective::identity(),
-            bitvec: BitVec::repeat(false, max_validator),
+            bitvec: BitVec::repeat(false, max_validators),
             max_rank: 0,
             cnt: 0,
-        }
+        };
+        Self::InProgress(state)
     }
 
     /// Returns true if the [`PartialCert`] needs the vote else false.
     fn wants_vote(&self, vote: &VoteMessage) -> bool {
-        match self.bitvec.get(vote.rank as usize) {
-            None => false,
-            Some(ind) => !*ind,
+        match self {
+            Self::Done(_) => false,
+            Self::InProgress(state) => match state.bitvec.get(vote.rank as usize) {
+                None => false,
+                Some(ind) => !*ind,
+            },
         }
     }
 
     /// Adds the given [`VoteMessage`] to the aggregate.
     fn add_vote(&mut self, vote: &VoteMessage) -> Result<(), AddVoteError> {
-        match self.bitvec.get_mut(vote.rank as usize) {
-            None => Err(AddVoteError::InvalidRank),
-            Some(mut ind) => {
-                if *ind {
-                    return Err(AddVoteError::Duplicate);
+        match self {
+            Self::Done(_) => Err(AddVoteError::Duplicate),
+            Self::InProgress(state) => {
+                match state.bitvec.get_mut(vote.rank as usize) {
+                    None => return Err(AddVoteError::InvalidRank),
+                    Some(mut ind) => {
+                        if *ind {
+                            return Err(AddVoteError::Duplicate);
+                        }
+                        state
+                            .signature
+                            .aggregate_with(std::iter::once(&vote.signature))?;
+                        *ind = true;
+                    }
                 }
-                self.signature
-                    .aggregate_with(std::iter::once(&vote.signature))?;
-                *ind = true;
-                self.max_rank = std::cmp::max(self.max_rank, vote.rank);
-                self.cnt = self.cnt.saturating_add(1);
+                state.max_rank = std::cmp::max(state.max_rank, vote.rank);
+                state.cnt = state.cnt.saturating_add(1);
+                if state.cnt == state.bitvec.len() {
+                    *self = Self::Done(DoneState {
+                        signature: state.signature.into(),
+                        bitmap: encode_base2(&state.bitvec).map_err(AddVoteError::Encode)?,
+                        max_validators: state.bitvec.len(),
+                    });
+                }
                 Ok(())
             }
         }
@@ -84,13 +121,26 @@ impl PartialCert {
     ///
     /// Returns Ok(None) if no votes were collected.
     fn build_sig_bitmap(&self) -> Result<Option<(BLSSignature, Vec<u8>)>, BuildCertError> {
-        if self.cnt == 0 {
-            return Ok(None);
+        match self {
+            Self::Done(state) => Ok(Some((state.signature, state.bitmap.clone()))),
+            Self::InProgress(state) => {
+                if state.cnt == 0 {
+                    return Ok(None);
+                }
+                let mut bitvec = state.bitvec.clone();
+                bitvec.resize(state.max_rank as usize, false);
+                let bitmap = encode_base2(&bitvec).map_err(BuildCertError::Encode)?;
+                Ok(Some((state.signature.into(), bitmap)))
+            }
         }
-        let mut bitvec = self.bitvec.clone();
-        bitvec.resize(self.max_rank as usize, false);
-        let bitmap = encode_base2(&bitvec).map_err(BuildCertError::Encode)?;
-        Ok(Some((self.signature.into(), bitmap)))
+    }
+
+    /// Returns how many votes have been seen.
+    fn votes_seen(&self) -> usize {
+        match self {
+            Self::InProgress(state) => state.cnt,
+            Self::Done(state) => state.max_validators,
+        }
     }
 }
 
@@ -144,22 +194,25 @@ impl Entry {
         }
     }
 
-    /// Builds skip and notar reward certificates from the collected votes.
-    pub(super) fn build_certs(
+    /// Builds a skip reward certificate from the collected votes.
+    pub(super) fn build_skip_cert(
         &self,
         slot: Slot,
-    ) -> (
-        Result<Option<SkipRewardCertificate>, BuildCertError>,
-        Result<Option<NotarRewardCertificate>, BuildCertError>,
-    ) {
-        let skip = self.skip.build_sig_bitmap().map(|r| {
+    ) -> Result<Option<SkipRewardCertificate>, BuildCertError> {
+        self.skip.build_sig_bitmap().map(|r| {
             r.map(|(signature, bitmap)| SkipRewardCertificate {
                 slot,
                 signature,
                 bitmap,
             })
-        });
+        })
+    }
 
+    /// Builds a notar reward certificate from the collected votes.
+    pub(super) fn build_notar_cert(
+        &self,
+        slot: Slot,
+    ) -> Result<Option<NotarRewardCertificate>, BuildCertError> {
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
         // pick the block_id with most votes.
         let mut notar = None;
@@ -167,13 +220,13 @@ impl Entry {
             match notar {
                 None => notar = Some((block_id, sub_entry)),
                 Some((_, max_sub_entry)) => {
-                    if sub_entry.cnt > max_sub_entry.cnt {
+                    if sub_entry.votes_seen() > max_sub_entry.votes_seen() {
                         notar = Some((block_id, sub_entry));
                     }
                 }
             }
         }
-        let notar = match notar {
+        match notar {
             None => Ok(None),
             Some((block_id, sub_entry)) => sub_entry.build_sig_bitmap().map(|r| {
                 r.map(|(signature, bitmap)| NotarRewardCertificate {
@@ -183,7 +236,6 @@ impl Entry {
                     bitmap,
                 })
             }),
-        };
-        (skip, notar)
+        }
     }
 }
