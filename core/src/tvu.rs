@@ -690,6 +690,8 @@ pub mod tests {
         let (votor_event_sender, votor_event_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::default());
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
+        let (reward_certs_sender, _reward_certs_receiver) = bounded(1);
+        let (_build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -769,6 +771,8 @@ pub mod tests {
             Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),
             Arc::new(MigrationStatus::default()),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {

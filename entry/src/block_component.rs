@@ -604,6 +604,8 @@ mod tests {
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"test-agent".to_vec(),
             final_cert: Some(FinalCertificate::new_for_tests()),
+            skip_reward_certificate: Some(SkipRewardCertificate::new_for_tests()),
+            notar_reward_certificate: Some(NotarRewardCertificate::new_for_tests()),
         }
     }
 

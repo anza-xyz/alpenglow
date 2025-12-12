@@ -1,5 +1,7 @@
-//! Defines aggregates used for rewards.
+//! Defines aggregates used for vote rewards.
 
+#[cfg(feature = "dev-context-only-utils")]
+use solana_bls_signatures::keypair::Keypair as BLSKeypair;
 use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
@@ -21,6 +23,20 @@ pub struct SkipRewardCertificate {
     pub bitmap: Vec<u8>,
 }
 
+impl SkipRewardCertificate {
+    /// Creates a new [`SkipRewardCertificate`] for test purposes.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_for_tests() -> Self {
+        let bls_keypair = BLSKeypair::new();
+        let signature = bls_keypair.sign(b"hello").into();
+        Self {
+            slot: 1234,
+            signature,
+            bitmap: vec![],
+        }
+    }
+}
+
 /// Reward certificate for the validators that voted notar.
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
 pub struct NotarRewardCertificate {
@@ -34,4 +50,19 @@ pub struct NotarRewardCertificate {
     pub signature: BLSSignature,
     /// The bitmap for validators, see solana-signer-store for encoding format
     pub bitmap: Vec<u8>,
+}
+
+impl NotarRewardCertificate {
+    /// Creates a new [`NotarRewardCertificate`] for test purposes.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_for_tests() -> Self {
+        let bls_keypair = BLSKeypair::new();
+        let signature = bls_keypair.sign(b"hello").into();
+        Self {
+            slot: 1234,
+            block_id: Hash::new_unique(),
+            signature,
+            bitmap: vec![],
+        }
+    }
 }
