@@ -433,7 +433,30 @@ fn produce_block_footer(
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
         skip_reward_certificate,
         notar_reward_certificate,
+        // TODO(ksn, wen): fill this field
+        final_cert: None,
     }
+}
+
+/// Shutdowns the record receiver and drains any remaining records.
+fn shutdown_and_drain_record_receiver(
+    poh_recorder: &RwLock<PohRecorder>,
+    record_receiver: &mut RecordReceiver,
+) -> Result<(), PohRecorderError> {
+    record_receiver.shutdown();
+
+    while !record_receiver.is_safe_to_restart() {
+        let Ok(record) = record_receiver.recv_timeout(Duration::ZERO) else {
+            continue;
+        };
+        poh_recorder.write().unwrap().record(
+            record.slot,
+            record.mixins,
+            record.transaction_batches,
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Records incoming transactions until we reach the block timeout.
@@ -475,17 +498,7 @@ fn record_and_complete_block(
 
     // Shutdown and clear any inflight records
     // TODO: do we need to lower the block timeout from 400ms to account for this / insertion of the block footer
-    record_receiver.shutdown();
-    while !record_receiver.is_safe_to_restart() {
-        let Ok(record) = record_receiver.recv_timeout(Duration::ZERO) else {
-            continue;
-        };
-        poh_recorder.write().unwrap().record(
-            record.slot,
-            record.mixins,
-            record.transaction_batches,
-        )?;
-    }
+    shutdown_and_drain_record_receiver(poh_recorder, record_receiver)?;
 
     // Alpentick and clear bank
     let mut w_poh_recorder = poh_recorder.write().unwrap();

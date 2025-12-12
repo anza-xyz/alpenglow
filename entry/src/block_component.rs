@@ -74,6 +74,36 @@
 /// │ User Agent Length            (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ User Agent Bytes          (0-255 bytes) │
+/// ├─────────────────────────────────────────┤
+/// │ Final Cert Present           (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ FinalCertificate (if present, variable) │
+/// └─────────────────────────────────────────┘
+/// ```
+///
+/// ### FinalCertificate Layout
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ Slot                         (8 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Block ID                    (32 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Final Aggregate (VotesAggregate)        │
+/// ├─────────────────────────────────────────┤
+/// │ Notar Aggregate Present      (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ Notar Aggregate (if present)            │
+/// └─────────────────────────────────────────┘
+/// ```
+///
+/// ### VotesAggregate Layout
+/// ```text
+/// ┌─────────────────────────────────────────┐
+/// │ BLS Signature Compressed    (96 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap Length                (2 bytes)  │
+/// ├─────────────────────────────────────────┤
+/// │ Bitmap                    (variable)    │
 /// └─────────────────────────────────────────┘
 /// ```
 ///
@@ -93,7 +123,9 @@
 /// ```
 use {
     crate::entry::Entry,
-    solana_bls_signatures::Signature as BLSSignature,
+    solana_bls_signatures::{
+        Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
+    },
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::{
@@ -128,6 +160,28 @@ impl SeqLen for U8Len {
 
     fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
         Ok(1)
+    }
+}
+
+/// 2-byte length prefix (max 65535 elements).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct U16Len;
+
+impl SeqLen for U16Len {
+    fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
+        u16::get(reader).map(|len| len as usize)
+    }
+
+    fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
+        let Ok(len): Result<u16, _> = len.try_into() else {
+            return Err(write_length_encoding_overflow("u16::MAX"));
+        };
+        writer.write(&len.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
+        Ok(2)
     }
 }
 
@@ -216,6 +270,7 @@ pub struct BlockFooterV1 {
     pub block_user_agent: Vec<u8>,
     pub skip_reward_certificate: Option<SkipRewardCertificate>,
     pub notar_reward_certificate: Option<NotarRewardCertificate>,
+    pub final_cert: Option<FinalCertificate>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
@@ -280,6 +335,38 @@ impl From<GenesisCertificate> for Certificate {
             bitmap: cert.bitmap,
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
+pub struct FinalCertificate {
+    pub slot: Slot,
+    #[wincode(with = "Pod<Hash>")]
+    pub block_id: Hash,
+    pub final_aggregate: VotesAggregate,
+    pub notar_aggregate: Option<VotesAggregate>,
+}
+
+impl FinalCertificate {
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn new_for_tests() -> FinalCertificate {
+        FinalCertificate {
+            slot: 1234567890,
+            block_id: Hash::new_from_array([1u8; 32]),
+            final_aggregate: VotesAggregate {
+                signature: BLSSignatureCompressed::default(),
+                bitmap: vec![42; 64],
+            },
+            notar_aggregate: None,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, SchemaRead, SchemaWrite)]
+pub struct VotesAggregate {
+    #[wincode(with = "Pod<BLSSignatureCompressed>")]
+    signature: BLSSignatureCompressed,
+    #[wincode(with = "WincodeVec<u8, U16Len>")]
+    bitmap: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
@@ -505,24 +592,19 @@ impl<'de> SchemaRead<'de> for BlockComponent {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::block_component as v1, std::iter::repeat_n};
+    use {super::*, std::iter::repeat_n};
 
     fn mock_entries(n: usize) -> Vec<Entry> {
         repeat_n(Entry::default(), n).collect()
     }
 
-    fn sample_footer() -> (v1::BlockFooterV1, BlockFooterV1) {
-        let v1 = v1::BlockFooterV1 {
+    fn sample_footer() -> BlockFooterV1 {
+        BlockFooterV1 {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"test-agent".to_vec(),
-        };
-        let v2 = BlockFooterV1 {
-            bank_hash: v1.bank_hash,
-            block_producer_time_nanos: v1.block_producer_time_nanos,
-            block_user_agent: v1.block_user_agent.clone(),
-        };
-        (v1, v2)
+            final_cert: Some(FinalCertificate::new_for_tests()),
+        }
     }
 
     #[test]
@@ -537,7 +619,7 @@ mod tests {
             wincode::deserialize::<BlockHeaderV1>(&bytes).unwrap()
         );
 
-        let (_, footer) = sample_footer();
+        let footer = sample_footer();
         let bytes = wincode::serialize(&footer).unwrap();
         assert_eq!(
             footer,
