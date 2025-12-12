@@ -70,13 +70,13 @@ pub const MIGRATION_SLOT_OFFSET: Slot = 5000;
 pub const MIGRATION_SLOT_OFFSET: Slot = 32;
 
 /// We match Alpenglow's 20 + 20 model, by allowing a maximum of 20% malicious stake during the migration.
-pub const MIGRATION_MALICIOUS_THRESHOLD: (u64, u64) = (1, 5);
+pub const MIGRATION_MALICIOUS_THRESHOLD: u64 = 20;
 
 /// In order to rollback a block eligible for genesis vote, we need:
 /// `SWITCH_FORK_THRESHOLD` - (1 - `GENESIS_VOTE_THRESHOLD`) = `MIGRATION_MALICIOUS_THRESHOLD` malicious stake.
 ///
 /// Using 38% as the `SWITCH_FORK_THRESHOLD` gives us 82% for `GENESIS_VOTE_THRESHOLD`.
-pub const GENESIS_VOTE_THRESHOLD: (u64, u64) = (82, 100);
+pub const GENESIS_VOTE_THRESHOLD: u64 = 82;
 
 /// The interval at which we refresh our genesis vote
 pub const GENESIS_VOTE_REFRESH: Duration = Duration::from_millis(400);
@@ -516,8 +516,7 @@ impl MigrationStatus {
             .map(|b| *b != (slot, block_id))
             .unwrap_or(true)
         {
-            let (num, denom) = GENESIS_VOTE_THRESHOLD;
-            let genesis_vote_thresh_f64 = num as f64 / denom as f64;
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD as f64 / 100.0;
             panic!(
                 "{}: We wish to cast a genesis vote on {discovered_genesis_block:?}, however we \
                  have received a genesis certificate for ({slot}, {block_id}). This means there \
@@ -568,8 +567,7 @@ impl MigrationStatus {
             return;
         };
         if *genesis_block != (slot, block_id) {
-            let (num, denom) = GENESIS_VOTE_THRESHOLD;
-            let genesis_vote_thresh_f64 = num as f64 / denom as f64;
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD as f64 / 100.0;
             panic!(
                 "{}: We cast a genesis vote on {genesis_block:?}, however we have received a \
                  genesis certificate for ({slot}, {block_id}). This means there is significant \

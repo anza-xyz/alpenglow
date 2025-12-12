@@ -2,9 +2,8 @@ use {
     crate::{
         commitment::CommitmentError,
         common::{
-            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Fraction,
-            Stake, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
-            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Stake,
+            MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
@@ -13,6 +12,7 @@ use {
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool},
         },
         event::VotorEvent,
+        fraction::Fraction,
     },
     certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
     log::{error, trace},
@@ -222,7 +222,6 @@ impl ConsensusPool {
                     })
                 })
                 .sum::<Stake>();
-
             if Fraction::new(accumulated_stake, total_stake) < limit {
                 continue;
             }

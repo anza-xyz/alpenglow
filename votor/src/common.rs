@@ -1,4 +1,5 @@
 use {
+    crate::fraction::Fraction,
     solana_votor_messages::{
         consensus_message::CertificateType,
         migration::GENESIS_VOTE_THRESHOLD,
@@ -39,63 +40,23 @@ pub const fn certificate_limits_and_vote_types(
     cert_type: &CertificateType,
 ) -> (Fraction, &'static [VoteType]) {
     match cert_type {
-        CertificateType::Notarize(_, _) => (Fraction::new(3, 5), &[VoteType::Notarize]),
+        CertificateType::Notarize(_, _) => (Fraction::from_percentage(60), &[VoteType::Notarize]),
         CertificateType::NotarizeFallback(_, _) => (
-            Fraction::new(3, 5),
+            Fraction::from_percentage(60),
             &[VoteType::Notarize, VoteType::NotarizeFallback],
         ),
-        CertificateType::FinalizeFast(_, _) => (Fraction::new(4, 5), &[VoteType::Notarize]),
-        CertificateType::Finalize(_) => (Fraction::new(3, 5), &[VoteType::Finalize]),
+        CertificateType::FinalizeFast(_, _) => {
+            (Fraction::from_percentage(80), &[VoteType::Notarize])
+        }
+        CertificateType::Finalize(_) => (Fraction::from_percentage(60), &[VoteType::Finalize]),
         CertificateType::Skip(_) => (
-            Fraction::new(3, 5),
+            Fraction::from_percentage(60),
             &[VoteType::Skip, VoteType::SkipFallback],
         ),
         CertificateType::Genesis(_, _) => (
-            Fraction::from_tuple(GENESIS_VOTE_THRESHOLD),
+            Fraction::from_percentage(GENESIS_VOTE_THRESHOLD),
             &[VoteType::Genesis],
         ),
-    }
-}
-
-/// Numerator / denominator, with denominator != 0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fraction {
-    pub numerator: u64,
-    pub denominator: u64,
-}
-
-impl Fraction {
-    #[inline]
-    pub const fn new(numerator: u64, denominator: u64) -> Self {
-        debug_assert!(denominator != 0);
-        Self {
-            numerator,
-            denominator,
-        }
-    }
-
-    #[inline]
-    pub const fn from_tuple((numerator, denominator): (u64, u64)) -> Self {
-        Self::new(numerator, denominator)
-    }
-}
-
-impl PartialOrd for Fraction {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Fraction {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Bowtie method to avoid division
-        let lhs = (self.numerator as u128)
-            .checked_mul(other.denominator as u128)
-            .unwrap();
-        let rhs = (other.numerator as u128)
-            .checked_mul(self.denominator as u128)
-            .unwrap();
-        lhs.cmp(&rhs)
     }
 }
 
@@ -122,11 +83,11 @@ pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
 
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: Fraction = Fraction::new(2, 5);
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: Fraction = Fraction::new(1, 5);
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: Fraction = Fraction::new(3, 5);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: Fraction = Fraction::from_percentage(40);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: Fraction = Fraction::from_percentage(20);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: Fraction = Fraction::from_percentage(60);
 
-pub const SAFE_TO_SKIP_THRESHOLD: Fraction = Fraction::new(2, 5);
+pub const SAFE_TO_SKIP_THRESHOLD: Fraction = Fraction::from_percentage(40);
 
 /// Time bound assumed on network transmission delays during periods of synchrony.
 pub(crate) const DELTA: Duration = Duration::from_millis(250);

@@ -1,12 +1,13 @@
 use {
     crate::{
         common::{
-            Fraction, Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
+            Stake, SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP,
             SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP, SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY,
             SAFE_TO_SKIP_THRESHOLD,
         },
         consensus_pool::stats::ConsensusPoolStats,
         event::VotorEvent,
+        fraction::Fraction,
     },
     solana_hash::Hash,
     solana_votor_messages::vote::Vote,
@@ -101,13 +102,10 @@ impl SlotStakeCounters {
             self.total_stake,
         );
 
-        let a = notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY;
-        let b = notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP;
-        let c = notarized_plus_skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP;
-
-        a ||
-        // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
-        (b && c)
+        notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
+            // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
+            || (notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP
+                && notarized_plus_skip_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP)
     }
 
     fn is_safe_to_skip(&self) -> bool {
