@@ -349,6 +349,7 @@ fn produce_window(
             &ctx.reward_certs_receiver,
             skip_timer,
             timeout,
+            slot,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -473,13 +474,11 @@ fn record_and_complete_block(
     cert_receiver: &Receiver<BuildRewardCertsResponse>,
     block_timer: Instant,
     block_timeout: Duration,
+    slot: Slot,
 ) -> Result<(), PohRecorderError> {
-    // XXX: how to look up the slot.
-    let slot = u64::MAX;
-    // XXX: handle error below.
     build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
-        .unwrap();
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
@@ -520,8 +519,9 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    /// XXX: handle error below
-    let resp = cert_receiver.recv().unwrap();
+    let resp = cert_receiver
+        .recv()
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let footer = produce_block_footer(
         working_bank.bank.clone_without_scheduler(),
         resp.skip,

@@ -82,7 +82,7 @@ impl PartialCert {
 
     /// Builds a signature and associated bitmap from the collected votes.
     ///
-    /// Returns Ok(None) if on votes were collected.
+    /// Returns Ok(None) if no votes were collected.
     fn build_sig_bitmap(&self) -> Result<Option<(BLSSignature, Vec<u8>)>, BuildCertError> {
         if self.cnt == 0 {
             return Ok(None);
