@@ -39,10 +39,7 @@ impl RepairHandler for StandardRepairHandler {
                 nonce,
             ),
             Some(block_id) => {
-                let location = self
-                    .blockstore()
-                    .get_block_location(slot, block_id)
-                    .expect("Unable to fetch block location from blockstore")?;
+                let location = self.blockstore().get_block_location(slot, block_id)?;
                 let shred = self
                     .blockstore()
                     .get_data_shred_from_location(slot, shred_index, location)

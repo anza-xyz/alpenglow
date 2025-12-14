@@ -174,16 +174,6 @@ pub mod columns {
     pub struct AlternateShredData;
 
     #[derive(Debug)]
-    /// The block versions
-    ///
-    /// This column stores information about what versions of blocks in `slot` we
-    /// have available, for use in serving repair or switching replayed banks
-    ///
-    /// * index type: `u64` (see [`SlotColumn`])
-    /// * value type: [`blockstore_meta::BlockVersions`]
-    pub struct BlockVersions;
-
-    #[derive(Debug)]
     /// The transaction status column
     ///
     /// * index type: `(`[`Signature`]`, `[`Slot`])`
@@ -780,14 +770,6 @@ impl Column for columns::AlternateShredData {
 }
 impl ColumnName for columns::AlternateShredData {
     const NAME: &'static str = "alt_data_shred";
-}
-
-impl SlotColumn for columns::BlockVersions {}
-impl ColumnName for columns::BlockVersions {
-    const NAME: &'static str = "block_versions";
-}
-impl TypedColumn for columns::BlockVersions {
-    type Type = blockstore_meta::BlockVersions;
 }
 
 impl SlotColumn for columns::Index {}

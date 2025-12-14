@@ -412,57 +412,11 @@ pub struct DuplicateSlotProof {
     pub shred2: shred::Payload,
 }
 
-#[derive(Deserialize, Serialize)]
-pub enum BlockStatus {
-    /// The block is being ingested, of the shreds received there are no conflicts
-    Incomplete,
-
-    /// We are unable to recover the block with the shreds ingested
-    Conflicting,
-
-    /// The block `block_id` has been fully ingested, has consistent shreds and is ready for replay
-    Complete { block_id: Hash },
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct BlockVersions {
-    /// The version that was ingested by turbine or TowerBFT repair
-    pub original_version: BlockStatus,
-    /// The versions that were requested by AG repair, populated during
-    /// catchup, safeToNotar, and by notarize-fallback certificates during duplicate block events.
-    /// In rare cases there can be overlap with the Turbine version, if for example we were heavily delayed
-    /// in the turbine ingest and ended up repairing the same block via a certificate condition.
-    pub alternate_versions: [(Hash, BlockStatus); 3],
-}
-
 /// Which column an associated block currently resides
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockLocation {
     Original,
     Alternate { block_id: Hash },
-}
-
-impl BlockVersions {
-    pub(crate) fn get_location(self, block_id: Hash) -> Option<BlockLocation> {
-        match self.original_version {
-            BlockStatus::Complete { block_id: bid } if bid == block_id => {
-                return Some(BlockLocation::Original);
-            }
-            _ => (),
-        };
-
-        self.alternate_versions
-            .into_iter()
-            .find_map(|(bid, block_status)| match block_status {
-                BlockStatus::Complete {
-                    block_id: status_bid,
-                } if status_bid == block_id => {
-                    assert!(bid == status_bid);
-                    Some(BlockLocation::Alternate { block_id })
-                }
-                _ => None,
-            })
-    }
 }
 
 impl Display for BlockLocation {
