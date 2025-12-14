@@ -655,10 +655,9 @@ impl Blockstore {
     pub fn get_parent_meta(
         &self,
         slot: Slot,
-        location: Option<BlockLocation>,
+        location: BlockLocation,
     ) -> Result<Option<ParentMeta>> {
-        self.parent_meta_cf
-            .get((slot, location.unwrap_or(BlockLocation::Original)))
+        self.parent_meta_cf.get((slot, location))
     }
 
     /// Returns true if the specified slot is full.
@@ -824,7 +823,7 @@ impl Blockstore {
         self.merkle_root_meta_cf.get(erasure_set.store_key())
     }
 
-    fn merkle_root_meta_from_location(
+    pub fn merkle_root_meta_from_location(
         &self,
         erasure_set: ErasureSetId,
         location: BlockLocation,
@@ -13232,7 +13231,7 @@ pub mod tests {
         assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(3));
 
         let parent_meta = blockstore
-            .get_parent_meta(10, Some(BlockLocation::Original))
+            .get_parent_meta(10, BlockLocation::Original)
             .unwrap()
             .unwrap();
         assert_eq!(parent_meta.parent_slot, 3);
