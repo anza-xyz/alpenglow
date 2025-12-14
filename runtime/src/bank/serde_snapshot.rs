@@ -120,6 +120,7 @@ mod tests {
             let mut bank_fields = bank2.get_fields_to_serialize();
             let versioned_epoch_stakes = mem::take(&mut bank_fields.versioned_epoch_stakes);
             let accounts_lt_hash = Some(bank_fields.accounts_lt_hash.clone().into());
+            let block_id = bank2.block_id();
             serde_snapshot::serialize_bank_snapshot_into(
                 &mut writer,
                 bank_fields,
@@ -131,6 +132,7 @@ mod tests {
                     obsolete_epoch_accounts_hash: None,
                     versioned_epoch_stakes,
                     accounts_lt_hash,
+                    block_id,
                 },
                 accounts_db.write_version.load(Ordering::Acquire),
             )
@@ -401,6 +403,7 @@ mod tests {
 
             let mut bank_fields = bank.get_fields_to_serialize();
             let versioned_epoch_stakes = std::mem::take(&mut bank_fields.versioned_epoch_stakes);
+            let block_id = bank.block_id();
             serde_snapshot::serialize_bank_snapshot_with(
                 serializer,
                 bank_fields,
@@ -414,6 +417,7 @@ mod tests {
                     obsolete_epoch_accounts_hash: Some(Hash::new_unique()),
                     versioned_epoch_stakes,
                     accounts_lt_hash: Some(AccountsLtHash(LtHash::identity()).into()),
+                    block_id,
                 },
                 u64::default(), // obsolete, formerly write_version
             )
