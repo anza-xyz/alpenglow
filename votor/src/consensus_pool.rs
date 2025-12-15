@@ -29,6 +29,7 @@ use {
     std::{
         cmp::Ordering,
         collections::{BTreeMap, HashMap},
+        num::NonZeroU64,
         sync::Arc,
     },
     thiserror::Error,
@@ -222,6 +223,7 @@ impl ConsensusPool {
                     })
                 })
                 .sum::<Stake>();
+            let total_stake = NonZeroU64::new(total_stake).unwrap();
             if Fraction::new(accumulated_stake, total_stake) < limit {
                 continue;
             }

@@ -46,6 +46,7 @@ use {
     std::{
         cmp::Ordering,
         collections::{HashMap, HashSet},
+        num::NonZeroU64,
         ops::{
             Bound::{Included, Unbounded},
             Deref,
@@ -508,7 +509,7 @@ impl Tower {
         }
 
         let parent_is_super_oc = bank_slot == parent_slot + 1
-            && Fraction::new(super_oc_stake, total_stake)
+            && Fraction::new(super_oc_stake, NonZeroU64::new(total_stake).unwrap())
                 > Fraction::from_percentage(GENESIS_VOTE_THRESHOLD);
 
         // TODO: populate_ancestor_voted_stakes only adds zeros. Comment why

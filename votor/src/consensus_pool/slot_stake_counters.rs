@@ -11,7 +11,7 @@ use {
     },
     solana_hash::Hash,
     solana_votor_messages::vote::Vote,
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, num::NonZeroU64},
 };
 
 #[derive(Debug, Default)]
@@ -95,12 +95,10 @@ impl SlotStakeCounters {
         let notarized_ratio = *stake as f64 / self.total_stake as f64;
         trace!("safe_to_notar {block_id:?} {skip_ratio} {notarized_ratio}");
         // Check if the block fits condition (i) 40% of stake holders voted notarize
-        let notarized_ratio = Fraction::new(*stake, self.total_stake);
-        let notarized_plus_skip_ratio = Fraction::new(
-            // UNWRAP: the total stake shouldn't overflow a u64
-            self.skip_total.checked_add(*stake).unwrap(),
-            self.total_stake,
-        );
+        let total_stake = NonZeroU64::new(self.total_stake).unwrap();
+        let notarized_ratio = Fraction::new(*stake, total_stake);
+        let notarized_plus_skip_ratio =
+            Fraction::new(self.skip_total.checked_add(*stake).unwrap(), total_stake);
 
         notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
             // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
@@ -125,8 +123,9 @@ impl SlotStakeCounters {
             let num_stake = self
                 .skip_total
                 .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake));
+            let total_stake = NonZeroU64::new(self.total_stake).unwrap();
 
-            Fraction::new(num_stake, self.total_stake) >= SAFE_TO_SKIP_THRESHOLD
+            Fraction::new(num_stake, total_stake) >= SAFE_TO_SKIP_THRESHOLD
         } else {
             false
         }
