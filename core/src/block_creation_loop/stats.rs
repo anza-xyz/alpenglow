@@ -10,6 +10,7 @@ pub(crate) struct BlockCreationLoopMetrics {
 
     pub(crate) window_production_elapsed: u64,
     pub(crate) bank_timeout_completion_elapsed_hist: histogram::Histogram,
+    pub(crate) waiting_for_reward_certs_hist: histogram::Histogram,
 }
 
 impl BlockCreationLoopMetrics {
@@ -19,6 +20,7 @@ impl BlockCreationLoopMetrics {
             + self.window_production_elapsed
             + self.skipped_window_behind_parent_ready_count
             + self.bank_timeout_completion_elapsed_hist.entries()
+            + self.waiting_for_reward_certs_hist.entries()
     }
 
     pub(crate) fn report(&mut self, report_interval_ms: u64) {
@@ -77,6 +79,28 @@ impl BlockCreationLoopMetrics {
                         .unwrap_or(0),
                     i64
                 ),
+                (
+                    "waiting_for_reward_certs_hist_90pct",
+                    self.waiting_for_reward_certs_hist
+                        .percentile(90.0)
+                        .unwrap_or(0),
+                    i64
+                ),
+                (
+                    "waiting_for_reward_certs_hist_mean",
+                    self.waiting_for_reward_certs_hist.mean().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "waiting_for_reward_certs_hist_min",
+                    self.waiting_for_reward_certs_hist.minimum().unwrap_or(0),
+                    i64
+                ),
+                (
+                    "waiting_for_reward_certs_hist_max",
+                    self.waiting_for_reward_certs_hist.maximum().unwrap_or(0),
+                    i64
+                ),
             );
 
             // reset metrics
@@ -84,6 +108,7 @@ impl BlockCreationLoopMetrics {
             self.window_production_elapsed = 0;
             self.skipped_window_behind_parent_ready_count = 0;
             self.bank_timeout_completion_elapsed_hist.clear();
+            self.waiting_for_reward_certs_hist.clear();
             self.last_report = now;
         }
     }

@@ -21,7 +21,7 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
-    solana_measure::measure::Measure,
+    solana_measure::{measure::Measure, measure_us},
     solana_poh::{
         poh_recorder::{PohRecorder, PohRecorderError, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
         record_channels::RecordReceiver,
@@ -350,6 +350,7 @@ fn produce_window(
             skip_timer,
             timeout,
             slot,
+            &mut ctx.metrics,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -475,6 +476,7 @@ fn record_and_complete_block(
     block_timer: Instant,
     block_timeout: Duration,
     slot: Slot,
+    metrics: &mut BlockCreationLoopMetrics,
 ) -> Result<(), PohRecorderError> {
     build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
@@ -517,11 +519,15 @@ fn record_and_complete_block(
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
 
-    // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let resp = cert_receiver
-        .recv()
-        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
+    let (resp, resp_blocked_us) = measure_us!(cert_receiver.recv());
+    if let Err(err) = metrics
+        .waiting_for_reward_certs_hist
+        .increment(resp_blocked_us)
+    {
+        warn!("capturing waiting for reward certs response metric {resp_blocked_us} failed with {err}");
+    }
+    let resp = resp.map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let footer = produce_block_footer(
         working_bank.bank.clone_without_scheduler(),
         resp.skip,
