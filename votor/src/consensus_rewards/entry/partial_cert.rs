@@ -12,8 +12,6 @@ pub(super) struct InProgressState {
     signature: SignatureProjective,
     /// bitvec of ranks whose signatures is included in the aggregate above.
     bitvec: BitVec<u8, Lsb0>,
-    /// the largest rank in the aggregate above.
-    max_rank: u16,
     /// number of signatures in the aggregate above.
     cnt: usize,
 }
@@ -42,7 +40,6 @@ impl PartialCert {
         let state = InProgressState {
             signature: SignatureProjective::identity(),
             bitvec: BitVec::repeat(false, max_validators),
-            max_rank: 0,
             cnt: 0,
         };
         Self::InProgress(state)
@@ -76,7 +73,6 @@ impl PartialCert {
                         *ind = true;
                     }
                 }
-                state.max_rank = std::cmp::max(state.max_rank, vote.rank);
                 state.cnt = state.cnt.saturating_add(1);
                 if state.cnt == state.bitvec.len() {
                     *self = Self::Done(DoneState {
@@ -103,7 +99,8 @@ impl PartialCert {
                     return Ok(None);
                 }
                 let mut bitvec = state.bitvec.clone();
-                bitvec.resize(state.max_rank as usize, false);
+                let new_len = bitvec.last_one().map_or(0, |i| i.saturating_add(1));
+                bitvec.resize(new_len, false);
                 let bitmap = encode_base2(&bitvec).map_err(BuildCertError::Encode)?;
                 Ok(Some((state.signature.into(), bitmap)))
             }
@@ -116,5 +113,99 @@ impl PartialCert {
             Self::InProgress(state) => state.cnt,
             Self::Done(state) => state.max_validators,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        solana_bls_signatures::Keypair as BLSKeypair,
+        solana_signer_store::{decode, Decoded},
+        solana_votor_messages::vote::Vote,
+    };
+
+    fn validate_bitmap(bitmap: &[u8], num_set: usize, max_len: usize) {
+        let bitvec = decode(bitmap, max_len).unwrap();
+        match bitvec {
+            Decoded::Base2(bitvec) => assert_eq!(bitvec.count_ones(), num_set),
+            Decoded::Base3(_, _) => panic!("unexpected variant"),
+        }
+    }
+
+    fn new_vote(vote: Vote, rank: usize) -> VoteMessage {
+        let serialized = bincode::serialize(&vote).unwrap();
+        let keypair = BLSKeypair::new();
+        let signature = keypair.sign(&serialized).into();
+        VoteMessage {
+            vote,
+            signature,
+            rank: rank.try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn validate_votes_seen() {
+        let max_validators = 2;
+        let skip = Vote::new_skip_vote(7);
+        let mut partial_cert = PartialCert::new(max_validators);
+        for rank in 0..max_validators {
+            let vote = new_vote(skip, rank);
+            partial_cert.add_vote(&vote).unwrap();
+            assert_eq!(partial_cert.votes_seen(), rank + 1);
+        }
+    }
+
+    #[test]
+    fn validate_build_sig_bitmap() {
+        let max_validators = 2;
+        let mut partial_cert = PartialCert::new(max_validators);
+        assert!(matches!(partial_cert.build_sig_bitmap(), Ok(None)));
+        let skip = Vote::new_skip_vote(7);
+        for rank in 0..max_validators {
+            let vote = new_vote(skip, rank);
+            partial_cert.add_vote(&vote).unwrap();
+            let (_signature, bitmap) = partial_cert.build_sig_bitmap().unwrap().unwrap();
+            validate_bitmap(&bitmap, rank + 1, max_validators);
+        }
+    }
+
+    #[test]
+    fn validate_add_vote() {
+        let mut partial_cert = PartialCert::new(2);
+        let skip = Vote::new_skip_vote(7);
+        let vote = new_vote(skip, 2);
+        assert!(matches!(
+            partial_cert.add_vote(&vote),
+            Err(AddVoteError::InvalidRank)
+        ));
+        let vote = new_vote(skip, 0);
+        partial_cert.add_vote(&vote).unwrap();
+        assert!(matches!(
+            partial_cert.add_vote(&vote),
+            Err(AddVoteError::Duplicate)
+        ));
+        let vote = new_vote(skip, 1);
+        partial_cert.add_vote(&vote).unwrap();
+        let vote = new_vote(skip, 0);
+        assert!(matches!(
+            partial_cert.add_vote(&vote),
+            Err(AddVoteError::Duplicate)
+        ));
+    }
+
+    #[test]
+    fn validate_wants_vote() {
+        let mut partial_cert = PartialCert::new(2);
+        let skip = Vote::new_skip_vote(7);
+        let vote = new_vote(skip, 2);
+        assert!(!partial_cert.wants_vote(&vote));
+        let vote = new_vote(skip, 0);
+        assert!(partial_cert.wants_vote(&vote));
+        partial_cert.add_vote(&vote).unwrap();
+        assert!(!partial_cert.wants_vote(&vote));
+        let vote = new_vote(skip, 1);
+        partial_cert.add_vote(&vote).unwrap();
+        assert!(!partial_cert.wants_vote(&vote));
     }
 }
