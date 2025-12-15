@@ -520,12 +520,9 @@ fn record_and_complete_block(
     // Write the single tick for this slot
 
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let (resp, resp_blocked_us) = measure_us!(cert_receiver.recv());
-    if let Err(err) = metrics
-        .waiting_for_reward_certs_hist
-        .increment(resp_blocked_us)
-    {
-        warn!("capturing waiting for reward certs response metric {resp_blocked_us} failed with {err}");
+    let (resp, waiting_us) = measure_us!(cert_receiver.recv());
+    if let Err(err) = metrics.waiting_for_reward_certs_hist.increment(waiting_us) {
+        warn!("capturing waiting for reward certs response metric {waiting_us} failed with {err}");
     }
     let resp = resp.map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let footer = produce_block_footer(
