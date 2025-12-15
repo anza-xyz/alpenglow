@@ -129,3 +129,69 @@ impl Entry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        solana_bls_signatures::Keypair as BLSKeypair,
+        solana_signer_store::{decode, Decoded},
+    };
+
+    fn validate_bitmap(bitmap: &[u8], num_set: usize, max_len: usize) {
+        let bitvec = decode(bitmap, max_len).unwrap();
+        match bitvec {
+            Decoded::Base2(bitvec) => assert_eq!(bitvec.count_ones(), num_set),
+            Decoded::Base3(_, _) => panic!("unexpected variant"),
+        }
+    }
+
+    fn new_vote(vote: Vote, rank: usize) -> VoteMessage {
+        let serialized = bincode::serialize(&vote).unwrap();
+        let keypair = BLSKeypair::new();
+        let signature = keypair.sign(&serialized).into();
+        VoteMessage {
+            vote,
+            signature,
+            rank: rank.try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn validate_build_skip_cert() {
+        let slot = 123;
+        let mut entry = Entry::new(5);
+        assert!(matches!(entry.build_skip_cert(slot), Ok(None)));
+        let skip = Vote::new_skip_vote(7);
+        let vote = new_vote(skip, 0);
+        entry.add_vote(&vote).unwrap();
+        let skip_cert = entry.build_skip_cert(slot).unwrap().unwrap();
+        assert_eq!(skip_cert.slot, slot);
+        validate_bitmap(&skip_cert.bitmap, 1, 5);
+    }
+
+    #[test]
+    fn validate_build_notar_cert() {
+        let slot = 123;
+        let mut entry = Entry::new(5);
+        assert!(matches!(entry.build_notar_cert(slot), Ok(None)));
+
+        let blockid0 = Hash::new_unique();
+        let blockid1 = Hash::new_unique();
+
+        for rank in 0..2 {
+            let notar = Vote::new_notarization_vote(slot, blockid0);
+            let vote = new_vote(notar, rank);
+            entry.add_vote(&vote).unwrap();
+        }
+        for rank in 2..5 {
+            let notar = Vote::new_notarization_vote(slot, blockid1);
+            let vote = new_vote(notar, rank);
+            entry.add_vote(&vote).unwrap();
+        }
+        let notar_cert = entry.build_notar_cert(slot).unwrap().unwrap();
+        assert_eq!(notar_cert.slot, slot);
+        assert_eq!(notar_cert.block_id, blockid1);
+        validate_bitmap(&notar_cert.bitmap, 3, 5);
+    }
+}
