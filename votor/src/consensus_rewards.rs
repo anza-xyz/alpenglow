@@ -272,3 +272,112 @@ impl ConsensusRewardsService {
         self.handle.join()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crossbeam_channel::{bounded, unbounded},
+        solana_bls_signatures::Keypair as BLSKeypair,
+        solana_gossip::contact_info::ContactInfo,
+        solana_hash::Hash,
+        solana_keypair::Keypair,
+        solana_runtime::{
+            bank::Bank,
+            genesis_utils::{
+                create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
+            },
+        },
+        solana_signer::Signer,
+        solana_signer_store::{decode, Decoded},
+        solana_streamer::socket::SocketAddrSpace,
+    };
+
+    fn validate_bitmap(bitmap: &[u8], num_set: usize, max_len: usize) {
+        let bitvec = decode(bitmap, max_len).unwrap();
+        match bitvec {
+            Decoded::Base2(bitvec) => assert_eq!(bitvec.count_ones(), num_set),
+            Decoded::Base3(_, _) => panic!("unexpected variant"),
+        }
+    }
+
+    fn new_vote(vote: Vote, rank: usize, max_validators: usize) -> AddVoteEntry {
+        let serialized = bincode::serialize(&vote).unwrap();
+        let keypair = BLSKeypair::new();
+        let signature = keypair.sign(&serialized).into();
+        let vote = VoteMessage {
+            vote,
+            signature,
+            rank: rank.try_into().unwrap(),
+        };
+        AddVoteEntry {
+            max_validators,
+            vote,
+        }
+    }
+
+    #[test]
+    fn validate_service() {
+        let keypair = Keypair::new();
+        let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(keypair),
+            SocketAddrSpace::Unspecified,
+        ));
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let stakes_vec = (0..validator_keypairs.len())
+            .map(|i| 1_000 - i as u64)
+            .collect::<Vec<_>>();
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            stakes_vec,
+        );
+        let bank = Bank::new_for_tests(&genesis.genesis_config);
+        let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&bank));
+        let exit = Arc::new(AtomicBool::new(false));
+        let (votes_sender, votes_receiver) = unbounded();
+        let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
+        let (reward_certs_sender, reward_certs_receiver) = bounded(1);
+        let service = ConsensusRewardsService::new(
+            cluster_info,
+            leader_schedule,
+            votes_receiver,
+            build_reward_certs_receiver,
+            reward_certs_sender,
+            exit.clone(),
+        );
+
+        let slot = 123;
+        let max_validators = 4095;
+        let request = BuildRewardCertsRequest { slot };
+        build_reward_certs_sender.send(request).unwrap();
+        let response = reward_certs_receiver.recv().unwrap();
+        assert!(response.skip.is_none());
+        assert!(response.notar.is_none());
+
+        let skip = Vote::new_skip_vote(slot);
+        let vote0 = new_vote(skip, 0, max_validators);
+        let vote1 = new_vote(skip, 0, max_validators);
+        let notar = Vote::new_notarization_vote(slot, Hash::new_unique());
+        let vote2 = new_vote(notar, 1, max_validators);
+        let request = AddVoteMessage {
+            root_slot: slot - 1,
+            votes: vec![vote0, vote1, vote2],
+        };
+        votes_sender.send(request).unwrap();
+        let request = BuildRewardCertsRequest { slot };
+        build_reward_certs_sender.send(request).unwrap();
+        let response = reward_certs_receiver.recv().unwrap();
+        let skip_cert = response.skip.unwrap();
+        let notar_cert = response.notar.unwrap();
+        validate_bitmap(&skip_cert.bitmap, 1, max_validators);
+        validate_bitmap(&notar_cert.bitmap, 1, max_validators);
+
+        exit.store(true, Ordering::Relaxed);
+        service.join().unwrap();
+    }
+}
