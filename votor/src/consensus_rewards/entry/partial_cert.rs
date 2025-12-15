@@ -1,7 +1,10 @@
 use {
     super::{AddVoteError, BuildCertError},
     bitvec::{order::Lsb0, vec::BitVec},
-    solana_bls_signatures::{Signature as BLSSignature, SignatureProjective},
+    solana_bls_signatures::{
+        Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
+        SignatureProjective,
+    },
     solana_signer_store::encode_base2,
     solana_votor_messages::consensus_message::VoteMessage,
 };
@@ -19,7 +22,7 @@ pub(super) struct InProgressState {
 /// State for when we have seen votes from all the validators so we can build the certificate already.
 pub(super) struct DoneState {
     /// The final aggregate signature.
-    signature: BLSSignature,
+    signature: BLSSignatureCompressed,
     /// Bitmap of rank of validators included in the aggregate above.
     bitmap: Vec<u8>,
     /// max number of validators for this slot.
@@ -75,8 +78,9 @@ impl PartialCert {
                 }
                 state.cnt = state.cnt.saturating_add(1);
                 if state.cnt == state.bitvec.len() {
+                    let signature = BLSSignature::from(state.signature).try_into().unwrap();
                     *self = Self::Done(DoneState {
-                        signature: state.signature.into(),
+                        signature,
                         bitmap: encode_base2(&state.bitvec).map_err(AddVoteError::Encode)?,
                         max_validators: state.bitvec.len(),
                     });
@@ -91,7 +95,7 @@ impl PartialCert {
     /// Returns Ok(None) if no votes were collected.
     pub(super) fn build_sig_bitmap(
         &self,
-    ) -> Result<Option<(BLSSignature, Vec<u8>)>, BuildCertError> {
+    ) -> Result<Option<(BLSSignatureCompressed, Vec<u8>)>, BuildCertError> {
         match self {
             Self::Done(state) => Ok(Some((state.signature, state.bitmap.clone()))),
             Self::InProgress(state) => {
@@ -102,7 +106,8 @@ impl PartialCert {
                 let new_len = bitvec.last_one().map_or(0, |i| i.saturating_add(1));
                 bitvec.resize(new_len, false);
                 let bitmap = encode_base2(&bitvec).map_err(BuildCertError::Encode)?;
-                Ok(Some((state.signature.into(), bitmap)))
+                let signature = BLSSignature::from(state.signature).try_into().unwrap();
+                Ok(Some((signature, bitmap)))
             }
         }
     }
