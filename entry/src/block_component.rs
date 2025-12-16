@@ -128,7 +128,10 @@ use {
     },
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::consensus_message::{Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
@@ -266,6 +269,8 @@ pub struct BlockFooterV1 {
     #[wincode(with = "WincodeVec<u8, U8Len>")]
     pub block_user_agent: Vec<u8>,
     pub final_cert: Option<FinalCertificate>,
+    pub skip_reward_cert: Option<SkipRewardCertificate>,
+    pub notar_reward_cert: Option<NotarRewardCertificate>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
@@ -386,6 +391,7 @@ pub enum VersionedUpdateParent {
 }
 
 /// TLV-encoded marker variants.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
@@ -598,6 +604,8 @@ mod tests {
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"test-agent".to_vec(),
             final_cert: Some(FinalCertificate::new_for_tests()),
+            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
+            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
         }
     }
 
