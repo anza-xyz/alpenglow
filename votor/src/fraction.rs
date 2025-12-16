@@ -16,11 +16,6 @@ impl Fraction {
     }
 
     #[inline]
-    pub fn from_tuple((numerator, denominator): (u64, u64)) -> Self {
-        Self::new(numerator, NonZeroU64::new(denominator).unwrap())
-    }
-
-    #[inline]
     pub const fn from_percentage(pct: u64) -> Self {
         // SAFETY: 100 != 0
         Self::new(pct, unsafe { NonZeroU64::new_unchecked(100) })
