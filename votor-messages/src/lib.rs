@@ -5,6 +5,7 @@
 pub mod consensus_message;
 pub mod fraction;
 pub mod migration;
+pub mod rewards_certificate;
 pub mod vote;
 
 #[cfg_attr(feature = "frozen-abi", macro_use)]

@@ -19,12 +19,17 @@ use {
         signature::SignatureProjective,
     },
     solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
-    solana_votor::consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+    solana_votor::{
+        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+        consensus_rewards::{self, AddVoteEntry, AddVoteMessage},
+    },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
         vote::Vote,
@@ -60,6 +65,7 @@ enum CertVerifyError {
 
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
+    reward_votes_sender: Sender<AddVoteMessage>,
     message_sender: Sender<ConsensusMessage>,
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
@@ -68,6 +74,8 @@ pub struct BLSSigVerifier {
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+    cluster_info: Arc<ClusterInfo>,
+    leader_schedule: Arc<LeaderScheduleCache>,
 }
 
 impl BLSSigVerifier {
@@ -148,8 +156,16 @@ impl BLSSigVerifier {
                         id: *solana_pubkey,
                         vote: vote_message.vote,
                     });
-                    // Only need votes newer than root slot
-                    if vote_message.vote.slot() <= root_bank.slot() {
+
+                    // consensus pool does not need votes for slots older than root slot however the rewards container may still need them.
+                    if vote_message.vote.slot() <= root_bank.slot()
+                        && !consensus_rewards::wants_vote(
+                            &self.cluster_info,
+                            &self.leader_schedule,
+                            root_bank.slot(),
+                            &vote_message,
+                        )
+                    {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
@@ -191,12 +207,12 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         let (votes_result, certs_result) = rayon::join(
-            || self.verify_and_send_votes(votes_to_verify),
+            || self.verify_and_send_votes(votes_to_verify, &root_bank),
             || self.verify_and_send_certificates(certs_to_verify, &root_bank),
         );
 
-        votes_result?;
-        certs_result?;
+        let add_vote_msg = votes_result?;
+        let () = certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
@@ -211,6 +227,10 @@ impl BLSSigVerifier {
             warn!("could not send consensus metrics, receive side of channel is closed");
         }
 
+        if self.reward_votes_sender.send(add_vote_msg).is_err() {
+            warn!("could not send votes to reward container, receive side of channel is closed");
+        }
+
         self.stats.maybe_report_stats();
 
         Ok(())
@@ -221,13 +241,17 @@ impl BLSSigVerifier {
     pub fn new(
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        cluster_info: Arc<ClusterInfo>,
+        leader_schedule: Arc<LeaderScheduleCache>,
     ) -> Self {
         Self {
             sharable_banks,
             verified_votes_sender,
+            reward_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
@@ -235,14 +259,42 @@ impl BLSSigVerifier {
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
+            cluster_info,
+            leader_schedule,
         }
     }
 
+    /// Verifies votes and sends verified votes to the consensus pool.
+    /// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
     fn verify_and_send_votes(
         &self,
         votes_to_verify: Vec<VoteToVerify>,
-    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
+        root_bank: &Bank,
+    ) -> Result<AddVoteMessage, BLSSigVerifyServiceError<ConsensusMessage>> {
         let verified_votes = self.verify_votes(votes_to_verify);
+
+        let reward_votes = verified_votes
+            .iter()
+            .filter_map(|v| {
+                let vote = v.vote_message;
+                let rank_map = get_key_to_rank_map(root_bank, vote.vote.slot())?;
+                consensus_rewards::wants_vote(
+                    &self.cluster_info,
+                    &self.leader_schedule,
+                    root_bank.slot(),
+                    &vote,
+                )
+                .then_some(AddVoteEntry {
+                    max_validators: rank_map.len(),
+                    vote,
+                })
+            })
+            .collect();
+        let add_vote_msg = AddVoteMessage {
+            root_slot: root_bank.slot(),
+            votes: reward_votes,
+        };
+
         self.stats
             .total_valid_packets
             .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
@@ -261,7 +313,7 @@ impl BLSSigVerifier {
                 }
             }
 
-            // Send the BLS vote messaage to certificate pool
+            // Send the votes to the consensus pool
             match self
                 .message_sender
                 .try_send(ConsensusMessage::Vote(vote.vote_message))
@@ -295,7 +347,7 @@ impl BLSSigVerifier {
             }
         }
 
-        Ok(())
+        Ok(add_vote_msg)
     }
 
     fn verify_votes(&self, votes_to_verify: Vec<VoteToVerify>) -> Vec<VoteToVerify> {
@@ -537,7 +589,9 @@ mod tests {
         crate::bls_sigverify::stats::STATS_INTERVAL_DURATION,
         bitvec::prelude::{BitVec, Lsb0},
         solana_bls_signatures::{Signature, Signature as BLSSignature},
+        solana_gossip::contact_info::ContactInfo,
         solana_hash::Hash,
+        solana_keypair::Keypair,
         solana_perf::packet::{Packet, PinnedPacketBatch},
         solana_runtime::{
             bank::Bank,
@@ -548,6 +602,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_signer_store::encode_base2,
+        solana_streamer::socket::SocketAddrSpace,
         solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
         solana_votor_messages::{
             consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
@@ -560,6 +615,7 @@ mod tests {
         verified_vote_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
     ) -> (Vec<ValidatorVoteKeypairs>, BLSSigVerifier) {
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
@@ -577,14 +633,25 @@ mod tests {
         let bank_forks = BankForks::new_rw_arc(bank0);
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
+        let keypair = Keypair::new();
+        let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(keypair),
+            SocketAddrSpace::Unspecified,
+        ));
+        let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
         (
             validator_keypairs,
             BLSSigVerifier::new(
                 sharable_banks,
                 verified_vote_sender,
+                reward_votes_sender,
                 message_sender,
                 consensus_metrics_sender,
                 alpenglow_last_voted,
+                cluster_info,
+                leader_schedule,
             ),
         )
     }
@@ -629,10 +696,12 @@ mod tests {
         let (verified_vote_sender, verfied_vote_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _consensus_metrics_receiver) =
             crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let vote_rank1 = 2;
@@ -715,10 +784,12 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let packets = vec![Packet::default()];
@@ -781,10 +852,12 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let msg1 = ConsensusMessage::Vote(create_signed_vote_message(
@@ -814,10 +887,12 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         // Close the receiver to simulate a disconnected channel.
@@ -838,10 +913,12 @@ mod tests {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let message = ConsensusMessage::Vote(create_signed_vote_message(
@@ -871,10 +948,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_votes = 5;
@@ -910,10 +989,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_votes_group1 = 3;
@@ -970,10 +1051,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_votes = 5;
@@ -1043,10 +1126,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_votes = 5;
@@ -1114,10 +1199,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (_, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let packet_batches: Vec<PacketBatch> = vec![];
@@ -1130,10 +1217,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_signers = 7; // > 2/3 of 10 validators
@@ -1159,10 +1248,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let slot = 20;
@@ -1206,10 +1297,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (_validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_signers = 7;
@@ -1250,10 +1343,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let mut packets = Vec::new();
@@ -1320,10 +1415,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let invalid_rank = 999;
@@ -1352,6 +1449,7 @@ mod tests {
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let validator_keypairs = (0..10)
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
@@ -1370,12 +1468,23 @@ mod tests {
         bank_forks.write().unwrap().set_root(5, None, None).unwrap();
 
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let keypair = Keypair::new();
+        let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(keypair),
+            SocketAddrSpace::Unspecified,
+        ));
+        let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
         let mut sig_verifier = BLSSigVerifier::new(
             sharable_banks,
             verified_vote_sender,
+            reward_votes_sender,
             message_sender,
             consensus_metrics_sender,
             Arc::new(AlpenglowLastVoted::default()),
+            cluster_info,
+            leader_schedule,
         );
 
         let vote = Vote::new_skip_vote(2);
@@ -1421,10 +1530,12 @@ mod tests {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
             verified_vote_sender,
             message_sender,
             consensus_metrics_sender,
+            reward_votes_sender,
         );
 
         let num_signers = 8;

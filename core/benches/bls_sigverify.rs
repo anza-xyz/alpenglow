@@ -5,7 +5,10 @@ use {
     crossbeam_channel::unbounded,
     solana_bls_signatures::signature::Signature as BlsSignature,
     solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
+    solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
     solana_hash::Hash,
+    solana_keypair::Keypair,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
@@ -16,6 +19,8 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
+    solana_signer::Signer,
+    solana_streamer::socket::SocketAddrSpace,
     solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
     solana_votor_messages::{
         consensus_message::{CertificateType, ConsensusMessage, VoteMessage},
@@ -81,6 +86,7 @@ fn setup_environment() -> BenchEnvironment {
     let (verified_votes_s, _) = unbounded();
     let (consensus_msg_s, _) = unbounded();
     let (consensus_metrics_sender, _) = unbounded();
+    let (reward_votes_sender, _) = unbounded();
 
     let validator_keypairs: Arc<Vec<_>> = Arc::new(
         (0..NUM_VALIDATORS)
@@ -100,12 +106,23 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+    let keypair = Keypair::new();
+    let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
+    let cluster_info = Arc::new(ClusterInfo::new(
+        contact_info,
+        Arc::new(keypair),
+        SocketAddrSpace::Unspecified,
+    ));
+    let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
     let verifier = BLSSigVerifier::new(
         sharable_banks,
         verified_votes_s,
+        reward_votes_sender,
         consensus_msg_s,
         consensus_metrics_sender,
         Arc::new(AlpenglowLastVoted::default()),
+        cluster_info,
+        leader_schedule,
     );
 
     BenchEnvironment {
