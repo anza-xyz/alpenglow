@@ -78,6 +78,14 @@
 /// │ Final Cert Present           (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ FinalCertificate (if present, variable) │
+/// ├─────────────────────────────────────────┤
+/// │ Skip reward cert Present     (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ SkipRewardCert (if present, variable)   │
+/// └─────────────────────────────────────────┘
+/// │ Notar reward cert Present    (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ NotarRewardCert (if present, variable)  │
 /// └─────────────────────────────────────────┘
 /// ```
 ///
@@ -130,7 +138,7 @@ use {
     solana_hash::Hash,
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType},
-        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
     },
     std::mem::MaybeUninit,
     wincode::{
@@ -160,28 +168,6 @@ impl SeqLen for U8Len {
 
     fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
         Ok(1)
-    }
-}
-
-/// 2-byte length prefix (max 65535 elements).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct U16Len;
-
-impl SeqLen for U16Len {
-    fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
-        u16::get(reader).map(|len| len as usize)
-    }
-
-    fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
-        let Ok(len): Result<u16, _> = len.try_into() else {
-            return Err(write_length_encoding_overflow("u16::MAX"));
-        };
-        writer.write(&len.to_le_bytes())?;
-        Ok(())
-    }
-
-    fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
-        Ok(2)
     }
 }
 

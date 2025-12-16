@@ -42,6 +42,7 @@ solana-logger = { workspace = true }
 solana-program = { workspace = true }
 solana-vote-interface = { workspace = true }
 spl-pod = { workspace = true }
+thiserror = { workspace = true }
 wincode = { workspace = true }
 
 [dev-dependencies]
