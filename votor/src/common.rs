@@ -1,6 +1,8 @@
 use {
     agave_votor_messages::{
         consensus_message::CertificateType,
+        fraction::Fraction,
+        migration::GENESIS_VOTE_THRESHOLD,
         vote::{Vote, VoteType},
     },
     std::time::Duration,
@@ -30,6 +32,30 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
     }
 }
 
+/// Lookup from `CertificateId` to the `VoteType`s that contribute,
+/// as well as the stake fraction required for certificate completion.
+///
+/// Must be in sync with `vote_to_cert_types`
+pub const fn certificate_limits_and_vote_types(
+    cert_type: &CertificateType,
+) -> (Fraction, &'static [VoteType]) {
+    match cert_type {
+        CertificateType::Notarize(_, _) => (Fraction::from_percentage(60), &[VoteType::Notarize]),
+        CertificateType::NotarizeFallback(_, _) => (
+            Fraction::from_percentage(60),
+            &[VoteType::Notarize, VoteType::NotarizeFallback],
+        ),
+        CertificateType::FinalizeFast(_, _) => {
+            (Fraction::from_percentage(80), &[VoteType::Notarize])
+        }
+        CertificateType::Finalize(_) => (Fraction::from_percentage(60), &[VoteType::Finalize]),
+        CertificateType::Skip(_) => (
+            Fraction::from_percentage(60),
+            &[VoteType::Skip, VoteType::SkipFallback],
+        ),
+        CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
+    }
+}
 /// Lookup from `Vote` to the `CertificateId`s the vote accounts for
 ///
 /// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
@@ -53,11 +79,11 @@ pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
 
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: f64 = 0.4;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: Fraction = Fraction::from_percentage(40);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: Fraction = Fraction::from_percentage(20);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: Fraction = Fraction::from_percentage(60);
 
-pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
+pub const SAFE_TO_SKIP_THRESHOLD: Fraction = Fraction::from_percentage(40);
 
 /// Time bound assumed on network transmission delays during periods of synchrony.
 pub(crate) const DELTA: Duration = Duration::from_millis(250);

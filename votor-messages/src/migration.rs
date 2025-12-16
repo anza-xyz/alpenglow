@@ -74,7 +74,7 @@ pub const MIGRATION_SLOT_OFFSET: Slot = 5000;
 pub const MIGRATION_SLOT_OFFSET: Slot = 32;
 
 /// We match Alpenglow's 20 + 20 model, by allowing a maximum of 20% malicious stake during the migration.
-pub const MIGRATION_MALICIOUS_THRESHOLD: f64 = 20.0 / 100.0;
+pub const MIGRATION_MALICIOUS_THRESHOLD: Fraction = Fraction::from_percentage(20);
 
 /// In order to rollback a block eligible for genesis vote, we need:
 /// `SWITCH_FORK_THRESHOLD` - (1 - `GENESIS_VOTE_THRESHOLD`) = `MIGRATION_MALICIOUS_THRESHOLD` malicious stake.
@@ -287,10 +287,6 @@ impl MigrationPhase {
         self.is_alpenglow_block(slot)
     }
 
-    /// Should this block allow the UpdateParent marker, i.e., support fast leader handover?
-    fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool {
-        self.is_alpenglow_block(slot)
-    }
 }
 
 /// Keeps track of the current migration status
@@ -430,7 +426,6 @@ impl MigrationStatus {
     dispatch!(pub fn should_allow_block_markers(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool);
-    dispatch!(pub fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool);
 
     /// The alpenglow feature flag has been activated in slot `slot`.
     /// This should only be called using the feature account of a *rooted* slot,
@@ -525,11 +520,12 @@ impl MigrationStatus {
             .map(|b| *b != (slot, block_id))
             .unwrap_or(true)
         {
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD.approx_f64();
             panic!(
                 "{}: We wish to cast a genesis vote on {discovered_genesis_block:?}, however we \
                  have received a genesis certificate for ({slot}, {block_id}). This means there \
                  is significant malicious activity causing two distinct forks to reach the \
-                 {GENESIS_VOTE_THRESHOLD}. We cannot recover without operator intervention.",
+                 {genesis_vote_thresh_f64}. We cannot recover without operator intervention.",
                 self.my_pubkey()
             );
         }
@@ -575,11 +571,12 @@ impl MigrationStatus {
             return;
         };
         if *genesis_block != (slot, block_id) {
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD.approx_f64();
             panic!(
                 "{}: We cast a genesis vote on {genesis_block:?}, however we have received a \
                  genesis certificate for ({slot}, {block_id}). This means there is significant \
                  malicious activity causing two distinct forks to reach the \
-                 {GENESIS_VOTE_THRESHOLD}. We cannot recover without operator intervention.",
+                 {genesis_vote_thresh_f64}. We cannot recover without operator intervention.",
                 self.my_pubkey()
             );
         }

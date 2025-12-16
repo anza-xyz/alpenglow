@@ -14,7 +14,6 @@ impl Display for Fraction {
         write!(f, "{}", self.approx_f64())
     }
 }
-
 impl Fraction {
     /// Creates a new fraction.
     #[inline]
