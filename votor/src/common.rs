@@ -1,7 +1,7 @@
 use {
-    crate::fraction::Fraction,
     solana_votor_messages::{
         consensus_message::CertificateType,
+        fraction::Fraction,
         migration::GENESIS_VOTE_THRESHOLD,
         vote::{Vote, VoteType},
     },
@@ -53,10 +53,7 @@ pub const fn certificate_limits_and_vote_types(
             Fraction::from_percentage(60),
             &[VoteType::Skip, VoteType::SkipFallback],
         ),
-        CertificateType::Genesis(_, _) => (
-            Fraction::from_percentage(GENESIS_VOTE_THRESHOLD),
-            &[VoteType::Genesis],
-        ),
+        CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
     }
 }
 

@@ -7,10 +7,9 @@ use {
         },
         consensus_pool::stats::ConsensusPoolStats,
         event::VotorEvent,
-        fraction::Fraction,
     },
     solana_hash::Hash,
-    solana_votor_messages::vote::Vote,
+    solana_votor_messages::{fraction::Fraction, vote::Vote},
     std::{collections::BTreeMap, num::NonZeroU64},
 };
 

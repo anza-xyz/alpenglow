@@ -1,5 +1,8 @@
+//! Fraction type for precise stake threshold comparisons.
+
 use std::num::NonZeroU64;
 
+/// Numerator / denominator, for precise comparisons without floating point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fraction {
     numerator: u64,
@@ -7,6 +10,7 @@ pub struct Fraction {
 }
 
 impl Fraction {
+    /// Creates a new fraction.
     #[inline]
     pub const fn new(numerator: u64, denominator: NonZeroU64) -> Self {
         Self {
@@ -15,10 +19,16 @@ impl Fraction {
         }
     }
 
+    /// Creates a fraction from a percentage (e.g. 60 -> 60/100).
     #[inline]
     pub const fn from_percentage(pct: u64) -> Self {
         // SAFETY: 100 != 0
         Self::new(pct, unsafe { NonZeroU64::new_unchecked(100) })
+    }
+
+    /// Approximates this fraction as an f64.
+    pub fn approx_f64(&self) -> f64 {
+        self.numerator as f64 / self.denominator.get() as f64
     }
 }
 

@@ -12,7 +12,6 @@ use {
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool},
         },
         event::VotorEvent,
-        fraction::Fraction,
     },
     certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
     log::{error, trace},
@@ -23,6 +22,7 @@ use {
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
         consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        fraction::Fraction,
         migration::MigrationStatus,
         vote::{Vote, VoteType},
     },
