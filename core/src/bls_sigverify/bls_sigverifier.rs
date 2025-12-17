@@ -458,7 +458,7 @@ impl BLSSigVerifier {
                             cert_to_verify.cert_type
                         );
                         if let CertVerifyError::CertVerifyFailed(
-                            BLSCertVerifyError::NotEnoughStake(_, _),
+                            BLSCertVerifyError::NotEnoughStake(..),
                         ) = e
                         {
                             self.stats
@@ -501,13 +501,12 @@ impl BLSSigVerifier {
             return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
-        let (required_stake_percentage, _) =
+        let (required_stake_fraction, _) =
             certificate_limits_and_vote_types(&cert_to_verify.cert_type);
-        let required_stake = (required_stake_percentage * total_stake as f64) as u64;
         verify_votor_message_certificate(
             cert_to_verify,
             key_to_rank_map.len(),
-            Some(required_stake),
+            Some((total_stake, required_stake_fraction)),
             |rank| {
                 key_to_rank_map
                     .get_pubkey_and_stake(rank)

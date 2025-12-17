@@ -10,8 +10,10 @@ use {
     solana_signer_store::{decode, DecodeError},
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType},
+        fraction::{self, Fraction},
         vote::Vote,
     },
+    std::num::NonZeroU64,
     thiserror::Error,
 };
 
@@ -32,8 +34,8 @@ pub enum CertVerifyError {
     #[error("Base 3 encoding on unexpected cert {0:?}")]
     Base3EncodingOnUnexpectedCert(CertificateType),
 
-    #[error("Not enough stake {0} < {1}")]
-    NotEnoughStake(u64, u64),
+    #[error("Not enough stake {0}: {1} < {2}")]
+    NotEnoughStake(u64, Fraction, Fraction),
 }
 
 fn aggregate_keys_and_stakes_from_bitmap<F>(
@@ -74,7 +76,7 @@ fn serialize_vote(vote: &Vote) -> Result<Vec<u8>, CertVerifyError> {
 pub fn verify_base2_certificate<F>(
     cert_to_verify: &Certificate,
     bit_vec: &BitVec<u8, Lsb0>,
-    required_stake: Option<u64>,
+    required_stake: Option<(u64, Fraction)>,
     rank_to_pubkey_and_stake: &F,
 ) -> Result<(), CertVerifyError>
 where
@@ -84,13 +86,19 @@ where
 
     let signed_payload = serialize_vote(&original_vote)?;
 
-    let (aggregate_bls_pubkey, total_stake) =
+    let (aggregate_bls_pubkey, aggregate_stake) =
         aggregate_keys_and_stakes_from_bitmap(bit_vec, rank_to_pubkey_and_stake)
             .ok_or(CertVerifyError::KeyAggregationFailed)?;
 
-    if let Some(required_stake) = required_stake {
-        if total_stake < required_stake {
-            return Err(CertVerifyError::NotEnoughStake(total_stake, required_stake));
+    if let Some((total_stake, required_fraction)) = required_stake {
+        let my_fraction =
+            fraction::Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
+        if my_fraction < required_fraction {
+            return Err(CertVerifyError::NotEnoughStake(
+                aggregate_stake,
+                my_fraction,
+                required_fraction,
+            ));
         }
     }
 
@@ -107,7 +115,7 @@ fn verify_base3_certificate<F>(
     cert_to_verify: &Certificate,
     bit_vec1: &BitVec<u8, Lsb0>,
     bit_vec2: &BitVec<u8, Lsb0>,
-    required_stake: Option<u64>,
+    required_stake: Option<(u64, Fraction)>,
     rank_to_pubkey_and_stake: &F,
 ) -> Result<(), CertVerifyError>
 where
@@ -129,13 +137,18 @@ where
         aggregate_keys_and_stakes_from_bitmap(bit_vec2, rank_to_pubkey_and_stake)
             .ok_or(CertVerifyError::KeyAggregationFailed)?;
 
-    if let Some(required_stake) = required_stake {
+    if let Some((total_stake, required_fraction)) = required_stake {
         // Base3 encoding doesn't allow (true, true), so we can add without checking overlap.
-        let total_stake = stake1
+        let aggregate_stake = stake1
             .checked_add(stake2)
             .expect("Stake addition should never overflow");
-        if total_stake < required_stake {
-            return Err(CertVerifyError::NotEnoughStake(total_stake, required_stake));
+        let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
+        if my_fraction < required_fraction {
+            return Err(CertVerifyError::NotEnoughStake(
+                aggregate_stake,
+                my_fraction,
+                required_fraction,
+            ));
         }
     }
 
@@ -154,7 +167,7 @@ where
 pub fn verify_votor_message_certificate<F>(
     cert_to_verify: &Certificate,
     max_len: usize,
-    required_stake: Option<u64>,
+    required_stake: Option<(u64, Fraction)>,
     rank_to_pubkey_and_stake: F,
 ) -> Result<(), CertVerifyError>
 where
@@ -243,12 +256,13 @@ mod test {
             cert_type,
             &(0..6).collect::<Vec<_>>(),
         );
-        assert!(
-            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
-                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
-            })
-            .is_ok()
-        );
+        assert!(verify_votor_message_certificate(
+            &cert,
+            10,
+            Some((1000, Fraction::new(3, NonZeroU64::new(5).unwrap()))),
+            |rank| { bls_keypairs.get(rank).map(|kp| (kp.public, 100)) }
+        )
+        .is_ok());
     }
 
     #[test]
@@ -261,10 +275,17 @@ mod test {
             &(0..5).collect::<Vec<_>>(),
         );
         assert_eq!(
-            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
-                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
-            }),
-            Err(CertVerifyError::NotEnoughStake(500, 600))
+            verify_votor_message_certificate(
+                &cert,
+                10,
+                Some((1000, Fraction::new(3, NonZeroU64::new(5).unwrap()))),
+                |rank| { bls_keypairs.get(rank).map(|kp| (kp.public, 100)) }
+            ),
+            Err(CertVerifyError::NotEnoughStake(
+                500,
+                Fraction::new(500, NonZeroU64::new(1000).unwrap()),
+                Fraction::new(3, NonZeroU64::new(5).unwrap())
+            ))
         );
     }
 
@@ -292,12 +313,13 @@ mod test {
             .aggregate(&all_vote_messages)
             .expect("Failed to aggregate votes");
         let cert = builder.build().expect("Failed to build certificate");
-        assert!(
-            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
-                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
-            })
-            .is_ok()
-        );
+        assert!(verify_votor_message_certificate(
+            &cert,
+            10,
+            Some((1000, Fraction::new(3, NonZeroU64::new(5).unwrap()))),
+            |rank| { bls_keypairs.get(rank).map(|kp| (kp.public, 100)) }
+        )
+        .is_ok());
     }
 
     #[test]
@@ -325,10 +347,17 @@ mod test {
             .expect("Failed to aggregate votes");
         let cert = builder.build().expect("Failed to build certificate");
         assert_eq!(
-            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
-                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
-            }),
-            Err(CertVerifyError::NotEnoughStake(500, 600))
+            verify_votor_message_certificate(
+                &cert,
+                10,
+                Some((1000, Fraction::new(3, NonZeroU64::new(5).unwrap()))),
+                |rank| { bls_keypairs.get(rank).map(|kp| (kp.public, 100)) }
+            ),
+            Err(CertVerifyError::NotEnoughStake(
+                500,
+                Fraction::new(500, NonZeroU64::new(1000).unwrap()),
+                Fraction::new(3, NonZeroU64::new(5).unwrap())
+            ))
         );
     }
 
@@ -353,9 +382,12 @@ mod test {
             bitmap: encoded_bitmap,
         };
         assert_eq!(
-            verify_votor_message_certificate(&cert, 10, Some(600), |rank| {
-                bls_keypairs.get(rank).map(|kp| (kp.public, 100))
-            }),
+            verify_votor_message_certificate(
+                &cert,
+                10,
+                Some((1000, Fraction::new(3, NonZeroU64::new(5).unwrap()))),
+                |rank| { bls_keypairs.get(rank).map(|kp| (kp.public, 100)) }
+            ),
             Err(CertVerifyError::SignatureVerificationFailed)
         );
     }
