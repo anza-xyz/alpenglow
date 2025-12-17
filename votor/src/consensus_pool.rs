@@ -22,12 +22,14 @@ use {
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
         consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        fraction::Fraction,
         migration::MigrationStatus,
         vote::{Vote, VoteType},
     },
     std::{
         cmp::Ordering,
         collections::{BTreeMap, HashMap},
+        num::NonZeroU64,
         sync::Arc,
     },
     thiserror::Error,
@@ -221,7 +223,8 @@ impl ConsensusPool {
                     })
                 })
                 .sum::<Stake>();
-            if accumulated_stake as f64 / (total_stake as f64) < limit {
+            let total_stake = NonZeroU64::new(total_stake).unwrap();
+            if Fraction::new(accumulated_stake, total_stake) < limit {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
