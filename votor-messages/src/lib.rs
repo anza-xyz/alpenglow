@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 pub mod consensus_message;
+pub mod fraction;
 pub mod migration;
 pub mod vote;
 

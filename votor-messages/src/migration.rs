@@ -69,14 +69,16 @@ pub const MIGRATION_SLOT_OFFSET: Slot = 5000;
 #[cfg(feature = "dev-context-only-utils")]
 pub const MIGRATION_SLOT_OFFSET: Slot = 32;
 
+use crate::fraction::Fraction;
+
 /// We match Alpenglow's 20 + 20 model, by allowing a maximum of 20% malicious stake during the migration.
-pub const MIGRATION_MALICIOUS_THRESHOLD: f64 = 20.0 / 100.0;
+pub const MIGRATION_MALICIOUS_THRESHOLD: Fraction = Fraction::from_percentage(20);
 
 /// In order to rollback a block eligible for genesis vote, we need:
 /// `SWITCH_FORK_THRESHOLD` - (1 - `GENESIS_VOTE_THRESHOLD`) = `MIGRATION_MALICIOUS_THRESHOLD` malicious stake.
 ///
 /// Using 38% as the `SWITCH_FORK_THRESHOLD` gives us 82% for `GENESIS_VOTE_THRESHOLD`.
-pub const GENESIS_VOTE_THRESHOLD: f64 = 82.0 / 100.0;
+pub const GENESIS_VOTE_THRESHOLD: Fraction = Fraction::from_percentage(82);
 
 /// The interval at which we refresh our genesis vote
 pub const GENESIS_VOTE_REFRESH: Duration = Duration::from_millis(400);
@@ -253,6 +255,11 @@ impl MigrationPhase {
         self.is_alpenglow_block(slot)
     }
 
+    /// Should this block allow the UpdateParent marker, i.e., support fast leader handover?
+    fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool {
+        self.is_alpenglow_block(slot)
+    }
+
     /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
     fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool {
         self.is_alpenglow_block(slot)
@@ -411,6 +418,7 @@ impl MigrationStatus {
     dispatch!(pub fn should_respond_to_ancestor_hashes_requests(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_have_alpenglow_ticks(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_allow_block_markers(&self, slot: Slot) -> bool);
+    dispatch!(pub fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool);
     dispatch!(pub fn should_use_double_merkle_block_id(&self, slot: Slot) -> bool);
     dispatch!(pub fn is_full_alpenglow_epoch(&self) -> bool);
     dispatch!(pub fn is_pre_feature_activation(&self) -> bool);
@@ -510,11 +518,12 @@ impl MigrationStatus {
             .map(|b| *b != (slot, block_id))
             .unwrap_or(true)
         {
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD.approx_f64();
             panic!(
                 "{}: We wish to cast a genesis vote on {discovered_genesis_block:?}, however we \
                  have received a genesis certificate for ({slot}, {block_id}). This means there \
                  is significant malicious activity causing two distinct forks to reach the \
-                 {GENESIS_VOTE_THRESHOLD}. We cannot recover without operator intervention.",
+                 {genesis_vote_thresh_f64}. We cannot recover without operator intervention.",
                 self.my_pubkey()
             );
         }
@@ -560,11 +569,12 @@ impl MigrationStatus {
             return;
         };
         if *genesis_block != (slot, block_id) {
+            let genesis_vote_thresh_f64 = GENESIS_VOTE_THRESHOLD.approx_f64();
             panic!(
                 "{}: We cast a genesis vote on {genesis_block:?}, however we have received a \
                  genesis certificate for ({slot}, {block_id}). This means there is significant \
                  malicious activity causing two distinct forks to reach the \
-                 {GENESIS_VOTE_THRESHOLD}. We cannot recover without operator intervention.",
+                 {genesis_vote_thresh_f64}. We cannot recover without operator intervention.",
                 self.my_pubkey()
             );
         }

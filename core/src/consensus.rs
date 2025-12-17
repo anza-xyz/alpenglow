@@ -41,10 +41,11 @@ use {
             MAX_LOCKOUT_HISTORY,
         },
     },
-    solana_votor_messages::migration::GENESIS_VOTE_THRESHOLD,
+    solana_votor_messages::{fraction::Fraction, migration::GENESIS_VOTE_THRESHOLD},
     std::{
         cmp::Ordering,
         collections::{HashMap, HashSet},
+        num::NonZeroU64,
         ops::{
             Bound::{Included, Unbounded},
             Deref,
@@ -507,7 +508,8 @@ impl Tower {
         }
 
         let parent_is_super_oc = bank_slot == parent_slot + 1
-            && super_oc_stake as f64 / total_stake as f64 > GENESIS_VOTE_THRESHOLD;
+            && Fraction::new(super_oc_stake, NonZeroU64::new(total_stake).unwrap())
+                > GENESIS_VOTE_THRESHOLD;
 
         // TODO: populate_ancestor_voted_stakes only adds zeros. Comment why
         // that is necessary (if so).
