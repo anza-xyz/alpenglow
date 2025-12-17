@@ -82,7 +82,7 @@
 /// │ Skip reward cert Present     (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ SkipRewardCert (if present, variable)   │
-/// └─────────────────────────────────────────┘
+/// ├─────────────────────────────────────────┤
 /// │ Notar reward cert Present    (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ NotarRewardCert (if present, variable)  │
