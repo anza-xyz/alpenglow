@@ -30,10 +30,12 @@ use {
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        fraction::Fraction,
         vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
+        num::NonZeroU64,
         sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
@@ -59,6 +61,9 @@ enum CertVerifyError {
 
     #[error("Cert Verification Error {0:?}")]
     CertVerifyFailed(#[from] BLSCertVerifyError),
+
+    #[error("Not enough stake {0}: {1} < {2}")]
+    NotEnoughStake(u64, Fraction, Fraction),
 }
 
 pub struct BLSSigVerifier {
@@ -457,10 +462,7 @@ impl BLSSigVerifier {
                             "Failed to verify BLS certificate: {:?}, error: {e}",
                             cert_to_verify.cert_type
                         );
-                        if let CertVerifyError::CertVerifyFailed(
-                            BLSCertVerifyError::NotEnoughStake(..),
-                        ) = e
-                        {
+                        if let CertVerifyError::NotEnoughStake(..) = e {
                             self.stats
                                 .received_not_enough_stake
                                 .fetch_add(1, Ordering::Relaxed);
@@ -503,16 +505,20 @@ impl BLSSigVerifier {
 
         let (required_stake_fraction, _) =
             certificate_limits_and_vote_types(&cert_to_verify.cert_type);
-        verify_votor_message_certificate(
-            cert_to_verify,
-            key_to_rank_map.len(),
-            Some((total_stake, required_stake_fraction)),
-            |rank| {
+        let aggregate_stake =
+            verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
                 key_to_rank_map
                     .get_pubkey_and_stake(rank)
                     .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
-            },
-        )?;
+            })?;
+        let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
+        if my_fraction < required_stake_fraction {
+            return Err(CertVerifyError::NotEnoughStake(
+                aggregate_stake,
+                my_fraction,
+                required_stake_fraction,
+            ));
+        }
 
         self.verified_certs
             .write()
