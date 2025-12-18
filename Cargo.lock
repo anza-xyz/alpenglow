@@ -11973,6 +11973,8 @@ dependencies = [
  "solana-vote-interface",
  "solana-votor-messages",
  "spl-pod",
+ "thiserror 2.0.16",
+ "wincode",
 ]
 
 [[package]]
