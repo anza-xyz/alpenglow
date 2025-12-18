@@ -13,8 +13,8 @@ use {
     std::collections::BTreeMap,
 };
 
-#[derive(Debug, Default)]
-pub(crate) struct SlotStakeCounters {
+#[derive(Debug)]
+pub(super) struct SlotStakeCounters {
     my_first_vote: Option<Vote>,
     total_stake: Stake,
     skip_total: Stake,
@@ -26,14 +26,20 @@ pub(crate) struct SlotStakeCounters {
 }
 
 impl SlotStakeCounters {
-    pub fn new(total_stake: Stake) -> Self {
+    pub(super) fn new(total_stake: Stake) -> Self {
         Self {
             total_stake,
-            ..Default::default()
+            my_first_vote: None,
+            skip_total: 0,
+            notarize_total: 0,
+            notarize_entry_total: BTreeMap::default(),
+            top_notarized_stake: 0,
+            safe_to_notar_sent: vec![],
+            safe_to_skip_sent: false,
         }
     }
 
-    pub fn add_vote(
+    pub(super) fn add_vote(
         &mut self,
         vote: &Vote,
         entry_stake: Stake,
