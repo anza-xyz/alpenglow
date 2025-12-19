@@ -141,7 +141,7 @@ use {
         thread::Builder,
         time::{Duration, Instant},
     },
-    test_case::test_case,
+    test_case::{test_case, test_matrix},
 };
 
 impl VoteReward {
@@ -12503,10 +12503,7 @@ fn test_get_top_epoch_stakes() {
     assert_eq!(stakes.staked_nodes().len(), MAX_ALPENGLOW_VOTE_ACCOUNTS);
 }
 
-#[test_case(false, false ; "both features deactivated")]
-#[test_case(true, false ; "only alpenglow feature activated")]
-#[test_case(false, true ; "only vat feature activated")]
-#[test_case(true, true ; "both features activated")]
+#[test_matrix([false, true], [false, true])]
 fn test_bank_burn_vat(enable_alpenglow: bool, enable_vat: bool) {
     // Create 100 vote accounts
     let num_of_nodes: u64 = 100;

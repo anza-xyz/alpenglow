@@ -179,13 +179,11 @@ impl<T: Clone> Stakes<T> {
         &self,
         max_vote_accounts: usize,
         minimum_identity_account_balance: u64,
-        identity_account_balances: &HashMap<Pubkey, u64>,
     ) -> Stakes<T> {
         Stakes {
             vote_accounts: self.vote_accounts.clone_and_filter_for_alpenglow(
                 max_vote_accounts,
                 minimum_identity_account_balance,
-                identity_account_balances,
             ),
             epoch: self.epoch,
             // Do not need anything else for EpochStakes

@@ -2285,17 +2285,25 @@ impl Bank {
 
     fn burn_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
         let mut total_vat = 0;
-        for identity_pubkey in epoch_stakes
-            .stakes()
-            .vote_accounts()
-            .identity_accounts_for_staked_nodes()
+        for vote_pubkey in
+            epoch_stakes
+                .stakes()
+                .staked_nodes()
+                .iter()
+                .filter_map(|(vote_pubkey, stake)| {
+                    if *stake != 0u64 {
+                        Some(vote_pubkey)
+                    } else {
+                        None
+                    }
+                })
         {
-            // burn VAT from each staked vote account's identity
+            // burn VAT from each staked vote account
             let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
-            let mut account = self.get_account(identity_pubkey).unwrap();
+            let mut account = self.get_account(vote_pubkey).unwrap();
             total_vat += vat;
             account.set_lamports(account.lamports().saturating_sub(vat));
-            self.store_account(identity_pubkey, &account);
+            self.store_account(vote_pubkey, &account);
         }
         info!("BURNED total VAT of {total_vat} lamports from staked accounts");
         self.capitalization.fetch_sub(total_vat, Relaxed);
@@ -5782,27 +5790,14 @@ impl Bank {
             .feature_set
             .is_active(&feature_set::alpenglow_vat_and_limit_validators::id())
         {
-            let identity_balances = self.get_all_identity_account_balances();
             self.stakes_cache.stakes().clone_and_filter_for_alpenglow(
                 MAX_ALPENGLOW_VOTE_ACCOUNTS,
                 ALPENGLOW_VAT_TO_BURN_PER_EPOCH,
-                &identity_balances,
             )
         } else {
             self.stakes_cache.stakes().clone()
         };
         stakes
-    }
-
-    fn get_all_identity_account_balances(&self) -> HashMap<Pubkey, u64> {
-        self.vote_accounts()
-            .iter()
-            .map(|(_, (_, account))| {
-                let identity = account.node_pubkey();
-                let balance = self.get_balance(identity);
-                (*identity, balance)
-            })
-            .collect::<HashMap<_, _>>()
     }
 }
 
