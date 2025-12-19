@@ -12,6 +12,7 @@ use {
             vote_pool::{DuplicateBlockVotePool, SimpleVotePool, VotePool},
         },
         event::VotorEvent,
+        types::non_zero_stake::NonZeroStake,
     },
     certificate_builder::{BuildError as CertificateBuildError, CertificateBuilder},
     log::{error, trace},
@@ -29,7 +30,6 @@ use {
     std::{
         cmp::Ordering,
         collections::{BTreeMap, HashMap},
-        num::NonZeroU64,
         sync::Arc,
     },
     thiserror::Error,
@@ -81,7 +81,7 @@ fn get_key_and_stakes(
     epoch_stakes_map: &HashMap<Epoch, VersionedEpochStakes>,
     slot: Slot,
     rank: u16,
-) -> Result<(Pubkey, Stake, Stake), AddVoteError> {
+) -> Result<(Pubkey, NonZeroStake, NonZeroStake), AddVoteError> {
     let epoch = epoch_schedule.get_epoch(slot);
     let epoch_stakes = epoch_stakes_map
         .get(&epoch)
@@ -93,11 +93,11 @@ fn get_key_and_stakes(
         return Err(AddVoteError::InvalidRank(rank));
     };
     let stake = epoch_stakes.vote_account_stake(vote_key);
-    if stake == 0 {
-        // Since we have a valid rank, this should never happen, there is no rank for zero stake.
-        panic!("Validator stake is zero for pubkey: {vote_key}");
-    }
-    Ok((*vote_key, stake, epoch_stakes.total_stake()))
+    // Safety: since we have a valid rank, the stake should not be 0.
+    let stake = NonZeroStake::try_new(stake).expect("validator stake for pubkey: {vote_key} is 0");
+    // Safety: since the validator stake is guaranteed to not be 0, the total stake must also not be 0.
+    let total_stake = NonZeroStake::try_new(epoch_stakes.total_stake()).unwrap();
+    Ok((*vote_key, stake, total_stake))
 }
 
 pub struct ConsensusPool {
@@ -169,7 +169,7 @@ impl ConsensusPool {
         &mut self,
         vote: VoteMessage,
         validator_vote_key: Pubkey,
-        validator_stake: Stake,
+        validator_stake: NonZeroStake,
     ) -> Option<Stake> {
         let vote_type = vote.vote.get_type();
         let pool = self
@@ -178,10 +178,10 @@ impl ConsensusPool {
             .or_insert_with(|| Self::new_vote_pool(vote_type));
         match pool {
             VotePool::SimpleVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, vote)
+                pool.add_vote(validator_vote_key, validator_stake.get(), vote)
             }
             VotePool::DuplicateBlockVotePool(pool) => {
-                pool.add_vote(validator_vote_key, validator_stake, vote)
+                pool.add_vote(validator_vote_key, validator_stake.get(), vote)
             }
         }
     }
@@ -198,7 +198,7 @@ impl ConsensusPool {
         vote: &Vote,
         block_id: Option<Hash>,
         events: &mut Vec<VotorEvent>,
-        total_stake: Stake,
+        total_stake: NonZeroStake,
     ) -> Result<Vec<Arc<Certificate>>, AddVoteError> {
         let slot = vote.slot();
         let mut new_certificates_to_send = Vec::new();
@@ -223,8 +223,7 @@ impl ConsensusPool {
                     })
                 })
                 .sum::<Stake>();
-            let total_stake = NonZeroU64::new(total_stake).unwrap();
-            if Fraction::new(accumulated_stake, total_stake) < limit {
+            if Fraction::new(accumulated_stake, total_stake.into()) < limit {
                 continue;
             }
             let mut cert_builder = CertificateBuilder::new(cert_type);
@@ -407,12 +406,6 @@ impl ConsensusPool {
         let vote_slot = vote.slot();
         let (validator_vote_key, validator_stake, total_stake) =
             get_key_and_stakes(epoch_schedule, epoch_stakes_map, vote_slot, rank)?;
-
-        // Since we have a valid rank, this should never happen, there is no rank for zero stake.
-        assert_ne!(
-            validator_stake, 0,
-            "Validator stake is zero for pubkey: {validator_vote_key}"
-        );
 
         self.stats.incoming_votes = self.stats.incoming_votes.saturating_add(1);
         if vote_slot < root_slot {

@@ -10,6 +10,7 @@ mod event_handler;
 pub mod root_utils;
 mod staked_validators_cache;
 mod timer_manager;
+pub(crate) mod types;
 pub mod vote_history;
 pub mod vote_history_storage;
 pub mod voting_service;
