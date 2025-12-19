@@ -413,6 +413,9 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
         // TODO(ksn, wen): fill this field
         final_cert: None,
+        // TODO(akhi): include reward certs
+        skip_reward_cert: None,
+        notar_reward_cert: None,
     }
 }
 

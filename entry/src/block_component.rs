@@ -78,6 +78,14 @@
 /// │ Final Cert Present           (1 byte)   │
 /// ├─────────────────────────────────────────┤
 /// │ FinalCertificate (if present, variable) │
+/// ├─────────────────────────────────────────┤
+/// │ Skip reward cert Present     (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ SkipRewardCert (if present, variable)   │
+/// ├─────────────────────────────────────────┤
+/// │ Notar reward cert Present    (1 byte)   │
+/// ├─────────────────────────────────────────┤
+/// │ NotarRewardCert (if present, variable)  │
 /// └─────────────────────────────────────────┘
 /// ```
 ///
@@ -128,7 +136,10 @@ use {
     },
     solana_clock::Slot,
     solana_hash::Hash,
-    solana_votor_messages::consensus_message::{Certificate, CertificateType},
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType},
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
+    },
     std::mem::MaybeUninit,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
@@ -157,28 +168,6 @@ impl SeqLen for U8Len {
 
     fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
         Ok(1)
-    }
-}
-
-/// 2-byte length prefix (max 65535 elements).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct U16Len;
-
-impl SeqLen for U16Len {
-    fn read<'de, T>(reader: &mut impl Reader<'de>) -> ReadResult<usize> {
-        u16::get(reader).map(|len| len as usize)
-    }
-
-    fn write(writer: &mut impl Writer, len: usize) -> WriteResult<()> {
-        let Ok(len): Result<u16, _> = len.try_into() else {
-            return Err(write_length_encoding_overflow("u16::MAX"));
-        };
-        writer.write(&len.to_le_bytes())?;
-        Ok(())
-    }
-
-    fn write_bytes_needed(_len: usize) -> WriteResult<usize> {
-        Ok(2)
     }
 }
 
@@ -266,6 +255,8 @@ pub struct BlockFooterV1 {
     #[wincode(with = "WincodeVec<u8, U8Len>")]
     pub block_user_agent: Vec<u8>,
     pub final_cert: Option<FinalCertificate>,
+    pub skip_reward_cert: Option<SkipRewardCertificate>,
+    pub notar_reward_cert: Option<NotarRewardCertificate>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
@@ -386,6 +377,7 @@ pub enum VersionedUpdateParent {
 }
 
 /// TLV-encoded marker variants.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 pub enum BlockMarkerV1 {
@@ -598,6 +590,8 @@ mod tests {
             block_producer_time_nanos: 1234567890,
             block_user_agent: b"test-agent".to_vec(),
             final_cert: Some(FinalCertificate::new_for_tests()),
+            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
+            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
         }
     }
 
