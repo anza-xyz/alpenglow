@@ -7,16 +7,16 @@ use {
         },
         consensus_pool::stats::ConsensusPoolStats,
         event::VotorEvent,
+        types::non_zero_stake::NonZeroStake,
     },
     solana_hash::Hash,
     solana_votor_messages::{fraction::Fraction, vote::Vote},
-    std::{collections::BTreeMap, num::NonZeroU64},
+    std::collections::BTreeMap,
 };
 
-#[derive(Debug)]
 pub(super) struct SlotStakeCounters {
     my_first_vote: Option<Vote>,
-    total_stake: Stake,
+    total_stake: NonZeroStake,
     skip_total: Stake,
     notarize_total: Stake,
     notarize_entry_total: BTreeMap<Hash, Stake>,
@@ -26,7 +26,7 @@ pub(super) struct SlotStakeCounters {
 }
 
 impl SlotStakeCounters {
-    pub(super) fn new(total_stake: Stake) -> Self {
+    pub(super) fn new(total_stake: NonZeroStake) -> Self {
         Self {
             total_stake,
             my_first_vote: None,
@@ -96,14 +96,15 @@ impl SlotStakeCounters {
                 return false; // I voted for the same block, no need to send NotarizeFallback
             }
         }
-        let skip_ratio = self.skip_total as f64 / self.total_stake as f64;
-        let notarized_ratio = *stake as f64 / self.total_stake as f64;
+        let skip_ratio = self.skip_total as f64 / self.total_stake.get() as f64;
+        let notarized_ratio = *stake as f64 / self.total_stake.get() as f64;
         trace!("safe_to_notar {block_id:?} {skip_ratio} {notarized_ratio}");
         // Check if the block fits condition (i) 40% of stake holders voted notarize
-        let total_stake = NonZeroU64::new(self.total_stake).unwrap();
-        let notarized_ratio = Fraction::new(*stake, total_stake);
-        let notarized_plus_skip_ratio =
-            Fraction::new(self.skip_total.checked_add(*stake).unwrap(), total_stake);
+        let notarized_ratio = Fraction::new(*stake, self.total_stake.into());
+        let notarized_plus_skip_ratio = Fraction::new(
+            self.skip_total.checked_add(*stake).unwrap(),
+            self.total_stake.into(),
+        );
 
         notarized_ratio >= SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY
             // Check if the block fits condition (ii) 20% notarized, and 60% notarized or skip
@@ -128,9 +129,7 @@ impl SlotStakeCounters {
             let num_stake = self
                 .skip_total
                 .saturating_add(self.notarize_total.saturating_sub(self.top_notarized_stake));
-            let total_stake = NonZeroU64::new(self.total_stake).unwrap();
-
-            Fraction::new(num_stake, total_stake) >= SAFE_TO_SKIP_THRESHOLD
+            Fraction::new(num_stake, self.total_stake.into()) >= SAFE_TO_SKIP_THRESHOLD
         } else {
             false
         }
@@ -143,7 +142,8 @@ mod tests {
 
     #[test]
     fn test_safe_to_notar() {
-        let mut counters = SlotStakeCounters::new(100);
+        let total_stake = NonZeroStake::try_new(100).unwrap();
+        let mut counters = SlotStakeCounters::new(total_stake);
 
         let mut events = vec![];
         let mut stats = ConsensusPoolStats::default();
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(stats.event_safe_to_notarize, 1);
 
         // Reset counters
-        counters = SlotStakeCounters::new(100);
+        counters = SlotStakeCounters::new(total_stake);
         events.clear();
         stats = ConsensusPoolStats::default();
 
@@ -231,7 +231,8 @@ mod tests {
 
     #[test]
     fn test_safe_to_skip() {
-        let mut counters = SlotStakeCounters::new(100);
+        let total_stake = NonZeroStake::try_new(100).unwrap();
+        let mut counters = SlotStakeCounters::new(total_stake);
 
         let mut events = vec![];
         let mut stats = ConsensusPoolStats::default();
@@ -272,7 +273,7 @@ mod tests {
         assert_eq!(stats.event_safe_to_skip, 1);
 
         // Reset counters
-        counters = SlotStakeCounters::new(100);
+        counters = SlotStakeCounters::new(total_stake);
         events.clear();
         stats = ConsensusPoolStats::default();
 
