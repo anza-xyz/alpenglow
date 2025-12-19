@@ -19,9 +19,7 @@ use {
         next_slots_iterator::NextSlotsIterator,
         shred::{
             self,
-            merkle_tree::{
-                get_proof_size, make_merkle_proof, make_merkle_tree, SIZE_OF_MERKLE_PROOF_ENTRY,
-            },
+            merkle_tree::{get_proof_size, MerkleTree, SIZE_OF_MERKLE_PROOF_ENTRY},
             ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredFlags,
             ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
         },
@@ -925,7 +923,7 @@ impl Blockstore {
         let fec_set_indices =
             (0..fec_set_count).map(|i| (slot, (i * DATA_SHREDS_PER_FEC_BLOCK) as u32));
         let keys = self.merkle_root_meta_cf.multi_get_keys(fec_set_indices);
-        let merkle_tree_leaves: Vec<_> = self
+        let merkle_tree_leaves = self
             .merkle_root_meta_cf
             .multi_get_bytes(&keys)
             .map(|get_result| {
@@ -943,40 +941,37 @@ impl Blockstore {
                 &parent_meta.parent_slot.to_le_bytes(),
                 parent_meta.parent_block_id.as_ref(),
             ]))))
-            .collect();
+            .collect::<Vec<_>>();
 
         Some(self.build_and_insert_double_merkle_meta(
             slot,
             block_location,
             fec_set_count,
-            merkle_tree_leaves,
+            merkle_tree_leaves.into_iter(),
         ))
     }
 
     /// Given the leaves of the double merkle tree, build the tree and proofs and create & insert into the double merkle meta column
-    pub fn build_and_insert_double_merkle_meta<I>(
+    pub fn build_and_insert_double_merkle_meta(
         &self,
         slot: Slot,
         block_location: BlockLocation,
         fec_set_count: usize,
-        merkle_tree_leaves: I,
-    ) -> Hash
-    where
-        I: IntoIterator<Item = std::result::Result<Hash, crate::shred::Error>>,
-        <I as IntoIterator>::IntoIter: ExactSizeIterator,
-    {
+        merkle_tree_leaves: impl ExactSizeIterator<
+            Item = std::result::Result<Hash, crate::shred::Error>,
+        >,
+    ) -> Hash {
         // Build the merkle tree
-        let merkle_tree = make_merkle_tree(merkle_tree_leaves)
+        let merkle_tree = MerkleTree::try_new(merkle_tree_leaves)
             .expect("Merkle tree construction cannot have failed");
-        let double_merkle_root = *merkle_tree
-            .last()
-            .expect("Merkle tree cannot be empty as fec_set_count is > 0");
+        let double_merkle_root = *merkle_tree.root();
 
         // Build proofs
         let tree_size = fec_set_count + 1;
         let proofs: Vec<Vec<u8>> = (0..tree_size)
             .map(|leaf_index| {
-                make_merkle_proof(leaf_index, tree_size, &merkle_tree)
+                merkle_tree
+                    .make_merkle_proof(leaf_index, tree_size)
                     .map(|proof_entry| {
                         proof_entry.expect("Merkle proof construction cannot have failed")
                     })
