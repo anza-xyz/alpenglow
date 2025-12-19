@@ -23,11 +23,12 @@ use {
     std::{
         cmp::Ordering,
         collections::{HashSet, VecDeque},
+        sync::{LazyLock, Mutex},
     },
 };
 
-// TODO: Change me once the program has full v4 feature gate support.
-pub(crate) const TEMP_HARDCODED_TARGET_VERSION: VoteStateTargetVersion = VoteStateTargetVersion::V3;
+pub static TEMP_HARDCODED_TARGET_VERSION: LazyLock<Mutex<VoteStateTargetVersion>> =
+    LazyLock::new(|| Mutex::new(VoteStateTargetVersion::V3));
 
 // utility function, used by Stakes, tests
 pub fn from<T: ReadableAccount>(account: &T) -> Option<VoteStateV3> {

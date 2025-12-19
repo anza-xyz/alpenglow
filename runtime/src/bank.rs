@@ -41,6 +41,7 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
+        block_component_processor::BlockComponentProcessor,
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
@@ -114,11 +115,12 @@ use {
         invoke_context::BuiltinFunctionWithContext, loaded_programs::ProgramCacheEntry,
     },
     solana_pubkey::{Pubkey, PubkeyHasherBuilder},
+    solana_rent::Rent,
     solana_reward_info::RewardInfo,
     solana_runtime_transaction::{
         runtime_transaction::RuntimeTransaction, transaction_with_meta::TransactionWithMeta,
     },
-    solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader},
+    solana_sdk_ids::{bpf_loader_upgradeable, incinerator, native_loader, system_program},
     solana_sha256_hasher::hashv,
     solana_signature::Signature,
     solana_slot_hashes::SlotHashes,
@@ -160,6 +162,9 @@ use {
     solana_transaction_context::{transaction_accounts::TransactionAccount, TransactionReturnData},
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_vote::vote_account::{VoteAccount, VoteAccountsHashMap},
+    solana_votor_messages::{
+        consensus_message::Certificate, migration::GENESIS_CERTIFICATE_ACCOUNT,
+    },
     std::{
         collections::{HashMap, HashSet},
         fmt,
@@ -171,7 +176,7 @@ use {
                 AtomicBool, AtomicI64, AtomicU64,
                 Ordering::{self, AcqRel, Acquire, Relaxed},
             },
-            Arc, LockResult, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
+            Arc, LazyLock, LockResult, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
         },
         time::{Duration, Instant},
     },
@@ -219,6 +224,13 @@ const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1_600_000_000; // 1.6 SOL
 
 #[cfg(feature = "dev-context-only-utils")]
 const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1; // For tests only require 1 lamport
+/// The off-curve account where we store the Alpenglow clock. The clock sysvar has seconds
+/// resolution while the Alpenglow clock has nanosecond resolution.
+static NANOSECOND_CLOCK_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {
+    let (pubkey, _) =
+        Pubkey::find_program_address(&[b"alpenclock"], &agave_feature_set::alpenglow::id());
+    pubkey
+});
 
 pub type BankStatusCache = StatusCache<Result<()>>;
 #[cfg_attr(
@@ -562,6 +574,7 @@ impl PartialEq for Bank {
             block_id,
             bank_hash_stats: _,
             epoch_rewards_calculation_cache: _,
+            block_component_processor: _,
             // Ignore new fields explicitly if they do not impact PartialEq.
             // Adding ".." will remove compile-time checks that if a new field
             // is added to the struct, this PartialEq is accordingly updated.
@@ -909,6 +922,11 @@ pub struct Bank {
     /// This is used to avoid recalculating the same epoch rewards at epoch boundary.
     /// The hashmap is keyed by parent_hash.
     epoch_rewards_calculation_cache: Arc<Mutex<HashMap<Hash, Arc<PartitionedRewardsCalculation>>>>,
+
+    /// Block component processor for validating block headers/footers and clock bounds. We
+    /// currently write to this during replay, as we process block components one at a time, and
+    /// read from this once replay is complete.
+    pub block_component_processor: RwLock<BlockComponentProcessor>,
 }
 
 #[derive(Debug)]
@@ -1105,6 +1123,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         bank.transaction_processor =
@@ -1172,6 +1191,7 @@ impl Bank {
         bank.update_last_restart_slot();
         bank.transaction_processor
             .fill_missing_sysvar_cache_entries(&bank);
+
         bank
     }
 
@@ -1352,6 +1372,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         let (_, ancestors_time_us) = measure_us!({
@@ -1387,7 +1408,12 @@ impl Bank {
         let (_, update_sysvars_time_us) = measure_us!({
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
-            new.update_clock(Some(parent.epoch()));
+
+            // If Alpenglow is enabled, update the clock from the footer.
+            if new.get_alpenglow_genesis_certificate().is_none() {
+                new.update_clock(Some(parent.epoch()));
+            }
+
             new.update_last_restart_slot()
         });
 
@@ -1820,6 +1846,7 @@ impl Bank {
             block_id: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
+            block_component_processor: RwLock::new(BlockComponentProcessor::default()),
         };
 
         // Sanity assertions between bank snapshot and genesis config
@@ -2014,6 +2041,52 @@ impl Bank {
     pub fn clock(&self) -> sysvar::clock::Clock {
         from_account(&self.get_account(&sysvar::clock::id()).unwrap_or_default())
             .unwrap_or_default()
+    }
+
+    pub fn update_clock_from_footer(&self, unix_timestamp_nanos: i64) {
+        // On epoch boundaries, update epoch_start_timestamp
+        let epoch_start_timestamp = match (self.slot, self.parent()) {
+            (0, _) => self.unix_timestamp_from_genesis(),
+            (_, Some(parent)) if parent.epoch() != self.epoch() => {
+                unix_timestamp_nanos / 1_000_000_000
+            }
+            _ => self.clock().epoch_start_timestamp,
+        };
+
+        // Update clock sysvar
+        // NOTE: block footer UNIX timestamps are in nanoseconds, but clock sysvar stores timestamps
+        // in seconds
+        let clock = sysvar::clock::Clock {
+            slot: self.slot,
+            epoch_start_timestamp,
+            epoch: self.epoch_schedule().get_epoch(self.slot),
+            leader_schedule_epoch: self.epoch_schedule().get_leader_schedule_epoch(self.slot),
+            unix_timestamp: unix_timestamp_nanos / 1_000_000_000,
+        };
+        self.update_sysvar_account(&sysvar::clock::id(), |account| {
+            create_account(
+                &clock,
+                self.inherit_specially_retained_account_fields(account),
+            )
+        });
+
+        // Update Alpenglow clock
+        let alpenclock_size = bincode::serialized_size(&unix_timestamp_nanos).unwrap();
+        let lamports = Rent::default().minimum_balance(alpenclock_size as usize);
+        let alpenclock_account_data =
+            AccountSharedData::new_data(lamports, &unix_timestamp_nanos, &system_program::ID)
+                .unwrap();
+        self.store_account_and_update_capitalization(
+            &NANOSECOND_CLOCK_ACCOUNT,
+            &alpenclock_account_data,
+        );
+    }
+
+    pub fn get_nanosecond_clock(&self) -> Option<i64> {
+        self.get_account(&NANOSECOND_CLOCK_ACCOUNT).map(|acct| {
+            acct.deserialize_data()
+                .expect("Couldn't deserialize nanosecond resolution clock")
+        })
     }
 
     fn update_clock(&self, parent_epoch: Option<Epoch>) {
@@ -2786,6 +2859,23 @@ impl Bank {
         blockhash_queue
             .get_hash_age(blockhash)
             .map(|age| self.block_height + MAX_PROCESSING_AGE as u64 - age)
+    }
+
+    /// If this is an alpenglow block, return the genesis certificate.
+    pub fn get_alpenglow_genesis_certificate(&self) -> Option<Certificate> {
+        self.get_account(&GENESIS_CERTIFICATE_ACCOUNT).map(|acct| {
+            acct.deserialize_data()
+                .expect("Programmer error deserializing genesis certificate")
+        })
+    }
+
+    /// For use in the first Alpenglow block, set the genesis certificate.
+    pub fn set_alpenglow_genesis_certificate(&self, cert: &Certificate) {
+        let cert_size = bincode::serialized_size(cert).unwrap();
+        let lamports = Rent::default().minimum_balance(cert_size as usize);
+        let cert_acct = AccountSharedData::new_data(lamports, cert, &system_program::ID).unwrap();
+
+        self.store_account_and_update_capitalization(&GENESIS_CERTIFICATE_ACCOUNT, &cert_acct);
     }
 
     pub fn confirmed_last_blockhash(&self) -> Hash {
@@ -5606,7 +5696,12 @@ impl Bank {
     }
 
     pub fn set_block_id(&self, block_id: Option<Hash>) {
-        *self.block_id.write().unwrap() = block_id;
+        let mut block_id_w = self.block_id.write().unwrap();
+        if block_id_w.is_some() {
+            debug_assert_eq!(*block_id_w, block_id);
+        } else {
+            *block_id_w = block_id;
+        }
     }
 
     pub fn compute_budget(&self) -> Option<ComputeBudget> {

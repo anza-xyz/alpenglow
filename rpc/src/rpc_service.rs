@@ -2,6 +2,7 @@
 
 use {
     crate::{
+        alpenglow_last_voted::AlpenglowLastVoted,
         cluster_tpu_info::ClusterTpuInfo,
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
@@ -491,6 +492,7 @@ pub struct JsonRpcServiceConfig<'a> {
     pub max_complete_transaction_status_slot: Arc<AtomicU64>,
     pub prioritization_fee_cache: Arc<PrioritizationFeeCache>,
     pub client_option: ClientOption<'a>,
+    pub alpenglow_last_voted: Option<Arc<AlpenglowLastVoted>>,
 }
 
 impl JsonRpcService {
@@ -542,6 +544,7 @@ impl JsonRpcService {
                     config.max_complete_transaction_status_slot,
                     config.prioritization_fee_cache,
                     runtime,
+                    config.alpenglow_last_voted,
                 )?;
                 Ok(json_rpc_service)
             }
@@ -591,6 +594,7 @@ impl JsonRpcService {
                     config.max_complete_transaction_status_slot,
                     config.prioritization_fee_cache,
                     runtime,
+                    config.alpenglow_last_voted,
                 )?;
                 Ok(json_rpc_service)
             }
@@ -666,6 +670,7 @@ impl JsonRpcService {
             max_complete_transaction_status_slot,
             prioritization_fee_cache,
             runtime,
+            None,
         )?;
         Ok(json_rpc_service)
     }
@@ -699,6 +704,7 @@ impl JsonRpcService {
         max_complete_transaction_status_slot: Arc<AtomicU64>,
         prioritization_fee_cache: Arc<PrioritizationFeeCache>,
         runtime: Arc<TokioRuntime>,
+        alpenglow_last_voted: Option<Arc<AlpenglowLastVoted>>,
     ) -> Result<Self, String> {
         info!("rpc bound to {rpc_addr:?}");
         info!("rpc configuration: {config:?}");
@@ -790,6 +796,7 @@ impl JsonRpcService {
             max_complete_transaction_status_slot,
             prioritization_fee_cache,
             Arc::clone(&runtime),
+            alpenglow_last_voted,
         );
 
         let _send_transaction_service = Arc::new(SendTransactionService::new_with_client(

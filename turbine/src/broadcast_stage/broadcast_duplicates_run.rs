@@ -3,7 +3,7 @@ use {
     crate::cluster_nodes::ClusterNodesCache,
     crossbeam_channel::Sender,
     itertools::Itertools,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
@@ -39,7 +39,7 @@ pub(super) struct BroadcastDuplicatesRun {
     config: BroadcastDuplicatesConfig,
     current_slot: Slot,
     chained_merkle_root: Hash,
-    carryover_entry: Option<WorkingBankEntry>,
+    carryover_entry: Option<WorkingBankEntryMarker>,
     next_shred_index: u32,
     next_code_index: u32,
     shred_version: u16,
@@ -50,10 +50,15 @@ pub(super) struct BroadcastDuplicatesRun {
     original_last_data_shreds: Arc<Mutex<HashSet<Signature>>>,
     partition_last_data_shreds: Arc<Mutex<HashSet<Signature>>>,
     reed_solomon_cache: Arc<ReedSolomonCache>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BroadcastDuplicatesRun {
-    pub(super) fn new(shred_version: u16, config: BroadcastDuplicatesConfig) -> Self {
+    pub(super) fn new(
+        shred_version: u16,
+        config: BroadcastDuplicatesConfig,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
         let cluster_nodes_cache = Arc::new(ClusterNodesCache::<BroadcastStage>::new(
             CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
             CLUSTER_NODES_CACHE_TTL,
@@ -73,6 +78,7 @@ impl BroadcastDuplicatesRun {
             original_last_data_shreds: Arc::<Mutex<HashSet<Signature>>>::default(),
             partition_last_data_shreds: Arc::<Mutex<HashSet<Signature>>>::default(),
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
+            migration_status,
         }
     }
 }
@@ -82,19 +88,19 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         &mut self,
         keypair: &Keypair,
         blockstore: &Blockstore,
-        receiver: &Receiver<WorkingBankEntry>,
+        receiver: &Receiver<WorkingBankEntryMarker>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         _votor_event_sender: &VotorEventSender,
     ) -> Result<()> {
         // 1) Pull entries from banking stage
         let mut stats = ProcessShredsStats::default();
-        let mut receive_results =
+        let receive_results =
             broadcast_utils::recv_slot_entries(receiver, &mut self.carryover_entry, &mut stats)?;
         let bank = receive_results.bank.clone();
         let last_tick_height = receive_results.last_tick_height;
 
-        if bank.slot() != self.current_slot {
+        let send_header = if bank.slot() != self.current_slot {
             self.chained_merkle_root = broadcast_utils::get_chained_merkle_root_from_parent(
                 bank.slot(),
                 bank.parent_slot(),
@@ -106,14 +112,19 @@ impl BroadcastRun for BroadcastDuplicatesRun {
             self.current_slot = bank.slot();
             self.prev_entry_hash = None;
             self.num_slots_broadcasted += 1;
-        }
 
-        if receive_results.entries.is_empty() {
+            self.migration_status.is_alpenglow_enabled()
+        } else {
+            false
+        };
+
+        // Check if we have a marker - if so, nothing to duplicate
+        if matches!(receive_results.component, BlockComponent::BlockMarker(_)) {
             return Ok(());
         }
 
         // Update the recent blockhash based on transactions in the entries
-        for entry in &receive_results.entries {
+        for entry in receive_results.entries() {
             if !entry.transactions.is_empty() {
                 self.recent_blockhash = Some(*entry.transactions[0].message.recent_blockhash());
                 break;
@@ -122,27 +133,33 @@ impl BroadcastRun for BroadcastDuplicatesRun {
 
         // 2) Convert entries to shreds + generate coding shreds. Set a garbage PoH on the last entry
         // in the slot to make verification fail on validators
-        let last_entries = {
+        let (component, last_entries) = {
             if last_tick_height == bank.max_tick_height()
                 && bank.slot() > MINIMUM_DUPLICATE_SLOT
                 && self.num_slots_broadcasted % DUPLICATE_RATE == 0
                 && self.recent_blockhash.is_some()
             {
-                let entry_batch_len = receive_results.entries.len();
-                let prev_entry_hash =
-                    // Try to get second-to-last entry before last tick
-                    if entry_batch_len > 1 {
-                        Some(receive_results.entries[entry_batch_len - 2].hash)
+                // Extract the last entry from the component
+                let (original_last_entry, prev_entry_hash, component) =
+                    if let BlockComponent::EntryBatch(mut entries) = receive_results.component {
+                        // Get the last entry from the batch (should be the final tick)
+                        let last_entry = entries.pop().expect("EntryBatch should not be empty");
+
+                        // Try to get the second-to-last entry from this batch
+                        let prev_hash = entries.last().map(|e| e.hash).or(self.prev_entry_hash);
+
+                        // Create component with remaining entries
+                        let component = BlockComponent::EntryBatch(entries);
+
+                        (last_entry, prev_hash, component)
                     } else {
-                        self.prev_entry_hash
+                        panic!("Expected EntryBatch, found BlockMarker");
                     };
 
+                // Last entry has to be a tick
+                assert!(original_last_entry.is_tick());
+
                 if let Some(prev_entry_hash) = prev_entry_hash {
-                    let original_last_entry = receive_results.entries.pop().unwrap();
-
-                    // Last entry has to be a tick
-                    assert!(original_last_entry.is_tick());
-
                     // Inject an extra entry before the last tick
                     let extra_tx = system_transaction::transfer(
                         keypair,
@@ -161,19 +178,25 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                         vec![],
                     );
 
-                    Some((original_last_entry, vec![new_extra_entry, new_last_entry]))
+                    (
+                        component,
+                        Some((original_last_entry, vec![new_extra_entry, new_last_entry])),
+                    )
                 } else {
-                    None
+                    (component, None)
                 }
             } else {
-                None
+                (receive_results.component, None)
             }
         };
 
         self.prev_entry_hash = last_entries
             .as_ref()
             .map(|(original_last_entry, _)| original_last_entry.hash)
-            .or_else(|| Some(receive_results.entries.last().unwrap().hash));
+            .or_else(|| match &component {
+                BlockComponent::EntryBatch(entries) => entries.last().map(|e| e.hash),
+                BlockComponent::BlockMarker(_) => None,
+            });
 
         let shredder = Shredder::new(
             bank.slot(),
@@ -183,28 +206,62 @@ impl BroadcastRun for BroadcastDuplicatesRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
-            keypair,
-            &receive_results.entries,
-            last_tick_height == bank.max_tick_height() && last_entries.is_none(),
-            Some(self.chained_merkle_root),
-            self.next_shred_index,
-            self.next_code_index,
-            &self.reed_solomon_cache,
-            &mut stats,
-        );
-        if let Some(shred) = data_shreds.iter().max_by_key(|shred| shred.index()) {
+        let (header_data_shreds, header_coding_shreds) = if send_header {
+            let header = produce_block_header(bank.parent_slot(), self.chained_merkle_root);
+
+            shredder.component_to_merkle_shreds_for_tests(
+                keypair,
+                &BlockComponent::BlockMarker(header),
+                false,
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            )
+        } else {
+            (vec![], vec![])
+        };
+        if let Some(shred) = header_data_shreds.iter().max_by_key(|shred| shred.index()) {
             self.chained_merkle_root = shred.merkle_root().unwrap();
         }
-        self.next_shred_index += data_shreds.len() as u32;
-        if let Some(index) = coding_shreds.iter().map(Shred::index).max() {
+        self.next_shred_index += header_data_shreds.len() as u32;
+        if let Some(index) = header_coding_shreds.iter().map(Shred::index).max() {
             self.next_code_index = index + 1;
         }
+
+        let (component_data_shreds, component_coding_shreds) = shredder
+            .component_to_merkle_shreds_for_tests(
+                keypair,
+                &component,
+                last_tick_height == bank.max_tick_height() && last_entries.is_none(),
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            );
+        if let Some(shred) = component_data_shreds
+            .iter()
+            .max_by_key(|shred| shred.index())
+        {
+            self.chained_merkle_root = shred.merkle_root().unwrap();
+        }
+        self.next_shred_index += component_data_shreds.len() as u32;
+        if let Some(index) = component_coding_shreds.iter().map(Shred::index).max() {
+            self.next_code_index = index + 1;
+        }
+
+        let data_shreds = header_data_shreds
+            .into_iter()
+            .chain(component_data_shreds)
+            .collect_vec();
+
         let last_shreds =
             last_entries.map(|(original_last_entry, duplicate_extra_last_entries)| {
-                let (original_last_data_shred, _) = shredder.entries_to_merkle_shreds_for_tests(
+                let (original_last_data_shred, _) = shredder.component_to_merkle_shreds_for_tests(
                     keypair,
-                    &[original_last_entry],
+                    &BlockComponent::EntryBatch(vec![original_last_entry]),
                     true,
                     Some(self.chained_merkle_root),
                     self.next_shred_index,
@@ -215,9 +272,9 @@ impl BroadcastRun for BroadcastDuplicatesRun {
                 // Don't mark the last shred as last so that validators won't
                 // know that they've gotten all the shreds, and will continue
                 // trying to repair.
-                let (partition_last_data_shred, _) = shredder.entries_to_merkle_shreds_for_tests(
+                let (partition_last_data_shred, _) = shredder.component_to_merkle_shreds_for_tests(
                     keypair,
-                    &duplicate_extra_last_entries,
+                    &BlockComponent::EntryBatch(duplicate_extra_last_entries),
                     true,
                     Some(self.chained_merkle_root),
                     self.next_shred_index,

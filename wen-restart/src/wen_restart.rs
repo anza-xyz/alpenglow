@@ -49,6 +49,7 @@ use {
     solana_svm_timings::ExecuteTimings,
     solana_time_utils::timestamp,
     solana_vote::vote_transaction::VoteTransaction,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{HashMap, HashSet},
         fs::{read, File},
@@ -649,6 +650,7 @@ pub(crate) fn find_bankhash_of_heaviest_fork(
                 None,
                 None,
                 &mut timing,
+                &MigrationStatus::default(),
             ) {
                 return Err(
                     WenRestartError::BlockNotFrozenAfterReplay(slot, Some(e.to_string())).into(),
@@ -2031,6 +2033,7 @@ mod tests {
             None,
             None,
             &mut timing,
+            &MigrationStatus::default(),
         ) {
             panic!("process_single_slot failed: {e:?}");
         }

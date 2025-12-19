@@ -48,6 +48,7 @@ solana-rayon-threadlimit = { workspace = true }
 solana-rpc = { workspace = true }
 solana-rpc-client-api = { workspace = true }
 solana-runtime = { workspace = true }
+solana-sha256-hasher = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-streamer = { workspace = true }
@@ -56,6 +57,7 @@ solana-time-utils = { workspace = true }
 solana-tls-utils = { workspace = true }
 solana-transaction-error = { workspace = true }
 solana-votor = { workspace = true }
+solana-votor-messages = { workspace = true }
 static_assertions = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -75,6 +77,7 @@ solana-runtime = { workspace = true, features = ["dev-context-only-utils"] }
 solana-signature = { workspace = true, features = ["rand"] }
 solana-transaction = { workspace = true }
 solana-turbine = { path = ".", features = ["agave-unstable-api"] }
+solana-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 test-case = { workspace = true }
 
 [[bench]]

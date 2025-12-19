@@ -1,31 +1,43 @@
 use {
     super::*,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_gossip::contact_info::ContactInfo,
     solana_hash::Hash,
     solana_keypair::Keypair,
-    solana_ledger::shred::{self, ProcessShredsStats, ReedSolomonCache, Shredder},
+    solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_votor::event::VotorEventSender,
 };
 #[derive(Clone)]
 pub(super) struct BroadcastFakeShredsRun {
     last_blockhash: Hash,
-    carryover_entry: Option<WorkingBankEntry>,
+    carryover_entry: Option<WorkingBankEntryMarker>,
     partition: usize,
     shred_version: u16,
+    current_slot: Slot,
+    chained_merkle_root: Hash,
+    next_shred_index: u32,
     next_code_index: u32,
     reed_solomon_cache: Arc<ReedSolomonCache>,
+    migration_status: Arc<MigrationStatus>,
 }
 
 impl BroadcastFakeShredsRun {
-    pub(super) fn new(partition: usize, shred_version: u16) -> Self {
+    pub(super) fn new(
+        partition: usize,
+        shred_version: u16,
+        migration_status: Arc<MigrationStatus>,
+    ) -> Self {
         Self {
             last_blockhash: Hash::default(),
             carryover_entry: None,
             partition,
             shred_version,
+            current_slot: 0,
+            chained_merkle_root: Hash::default(),
+            next_shred_index: 0,
             next_code_index: 0,
             reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
+            migration_status,
         }
     }
 }
@@ -35,7 +47,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         &mut self,
         keypair: &Keypair,
         blockstore: &Blockstore,
-        receiver: &Receiver<WorkingBankEntry>,
+        receiver: &Receiver<WorkingBankEntryMarker>,
         socket_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         blockstore_sender: &Sender<(Arc<Vec<Shred>>, Option<BroadcastShredBatchInfo>)>,
         _votor_event_sender: &VotorEventSender,
@@ -49,28 +61,26 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         let bank = receive_results.bank;
         let last_tick_height = receive_results.last_tick_height;
 
-        let next_shred_index = blockstore
-            .meta(bank.slot())
-            .expect("Database error")
-            .map(|meta| meta.consumed)
-            .unwrap_or(0) as u32;
-        let chained_merkle_root = match next_shred_index.checked_sub(1) {
-            None => broadcast_utils::get_chained_merkle_root_from_parent(
+        let send_header = if bank.slot() != self.current_slot {
+            self.chained_merkle_root = broadcast_utils::get_chained_merkle_root_from_parent(
                 bank.slot(),
                 bank.parent_slot(),
                 blockstore,
             )
-            .unwrap(),
-            Some(index) => {
-                let shred = blockstore
-                    .get_data_shred(bank.slot(), u64::from(index))
-                    .unwrap()
-                    .unwrap();
-                shred::layout::get_merkle_root(&shred).unwrap()
-            }
+            .unwrap();
+            self.next_shred_index = 0;
+            self.next_code_index = 0;
+            self.current_slot = bank.slot();
+
+            self.migration_status.is_alpenglow_enabled()
+        } else {
+            false
         };
 
-        let num_entries = receive_results.entries.len();
+        let num_entries = match &receive_results.component {
+            BlockComponent::EntryBatch(entries) => entries.len(),
+            BlockComponent::BlockMarker(_) => 0,
+        };
 
         let shredder = Shredder::new(
             bank.slot(),
@@ -80,16 +90,53 @@ impl BroadcastRun for BroadcastFakeShredsRun {
         )
         .expect("Expected to create a new shredder");
 
-        let (data_shreds, coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
-            keypair,
-            &receive_results.entries,
-            last_tick_height == bank.max_tick_height(),
-            Some(chained_merkle_root),
-            next_shred_index,
-            self.next_code_index,
-            &self.reed_solomon_cache,
-            &mut ProcessShredsStats::default(),
-        );
+        let mut stats = ProcessShredsStats::default();
+
+        let (header_data_shreds, header_coding_shreds) = if send_header {
+            let header = produce_block_header(bank.parent_slot(), self.chained_merkle_root);
+
+            shredder.component_to_merkle_shreds_for_tests(
+                keypair,
+                &BlockComponent::BlockMarker(header),
+                false,
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            )
+        } else {
+            (vec![], vec![])
+        };
+        if let Some(shred) = header_data_shreds.iter().max_by_key(|shred| shred.index()) {
+            self.chained_merkle_root = shred.merkle_root().unwrap();
+        }
+        self.next_shred_index += header_data_shreds.len() as u32;
+        if let Some(index) = header_coding_shreds.iter().map(Shred::index).max() {
+            self.next_code_index = index + 1;
+        }
+
+        let (component_data_shreds, component_coding_shreds) = shredder
+            .component_to_merkle_shreds_for_tests(
+                keypair,
+                &receive_results.component,
+                last_tick_height == bank.max_tick_height(),
+                Some(self.chained_merkle_root),
+                self.next_shred_index,
+                self.next_code_index,
+                &self.reed_solomon_cache,
+                &mut stats,
+            );
+        if let Some(shred) = component_data_shreds
+            .iter()
+            .max_by_key(|shred| shred.index())
+        {
+            self.chained_merkle_root = shred.merkle_root().unwrap();
+        }
+        self.next_shred_index += component_data_shreds.len() as u32;
+        if let Some(index) = component_coding_shreds.iter().map(Shred::index).max() {
+            self.next_code_index = index + 1;
+        }
 
         // If the last blockhash is default, a new block is being created
         // So grab the last blockhash from the parent bank
@@ -97,35 +144,41 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             self.last_blockhash = bank.parent().unwrap().last_blockhash();
         }
 
+        // Create fake entries and shreds for the same component
         let fake_entries: Vec<_> = (0..num_entries)
             .map(|_| Entry::new(&self.last_blockhash, 0, vec![]))
             .collect();
+
+        // Fake shreds need to start from the same index as component shreds
+        let fake_shred_start_index = self.next_shred_index - component_data_shreds.len() as u32;
+        let fake_code_start_index = self.next_code_index - component_coding_shreds.len() as u32;
 
         let (fake_data_shreds, fake_coding_shreds) = shredder.entries_to_merkle_shreds_for_tests(
             keypair,
             &fake_entries,
             last_tick_height == bank.max_tick_height(),
-            Some(chained_merkle_root),
-            next_shred_index,
-            self.next_code_index,
+            Some(self.chained_merkle_root),
+            fake_shred_start_index,
+            fake_code_start_index,
             &self.reed_solomon_cache,
-            &mut ProcessShredsStats::default(),
+            &mut stats,
         );
-
-        if let Some(index) = coding_shreds
-            .iter()
-            .chain(&fake_coding_shreds)
-            .map(Shred::index)
-            .max()
-        {
-            self.next_code_index = index + 1;
-        }
 
         // If it's the last tick, reset the last block hash to default
         // this will cause next run to grab last bank's blockhash
         if last_tick_height == bank.max_tick_height() {
             self.last_blockhash = Hash::default();
         }
+
+        // Chain header shreds with component shreds
+        let data_shreds = header_data_shreds
+            .into_iter()
+            .chain(component_data_shreds)
+            .collect_vec();
+        let coding_shreds = header_coding_shreds
+            .into_iter()
+            .chain(component_coding_shreds)
+            .collect_vec();
 
         let data_shreds = Arc::new(data_shreds);
         blockstore_sender.send((data_shreds.clone(), None))?;

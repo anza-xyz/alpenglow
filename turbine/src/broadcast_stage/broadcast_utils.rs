@@ -1,17 +1,17 @@
 use {
     super::{Error, Result},
-    bincode::serialized_size,
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::entry::Entry,
+    solana_entry::{block_component::BlockComponent, entry::Entry},
     solana_hash::Hash,
     solana_ledger::{
         blockstore::Blockstore,
         shred::{self, get_data_shred_bytes_per_batch_typical, ProcessShredsStats},
     },
-    solana_poh::poh_recorder::WorkingBankEntry,
+    solana_poh::poh_recorder::WorkingBankEntryMarker,
     solana_runtime::bank::Bank,
     solana_votor::event::{CompletedBlock, VotorEvent, VotorEventSender},
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -21,9 +21,20 @@ use {
 const ENTRY_COALESCE_DURATION: Duration = Duration::from_millis(200);
 
 pub(super) struct ReceiveResults {
-    pub entries: Vec<Entry>,
+    pub component: BlockComponent,
     pub bank: Arc<Bank>,
     pub last_tick_height: u64,
+}
+
+impl ReceiveResults {
+    pub fn entries(&self) -> impl Iterator<Item = &Entry> {
+        match &self.component {
+            BlockComponent::EntryBatch(entries) => Some(entries.iter()),
+            _ => None,
+        }
+        .into_iter()
+        .flatten()
+    }
 }
 
 const fn get_target_batch_bytes_default() -> u64 {
@@ -76,23 +87,38 @@ fn max_coalesce_time(serialized_batch_byte_count: u64, max_batch_byte_count: u64
 }
 
 pub(super) fn recv_slot_entries(
-    receiver: &Receiver<WorkingBankEntry>,
-    carryover_entry: &mut Option<WorkingBankEntry>,
+    receiver: &Receiver<WorkingBankEntryMarker>,
+    carryover_entry: &mut Option<WorkingBankEntryMarker>,
     process_stats: &mut ProcessShredsStats,
 ) -> Result<ReceiveResults> {
     let recv_start = Instant::now();
 
     // If there is a carryover entry, use it. Else, see if there is a new entry.
-    let (mut bank, (entry, mut last_tick_height)) = match carryover_entry.take() {
-        Some((bank, (entry, tick_height))) => (bank, (entry, tick_height)),
+    let (mut bank, (entry_marker, mut last_tick_height)) = match carryover_entry.take() {
+        Some((bank, (entry_marker, tick_height))) => (bank, (entry_marker, tick_height)),
         None => receiver.recv_timeout(Duration::new(1, 0))?,
     };
     assert!(last_tick_height <= bank.max_tick_height());
-    let mut entries = vec![entry];
 
-    // Drain the channel of entries.
+    // If the first thing is a block marker, return it immediately
+    if entry_marker.as_marker().is_some() {
+        process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
+
+        return Ok(ReceiveResults {
+            component: BlockComponent::BlockMarker(entry_marker.into_marker().unwrap()),
+            bank,
+            last_tick_height,
+        });
+    }
+
+    // Otherwise, drain entries into a batch
+    let mut entries = vec![entry_marker
+        .into_entry()
+        .expect("entry_marker must be Entry if not Marker")];
+
+    // Drain the channel of entries until we hit a marker or the slot ends
     while last_tick_height != bank.max_tick_height() {
-        let Ok((try_bank, (entry, tick_height))) = receiver.try_recv() else {
+        let Ok((try_bank, (next_marker, tick_height))) = receiver.try_recv() else {
             break;
         };
         // If the bank changed, that implies the previous slot was interrupted and we do not have to
@@ -100,14 +126,23 @@ pub(super) fn recv_slot_entries(
         if try_bank.slot() != bank.slot() {
             warn!("Broadcast for slot: {} interrupted", bank.slot());
             entries.clear();
-            bank = try_bank;
+            bank = try_bank.clone();
         }
         last_tick_height = tick_height;
-        entries.push(entry);
+
+        // If we hit a block marker, save it for next time and stop draining
+        if next_marker.as_marker().is_some() {
+            *carryover_entry = Some((try_bank, (next_marker, tick_height)));
+            break;
+        }
+
+        // Add the entry to our batch
+        entries.push(next_marker.into_entry().expect("must be Entry"));
         assert!(last_tick_height <= bank.max_tick_height());
     }
 
-    let mut serialized_batch_byte_count = serialized_size(&entries)?;
+    let mut serialized_batch_byte_count = bincode::serialized_size(&entries)?;
+
     let next_full_batch_byte_count = serialized_batch_byte_count
         .div_ceil(get_data_shred_bytes_per_batch_typical())
         .saturating_mul(get_data_shred_bytes_per_batch_typical());
@@ -117,6 +152,7 @@ pub(super) fn recv_slot_entries(
     // 1. We ticked through the entire slot.
     // 2. We hit the timeout.
     // 3. We're over the max data target.
+    // 4. We hit a block marker.
     let mut coalesce_start = Instant::now();
     while keep_coalescing_entries(
         last_tick_height,
@@ -125,7 +161,7 @@ pub(super) fn recv_slot_entries(
         max_batch_byte_count,
         process_stats,
     ) {
-        let Ok((try_bank, (entry, tick_height))) = receiver.recv_deadline(
+        let Ok((try_bank, (entry_marker, tick_height))) = receiver.recv_deadline(
             coalesce_start + max_coalesce_time(serialized_batch_byte_count, max_batch_byte_count),
         ) else {
             process_stats.coalesce_exited_rcv_timeout += 1;
@@ -142,11 +178,19 @@ pub(super) fn recv_slot_entries(
         }
         last_tick_height = tick_height;
 
-        let entry_bytes = serialized_size(&entry)?;
+        // If we hit a block marker, save it for next time and stop coalescing
+        if entry_marker.as_marker().is_some() {
+            *carryover_entry = Some((try_bank, (entry_marker, tick_height)));
+            break;
+        }
+
+        let entry = entry_marker.into_entry().expect("must be Entry");
+        let entry_bytes = bincode::serialized_size(&entry)?;
+
         if serialized_batch_byte_count + entry_bytes > max_batch_byte_count {
             // This entry will push us over the batch byte limit. Save it for
             // the next batch.
-            *carryover_entry = Some((try_bank, (entry, tick_height)));
+            *carryover_entry = Some((try_bank, (entry.into(), tick_height)));
             process_stats.coalesce_exited_hit_max += 1;
             break;
         }
@@ -154,12 +198,13 @@ pub(super) fn recv_slot_entries(
         // Add the entry to the batch.
         serialized_batch_byte_count += entry_bytes;
         entries.push(entry);
+
         assert!(last_tick_height <= bank.max_tick_height());
     }
     process_stats.receive_elapsed = recv_start.elapsed().as_micros() as u64;
     process_stats.coalesce_elapsed = coalesce_start.elapsed().as_micros() as u64;
     Ok(ReceiveResults {
-        entries,
+        component: BlockComponent::EntryBatch(entries),
         bank,
         last_tick_height,
     })
@@ -195,12 +240,13 @@ pub(super) fn get_chained_merkle_root_from_parent(
 
 /// Set the block id on the bank and send it for consideration in voting
 pub(super) fn set_block_id_and_send(
+    migration_status: &MigrationStatus,
     votor_event_sender: &VotorEventSender,
     bank: Arc<Bank>,
     block_id: Hash,
 ) -> Result<()> {
     bank.set_block_id(Some(block_id));
-    if bank.is_frozen() {
+    if bank.is_frozen() && migration_status.should_send_votor_event(bank.slot()) {
         votor_event_sender.send(VotorEvent::Block(CompletedBlock {
             slot: bank.slot(),
             bank,
@@ -214,6 +260,7 @@ mod tests {
     use {
         super::*,
         crossbeam_channel::unbounded,
+        solana_entry::entry_marker::EntryMarker,
         solana_genesis_config::GenesisConfig,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
         solana_pubkey::Pubkey,
@@ -251,7 +298,8 @@ mod tests {
             .map(|i| {
                 let entry = Entry::new(&last_hash, 1, vec![tx.clone()]);
                 last_hash = entry.hash;
-                s.send((bank1.clone(), (entry.clone(), i))).unwrap();
+                s.send((bank1.clone(), (EntryMarker::Entry(entry.clone()), i)))
+                    .unwrap();
                 entry
             })
             .collect();
@@ -262,7 +310,9 @@ mod tests {
         {
             assert_eq!(result.bank.slot(), bank1.slot());
             last_tick_height = result.last_tick_height;
-            res_entries.extend(result.entries);
+            if let BlockComponent::EntryBatch(entries) = result.component {
+                res_entries.extend(entries);
+            }
         }
         assert_eq!(last_tick_height, bank1.max_tick_height());
         assert_eq!(res_entries, entries);
@@ -286,11 +336,15 @@ mod tests {
                 last_hash = entry.hash;
                 // Interrupt slot 1 right before the last tick
                 if tick_height == expected_last_height {
-                    s.send((bank2.clone(), (entry.clone(), tick_height)))
-                        .unwrap();
+                    s.send((
+                        bank2.clone(),
+                        (EntryMarker::Entry(entry.clone()), tick_height),
+                    ))
+                    .unwrap();
                     Some(entry)
                 } else {
-                    s.send((bank1.clone(), (entry, tick_height))).unwrap();
+                    s.send((bank1.clone(), (EntryMarker::Entry(entry), tick_height)))
+                        .unwrap();
                     None
                 }
             })
@@ -305,7 +359,9 @@ mod tests {
         {
             bank_slot = result.bank.slot();
             last_tick_height = result.last_tick_height;
-            res_entries = result.entries;
+            if let BlockComponent::EntryBatch(entries) = result.component {
+                res_entries = entries;
+            }
         }
         assert_eq!(bank_slot, bank2.slot());
         assert_eq!(last_tick_height, expected_last_height);

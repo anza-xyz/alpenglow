@@ -40,9 +40,9 @@ use {
     solana_ledger::{
         ancestor_iterator::AncestorIterator,
         bank_forks_utils,
-        blockstore::{entries_to_test_shreds, Blockstore},
+        blockstore::{entries_to_test_shreds, Blockstore, PurgeType},
         blockstore_processor::ProcessOptions,
-        leader_schedule::FixedSchedule,
+        leader_schedule::{FixedSchedule, IdentityKeyedLeaderSchedule},
         leader_schedule_utils::first_of_consecutive_leader_slots,
         shred::{ProcessShredsStats, ReedSolomonCache, Shred, Shredder},
         use_snapshot_archives_at_startup::UseSnapshotArchivesAtStartup,
@@ -100,8 +100,9 @@ use {
     solana_votor::voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     solana_votor_messages::{
         consensus_message::{
-            CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+            Certificate, CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
         },
+        migration::{GENESIS_CERTIFICATE_ACCOUNT, MIGRATION_SLOT_OFFSET},
         vote::Vote,
     },
     std::{
@@ -1768,13 +1769,14 @@ fn test_optimistic_confirmation_violation_detection() {
     // to form a cluster. The heavier validator is the second node.
     let node_to_restart = validator_keys[1].0.pubkey();
 
+    // WFSM as we require a OC slot > 50 within 100 seconds
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
+
     let mut config = ClusterConfig {
         mint_lamports: DEFAULT_MINT_LAMPORTS + node_stakes.iter().sum::<u64>(),
         node_stakes: node_stakes.clone(),
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            node_stakes.len(),
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, node_stakes.len()),
         validator_keys: Some(validator_keys),
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
@@ -2162,13 +2164,12 @@ fn do_test_future_tower(cluster_mode: ClusterMode) {
         ClusterMode::MasterSlave => validators[1],
     };
 
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
     let mut config = ClusterConfig {
         mint_lamports: DEFAULT_MINT_LAMPORTS + DEFAULT_NODE_STAKE * 100,
         node_stakes: node_stakes.clone(),
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            node_stakes.len(),
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, node_stakes.len()),
         validator_keys: Some(validator_keys),
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
@@ -2664,13 +2665,12 @@ fn test_restart_tower_rollback() {
 
     let b_pubkey = validator_keys[1].0.pubkey();
 
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
     let mut config = ClusterConfig {
         mint_lamports: DEFAULT_MINT_LAMPORTS + DEFAULT_NODE_STAKE * 100,
         node_stakes: node_stakes.clone(),
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            node_stakes.len(),
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, node_stakes.len()),
         validator_keys: Some(validator_keys),
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
@@ -2760,7 +2760,7 @@ fn run_test_load_program_accounts_partition(scan_commitment: CommitmentConfig, i
     let exit = Arc::new(AtomicBool::new(false));
 
     let (t_update, t_scan, additional_accounts) = setup_transfer_scan_threads(
-        1000,
+        100,
         exit.clone(),
         scan_commitment,
         update_client_receiver,
@@ -2813,6 +2813,7 @@ fn test_rpc_block_subscribe() {
     let node_stakes = vec![leader_stake, rpc_stake];
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.enable_default_rpc_block_subscribe();
+    validator_config.wait_for_supermajority = Some(0);
 
     let validator_keys = [
         "28bN3xyvrP4E8LwEgtLjhnkb7cY4amQb6DrYAbAYjgRV4GAGgkVM2K7wnxnAS7WDneuavza7x21MiafLu1HkwQt4",
@@ -2891,11 +2892,6 @@ fn test_oc_bad_signatures() {
     let leader_stake = (total_stake as f64 * VOTE_THRESHOLD_SIZE) as u64;
     let our_node_stake = total_stake - leader_stake;
     let node_stakes = vec![leader_stake, our_node_stake];
-    let mut validator_config = ValidatorConfig {
-        require_tower: true,
-        ..ValidatorConfig::default_for_test()
-    };
-    validator_config.enable_default_rpc_block_subscribe();
     let validator_keys = [
         "28bN3xyvrP4E8LwEgtLjhnkb7cY4amQb6DrYAbAYjgRV4GAGgkVM2K7wnxnAS7WDneuavza7x21MiafLu1HkwQt4",
         "2saHBBoTkLMmttmPQP8KfBkcCw45S5cwtV3wTdGCscRC8uxdgvHxpHiWXKx4LvJjNJtnNcbSv5NdheokFFqnNDt8",
@@ -2904,6 +2900,23 @@ fn test_oc_bad_signatures() {
     .map(|s| (Arc::new(Keypair::from_base58_string(s)), true))
     .take(node_stakes.len())
     .collect::<Vec<_>>();
+
+    // Give bootstrap node all the leader slots to avoid initial forking leading
+    // to casting votes with invalid blockhash. This is not what is meant to be
+    // test and only inflates test time.
+    let fixed_schedule = FixedSchedule {
+        leader_schedule: Arc::new(Box::new(IdentityKeyedLeaderSchedule::new_from_schedule(
+            vec![validator_keys.first().unwrap().0.pubkey()],
+        ))),
+    };
+
+    let mut validator_config = ValidatorConfig {
+        require_tower: true,
+        wait_for_supermajority: Some(0),
+        fixed_leader_schedule: Some(fixed_schedule),
+        ..ValidatorConfig::default_for_test()
+    };
+    validator_config.enable_default_rpc_block_subscribe();
 
     let our_id = validator_keys.last().unwrap().0.pubkey();
     let mut config = ClusterConfig {
@@ -2930,7 +2943,6 @@ fn test_oc_bad_signatures() {
     let client = cluster
         .build_validator_tpu_quic_client(cluster.entry_point_info.pubkey())
         .unwrap();
-    let cluster_funding_keypair = cluster.funding_keypair.insecure_clone();
     let voter_thread_sleep_ms: usize = 100;
     let num_votes_simulated = Arc::new(AtomicUsize::new(0));
     let gossip_voter = cluster_tests::start_gossip_voter(
@@ -2973,7 +2985,7 @@ fn test_oc_bad_signatures() {
                 );
                 LocalCluster::send_transaction_with_retries(
                     &client,
-                    &[&cluster_funding_keypair, &bad_authorized_signer_keypair],
+                    &[&node_keypair, &bad_authorized_signer_keypair],
                     &mut vote_tx,
                     5,
                 )
@@ -3259,7 +3271,7 @@ fn run_test_load_program_accounts(scan_commitment: CommitmentConfig) {
     .take(node_stakes.len())
     .collect();
 
-    let num_starting_accounts = 1000;
+    let num_starting_accounts = 100;
     let exit = Arc::new(AtomicBool::new(false));
     let (update_client_sender, update_client_receiver) = unbounded();
     let (scan_client_sender, scan_client_receiver) = unbounded();
@@ -3273,13 +3285,12 @@ fn run_test_load_program_accounts(scan_commitment: CommitmentConfig) {
         scan_client_receiver,
     );
 
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
     let mut config = ClusterConfig {
         mint_lamports: DEFAULT_MINT_LAMPORTS + node_stakes.iter().sum::<u64>(),
         node_stakes: node_stakes.clone(),
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            node_stakes.len(),
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, node_stakes.len()),
         validator_keys: Some(validator_keys),
         slots_per_epoch,
         stakers_slot_offset: slots_per_epoch,
@@ -3422,6 +3433,7 @@ fn do_test_lockout_violation_with_or_without_tower(with_tower: bool) {
     default_config.fixed_leader_schedule = Some(FixedSchedule {
         leader_schedule: leader_schedule.clone(),
     });
+    default_config.wait_for_supermajority = Some(0);
     let mut validator_configs =
         make_identical_validator_configs(&default_config, node_stakes.len());
 
@@ -4559,7 +4571,8 @@ fn test_leader_failure_4() {
     // Cluster needs a supermajority to remain even after taking 1 node offline,
     // so the minimum number of nodes for this test is 4.
     let num_nodes = 4;
-    let validator_config = ValidatorConfig::default_for_test();
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
     // Embed vote and stake account in genesis to avoid waiting for stake
     // activation and race conditions around accepting gossip votes, repairing
     // blocks, etc. before we advance through too many epochs.
@@ -4655,8 +4668,10 @@ fn test_slot_hash_expiry() {
 
     // We want B to not vote (we are trying to simulate its votes not landing until it gets to the
     // minority fork)
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
     let mut validator_configs =
-        make_identical_validator_configs(&ValidatorConfig::default_for_test(), node_stakes.len());
+        make_identical_validator_configs(&validator_config, node_stakes.len());
     validator_configs[1].voting_disabled = true;
 
     let mut config = ClusterConfig {
@@ -6208,6 +6223,301 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
+fn test_alpenglow_migration(
+    num_nodes: usize,
+    test_name: &str,
+    leader_schedule: &[usize],
+) -> (
+    LocalCluster,
+    Vec<Arc<Keypair>>,
+    /* migration slot */ Slot,
+) {
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
+    let vote_listener_addr = vote_listener_socket.try_clone().unwrap();
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
+    // Since we don't skip warmup slots and have very small epochs + tight MIGRATION_SLOT_OFFSET
+    // we can't afford any forking due to rolling start
+    validator_config.wait_for_supermajority = Some(0);
+
+    let (leader_schedule, keys) = create_custom_leader_schedule_with_random_keys(leader_schedule);
+
+    validator_config.fixed_leader_schedule = Some(FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    });
+    let node_stakes = vec![DEFAULT_NODE_STAKE; num_nodes];
+
+    // We want the epochs to be as short as possible to reduce test time without being flaky.
+    // We start the migration at an offset of 32, so use 64 as the epoch length.
+    let slots_per_epoch = 2 * MINIMUM_SLOTS_PER_EPOCH;
+    assert!(slots_per_epoch > MIGRATION_SLOT_OFFSET);
+    let mut cluster_config = ClusterConfig {
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
+        validator_keys: Some(
+            keys.iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        node_stakes: node_stakes.clone(),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        // So we don't have to wait so long
+        skip_warmup_slots: false,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster with alpenglow accounts but feature not activated
+    let cluster = LocalCluster::new_pre_migration_alpenglow(
+        &mut cluster_config,
+        SocketAddrSpace::Unspecified,
+    );
+
+    let validator_keys: Vec<Arc<Keypair>> = cluster
+        .validators
+        .values()
+        .map(|v| v.info.keypair.clone())
+        .collect();
+
+    // Send feature activation transaction
+    info!("Sending feature activation transaction");
+    let client = RpcClient::new_socket_with_commitment(
+        cluster.entry_point_info.rpc().unwrap(),
+        CommitmentConfig::processed(),
+    );
+    let faucet_keypair = &cluster.funding_keypair;
+    let feature_keypair = &*agave_feature_set::alpenglow::TEST_KEYPAIR;
+    let blockhash = client.get_latest_blockhash().unwrap();
+    let lamports = client
+        .get_minimum_balance_for_rent_exemption(solana_feature_gate_interface::Feature::size_of())
+        .unwrap();
+
+    let activation_message = solana_message::Message::new(
+        &solana_feature_gate_interface::activate_with_lamports(
+            &agave_feature_set::alpenglow::id(),
+            &faucet_keypair.pubkey(),
+            lamports,
+        ),
+        Some(&faucet_keypair.pubkey()),
+    );
+    let activation_tx = solana_transaction::Transaction::new(
+        &[&feature_keypair, &faucet_keypair],
+        activation_message,
+        blockhash,
+    );
+
+    client.send_and_confirm_transaction(&activation_tx).unwrap();
+    info!("Feature activation transaction confirmed");
+
+    // Monitor for feature activation
+    let activation_slot;
+    loop {
+        if let Ok(account) = client.get_account(&agave_feature_set::alpenglow::id()) {
+            if let Some(feature) = solana_feature_gate_interface::from_account(&account) {
+                if let Some(slot) = feature.activated_at {
+                    activation_slot = slot;
+                    info!("Feature activated at slot {slot}");
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // The migration happens at a fixed offset from feature activation
+    let migration_slot = activation_slot + MIGRATION_SLOT_OFFSET;
+    info!("Waiting for migration slot {migration_slot}");
+
+    loop {
+        let slot = client.get_slot().unwrap();
+        if slot >= migration_slot - 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    info!("Migration slot reached, checking for notarized votes");
+
+    // Check for new notarized votes
+    cluster.check_for_new_notarized_votes(
+        4,
+        test_name,
+        SocketAddrSpace::Unspecified,
+        vote_listener_addr,
+        &validator_keys,
+        &node_stakes,
+    );
+
+    // Additionally ensure that roots are being made
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+    (cluster, keys, migration_slot)
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_migration_4() {
+    test_alpenglow_migration(4, "test_alpenglow_migration_4", &[4, 4, 4, 4]);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_restart_post_migration() {
+    let test_name = "test_alpenglow_restart_post_migration";
+
+    // Start a 2 node cluster and have it go through the migration
+    let (mut cluster, _, _) = test_alpenglow_migration(2, test_name, &[4, 4]);
+
+    // Now restart one of the nodes. This causes the cluster to temporarily halt
+    let node_pubkey = cluster.get_node_pubkeys()[0];
+    cluster.exit_restart_node(
+        &node_pubkey,
+        safe_clone_config(&cluster.validators.get(&node_pubkey).unwrap().config),
+        SocketAddrSpace::Unspecified,
+    );
+
+    // The restarted node will startup from genesis (0) so this test verifies the following:
+    // - When processing the feature flag activation during startup increment `PreFeatureActivation` ->  `Migration`
+    // - When processing the first alpenglow block during startup increment `Migration` -> `ReadyToEnable`
+    // - If we reach `ReadyToEnable` during startup, enable alpenglow
+    // - Ensure that during startup we set ticks correctly
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_missed_migration_entirely() {
+    let test_name = "test_alpenglow_missed_migration_entirely";
+
+    // Start a 3 node cluster and have it go through the migration and root some slots
+    // Critical that the third node is not in the leader schedule, as since
+    // we clear blockstore later, we could end up producing duplicate blocks
+    let (mut cluster, validator_keys, migration_slot) =
+        test_alpenglow_migration(3, test_name, &[4, 4, 0]);
+
+    // Now kill the second node
+    let node_pubkey = validator_keys[2].pubkey();
+    let exit_info = cluster.exit_node(&node_pubkey);
+    let start_slot = migration_slot - 10;
+
+    // Clear blockstore to simulate the node partitioning before the migration period
+    info!("Clearing blockstore after slot {start_slot}");
+    {
+        let blockstore = Blockstore::open(&exit_info.info.ledger_path).unwrap();
+        let end_slot = blockstore.highest_slot().unwrap().unwrap();
+        blockstore.purge_from_next_slots(start_slot, end_slot);
+        blockstore.purge_slots(start_slot, end_slot, PurgeType::Exact);
+    }
+
+    // Restart the node.
+    // We have simulated the following situation:
+    // - Nodes 1 and 2 were enough to perform the migration. They finalized blocks after the migration
+    //   and are no longer broadcasting the GenesisCertificate.
+    // - Node 3 was completely partitioned off since 10 slots before the migration.
+    // - Node 3 now rejoins the network
+    // - It is able to use TowerBFT eager repair to fetch blocks, eventually it will see the
+    //   first Alpenglow block, attempt to process it as a TowerBFT block and switch to Alpenglow.
+    info!("Restarting node to a pre migration state");
+    cluster.restart_node(&node_pubkey, exit_info, SocketAddrSpace::Unspecified);
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
+#[test]
+// This test requires alpenglow repair
+#[ignore]
+#[serial]
+fn test_alpenglow_missed_migration_completion() {
+    let test_name = "test_alpenglow_missed_migration_completion";
+
+    // Start a 3 node cluster and have it go through the migration and root some slots
+    // Critical that the second node is not in the leader schedule, as since
+    // we clear blockstore later, we could end up producing duplicate blocks
+    let (mut cluster, validator_keys, _migration_slot) =
+        test_alpenglow_migration(3, test_name, &[4, 0, 4]);
+
+    // Figure out the genesis slot
+    info!("Determining the genesis slot");
+    let client = RpcClient::new_socket_with_commitment(
+        cluster.entry_point_info.rpc().unwrap(),
+        CommitmentConfig::processed(),
+    );
+    let genesis_slot = loop {
+        let Ok(account) = client.get_account(&GENESIS_CERTIFICATE_ACCOUNT) else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        };
+        break account
+            .deserialize_data::<Certificate>()
+            .expect("Genesis cert must be populated")
+            .cert_type
+            .slot();
+    };
+    info!("Genesis slot {genesis_slot}");
+
+    // Now kill the second node
+    let node_pubkey = validator_keys[1].pubkey();
+    let exit_info = cluster.exit_node(&node_pubkey);
+    {
+        // Clear all blocks past genesis
+        let start_slot = genesis_slot + 1;
+        let blockstore = Blockstore::open(&exit_info.info.ledger_path).unwrap();
+        let end_slot = blockstore.highest_slot().unwrap().unwrap();
+        info!("Clearing blockstore from slot {start_slot}");
+        blockstore.purge_from_next_slots(start_slot, end_slot);
+        blockstore.purge_slots(start_slot, end_slot, PurgeType::CompactionFilter);
+
+        // Now to simulate the node observing the migration insert 5 TowerBFT blocks
+        // past the alpenglow genesis
+        for slot in start_slot..start_slot + 5 {
+            let entries = create_ticks(64, 0, cluster.genesis_config.hash());
+            let last_hash = entries.last().unwrap().hash;
+            let version = solana_shred_version::version_from_hash(&last_hash);
+            // It doesn't really matter if these shreds fully check out.
+            // The key is that they occupy space in the blockstore column requiring
+            // Alpenglow repair to get the alpenglow version of these blocks
+            let shreds = Shredder::new(slot, slot - 1, 0, version)
+                .unwrap()
+                .entries_to_merkle_shreds_for_tests(
+                    &Keypair::new(),
+                    &entries,
+                    true, // is_full_slot
+                    None, // chained_merkle_root
+                    0,    // next_shred_index,
+                    0,    // next_code_index
+                    &ReedSolomonCache::default(),
+                    &mut ProcessShredsStats::default(),
+                )
+                .0;
+            blockstore
+                .insert_shreds(shreds, None, /* is_trusted */ true)
+                .unwrap();
+        }
+    }
+
+    // Restart the node - we have now simulated the following case:
+    // - All nodes entered the migration
+    // - Node 1 and 3 observed the migration success, cleared TowerBFT blocks past genesis
+    //   and are now chugging along in Alpenglow
+    // - The second node observed 5 TowerBFT blocks after the migration, but partitioned off
+    //   before it could view the Genesis Certificate. It has the Genesis block
+    //
+    // BlockID repair is necessary to progress:
+    // - Alpenglow must repair to get the Alpenglow blocks instead of the TowerBFT ones leftover from the
+    //   migrationary period.
+    // - This allows Node 2 to see the first Alpenglow block and enter alpenglow
+    //
+    // Upon observing a finalization certificate from the other nodes, Node 2 will eventually
+    // be able to trigger block id repair. The tricky part is figuring out that we need to replay
+    // these alpenglow blocks from the secondary column. If this is done, then the GenesisCertificate
+    // Marker will be observed and we will enable alpenglow.
+    cluster.restart_node(&node_pubkey, exit_info, SocketAddrSpace::Unspecified);
+    cluster.check_for_new_roots(8, test_name, SocketAddrSpace::Unspecified);
+}
+
 fn broadcast_vote(
     message: ConsensusMessage,
     tpu_socket_addrs: &[std::net::SocketAddr],
@@ -7033,14 +7343,14 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                                 }
                             }
                         }
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Stage 3: Verify continued liveness after partition resolution
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage == Stage::ObserveLiveness
-                                && [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                    .contains(&cert_message.certificate.certificate_type())
+                                && (matches!(cert_type, CertificateType::Finalize(_))
+                                    || matches!(cert_type, CertificateType::FinalizeFast(_, _)))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
                                     exit.store(true, Ordering::Relaxed);
@@ -7371,17 +7681,17 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                             );
                         }
 
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Wait until the final stage before looking for finalization certificates.
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage != Stage::ObserveLiveness {
                                 continue;
                             }
                             // Observing finalization certificates to ensure liveness.
-                            if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                .contains(&cert_message.certificate.certificate_type())
+                            if matches!(cert_type, CertificateType::Finalize(_))
+                                || matches!(cert_type, CertificateType::FinalizeFast(_, _))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
                                     exit.store(true, Ordering::Relaxed);
@@ -7667,17 +7977,17 @@ fn test_alpenglow_add_missing_parent_ready() {
                             experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
                         }
 
-                        ConsensusMessage::Certificate(cert_message) => {
+                        ConsensusMessage::Certificate(certificate) => {
                             // Wait until the final stage before looking for finalization certificates.
+                            let cert_type = certificate.cert_type;
                             if experiment_state.stage != Stage::ObserveLiveness {
                                 continue;
                             }
                             // Observing finalization certificates to ensure liveness.
-                            if [CertificateType::Finalize, CertificateType::FinalizeFast]
-                                .contains(&cert_message.certificate.certificate_type())
+                            if matches!(cert_type, CertificateType::Finalize(_))
+                                || matches!(cert_type, CertificateType::FinalizeFast(_, _))
                             {
-                                experiment_state
-                                    .record_certificate(cert_message.certificate.slot());
+                                experiment_state.record_certificate(certificate.cert_type.slot());
                             }
                         }
                     }

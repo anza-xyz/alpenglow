@@ -2,7 +2,7 @@
 use {
     crate::{
         blockstore::error::Result,
-        blockstore_meta::{self},
+        blockstore_meta::{self, BlockLocation},
     },
     serde::{de::DeserializeOwned, Serialize},
     solana_clock::{Slot, UnixTimestamp},
@@ -278,6 +278,26 @@ pub mod columns {
     /// * index type: `u64` (see [`SlotColumn`])
     /// * value type: [`blockstore_meta::SlotCertificates`]
     pub struct SlotCertificates;
+
+    #[derive(Debug)]
+    /// The parent metadata column
+    ///
+    /// This column stores metadata about parent blocks for each slot and block location. We update
+    /// this column on receiving BlockHeader and UpdateParent BlockComponents.
+    ///
+    /// * index type: `(Slot, BlockLocation)`
+    /// * value type: [`blockstore_meta::ParentMeta`]
+    pub struct ParentMeta;
+
+    #[derive(Debug)]
+    /// The double merkle root metadata column
+    ///
+    /// This column stores details about the double merkle root of a block.
+    /// We update this column when we finish ingesting all the shreds of the block.
+    ///
+    /// * index type: `(Slot, BlockLocation)`
+    /// * value type: [`blockstore_meta::DoubleMerkleMeta`]
+    pub struct DoubleMerkleMeta;
 }
 
 macro_rules! convert_column_index_to_key_bytes {
@@ -1058,4 +1078,102 @@ impl ColumnName for columns::AlternateMerkleRootMeta {
 }
 impl TypedColumn for columns::AlternateMerkleRootMeta {
     type Type = blockstore_meta::MerkleRootMeta;
+}
+
+impl Column for columns::ParentMeta {
+    type Index = (Slot, BlockLocation);
+    // Key size: Slot (8 bytes) + Hash (32 bytes)
+    // When BlockLocation::Original, the hash is Hash::default().
+    type Key = [u8; std::mem::size_of::<Slot>() + HASH_BYTES];
+
+    #[inline]
+    fn key((slot, location): &Self::Index) -> Self::Key {
+        let mut key = [0u8; std::mem::size_of::<Slot>() + HASH_BYTES];
+        key[..8].copy_from_slice(&slot.to_le_bytes());
+
+        let hash_bytes = match location {
+            BlockLocation::Original => &Hash::default().to_bytes(),
+            BlockLocation::Alternate { block_id } => &block_id.to_bytes(),
+        };
+
+        key[8..40].copy_from_slice(hash_bytes);
+
+        key
+    }
+
+    fn index(key: &[u8]) -> Self::Index {
+        let slot = Slot::from_le_bytes(key[0..8].try_into().unwrap());
+        let hash = Hash::new_from_array(key[8..40].try_into().unwrap());
+        let location = match hash == Hash::default() {
+            true => BlockLocation::Original,
+            false => BlockLocation::Alternate { block_id: hash },
+        };
+
+        (slot, location)
+    }
+
+    fn as_index(slot: Slot) -> Self::Index {
+        (slot, BlockLocation::Original)
+    }
+
+    fn slot((slot, _location): Self::Index) -> Slot {
+        slot
+    }
+}
+
+impl ColumnName for columns::ParentMeta {
+    const NAME: &'static str = "parent_meta";
+}
+
+impl TypedColumn for columns::ParentMeta {
+    type Type = blockstore_meta::ParentMeta;
+}
+
+impl Column for columns::DoubleMerkleMeta {
+    type Index = (Slot, BlockLocation);
+    // Key size: Slot (8 bytes) + Hash (32 bytes)
+    // When BlockLocation::Original, the hash is Hash::default().
+    type Key = [u8; std::mem::size_of::<Slot>() + HASH_BYTES];
+
+    #[inline]
+    fn key((slot, location): &Self::Index) -> Self::Key {
+        let mut key = [0u8; std::mem::size_of::<Slot>() + HASH_BYTES];
+        key[..8].copy_from_slice(&slot.to_le_bytes());
+
+        let hash_bytes = match location {
+            BlockLocation::Original => &Hash::default().to_bytes(),
+            BlockLocation::Alternate { block_id } => &block_id.to_bytes(),
+        };
+
+        key[8..40].copy_from_slice(hash_bytes);
+
+        key
+    }
+
+    fn index(key: &[u8]) -> Self::Index {
+        let slot = Slot::from_le_bytes(key[0..8].try_into().unwrap());
+        let hash = Hash::new_from_array(key[8..40].try_into().unwrap());
+        let location = match hash == Hash::default() {
+            true => BlockLocation::Original,
+            false => BlockLocation::Alternate { block_id: hash },
+        };
+
+        (slot, location)
+    }
+
+    fn as_index(slot: Slot) -> Self::Index {
+        (slot, BlockLocation::Original)
+    }
+
+    fn slot((slot, _location): Self::Index) -> Slot {
+        slot
+    }
+}
+
+impl ColumnName for columns::DoubleMerkleMeta {
+    const NAME: &'static str = "double_merkle_meta";
+}
+
+impl TypedColumn for columns::DoubleMerkleMeta {
+    type Type = blockstore_meta::DoubleMerkleMeta;
 }

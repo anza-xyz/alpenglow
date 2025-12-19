@@ -7,6 +7,7 @@ use {
         banking_trace::Channels,
         validator::{BlockProductionMethod, TransactionStructure},
     },
+    solana_entry::entry_marker::EntryMarker,
     solana_vote::vote_transaction::new_tower_sync_transaction,
     solana_vote_program::vote_state::TowerSync,
 };
@@ -31,7 +32,7 @@ use {
     },
     solana_message::Message,
     solana_perf::packet::to_packet_batches,
-    solana_poh::poh_recorder::{create_test_recorder, WorkingBankEntry},
+    solana_poh::poh_recorder::{create_test_recorder, WorkingBankEntryMarker},
     solana_pubkey as pubkey,
     solana_runtime::{
         bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
@@ -50,11 +51,13 @@ use {
     test::Bencher,
 };
 
-fn check_txs(receiver: &Arc<Receiver<WorkingBankEntry>>, ref_tx_count: usize) {
+fn check_txs(receiver: &Arc<Receiver<WorkingBankEntryMarker>>, ref_tx_count: usize) {
     let mut total = 0;
     let now = Instant::now();
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::new(1, 0)) {
+        if let Ok((_bank, (EntryMarker::Entry(entry), _tick_height))) =
+            receiver.recv_timeout(Duration::new(1, 0))
+        {
             total += entry.transactions.len();
         }
         if total >= ref_tx_count {

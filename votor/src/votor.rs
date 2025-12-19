@@ -1,6 +1,6 @@
 //! The entrypoint into votor the module responsible for voting, rooting, and notifying
 //! the core to create a new block.
-//!
+//! ```text
 //!                                Votor
 //!   ┌────────────────────────────────────────────────────────────────────────────┐
 //!   │                                                                            │
@@ -39,11 +39,13 @@
 //!   │                          │                    │     │                    │ │
 //!   │                          └────────────────────┘     └────────────────────┘ │
 //!   └────────────────────────────────────────────────────────────────────────────┘
-//!
+//! ```
 use {
     crate::{
         commitment::CommitmentAggregationData,
-        consensus_metrics::ConsensusMetrics,
+        consensus_metrics::{
+            ConsensusMetrics, ConsensusMetricsEventReceiver, ConsensusMetricsEventSender,
+        },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
@@ -70,25 +72,14 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::consensus_message::ConsensusMessage,
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         collections::HashMap,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc, Condvar, Mutex, RwLock,
-        },
+        sync::{atomic::AtomicBool, Arc, RwLock},
         thread,
         time::Duration,
     },
 };
-
-/// Communication with the block creation loop to notify leader window
-#[derive(Default)]
-pub struct LeaderWindowNotifier {
-    pub window_info: Mutex<Option<LeaderWindowInfo>>,
-    pub window_notification: Condvar,
-    pub highest_parent_ready: RwLock<(Slot, (Slot, Hash))>,
-}
 
 /// Inputs to Votor
 pub struct VotorConfig {
@@ -107,7 +98,8 @@ pub struct VotorConfig {
     pub cluster_info: Arc<ClusterInfo>,
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
-    pub consensus_metrics: Arc<PlRwLock<ConsensusMetrics>>,
+    pub consensus_metrics_sender: ConsensusMetricsEventSender,
+    pub migration_status: Arc<MigrationStatus>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -115,13 +107,15 @@ pub struct VotorConfig {
     pub commitment_sender: Sender<CommitmentAggregationData>,
     pub drop_bank_sender: Sender<Vec<BankWithScheduler>>,
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
-    pub leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub leader_window_info_sender: Sender<LeaderWindowInfo>,
+    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
 
     // Receivers
     pub event_receiver: VotorEventReceiver,
     pub consensus_message_receiver: Receiver<ConsensusMessage>,
+    pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
@@ -130,16 +124,12 @@ pub(crate) struct SharedContext {
     pub(crate) bank_forks: Arc<RwLock<BankForks>>,
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
-    pub(crate) leader_window_notifier: Arc<LeaderWindowNotifier>,
+    pub(crate) leader_window_info_sender: Sender<LeaderWindowInfo>,
+    pub(crate) highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub(crate) vote_history_storage: Arc<dyn VoteHistoryStorage>,
 }
 
 pub struct Votor {
-    // TODO: Just a placeholder for how migration could look like,
-    // will fix once we finish the strategy
-    #[allow(dead_code)]
-    start: Arc<(Mutex<bool>, Condvar)>,
-
     event_handler: EventHandler,
     consensus_pool_service: ConsensusPoolService,
     timer_manager: Arc<PlRwLock<TimerManager>>,
@@ -160,20 +150,21 @@ impl Votor {
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
+            migration_status,
             snapshot_controller,
             bls_sender,
             commitment_sender,
             drop_bank_sender,
             bank_notification_sender,
-            leader_window_notifier,
+            leader_window_info_sender,
+            highest_parent_ready,
             event_sender,
-            event_receiver,
             own_vote_sender,
+            event_receiver,
             consensus_message_receiver: bls_receiver,
-            consensus_metrics,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
         } = config;
-
-        let start = Arc::new((Mutex::new(false), Condvar::new()));
 
         let identity_keypair = cluster_info.keypair().clone();
         let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
@@ -186,7 +177,8 @@ impl Votor {
             bank_forks: bank_forks.clone(),
             cluster_info: cluster_info.clone(),
             rpc_subscriptions,
-            leader_window_notifier,
+            highest_parent_ready,
+            leader_window_info_sender,
             vote_history_storage,
         };
 
@@ -202,7 +194,7 @@ impl Votor {
             commitment_sender: commitment_sender.clone(),
             wait_to_vote_slot,
             sharable_banks: sharable_banks.clone(),
-            consensus_metrics,
+            consensus_metrics_sender: consensus_metrics_sender.clone(),
         };
 
         let root_context = RootContext {
@@ -215,11 +207,12 @@ impl Votor {
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
+            migration_status.clone(),
         )));
 
         let event_handler_context = EventHandlerContext {
             exit: exit.clone(),
-            start: start.clone(),
+            migration_status: migration_status.clone(),
             event_receiver,
             timer_manager: Arc::clone(&timer_manager),
             shared_context,
@@ -227,9 +220,11 @@ impl Votor {
             root_context,
         };
 
+        let root_epoch = sharable_banks.root().epoch();
+
         let consensus_pool_context = ConsensusPoolContext {
             exit: exit.clone(),
-            start: start.clone(),
+            migration_status,
             cluster_info: cluster_info.clone(),
             my_vote_pubkey: vote_account,
             blockstore,
@@ -241,36 +236,14 @@ impl Votor {
             commitment_sender,
         };
 
+        ConsensusMetrics::start_metrics_loop(root_epoch, consensus_metrics_receiver, exit.clone());
         let event_handler = EventHandler::new(event_handler_context);
         let consensus_pool_service = ConsensusPoolService::new(consensus_pool_context);
 
         Self {
-            start,
             event_handler,
             consensus_pool_service,
             timer_manager,
-        }
-    }
-
-    pub fn start_migration(&self) {
-        // TODO: evaluate once we have actual migration logic
-        let (lock, cvar) = &*self.start;
-        let mut started = lock.lock().unwrap();
-        *started = true;
-        cvar.notify_all();
-    }
-
-    pub(crate) fn wait_for_migration_or_exit(
-        exit: &AtomicBool,
-        (lock, cvar): &(Mutex<bool>, Condvar),
-    ) {
-        let mut started = lock.lock().unwrap();
-        while !*started {
-            if exit.load(Ordering::Relaxed) {
-                return;
-            }
-            // Add timeout to check for exit flag
-            (started, _) = cvar.wait_timeout(started, Duration::from_secs(5)).unwrap();
         }
     }
 

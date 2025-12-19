@@ -15,6 +15,7 @@ members = [
     "bench-tps",
     "bench-vote",
     "bloom",
+    "bls-cert-verify",
     "bucket_map",
     "builtins",
     "builtins-default-costs",
@@ -176,6 +177,7 @@ used_underscore_binding = "deny"
 Inflector = "0.11.4"
 aes-gcm-siv = "0.11.1"
 agave-banking-stage-ingress-types = { path = "banking-stage-ingress-types", version = "=3.1.0" }
+agave-bls-cert-verify = { path = "bls-cert-verify" }
 agave-cargo-registry = { path = "cargo-registry", version = "=3.1.0" }
 agave-feature-set = { path = "feature-set", version = "=3.1.0" }
 agave-geyser-plugin-interface = { path = "geyser-plugin-interface", version = "=3.1.0" }
@@ -359,10 +361,10 @@ rustls = { version = "0.23.31", features = ["std"], default-features = false }
 scopeguard = "1.2.0"
 semver = "1.0.26"
 seqlock = "0.2.0"
-serde = "1.0.219" # must match the serde_derive version, see https://github.com/serde-rs/serde/issues/2584#issuecomment-1685252251
+serde = "1.0.228" # must match the serde_derive version, see https://github.com/serde-rs/serde/issues/2584#issuecomment-1685252251
 serde-big-array = "0.5.1"
 serde_bytes = "0.11.17"
-serde_derive = "1.0.219" # must match the serde version, see https://github.com/serde-rs/serde/issues/2584#issuecomment-1685252251
+serde_derive = "1.0.228" # must match the serde version, see https://github.com/serde-rs/serde/issues/2584#issuecomment-1685252251
 serde_json = "1.0.143"
 serde_with = { version = "3.14.0", default-features = false }
 serde_yaml = "0.9.34"
@@ -392,7 +394,7 @@ solana-big-mod-exp = "3.0.0"
 solana-bincode = "3.0.0"
 solana-blake3-hasher = "3.0.0"
 solana-bloom = { path = "bloom", version = "=3.1.0" }
-solana-bls-signatures = { version = "0.3.0", features = ["serde"] }
+solana-bls-signatures = { version = "1.0.0", features = ["serde"] }
 solana-bls12-381 = { path = "curves/bls12-381", version = "=3.1.0" }
 solana-bn254 = "3.0.0"
 solana-borsh = "3.0.0"
@@ -618,6 +620,7 @@ url = "2.5.7"
 vec_extract_if_polyfill = "0.1.0"
 wasm-bindgen = "0.2"
 winapi = "0.3.8"
+wincode = { version = "0.2.1", features = ["derive"] }
 winreg = "0.50"
 x509-parser = "0.14.0"
 zeroize = { version = "1.7", default-features = false }

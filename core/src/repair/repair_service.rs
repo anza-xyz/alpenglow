@@ -40,6 +40,7 @@ use {
     },
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     solana_time_utils::timestamp,
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         iter::Iterator,
@@ -460,11 +461,13 @@ impl RepairService {
         repair_info: RepairInfo,
         outstanding_requests: Arc<RwLock<OutstandingShredRepairs>>,
         repair_service_channels: RepairServiceChannels,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let t_repair = {
             let blockstore = blockstore.clone();
             let exit = exit.clone();
             let repair_info = repair_info.clone();
+            let migration_status = migration_status.clone();
             Builder::new()
                 .name("solRepairSvc".to_string())
                 .spawn(move || {
@@ -475,6 +478,7 @@ impl RepairService {
                         repair_service_channels.repair_channels,
                         repair_info,
                         &outstanding_requests,
+                        migration_status,
                     )
                 })
                 .unwrap()
@@ -486,6 +490,7 @@ impl RepairService {
             ancestor_hashes_socket,
             repair_service_channels.ancestors_hashes_channels,
             repair_info,
+            migration_status,
         );
 
         RepairService {
@@ -700,6 +705,7 @@ impl RepairService {
         repair_tracker: &mut RepairTracker,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
         repair_socket: &UdpSocket,
+        migration_status: &MigrationStatus,
     ) {
         let RepairChannels {
             repair_request_quic_sender,
@@ -737,10 +743,7 @@ impl RepairService {
             repair_metrics,
         );
 
-        if !root_bank
-            .feature_set
-            .is_active(&agave_feature_set::alpenglow::id())
-        {
+        if !migration_status.is_alpenglow_enabled() {
             Self::handle_popular_pruned_forks(
                 root_bank.clone(),
                 repair_weight,
@@ -770,6 +773,7 @@ impl RepairService {
         repair_channels: RepairChannels,
         repair_info: RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
+        migration_status: Arc<MigrationStatus>,
     ) {
         let sharable_banks = repair_info.bank_forks.read().unwrap().sharable_banks();
         let root_bank_slot = sharable_banks.root().slot();
@@ -782,6 +786,7 @@ impl RepairService {
                     repair_info.bank_forks.read().unwrap().sharable_banks(),
                     repair_info.repair_whitelist.clone(),
                     Box::new(StandardRepairHandler::new(blockstore.clone())),
+                    migration_status.clone(),
                 )
             },
             repair_metrics: RepairMetrics::default(),
@@ -798,6 +803,7 @@ impl RepairService {
                 &mut repair_tracker,
                 outstanding_requests,
                 repair_socket,
+                migration_status.as_ref(),
             );
             repair_tracker.repair_metrics.maybe_report();
             sleep(Duration::from_millis(REPAIR_MS));
@@ -1664,12 +1670,14 @@ mod test {
         let cluster_slots = ClusterSlots::default_for_tests();
         let cluster_info = Arc::new(new_test_cluster_info());
         let identity_keypair = cluster_info.keypair().clone();
+        let migration_status = Arc::new(MigrationStatus::default());
         let serve_repair = {
             ServeRepair::new(
                 cluster_info,
                 bank_forks.read().unwrap().sharable_banks(),
                 Arc::new(RwLock::new(HashSet::default())),
                 Box::new(StandardRepairHandler::new(blockstore.clone())),
+                migration_status,
             )
         };
         let mut duplicate_slot_repair_statuses = HashMap::new();
@@ -1766,12 +1774,14 @@ mod test {
         let cluster_info = Arc::new(new_test_cluster_info());
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
+        let migration_status = Arc::new(MigrationStatus::default());
         let serve_repair = {
             ServeRepair::new(
                 cluster_info.clone(),
                 bank_forks.read().unwrap().sharable_banks(),
                 Arc::new(RwLock::new(HashSet::default())),
                 Box::new(StandardRepairHandler::new(blockstore)),
+                migration_status,
             )
         };
         let valid_repair_peer = Node::new_localhost().info;

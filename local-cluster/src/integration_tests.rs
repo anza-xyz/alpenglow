@@ -68,8 +68,10 @@ pub const RUST_LOG_FILTER: &str =
 
 pub const AG_DEBUG_LOG_FILTER: &str =
     "error,solana_core::replay_stage=info,solana_local_cluster=info,local_cluster=info,\
-     solana_core::block_creation_loop=trace,solana_votor=trace,\
-     solana_votor::vote_history_storage=info,solana_core::validator=info";
+     solana_core::block_creation_loop=trace,solana_votor=trace,solana_votor::voting_service=info,\
+     solana_votor::vote_history_storage=info,solana_core::validator=info,\
+     solana_votor::consensus_metrics=info,solana_core::consensus=info,\
+     solana_ledger::blockstore_processor=info,solana_ledger::blockstore=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {
@@ -114,7 +116,6 @@ pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
         BlockstoreOptions {
             access_type: AccessType::Primary,
             recovery_mode: None,
-            enforce_ulimit_nofile: true,
             ..BlockstoreOptions::default()
         },
     )
@@ -126,7 +127,6 @@ pub fn open_blockstore(ledger_path: &Path) -> Blockstore {
             BlockstoreOptions {
                 access_type: AccessType::Secondary,
                 recovery_mode: None,
-                enforce_ulimit_nofile: true,
                 ..BlockstoreOptions::default()
             },
         )
@@ -404,7 +404,7 @@ pub fn run_cluster_partition<C>(
     additional_accounts: Vec<(Pubkey, AccountSharedData)>,
     is_alpenglow: bool,
 ) {
-    solana_logger::setup_with_default(RUST_LOG_FILTER);
+    solana_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
     info!("PARTITION_TEST!");
     let num_nodes = partitions.len();
     let node_stakes: Vec<_> = partitions
@@ -416,6 +416,7 @@ pub fn run_cluster_partition<C>(
     let turbine_disabled = Arc::new(AtomicBool::new(false));
     let mut validator_config = ValidatorConfig {
         turbine_disabled: turbine_disabled.clone(),
+        wait_for_supermajority: Some(0),
         ..ValidatorConfig::default_for_test()
     };
 
@@ -610,6 +611,7 @@ pub fn test_faulty_node(
     validator_configs[0].broadcast_stage_type = faulty_node_type;
     for config in &mut validator_configs {
         config.fixed_leader_schedule = Some(fixed_leader_schedule.clone());
+        config.wait_for_supermajority = Some(0);
     }
 
     let mut cluster_config = ClusterConfig {

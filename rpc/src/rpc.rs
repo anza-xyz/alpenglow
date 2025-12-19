@@ -3,7 +3,7 @@
 use solana_runtime::installed_scheduler_pool::BankWithScheduler;
 use {
     crate::{
-        filter::filter_allows, max_slots::MaxSlots,
+        alpenglow_last_voted::AlpenglowLastVoted, filter::filter_allows, max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         parsed_token_accounts::*, rpc_cache::LargestAccountsCache, rpc_health::*,
     },
@@ -257,6 +257,7 @@ pub struct JsonRpcRequestProcessor {
     max_complete_transaction_status_slot: Arc<AtomicU64>,
     prioritization_fee_cache: Arc<PrioritizationFeeCache>,
     runtime: Arc<Runtime>,
+    alpenglow_last_voted: Option<Arc<AlpenglowLastVoted>>,
 }
 impl Metadata for JsonRpcRequestProcessor {}
 
@@ -420,6 +421,7 @@ impl JsonRpcRequestProcessor {
         max_complete_transaction_status_slot: Arc<AtomicU64>,
         prioritization_fee_cache: Arc<PrioritizationFeeCache>,
         runtime: Arc<Runtime>,
+        alpenglow_last_voted: Option<Arc<AlpenglowLastVoted>>,
     ) -> (Self, Receiver<TransactionInfo>) {
         let (transaction_sender, transaction_receiver) = unbounded();
         (
@@ -442,6 +444,7 @@ impl JsonRpcRequestProcessor {
                 max_complete_transaction_status_slot,
                 prioritization_fee_cache,
                 runtime,
+                alpenglow_last_voted,
             },
             transaction_receiver,
         )
@@ -527,6 +530,7 @@ impl JsonRpcRequestProcessor {
             max_complete_transaction_status_slot: Arc::new(AtomicU64::default()),
             prioritization_fee_cache: Arc::new(PrioritizationFeeCache::default()),
             runtime,
+            alpenglow_last_voted: None,
         }
     }
 
@@ -1172,7 +1176,14 @@ impl JsonRpcRequestProcessor {
                 }
 
                 let vote_state_view = account.vote_state_view();
-                let last_vote = vote_state_view.last_voted_slot().unwrap_or(0);
+                let last_vote = vote_state_view.last_voted_slot().unwrap_or_else(|| {
+                    self.alpenglow_last_voted
+                        .as_ref()
+                        .and_then(|alpenglow_last_voted| {
+                            alpenglow_last_voted.get_last_voted(vote_pubkey)
+                        })
+                        .unwrap_or(0)
+                });
                 let num_epoch_credits = vote_state_view.num_epoch_credits();
                 let epoch_credits = vote_state_view
                     .epoch_credits_iter()
@@ -4819,6 +4830,7 @@ pub mod tests {
                 max_complete_transaction_status_slot.clone(),
                 Arc::new(PrioritizationFeeCache::default()),
                 service_runtime(rpc_threads, rpc_blocking_threads, rpc_niceness_adj),
+                None,
             )
             .0;
 
@@ -6859,6 +6871,7 @@ pub mod tests {
             Arc::new(AtomicU64::default()),
             Arc::new(PrioritizationFeeCache::default()),
             runtime.clone(),
+            None,
         );
 
         let client = Client::create_client(Some(runtime.handle().clone()), my_tpu_address, None, 1);
@@ -7162,6 +7175,7 @@ pub mod tests {
             Arc::new(AtomicU64::default()),
             Arc::new(PrioritizationFeeCache::default()),
             runtime,
+            None,
         );
 
         SendTransactionService::new_with_client(
@@ -8864,6 +8878,7 @@ pub mod tests {
             max_complete_transaction_status_slot,
             Arc::new(PrioritizationFeeCache::default()),
             service_runtime(rpc_threads, rpc_blocking_threads, rpc_niceness_adj),
+            None,
         );
 
         let mut io = MetaIoHandler::default();

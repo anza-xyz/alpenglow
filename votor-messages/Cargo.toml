@@ -11,11 +11,18 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [features]
-frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
+frozen-abi = [
+    "dep:solana-frozen-abi",
+    "dep:solana-frozen-abi-macro",
+    "solana-hash/frozen-abi",
+]
+dev-context-only-utils = []
 
 [dependencies]
+agave-feature-set = { workspace = true }
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
+log = { workspace = true }
 num_enum = { workspace = true }
 serde = { workspace = true }
 solana-account = { workspace = true }
@@ -23,6 +30,7 @@ solana-bls-signatures = { workspace = true, features = [
     "bytemuck", "solana-signer-derive",
 ] }
 solana-clock = { workspace = true }
+solana-epoch-schedule = { workspace = true }
 solana-frozen-abi = { workspace = true, optional = true, features = [
     "frozen-abi",
 ] }
@@ -34,6 +42,11 @@ solana-logger = { workspace = true }
 solana-program = { workspace = true }
 solana-vote-interface = { workspace = true }
 spl-pod = { workspace = true }
+thiserror = { workspace = true }
+wincode = { workspace = true }
+
+[dev-dependencies]
+solana-votor-messages = { path = ".", features = ["dev-context-only-utils"] }
 
 [lints]
 workspace = true

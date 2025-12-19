@@ -8,6 +8,7 @@ use {
     solana_hash::Hash,
     solana_perf::packet::{Packet, PacketBatch, PinnedPacketBatch},
     solana_pubkey::Pubkey,
+    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{
         bank::Bank,
         bank_forks::BankForks,
@@ -15,9 +16,9 @@ use {
             create_genesis_config_with_alpenglow_vote_accounts, ValidatorVoteKeypairs,
         },
     },
-    solana_votor::consensus_pool::vote_certificate_builder::VoteCertificateBuilder,
+    solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage, VoteMessage},
+        consensus_message::{CertificateType, ConsensusMessage, VoteMessage},
         vote::Vote,
     },
     std::{
@@ -79,6 +80,7 @@ impl PregeneratedBatches {
 fn setup_environment() -> BenchEnvironment {
     let (verified_votes_s, _) = unbounded();
     let (consensus_msg_s, _) = unbounded();
+    let (consensus_metrics_sender, _) = unbounded();
 
     let validator_keypairs: Arc<Vec<_>> = Arc::new(
         (0..NUM_VALIDATORS)
@@ -98,7 +100,13 @@ fn setup_environment() -> BenchEnvironment {
     let root_bank = Bank::new_from_parent(Arc::new(bank0), &Pubkey::default(), BENCH_SLOT - 1);
     let bank_forks = BankForks::new_rw_arc(root_bank);
     let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-    let verifier = BLSSigVerifier::new(sharable_banks, verified_votes_s, consensus_msg_s, None);
+    let verifier = BLSSigVerifier::new(
+        sharable_banks,
+        verified_votes_s,
+        consensus_msg_s,
+        consensus_metrics_sender,
+        Arc::new(AlpenglowLastVoted::default()),
+    );
 
     BenchEnvironment {
         verifier: RefCell::new(verifier),
@@ -114,8 +122,8 @@ fn message_to_packet(msg: &ConsensusMessage) -> Packet {
 
 fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> ConsensusMessage {
     let num_signers = (NUM_VALIDATORS * 67) / 100; // 67% quorum
-    let certificate = Certificate::Notarize(slot, hash);
-    let original_vote = certificate.to_source_vote();
+    let cert_type = CertificateType::Notarize(slot, hash);
+    let original_vote = cert_type.to_source_vote();
     let payload = bincode::serialize(&original_vote).unwrap();
 
     let vote_messages: Vec<VoteMessage> = (0..num_signers)
@@ -129,14 +137,14 @@ fn create_base2_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         })
         .collect();
 
-    let mut builder = VoteCertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(cert_type);
     builder.aggregate(&vote_messages).unwrap();
-    let cert_message = builder.build().unwrap();
-    ConsensusMessage::Certificate(cert_message)
+    let cert = builder.build().unwrap();
+    ConsensusMessage::Certificate(cert)
 }
 
 fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> ConsensusMessage {
-    let certificate = Certificate::NotarizeFallback(slot, hash);
+    let cert_type = CertificateType::NotarizeFallback(slot, hash);
 
     let vote1 = Vote::new_notarization_vote(slot, hash);
     let payload1 = bincode::serialize(&vote1).unwrap();
@@ -168,10 +176,10 @@ fn create_base3_cert_message(env: &BenchEnvironment, slot: u64, hash: Hash) -> C
         });
     }
 
-    let mut builder = VoteCertificateBuilder::new(certificate);
+    let mut builder = CertificateBuilder::new(cert_type);
     builder.aggregate(&all_vote_messages).unwrap();
-    let cert_message = builder.build().unwrap();
-    ConsensusMessage::Certificate(cert_message)
+    let cert = builder.build().unwrap();
+    ConsensusMessage::Certificate(cert)
 }
 
 // Scenario 1: One batch with two votes.

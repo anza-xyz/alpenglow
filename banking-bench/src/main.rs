@@ -13,6 +13,7 @@ use {
         banking_trace::{BankingTracer, Channels, BANKING_TRACE_DIR_DEFAULT_BYTE_LIMIT},
         validator::{BlockProductionMethod, TransactionStructure},
     },
+    solana_entry::entry_marker::EntryMarker,
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
@@ -24,7 +25,7 @@ use {
     solana_measure::measure::Measure,
     solana_message::Message,
     solana_perf::packet::{to_packet_batches, PacketBatch},
-    solana_poh::poh_recorder::{create_test_recorder, PohRecorder, WorkingBankEntry},
+    solana_poh::poh_recorder::{create_test_recorder, PohRecorder, WorkingBankEntryMarker},
     solana_pubkey::{self as pubkey, Pubkey},
     solana_runtime::{
         bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
@@ -50,7 +51,7 @@ use {
 const TRANSFER_TRANSACTION_COST: u32 = 1470;
 
 fn check_txs(
-    receiver: &Arc<Receiver<WorkingBankEntry>>,
+    receiver: &Arc<Receiver<WorkingBankEntryMarker>>,
     ref_tx_count: usize,
     poh_recorder: &Arc<RwLock<PohRecorder>>,
 ) -> bool {
@@ -58,7 +59,8 @@ fn check_txs(
     let now = Instant::now();
     let mut no_bank = false;
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::from_millis(10))
+        if let Ok((_bank, (EntryMarker::Entry(entry), _tick_height))) =
+            receiver.recv_timeout(Duration::from_millis(10))
         {
             total += entry.transactions.len();
         }

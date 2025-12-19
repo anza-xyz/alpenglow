@@ -1,31 +1,15 @@
 use {
-    solana_votor_messages::{consensus_message::Certificate, vote::Vote},
+    solana_votor_messages::{
+        consensus_message::CertificateType,
+        fraction::Fraction,
+        migration::GENESIS_VOTE_THRESHOLD,
+        vote::{Vote, VoteType},
+    },
     std::time::Duration,
 };
 
 // Core consensus types and constants
 pub type Stake = u64;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum VoteType {
-    Finalize,
-    Notarize,
-    NotarizeFallback,
-    Skip,
-    SkipFallback,
-}
-
-impl VoteType {
-    pub fn get_type(vote: &Vote) -> VoteType {
-        match vote {
-            Vote::Notarize(_) => VoteType::Notarize,
-            Vote::NotarizeFallback(_) => VoteType::NotarizeFallback,
-            Vote::Skip(_) => VoteType::Skip,
-            Vote::SkipFallback(_) => VoteType::SkipFallback,
-            Vote::Finalize(_) => VoteType::Finalize,
-        }
-    }
-}
 
 pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
     match vote_type {
@@ -38,54 +22,69 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
             VoteType::SkipFallback,
         ],
         VoteType::SkipFallback => &[VoteType::Skip],
+        VoteType::Genesis => &[
+            VoteType::Finalize,
+            VoteType::Notarize,
+            VoteType::NotarizeFallback,
+            VoteType::Skip,
+            VoteType::SkipFallback,
+        ],
     }
 }
 
 /// Lookup from `CertificateId` to the `VoteType`s that contribute,
 /// as well as the stake fraction required for certificate completion.
 ///
-/// Must be in sync with `vote_to_certificate_ids`
+/// Must be in sync with `vote_to_cert_types`
 pub const fn certificate_limits_and_vote_types(
-    cert_type: Certificate,
-) -> (f64, &'static [VoteType]) {
+    cert_type: &CertificateType,
+) -> (Fraction, &'static [VoteType]) {
     match cert_type {
-        Certificate::Notarize(_, _) => (0.6, &[VoteType::Notarize]),
-        Certificate::NotarizeFallback(_, _) => {
-            (0.6, &[VoteType::Notarize, VoteType::NotarizeFallback])
+        CertificateType::Notarize(_, _) => (Fraction::from_percentage(60), &[VoteType::Notarize]),
+        CertificateType::NotarizeFallback(_, _) => (
+            Fraction::from_percentage(60),
+            &[VoteType::Notarize, VoteType::NotarizeFallback],
+        ),
+        CertificateType::FinalizeFast(_, _) => {
+            (Fraction::from_percentage(80), &[VoteType::Notarize])
         }
-        Certificate::FinalizeFast(_, _) => (0.8, &[VoteType::Notarize]),
-        Certificate::Finalize(_) => (0.6, &[VoteType::Finalize]),
-        Certificate::Skip(_) => (0.6, &[VoteType::Skip, VoteType::SkipFallback]),
+        CertificateType::Finalize(_) => (Fraction::from_percentage(60), &[VoteType::Finalize]),
+        CertificateType::Skip(_) => (
+            Fraction::from_percentage(60),
+            &[VoteType::Skip, VoteType::SkipFallback],
+        ),
+        CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
     }
 }
 
 /// Lookup from `Vote` to the `CertificateId`s the vote accounts for
 ///
 /// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
-pub fn vote_to_certificate_ids(vote: &Vote) -> Vec<Certificate> {
+pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
     match vote {
         Vote::Notarize(vote) => vec![
-            Certificate::Notarize(vote.slot(), *vote.block_id()),
-            Certificate::NotarizeFallback(vote.slot(), *vote.block_id()),
-            Certificate::FinalizeFast(vote.slot(), *vote.block_id()),
+            CertificateType::Notarize(vote.slot, vote.block_id),
+            CertificateType::NotarizeFallback(vote.slot, vote.block_id),
+            CertificateType::FinalizeFast(vote.slot, vote.block_id),
         ],
         Vote::NotarizeFallback(vote) => {
-            vec![Certificate::NotarizeFallback(vote.slot(), *vote.block_id())]
+            vec![CertificateType::NotarizeFallback(vote.slot, vote.block_id)]
         }
-        Vote::Finalize(vote) => vec![Certificate::Finalize(vote.slot())],
-        Vote::Skip(vote) => vec![Certificate::Skip(vote.slot())],
-        Vote::SkipFallback(vote) => vec![Certificate::Skip(vote.slot())],
+        Vote::Finalize(vote) => vec![CertificateType::Finalize(vote.slot)],
+        Vote::Skip(vote) => vec![CertificateType::Skip(vote.slot)],
+        Vote::SkipFallback(vote) => vec![CertificateType::Skip(vote.slot)],
+        Vote::Genesis(vote) => vec![CertificateType::Genesis(vote.slot, vote.block_id)],
     }
 }
 
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES: usize = 1;
 pub const MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE: usize = 3;
 
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: f64 = 0.4;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: f64 = 0.2;
-pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: f64 = 0.6;
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_ONLY: Fraction = Fraction::from_percentage(40);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_FOR_NOTARIZE_OR_SKIP: Fraction = Fraction::from_percentage(20);
+pub const SAFE_TO_NOTAR_MIN_NOTARIZE_AND_SKIP: Fraction = Fraction::from_percentage(60);
 
-pub const SAFE_TO_SKIP_THRESHOLD: f64 = 0.4;
+pub const SAFE_TO_SKIP_THRESHOLD: Fraction = Fraction::from_percentage(40);
 
 /// Time bound assumed on network transmission delays during periods of synchrony.
 pub(crate) const DELTA: Duration = Duration::from_millis(250);

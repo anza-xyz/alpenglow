@@ -6,7 +6,7 @@ use {
         admin_rpc_post_init::{AdminRpcRequestMetadataPostInit, KeyUpdaterType, KeyUpdaters},
         banking_stage::BankingStage,
         banking_trace::{self, BankingTracer, TraceError},
-        block_creation_loop::{self, BlockCreationLoopConfig, ReplayHighestFrozen},
+        block_creation_loop::{BlockCreationLoop, BlockCreationLoopConfig, ReplayHighestFrozen},
         cluster_info_vote_listener::VoteTracker,
         completed_data_sets_service::CompletedDataSetsService,
         consensus::{
@@ -21,20 +21,18 @@ use {
             repair_handler::RepairHandlerType,
             serve_repair_service::ServeRepairService,
         },
+        resource_limits::{adjust_nofile_limit, ResourceLimitError},
         sample_performance_service::SamplePerformanceService,
         snapshot_packager_service::SnapshotPackagerService,
         stats_reporter_service::StatsReporterService,
         system_monitor_service::{
             verify_net_stats_access, SystemMonitorService, SystemMonitorStatsReportConfig,
         },
-        tpu::{
-            ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE, MAX_ALPENGLOW_PACKET_NUM,
-        },
+        tpu::{ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE},
         tvu::{Tvu, TvuConfig, TvuSockets},
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
-    parking_lot::RwLock as PlRwLock,
     quinn::Endpoint,
     solana_accounts_db::{
         accounts_db::{AccountsDbConfig, ACCOUNTS_DB_CONFIG_FOR_TESTING},
@@ -90,11 +88,13 @@ use {
         poh_controller::PohController,
         poh_recorder::PohRecorder,
         poh_service::{self, PohService},
+        record_channels::record_channels,
         transaction_recorder::TransactionRecorder,
     },
     solana_pubkey::Pubkey,
     solana_rayon_threadlimit::get_thread_count,
     solana_rpc::{
+        alpenglow_last_voted::AlpenglowLastVoted,
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::{
             BankNotificationSenderConfig, OptimisticallyConfirmedBank,
@@ -143,11 +143,9 @@ use {
     solana_validator_exit::Exit,
     solana_vote_program::vote_state,
     solana_votor::{
-        consensus_metrics::ConsensusMetrics,
         vote_history::{VoteHistory, VoteHistoryError},
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
-        votor::LeaderWindowNotifier,
     },
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
@@ -309,6 +307,7 @@ pub struct ValidatorConfig {
     pub no_os_network_stats_reporting: bool,
     pub no_os_cpu_stats_reporting: bool,
     pub no_os_disk_stats_reporting: bool,
+    pub enforce_ulimit_nofile: bool,
     pub poh_pinned_cpu_core: usize,
     pub poh_hashes_per_batch: u64,
     pub process_ledger_before_services: bool,
@@ -390,6 +389,8 @@ impl ValidatorConfig {
             no_os_network_stats_reporting: true,
             no_os_cpu_stats_reporting: true,
             no_os_disk_stats_reporting: true,
+            // No need to enforce nofile limit in tests
+            enforce_ulimit_nofile: false,
             poh_pinned_cpu_core: poh_service::DEFAULT_PINNED_CPU_CORE,
             poh_hashes_per_batch: poh_service::DEFAULT_HASHES_PER_BATCH,
             process_ledger_before_services: false,
@@ -590,6 +591,7 @@ pub struct Validator {
     snapshot_packager_service: Option<SnapshotPackagerService>,
     poh_recorder: Arc<RwLock<PohRecorder>>,
     poh_service: PohService,
+    block_creation_loop: BlockCreationLoop,
     tpu: Tpu,
     tvu: Tvu,
     ip_echo_server: Option<solana_net_utils::IpEchoServer>,
@@ -641,6 +643,8 @@ impl Validator {
         } = tpu_config;
 
         let start_time = Instant::now();
+
+        adjust_nofile_limit(config.enforce_ulimit_nofile)?;
 
         // Initialize the global rayon pool first to ensure the value in config
         // is honored. Otherwise, some code accessing the global pool could
@@ -842,6 +846,8 @@ impl Validator {
         )
         .map_err(ValidatorError::Other)?;
 
+        let migration_status = bank_forks.read().unwrap().migration_status();
+
         if !config.no_poh_speed_test {
             check_poh_speed(&bank_forks.read().unwrap().root_bank(), None)?;
         }
@@ -895,6 +901,7 @@ impl Validator {
         cluster_info.set_bind_ip_addrs(node.bind_ip_addrs.clone());
         let cluster_info = Arc::new(cluster_info);
         let node_multihoming = Arc::new(NodeMultihoming::from(&node));
+        migration_status.set_pubkey(cluster_info.id());
 
         assert!(is_snapshot_config_valid(&config.snapshot_config));
 
@@ -954,24 +961,14 @@ impl Validator {
         );
 
         let (replay_vote_sender, replay_vote_receiver) = unbounded();
-        let (bls_verified_message_sender, bls_verified_message_receiver) =
-            bounded(MAX_ALPENGLOW_PACKET_NUM);
 
         // block min prioritization fee cache should be readable by RPC, and writable by validator
         // (by both replay stage and banking stage)
         let prioritization_fee_cache = Arc::new(PrioritizationFeeCache::default());
 
         let leader_schedule_cache = Arc::new(leader_schedule_cache);
-        let (mut poh_recorder, entry_receiver) = {
+        let (poh_recorder, entry_receiver) = {
             let bank = &bank_forks.read().unwrap().working_bank();
-            let highest_frozen_bank = bank_forks.read().unwrap().highest_frozen_bank();
-            let first_alpenglow_slot = highest_frozen_bank.as_ref().and_then(|hfb| {
-                hfb.feature_set
-                    .activated_slot(&agave_feature_set::alpenglow::id())
-            });
-            let is_alpenglow_enabled = highest_frozen_bank
-                .zip(first_alpenglow_slot)
-                .is_some_and(|(hfs, fas)| hfs.slot() >= fas);
             PohRecorder::new_with_clear_signal(
                 bank.tick_height(),
                 bank.last_blockhash(),
@@ -984,15 +981,10 @@ impl Validator {
                 &leader_schedule_cache,
                 &genesis_config.poh_config,
                 exit.clone(),
-                is_alpenglow_enabled,
             )
         };
-        if transaction_status_sender.is_some() {
-            poh_recorder.track_transaction_indexes();
-        }
-        let (record_sender, record_receiver) = unbounded();
-        let transaction_recorder =
-            TransactionRecorder::new(record_sender, poh_recorder.is_exited.clone());
+        let (record_sender, record_receiver) = record_channels(transaction_status_sender.is_some());
+        let transaction_recorder = TransactionRecorder::new(record_sender);
         let poh_recorder = Arc::new(RwLock::new(poh_recorder));
         let (poh_controller, poh_service_message_receiver) = PohController::new();
 
@@ -1103,6 +1095,7 @@ impl Validator {
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks);
 
         let max_slots = Arc::new(MaxSlots::default());
+        let alpenglow_last_voted = Arc::new(AlpenglowLastVoted::default());
 
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
 
@@ -1259,6 +1252,7 @@ impl Validator {
                 max_complete_transaction_status_slot: max_complete_transaction_status_slot.clone(),
                 prioritization_fee_cache: prioritization_fee_cache.clone(),
                 client_option,
+                alpenglow_last_voted: Some(alpenglow_last_voted.clone()),
             };
             let json_rpc_service =
                 JsonRpcService::new_with_config(rpc_svc_config).map_err(ValidatorError::Other)?;
@@ -1398,6 +1392,7 @@ impl Validator {
             cluster_info.clone(),
             bank_forks.read().unwrap().sharable_banks(),
             config.repair_whitelist.clone(),
+            migration_status.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
         let (repair_response_quic_sender, repair_response_quic_receiver) = unbounded();
@@ -1420,24 +1415,13 @@ impl Validator {
             !waited_for_supermajority && !config.no_wait_for_vote_to_start_leader;
 
         let replay_highest_frozen = Arc::new(ReplayHighestFrozen::default());
-        let leader_window_notifier = Arc::new(LeaderWindowNotifier::default());
-        let block_creation_loop_config = BlockCreationLoopConfig {
-            exit: exit.clone(),
-            bank_forks: bank_forks.clone(),
-            blockstore: blockstore.clone(),
-            cluster_info: cluster_info.clone(),
-            poh_recorder: poh_recorder.clone(),
-            leader_schedule_cache: leader_schedule_cache.clone(),
-            rpc_subscriptions: rpc_subscriptions.clone(),
-            banking_tracer: banking_tracer.clone(),
-            slot_status_notifier: slot_status_notifier.clone(),
-            record_receiver: record_receiver.clone(),
-            leader_window_notifier: leader_window_notifier.clone(),
-            replay_highest_frozen: replay_highest_frozen.clone(),
-        };
-        let block_creation_loop = || {
-            block_creation_loop::start_loop(block_creation_loop_config);
-        };
+
+        // Pass RecordReceiver from PohService to BlockCreationLoop when shutting down. Gives us a strong guarentee
+        // that both block producers are not running at the same time
+        let (record_receiver_sender, record_receiver_receiver) = bounded(1);
+
+        let (leader_window_info_sender, leader_window_info_receiver) = bounded(7);
+        let highest_parent_ready = Arc::new(RwLock::default());
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
@@ -1448,8 +1432,30 @@ impl Validator {
             config.poh_hashes_per_batch,
             record_receiver,
             poh_service_message_receiver,
-            block_creation_loop,
+            migration_status.clone(),
+            record_receiver_sender,
         );
+
+        let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
+
+        let block_creation_loop_config = BlockCreationLoopConfig {
+            exit: exit.clone(),
+            bank_forks: bank_forks.clone(),
+            blockstore: blockstore.clone(),
+            cluster_info: cluster_info.clone(),
+            poh_recorder: poh_recorder.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            rpc_subscriptions: rpc_subscriptions.clone(),
+            banking_tracer: banking_tracer.clone(),
+            slot_status_notifier: slot_status_notifier.clone(),
+            record_receiver_receiver,
+            leader_window_info_receiver: leader_window_info_receiver.clone(),
+            replay_highest_frozen: replay_highest_frozen.clone(),
+            highest_parent_ready: highest_parent_ready.clone(),
+            optimistic_parent_receiver: optimistic_parent_receiver.clone(),
+        };
+        let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
+
         assert_eq!(
             blockstore.get_new_shred_signals_len(),
             1,
@@ -1566,10 +1572,11 @@ impl Validator {
                     vote_history
                 }
                 Err(e) => {
+                    // TODO(ashwin): we need to be viligant about this and add a CLI option to panic here.
                     warn!(
                         "Unable to retrieve vote history: {e:?} creating default vote history...."
                     );
-                    VoteHistory::default()
+                    VoteHistory::new(identity_keypair.pubkey(), 0)
                 }
             };
             (Tower::default(), vote_history)
@@ -1584,8 +1591,9 @@ impl Validator {
                     Tower::default()
                 }
             };
-            (tower, VoteHistory::default())
+            (tower, VoteHistory::new(identity_keypair.pubkey(), 0))
         };
+        migration_status.log_phase();
 
         let last_vote = tower.last_vote();
 
@@ -1621,13 +1629,11 @@ impl Validator {
             } else {
                 (None, None)
             };
-
-        let epoch = bank_forks.read().unwrap().sharable_banks().root().epoch();
-        let consensus_metrics = Arc::new(PlRwLock::new(ConsensusMetrics::new(epoch)));
-
+        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
+            identity_keypair.clone(),
             &bank_forks,
             &cluster_info,
             TvuSockets {
@@ -1635,6 +1641,7 @@ impl Validator {
                 retransmit: node.sockets.retransmit_sockets,
                 fetch: node.sockets.tvu,
                 ancestor_hashes_requests: node.sockets.ancestor_hashes_requests,
+                alpenglow_quic: node.sockets.alpenglow,
             },
             blockstore.clone(),
             ledger_signal_receiver,
@@ -1654,13 +1661,12 @@ impl Validator {
             vote_tracker.clone(),
             retransmit_slots_sender,
             gossip_verified_vote_hash_receiver,
+            verified_vote_sender.clone(),
             verified_vote_receiver,
             replay_vote_sender.clone(),
             completed_data_sets_sender,
             bank_notification_sender.clone(),
             duplicate_confirmed_slots_receiver,
-            bls_verified_message_sender.clone(),
-            bls_verified_message_receiver,
             TvuConfig {
                 max_ledger_shreds: config.max_ledger_shreds,
                 shred_version: node.info.shred_version(),
@@ -1689,15 +1695,21 @@ impl Validator {
             outstanding_repair_requests.clone(),
             cluster_slots.clone(),
             wen_restart_repair_slots.clone(),
-            slot_status_notifier,
+            slot_status_notifier.clone(),
             vote_connection_cache,
             alpenglow_connection_cache,
-            replay_highest_frozen,
-            leader_window_notifier,
+            replay_highest_frozen.clone(),
+            leader_window_info_sender.clone(),
+            highest_parent_ready.clone(),
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,
-            consensus_metrics.clone(),
+            optimistic_parent_sender,
+            alpenglow_quic_server_config,
+            staked_nodes.clone(),
+            key_notifiers.clone(),
+            alpenglow_last_voted.clone(),
+            migration_status.clone(),
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1721,7 +1733,6 @@ impl Validator {
             return Err(ValidatorError::WenRestartFinished.into());
         }
 
-        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
         let forwarding_tpu_client = if let Some(connection_cache) = &connection_cache {
             ForwardingClientOption::ConnectionCache(connection_cache.clone())
         } else {
@@ -1753,7 +1764,6 @@ impl Validator {
                 vote_quic: node.sockets.tpu_vote_quic,
                 vote_forwarding_client: node.sockets.tpu_vote_forwarding_client,
                 vortexor_receivers: node.sockets.vortexor_receivers,
-                alpenglow_quic: node.sockets.alpenglow,
             },
             rpc_subscriptions.clone(),
             transaction_status_sender,
@@ -1773,7 +1783,6 @@ impl Validator {
             config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
             forwarding_tpu_client,
-            bls_verified_message_sender,
             turbine_quic_endpoint_sender,
             votor_event_sender.clone(),
             &identity_keypair,
@@ -1786,7 +1795,6 @@ impl Validator {
             tpu_quic_server_config,
             tpu_fwd_quic_server_config,
             vote_quic_server_config,
-            alpenglow_quic_server_config,
             &prioritization_fee_cache,
             config.block_production_method.clone(),
             config.block_production_num_workers,
@@ -1794,7 +1802,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
-            consensus_metrics,
+            migration_status,
         );
 
         datapoint_info!(
@@ -1850,6 +1858,7 @@ impl Validator {
             tpu,
             tvu,
             poh_service,
+            block_creation_loop,
             poh_recorder,
             ip_echo_server,
             validator_exit: config.validator_exit.clone(),
@@ -1917,6 +1926,9 @@ impl Validator {
         drop(self.cluster_info);
 
         self.poh_service.join().expect("poh_service");
+        self.block_creation_loop
+            .join()
+            .expect("block_creation_loop");
         drop(self.poh_recorder);
 
         if let Some(json_rpc_service) = self.json_rpc_service {
@@ -2837,6 +2849,9 @@ pub enum ValidatorError {
         "PoH hashes/second rate is slower than the cluster target: mine {mine}, cluster {target}"
     )]
     PohTooSlow { mine: u64, target: u64 },
+
+    #[error(transparent)]
+    ResourceLimitError(#[from] ResourceLimitError),
 
     #[error("shred version mismatch: actual {actual}, expected {expected}")]
     ShredVersionMismatch { actual: u16, expected: u16 },

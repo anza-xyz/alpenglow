@@ -26,8 +26,6 @@ pub enum BlockstoreError {
     SlotCleanedUp,
     #[error("unpack error: {0}")]
     UnpackError(#[from] UnpackError),
-    #[error("unable to set open file descriptor limit")]
-    UnableToSetOpenFileDescriptorLimit,
     #[error("transaction status slot mismatch")]
     TransactionStatusSlotMismatch,
     #[error("empty epoch stakes")]
@@ -58,5 +56,13 @@ pub enum BlockstoreError {
     LegacyShred(Slot, u64),
     #[error("unable to read merkle root slot {0}, index {1}")]
     MissingMerkleRoot(Slot, u64),
+    #[error("Update parent matches block header slot {0}")]
+    UpdateParentMatchesBlockHeader(Slot),
+    #[error("Update parent slot greater than block header slot {0}")]
+    UpdateParentSlotGreaterThanBlockHeader(Slot),
+    #[error("Unexpected block component")]
+    UnexpectedBlockComponent,
+    #[error("Block component mismatch slot {0}")]
+    BlockComponentMismatch(Slot),
 }
 pub type Result<T> = std::result::Result<T, BlockstoreError>;

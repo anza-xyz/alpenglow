@@ -39,6 +39,7 @@ use {
         vote_parser::{self, ParsedVote},
         vote_transaction::VoteTransaction,
     },
+    solana_votor_messages::migration::MigrationStatus,
     std::{
         cmp::max,
         collections::HashMap,
@@ -198,6 +199,7 @@ impl ClusterInfoVoteListener {
         blockstore: Arc<Blockstore>,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
+        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let (verified_vote_transactions_sender, verified_vote_transactions_receiver) = unbounded();
         let listen_thread = {
@@ -235,6 +237,7 @@ impl ClusterInfoVoteListener {
                     blockstore,
                     bank_notification_sender,
                     duplicate_confirmed_slot_sender,
+                    migration_status,
                 );
             })
             .unwrap();
@@ -323,6 +326,7 @@ impl ClusterInfoVoteListener {
         blockstore: Arc<Blockstore>,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
+        migration_status: Arc<MigrationStatus>,
     ) -> Result<()> {
         let mut confirmation_verifier = OptimisticConfirmationVerifier::new(bank_hash_cache.root());
         let mut latest_vote_slot_per_validator = HashMap::new();
@@ -363,11 +367,18 @@ impl ClusterInfoVoteListener {
                 &mut latest_vote_slot_per_validator,
                 bank_hash_cache,
                 &dumped_slot_subscription,
+                &migration_status,
             );
             match confirmed_slots {
                 Ok(confirmed_slots) => {
+                    let confirmed_slots = confirmed_slots
+                        .into_iter()
+                        .filter(|(slot, _)| {
+                            migration_status.should_report_commitment_or_root(*slot)
+                        })
+                        .collect();
                     confirmation_verifier
-                        .add_new_optimistic_confirmed_slots(confirmed_slots.clone(), &blockstore);
+                        .add_new_optimistic_confirmed_slots(confirmed_slots, &blockstore);
                 }
                 Err(e) => match e {
                     Error::RecvTimeout(RecvTimeoutError::Disconnected) => {
@@ -397,6 +408,7 @@ impl ClusterInfoVoteListener {
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
+        migration_status: &MigrationStatus,
     ) -> Result<ThresholdConfirmedSlots> {
         let mut sel = Select::new();
         sel.recv(gossip_vote_txs_receiver);
@@ -429,6 +441,7 @@ impl ClusterInfoVoteListener {
                     latest_vote_slot_per_validator,
                     bank_hash_cache,
                     dumped_slot_subscription,
+                    migration_status,
                 ));
             }
             remaining_wait_time = remaining_wait_time.saturating_sub(start.elapsed());
@@ -454,6 +467,7 @@ impl ClusterInfoVoteListener {
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
+        migration_status: &MigrationStatus,
     ) {
         if vote.is_empty() {
             return;
@@ -538,19 +552,21 @@ impl ClusterInfoVoteListener {
                     new_optimistic_confirmed_slots.push((slot, hash));
                     // Notify subscribers about new optimistic confirmation
                     if let Some(sender) = bank_notification_sender {
-                        let dependency_work = sender
-                            .dependency_tracker
-                            .as_ref()
-                            .map(|s| s.get_current_declared_work());
-                        sender
-                            .sender
-                            .send((
-                                BankNotification::OptimisticallyConfirmed(slot),
-                                dependency_work,
-                            ))
-                            .unwrap_or_else(|err| {
-                                warn!("bank_notification_sender failed: {err:?}")
-                            });
+                        if migration_status.should_report_commitment_or_root(slot) {
+                            let dependency_work = sender
+                                .dependency_tracker
+                                .as_ref()
+                                .map(|s| s.get_current_declared_work());
+                            sender
+                                .sender
+                                .send((
+                                    BankNotification::OptimisticallyConfirmed(slot),
+                                    dependency_work,
+                                ))
+                                .unwrap_or_else(|err| {
+                                    warn!("bank_notification_sender failed: {err:?}")
+                                });
+                        }
                     }
                 }
 
@@ -612,6 +628,7 @@ impl ClusterInfoVoteListener {
         latest_vote_slot_per_validator: &mut HashMap<Pubkey, Slot>,
         bank_hash_cache: &mut BankHashCache,
         dumped_slot_subscription: &Mutex<bool>,
+        migration_status: &MigrationStatus,
     ) -> ThresholdConfirmedSlots {
         let mut diff: HashMap<Slot, HashMap<Pubkey, bool>> = HashMap::new();
         let mut new_optimistic_confirmed_slots = vec![];
@@ -641,6 +658,7 @@ impl ClusterInfoVoteListener {
                 latest_vote_slot_per_validator,
                 bank_hash_cache,
                 dumped_slot_subscription,
+                migration_status,
             );
         }
         gossip_vote_txn_processing_time.stop();
@@ -896,6 +914,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         )
         .unwrap();
 
@@ -931,6 +950,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         )
         .unwrap();
 
@@ -1025,6 +1045,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         )
         .unwrap();
 
@@ -1195,6 +1216,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         )
         .unwrap();
 
@@ -1308,6 +1330,7 @@ mod tests {
                     &mut latest_vote_slot_per_validator,
                     &mut bank_hash_cache,
                     &Mutex::new(false),
+                    &MigrationStatus::default(),
                 );
             }
             let slot_vote_tracker = vote_tracker.get_slot_vote_tracker(vote_slot).unwrap();
@@ -1403,6 +1426,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         );
 
         // Setup next epoch
@@ -1452,6 +1476,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         );
     }
 
@@ -1650,6 +1675,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         );
         assert_eq!(diff.keys().copied().sorted().collect_vec(), vec![1, 2, 6]);
 
@@ -1683,6 +1709,7 @@ mod tests {
             &mut latest_vote_slot_per_validator,
             &mut bank_hash_cache,
             &Mutex::new(false),
+            &MigrationStatus::default(),
         );
         assert_eq!(diff.keys().copied().sorted().collect_vec(), vec![7, 8]);
     }

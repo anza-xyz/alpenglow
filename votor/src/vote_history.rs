@@ -47,7 +47,7 @@ impl VoteHistoryVersions {
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample),
-    frozen_abi(digest = "H9oKKcWpebSTPtnXG6Aetwb7434CrW21pxnrrusYVEPy")
+    frozen_abi(digest = "9h5xLzJWKtwn1wLAaGbDUsSVJawLdNfi7jVzcFBP86S6")
 )]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct VoteHistory {
@@ -183,34 +183,36 @@ impl VoteHistory {
         // in final version
         match vote {
             Vote::Notarize(vote) => {
-                assert!(self.voted.insert(vote.slot()));
-                assert!(self
-                    .voted_notar
-                    .insert(vote.slot(), *vote.block_id())
-                    .is_none());
+                assert!(self.voted.insert(vote.slot));
+                assert!(self.voted_notar.insert(vote.slot, vote.block_id).is_none());
             }
             Vote::Finalize(vote) => {
-                assert!(!self.skipped(vote.slot()));
-                self.its_over.insert(vote.slot());
+                assert!(!self.skipped(vote.slot));
+                self.its_over.insert(vote.slot);
             }
             Vote::Skip(vote) => {
-                self.voted.insert(vote.slot());
-                self.skipped.insert(vote.slot());
+                self.voted.insert(vote.slot);
+                self.skipped.insert(vote.slot);
             }
             Vote::NotarizeFallback(vote) => {
-                assert!(self.voted(vote.slot()));
-                assert!(!self.its_over(vote.slot()));
-                self.skipped.insert(vote.slot());
+                assert!(self.voted(vote.slot));
+                assert!(!self.its_over(vote.slot));
+                self.skipped.insert(vote.slot);
                 self.voted_notar_fallback
-                    .entry(vote.slot())
+                    .entry(vote.slot)
                     .or_default()
-                    .insert(*vote.block_id());
+                    .insert(vote.block_id);
             }
             Vote::SkipFallback(vote) => {
-                assert!(self.voted(vote.slot()));
-                assert!(!self.its_over(vote.slot()));
-                self.skipped.insert(vote.slot());
-                self.voted_skip_fallback.insert(vote.slot());
+                assert!(self.voted(vote.slot));
+                assert!(!self.its_over(vote.slot));
+                self.skipped.insert(vote.slot);
+                self.voted_skip_fallback.insert(vote.slot);
+            }
+            Vote::Genesis(_vote) => {
+                // Genesis votes are only used during migration.
+                // Since these votes are tracked and sent outside of
+                // votor, we do not need to insert anything here.
             }
         }
         self.votes_cast.entry(vote.slot()).or_default().push(vote);

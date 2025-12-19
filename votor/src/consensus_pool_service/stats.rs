@@ -72,7 +72,7 @@ impl ConsensusPoolServiceStats {
             ),
             ("received_votes", received_votes, i64),
             ("received_certificates", received_certificates, i64),
-            ("standstill", standstill, bool),
+            ("in_standstill_bool", standstill, bool),
             ("prune_old_state_called", prune_old_state_called, i64),
         );
     }

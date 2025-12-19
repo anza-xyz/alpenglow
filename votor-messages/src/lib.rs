@@ -3,6 +3,9 @@
 #![deny(missing_docs)]
 
 pub mod consensus_message;
+pub mod fraction;
+pub mod migration;
+pub mod reward_certificate;
 pub mod vote;
 
 #[cfg_attr(feature = "frozen-abi", macro_use)]

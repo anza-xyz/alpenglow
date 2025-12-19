@@ -26,7 +26,7 @@ pub struct VoteMessage {
 
 /// Certificate details
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub enum Certificate {
+pub enum CertificateType {
     /// Finalize certificate
     Finalize(Slot),
     /// Fast finalize certificate
@@ -37,57 +37,20 @@ pub enum Certificate {
     NotarizeFallback(Slot, Hash),
     /// Skip certificate
     Skip(Slot),
+    /// Genesis certificate
+    Genesis(Slot, Hash),
 }
 
-/// Certificate type
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub enum CertificateType {
-    /// Finalize certificate
-    Finalize,
-    /// Fast finalize certificate
-    FinalizeFast,
-    /// Notarize certificate
-    Notarize,
-    /// Notarize fallback certificate
-    NotarizeFallback,
-    /// Skip certificate
-    Skip,
-}
-
-impl Certificate {
-    /// Create a new certificate ID from a CertificateType, Option<Slot>, and Option<Hash>
-    pub fn new(certificate_type: CertificateType, slot: Slot, hash: Option<Hash>) -> Self {
-        match (certificate_type, hash) {
-            (CertificateType::Finalize, None) => Certificate::Finalize(slot),
-            (CertificateType::FinalizeFast, Some(hash)) => Certificate::FinalizeFast(slot, hash),
-            (CertificateType::Notarize, Some(hash)) => Certificate::Notarize(slot, hash),
-            (CertificateType::NotarizeFallback, Some(hash)) => {
-                Certificate::NotarizeFallback(slot, hash)
-            }
-            (CertificateType::Skip, None) => Certificate::Skip(slot),
-            _ => panic!("Invalid certificate type and hash combination"),
-        }
-    }
-
-    /// Get the certificate type
-    pub fn certificate_type(&self) -> CertificateType {
-        match self {
-            Certificate::Finalize(_) => CertificateType::Finalize,
-            Certificate::FinalizeFast(_, _) => CertificateType::FinalizeFast,
-            Certificate::Notarize(_, _) => CertificateType::Notarize,
-            Certificate::NotarizeFallback(_, _) => CertificateType::NotarizeFallback,
-            Certificate::Skip(_) => CertificateType::Skip,
-        }
-    }
-
+impl CertificateType {
     /// Get the slot of the certificate
     pub fn slot(&self) -> Slot {
         match self {
-            Certificate::Finalize(slot)
-            | Certificate::FinalizeFast(slot, _)
-            | Certificate::Notarize(slot, _)
-            | Certificate::NotarizeFallback(slot, _)
-            | Certificate::Skip(slot) => *slot,
+            CertificateType::Finalize(slot)
+            | CertificateType::FinalizeFast(slot, _)
+            | CertificateType::Notarize(slot, _)
+            | CertificateType::NotarizeFallback(slot, _)
+            | CertificateType::Genesis(slot, _)
+            | CertificateType::Skip(slot) => *slot,
         }
     }
 
@@ -111,13 +74,19 @@ impl Certificate {
         matches!(self, Self::Skip(_))
     }
 
+    /// Is this a genesis certificate?
+    pub fn is_genesis(&self) -> bool {
+        matches!(self, Self::Genesis(_, _))
+    }
+
     /// Gets the block associated with this certificate, if present
     pub fn to_block(self) -> Option<Block> {
         match self {
-            Certificate::Finalize(_) | Certificate::Skip(_) => None,
-            Certificate::Notarize(slot, block_id)
-            | Certificate::NotarizeFallback(slot, block_id)
-            | Certificate::FinalizeFast(slot, block_id) => Some((slot, block_id)),
+            CertificateType::Finalize(_) | CertificateType::Skip(_) => None,
+            CertificateType::Notarize(slot, block_id)
+            | CertificateType::NotarizeFallback(slot, block_id)
+            | CertificateType::Genesis(slot, block_id)
+            | CertificateType::FinalizeFast(slot, block_id) => Some((slot, block_id)),
         }
     }
 
@@ -143,13 +112,14 @@ impl Certificate {
     /// vote type (e.g., exclusively from `Notarize` or `Skip` votes). For
     /// certificates formed from a mix of two vote types, use the `to_source_votes`
     /// function.
-    pub fn to_source_vote(&self) -> Vote {
+    pub fn to_source_vote(self) -> Vote {
         match self {
-            Certificate::Notarize(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-            Certificate::FinalizeFast(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-            Certificate::Finalize(slot) => Vote::new_finalization_vote(*slot),
-            Certificate::NotarizeFallback(slot, hash) => Vote::new_notarization_vote(*slot, *hash),
-            Certificate::Skip(slot) => Vote::new_skip_vote(*slot),
+            Self::Notarize(slot, block_id)
+            | Self::FinalizeFast(slot, block_id)
+            | Self::NotarizeFallback(slot, block_id) => Vote::new_notarization_vote(slot, block_id),
+            Self::Finalize(slot) => Vote::new_finalization_vote(slot),
+            Self::Skip(slot) => Vote::new_skip_vote(slot),
+            Self::Genesis(slot, block_id) => Vote::new_genesis_vote(slot, block_id),
         }
     }
 
@@ -161,16 +131,16 @@ impl Certificate {
     ///
     /// It reconstructs both potential message payloads that were signed by validators, which
     /// the verifier uses to check the single aggregate signature.
-    pub fn to_source_votes(&self) -> Option<(Vote, Vote)> {
+    pub fn to_source_votes(self) -> Option<(Vote, Vote)> {
         match self {
-            Certificate::NotarizeFallback(slot, hash) => {
-                let vote1 = Vote::new_notarization_vote(*slot, *hash);
-                let vote2 = Vote::new_notarization_fallback_vote(*slot, *hash);
+            Self::NotarizeFallback(slot, block_id) => {
+                let vote1 = Vote::new_notarization_vote(slot, block_id);
+                let vote2 = Vote::new_notarization_fallback_vote(slot, block_id);
                 Some((vote1, vote2))
             }
-            Certificate::Skip(slot) => {
-                let vote1 = Vote::new_skip_vote(*slot);
-                let vote2 = Vote::new_skip_fallback_vote(*slot);
+            Self::Skip(slot) => {
+                let vote1 = Vote::new_skip_vote(slot);
+                let vote2 = Vote::new_skip_fallback_vote(slot);
                 Some((vote1, vote2))
             }
             // Other certificate types do not use Base3 encoding.
@@ -179,25 +149,25 @@ impl Certificate {
     }
 }
 
+/// Definition of a consensus certificate.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-/// BLS vote message, we need rank to look up pubkey
-pub struct CertificateMessage {
-    /// The certificate
-    pub certificate: Certificate,
+pub struct Certificate {
+    /// The type of the certificate.
+    pub cert_type: CertificateType,
     /// The signature
     pub signature: BLSSignature,
     /// The bitmap for validators, see solana-signer-store for encoding format
     pub bitmap: Vec<u8>,
 }
 
+/// Different types of consensus messages.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
-/// BLS message data in Alpenglow
 pub enum ConsensusMessage {
     /// Vote message, with the vote and the rank of the validator.
     Vote(VoteMessage),
     /// Certificate message
-    Certificate(CertificateMessage),
+    Certificate(Certificate),
 }
 
 impl ConsensusMessage {
@@ -210,14 +180,14 @@ impl ConsensusMessage {
         })
     }
 
-    /// Create a new certificate message
+    /// Create a new certificate.
     pub fn new_certificate(
-        certificate: Certificate,
+        cert_type: CertificateType,
         bitmap: Vec<u8>,
         signature: BLSSignature,
     ) -> Self {
-        Self::Certificate(CertificateMessage {
-            certificate,
+        Self::Certificate(Certificate {
+            cert_type,
             signature,
             bitmap,
         })
