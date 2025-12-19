@@ -46,8 +46,6 @@ where
     // It only returns Some(aggregated_pubkey) if all pubkeys are found and valid.
     let results: Option<Vec<_>> = bit_vec
         .iter_ones()
-        .collect::<Vec<_>>()
-        .into_par_iter()
         .map(|rank| {
             let (pubkey, stake) = rank_to_pubkey_and_stake(rank)?;
             let pk_proj = PubkeyProjective::try_from(&pubkey).ok()?;
