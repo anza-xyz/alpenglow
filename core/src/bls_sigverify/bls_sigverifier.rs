@@ -1181,6 +1181,35 @@ mod tests {
     }
 
     #[test]
+    fn test_verify_certificate_base2_just_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let num_signers = 6; // = 60% of 10 validators
+        let cert_type = CertificateType::Notarize(10, Hash::new_unique());
+        let cert = create_signed_certificate_message(
+            &validator_keypairs,
+            cert_type,
+            &(0..num_signers).collect::<Vec<_>>(),
+        );
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            1,
+            "Valid Base2 certificate should be sent"
+        );
+    }
+
+    #[test]
     fn test_verify_certificate_base2_not_enough_stake() {
         let (verified_vote_sender, _) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
@@ -1191,7 +1220,7 @@ mod tests {
             consensus_metrics_sender,
         );
 
-        let num_signers = 5; // < 60 of 10 validators
+        let num_signers = 5; // < 60% of 10 validators
         let cert_type = CertificateType::Notarize(10, Hash::new_unique());
         let cert = create_signed_certificate_message(
             &validator_keypairs,
@@ -1241,6 +1270,53 @@ mod tests {
             ))
         });
         (4..7).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_fallback_vote,
+                i,
+            ))
+        });
+        let cert_type = CertificateType::NotarizeFallback(slot, block_hash);
+        let mut builder = CertificateBuilder::new(cert_type);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert = builder.build().expect("Failed to build certificate");
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            1,
+            "Valid Base3 certificate should be sent"
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base3_just_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let slot = 20;
+        let block_hash = Hash::new_unique();
+        let notarize_vote = Vote::new_notarization_vote(slot, block_hash);
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, block_hash);
+        let mut all_vote_messages = Vec::new();
+        (0..4).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_vote,
+                i,
+            ))
+        });
+        (4..6).for_each(|i| {
             all_vote_messages.push(create_signed_vote_message(
                 &validator_keypairs,
                 notarize_fallback_vote,
