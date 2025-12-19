@@ -602,6 +602,9 @@ mod tests {
         let (verified_votes_sender, verified_votes_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = crossbeam_channel::unbounded();
+        // the sigverifier sends msgs on some channels which the tests do not inspect.
+        // use a thread to keep the receive side of these channels alive so that the sending of msgs doesn't fail.
+        // the thread does not need to be joined and will exit when the sigverifier is dropped.
         std::thread::spawn(move || while consensus_metrics_receiver.recv().is_ok() {});
         let (keypairs, verifier) = create_keypairs_and_bls_sig_verifier_with_channels(
             verified_votes_sender,
