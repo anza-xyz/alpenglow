@@ -58,7 +58,7 @@ impl BLSPubkeyToRankMap {
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
         for (rank, (pubkey, bls_pubkey, stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            sorted_pubkeys.push((pubkey, bls_pubkey, stake));
+            sorted_pubkeys.push((*pubkey, bls_pubkey, stake));
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
