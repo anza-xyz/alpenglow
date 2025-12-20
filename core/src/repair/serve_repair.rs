@@ -26,6 +26,7 @@ use {
         distributions::{Distribution, WeightedError, WeightedIndex},
         Rng,
     },
+    shred::wire::get_merkle_root,
     solana_clock::Slot,
     solana_cluster_type::ClusterType,
     solana_gossip::{
@@ -171,7 +172,7 @@ impl RequestResponse for ShredRepairType {
             } => {
                 shred_slot == *slot
                     && get_shred_index(shred) == Some(*index)
-                    && shred::wire::get_merkle_root(shred) == Some(*fec_set_merkle_root)
+                    && get_merkle_root(shred) == Some(*fec_set_merkle_root)
             }
         }
     }
