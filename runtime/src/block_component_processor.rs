@@ -4,7 +4,7 @@ use {
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
-        VersionedBlockMarker,
+        VersionedBlockMarker, VersionedUpdateParent,
     },
     std::sync::Arc,
     thiserror::Error,
@@ -14,33 +14,55 @@ use {
 pub enum BlockComponentProcessorError {
     #[error("Missing block footer")]
     MissingBlockFooter,
-    #[error("Missing block header")]
-    MissingBlockHeader,
+    #[error("Missing parent marker (neither a header nor an update parent was present)")]
+    MissingParentMarker,
     #[error("Multiple block footers detected")]
     MultipleBlockFooters,
     #[error("Multiple block headers detected")]
     MultipleBlockHeaders,
+    #[error("Multiple update parents detected")]
+    MultipleUpdateParents,
     #[error("BlockComponent detected pre-migration")]
     BlockComponentPreMigration,
     #[error("Nanosecond clock out of bounds")]
     NanosecondClockOutOfBounds,
+    #[error("Spurious update parent")]
+    SpuriousUpdateParent,
+    #[error("Abandoned bank")]
+    AbandonedBank(VersionedUpdateParent),
 }
 
 #[derive(Default)]
 pub struct BlockComponentProcessor {
     has_header: bool,
     has_footer: bool,
+    update_parent: Option<VersionedUpdateParent>,
 }
 
 impl BlockComponentProcessor {
-    fn on_final(&self) -> Result<(), BlockComponentProcessorError> {
+    pub fn on_final(
+        &self,
+        migration_status: &MigrationStatus,
+        slot: Slot,
+    ) -> Result<(), BlockComponentProcessorError> {
+        // Only require block markers (header/footer) for slots where they should be present.
+        if !migration_status.should_allow_block_markers(slot) {
+            return Ok(());
+        }
+
+        // If we encounter an UpdateParent when fast leader handover is disabled, error.
+        if !migration_status.should_allow_fast_leader_handover(slot) && self.update_parent.is_some()
+        {
+            return Err(BlockComponentProcessorError::SpuriousUpdateParent);
+        }
+
         // Post-migration: both header and footer are required.
         if !self.has_footer {
             return Err(BlockComponentProcessorError::MissingBlockFooter);
         }
 
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
         Ok(())
@@ -49,22 +71,17 @@ impl BlockComponentProcessor {
     pub fn on_entry_batch(
         &mut self,
         migration_status: &MigrationStatus,
-        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         if !migration_status.is_alpenglow_enabled() {
             return Ok(());
         }
 
-        // The block header must be the first component of each block.
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        // We must have either a header or an update parent prior to processing entry batches.
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
-        if is_final {
-            self.on_final()
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub fn on_marker(
@@ -73,7 +90,6 @@ impl BlockComponentProcessor {
         parent_bank: Arc<Bank>,
         marker: &VersionedBlockMarker,
         migration_status: &MigrationStatus,
-        is_final: bool,
     ) -> Result<(), BlockComponentProcessorError> {
         // Pre-migration: blocks with block components should be marked as dead.
         if !migration_status.is_alpenglow_enabled() {
@@ -87,15 +103,11 @@ impl BlockComponentProcessor {
                 self.on_footer(bank, parent_bank, footer.inner())
             }
             BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
-            // We process UpdateParent messages on shred ingest, so no callback needed here.
-            BlockMarkerV1::UpdateParent(_) => Ok(()),
+            BlockMarkerV1::UpdateParent(update_parent) => {
+                self.on_update_parent(update_parent.inner())
+            }
+            // We process GenesisCertificate messages elsewhere, so no callback needed here.
             BlockMarkerV1::GenesisCertificate(_) => Ok(()),
-        }?;
-
-        if is_final {
-            self.on_final()
-        } else {
-            Ok(())
         }
     }
 
@@ -105,9 +117,8 @@ impl BlockComponentProcessor {
         parent_bank: Arc<Bank>,
         footer: &VersionedBlockFooter,
     ) -> Result<(), BlockComponentProcessorError> {
-        // The block header must be the first component of each block.
-        if !self.has_header {
-            return Err(BlockComponentProcessorError::MissingBlockHeader);
+        if !self.has_header && self.update_parent.is_none() {
+            return Err(BlockComponentProcessorError::MissingParentMarker);
         }
 
         if self.has_footer {
@@ -131,8 +142,31 @@ impl BlockComponentProcessor {
             return Err(BlockComponentProcessorError::MultipleBlockHeaders);
         }
 
+        if self.update_parent.is_some() {
+            return Err(BlockComponentProcessorError::SpuriousUpdateParent);
+        }
+
         self.has_header = true;
         Ok(())
+    }
+
+    fn on_update_parent(
+        &mut self,
+        update_parent: &VersionedUpdateParent,
+    ) -> Result<(), BlockComponentProcessorError> {
+        if self.update_parent.is_some() {
+            return Err(BlockComponentProcessorError::MultipleUpdateParents);
+        }
+
+        self.update_parent = Some(update_parent.clone());
+
+        if self.has_header {
+            Err(BlockComponentProcessorError::AbandonedBank(
+                update_parent.clone(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn enforce_nanosecond_clock_bounds(
