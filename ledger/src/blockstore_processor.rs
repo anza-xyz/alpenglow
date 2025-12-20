@@ -1548,10 +1548,10 @@ pub fn confirm_slot(
                 let slot_full = slot_full && ix == last_entry_batch_index.unwrap();
 
                 // Skip block component validation for genesis block. Slot 0 is handled specially,
-                // since it won't have the required block markers (e.g., the header and the footer).
+                // since it won't have the required block markers.
                 if bank.slot() != 0 {
                     processor
-                        .on_entry_batch(migration_status, is_final)
+                        .on_entry_batch(migration_status)
                         .inspect_err(|err| {
                             warn!("Block component processing failed for slot {slot}: {err:?}",);
                         })?;
@@ -1581,7 +1581,6 @@ pub fn confirm_slot(
                             parent_bank,
                             marker,
                             migration_status,
-                            is_final,
                         )
                         .inspect_err(|err| {
                             warn!("Block component processing failed for slot {slot}: {err:?}",);
@@ -1589,6 +1588,12 @@ pub fn confirm_slot(
                 }
                 progress.num_shreds += num_shreds as u64;
             }
+        }
+
+        // Skip block component validation for genesis block. Slot 0 is handled specially,
+        // since it won't have the required block markers.
+        if is_final && bank.slot() != 0 {
+            processor.on_final(migration_status, bank.slot())?;
         }
     }
 
