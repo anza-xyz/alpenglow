@@ -1428,6 +1428,7 @@ impl Blockstore {
         self.handle_chaining(
             &mut shred_insertion_tracker.write_batch,
             &mut shred_insertion_tracker.slot_meta_working_set,
+            &shred_insertion_tracker.parent_metas,
             metrics,
         )?;
 
@@ -4783,6 +4784,9 @@ impl Blockstore {
     /// checks whether any of its direct and indirect children slots are connected
     /// or not.
     ///
+    /// This function also handles chaining updates when an UpdateParent marker
+    /// overrides a previously set parent from a BlockHeader.
+    ///
     /// This function may update column families [`cf::SlotMeta`] and
     /// [`cf::Orphans`].
     ///
@@ -4795,10 +4799,12 @@ impl Blockstore {
     ///   the current write and ensures their atomicity.
     /// - `working_set`: a slot-id to SlotMetaWorkingSetEntry map.  This function
     ///   will remove all entries which insertion did not actually occur.
+    /// - `parent_metas`: the dirty ParentMetas that need chaining updates.
     fn handle_chaining(
         &self,
         write_batch: &mut WriteBatch,
         working_set: &mut HashMap<u64, SlotMetaWorkingSetEntry>,
+        parent_metas: &HashMap<u64, WorkingEntry<ParentMeta>>,
         metrics: &mut BlockstoreInsertionMetrics,
     ) -> Result<()> {
         let mut start = Measure::start("Shred chaining");
@@ -4809,6 +4815,9 @@ impl Blockstore {
         for slot in working_set_slots {
             self.handle_chaining_for_slot(write_batch, working_set, &mut new_chained_slots, *slot)?;
         }
+
+        // Handle chaining updates from dirty ParentMetas (UpdateParent overriding BlockHeader)
+        self.update_chaining_for_parent_metas(working_set, parent_metas, &mut new_chained_slots)?;
 
         // Write all the newly changed slots in new_chained_slots to the write_batch
         for (slot, meta) in new_chained_slots.iter() {
@@ -4918,6 +4927,74 @@ impl Blockstore {
                 new_chained_slots,
                 SlotMeta::set_parent_connected,
             )?;
+        }
+
+        Ok(())
+    }
+
+    /// Handles chaining updates when an UpdateParent marker overrides a previously
+    /// set parent from a BlockHeader.
+    ///
+    fn update_chaining_for_parent_metas(
+        &self,
+        working_set: &HashMap<u64, SlotMetaWorkingSetEntry>,
+        parent_metas: &HashMap<u64, WorkingEntry<ParentMeta>>,
+        new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
+    ) -> Result<()> {
+        let update_parent_entries = parent_metas.iter().filter_map(|(slot, parent_meta)| {
+            match parent_meta {
+                WorkingEntry::Dirty(parent_meta) if parent_meta.populated_from_update_parent() => {
+                    Some((*slot, parent_meta.parent_slot))
+                }
+                _ => None,
+            }
+        });
+
+        for (slot, new_parent_slot) in update_parent_entries {
+            // Get or create slot meta. When UpdateParent is inserted separately from
+            // BlockHeader, the slot may not be in working_set (filtered by did_insert_occur).
+            let slot_meta =
+                self.find_slot_meta_else_create(working_set, new_chained_slots, slot)?;
+            let old_parent_slot = slot_meta.borrow().parent_slot;
+            slot_meta.borrow_mut().parent_slot = Some(new_parent_slot);
+
+            // Remove slot from old parent's next_slots if parent changed
+            if let Some(old_parent) = old_parent_slot.filter(|&old| old != new_parent_slot) {
+                self.find_slot_meta_else_create(working_set, new_chained_slots, old_parent)?
+                    .borrow_mut()
+                    .next_slots
+                    .retain(|&s| s != slot);
+            }
+
+            // Add slot to new parent's next_slots
+            let new_parent_meta =
+                self.find_slot_meta_else_create(working_set, new_chained_slots, new_parent_slot)?;
+            {
+                let mut new_parent = new_parent_meta.borrow_mut();
+                if !new_parent.next_slots.contains(&slot) {
+                    new_parent.next_slots.push(slot);
+                }
+            }
+
+            // Propagate or clear connectivity based on new parent's state.
+            if new_parent_meta.borrow().is_connected() {
+                if !slot_meta.borrow().is_parent_connected() {
+                    slot_meta.borrow_mut().set_parent_connected();
+                    self.traverse_children_mut(
+                        &slot_meta,
+                        working_set,
+                        new_chained_slots,
+                        SlotMeta::set_parent_connected,
+                    )?;
+                }
+            } else if slot_meta.borrow_mut().clear_parent_connected() {
+                self.traverse_children_mut(
+                    &slot_meta,
+                    working_set,
+                    new_chained_slots,
+                    SlotMeta::clear_parent_connected,
+                )?;
+            }
         }
 
         Ok(())
