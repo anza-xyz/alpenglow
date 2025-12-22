@@ -743,6 +743,15 @@ impl SlotMeta {
         self.is_connected()
     }
 
+    /// Clear the meta's parent_connected and connected flags.
+    /// Returns true if the meta was connected, indicating children need clearing.
+    pub fn clear_parent_connected(&mut self) -> bool {
+        let originally_connected = self.is_connected();
+        self.connected_flags
+            .remove(ConnectedFlags::PARENT_CONNECTED | ConnectedFlags::CONNECTED);
+        originally_connected
+    }
+
     /// Dangerous.
     #[cfg(feature = "dev-context-only-utils")]
     pub fn unset_parent(&mut self) {
