@@ -946,7 +946,6 @@ impl Blockstore {
         Some(self.build_and_insert_double_merkle_meta(
             slot,
             block_location,
-            fec_set_count,
             merkle_tree_leaves.into_iter(),
         ))
     }
@@ -956,11 +955,11 @@ impl Blockstore {
         &self,
         slot: Slot,
         block_location: BlockLocation,
-        fec_set_count: usize,
         merkle_tree_leaves: impl ExactSizeIterator<
             Item = std::result::Result<Hash, crate::shred::Error>,
         >,
     ) -> Hash {
+        let fec_set_count = merkle_tree_leaves.len();
         // Build the merkle tree
         let merkle_tree = MerkleTree::try_new(merkle_tree_leaves)
             .expect("Merkle tree construction cannot have failed");

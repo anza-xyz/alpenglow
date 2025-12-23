@@ -424,7 +424,6 @@ impl StandardBroadcastRun {
                 .should_use_double_merkle_block_id(bank.slot())
             {
                 // Block id is the double merkle root
-                let fec_set_count = self.double_merkle_leaves.len();
                 // Add the final leaf (parent info)
                 let parent_info_leaf =
                     hashv(&[&self.parent.to_le_bytes(), self.parent_block_id.as_ref()]);
@@ -433,7 +432,6 @@ impl StandardBroadcastRun {
                 blockstore.build_and_insert_double_merkle_meta(
                     bank.slot(),
                     BlockLocation::Original,
-                    fec_set_count,
                     self.double_merkle_leaves.drain(..).map(Ok),
                 )
             } else {
