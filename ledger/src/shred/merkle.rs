@@ -6,7 +6,11 @@ use {
             self,
             common::impl_shred_common,
             dispatch,
-            merkle_tree::*,
+            merkle_tree::{
+                fec_set_root::FecSetRoot, get_merkle_root, MerkleProofEntry, MerkleTree,
+                MERKLE_HASH_PREFIX_LEAF, PROOF_ENTRIES_FOR_32_32_BATCH, SIZE_OF_MERKLE_PROOF_ENTRY,
+                SIZE_OF_MERKLE_ROOT,
+            },
             payload::{Payload, PayloadMutGuard},
             shred_code, shred_data,
             traits::{
@@ -140,7 +144,7 @@ impl Shred {
     dispatch!(fn erasure_shard(&self) -> Result<&[u8], Error>);
     dispatch!(fn proof_size(&self) -> Result<u8, Error>);
     dispatch!(pub(super) fn chained_merkle_root(&self) -> Result<Hash, Error>);
-    dispatch!(pub(super) fn merkle_root(&self) -> Result<Hash, Error>);
+    dispatch!(pub(super) fn merkle_root(&self) -> Result<FecSetRoot, Error>);
     dispatch!(pub(super) fn retransmitter_signature(&self) -> Result<Signature, Error>);
     dispatch!(pub(super) fn retransmitter_signature_offset(&self) -> Result<usize, Error>);
 
@@ -185,7 +189,7 @@ impl ShredData {
         proof_size: u8,
         chained: bool,
         resigned: bool,
-    ) -> Option<Hash> {
+    ) -> Option<FecSetRoot> {
         debug_assert_eq!(
             shred::layout::get_shred_variant(shred).unwrap(),
             ShredVariant::MerkleData {
@@ -241,7 +245,7 @@ impl ShredCode {
         proof_size: u8,
         chained: bool,
         resigned: bool,
-    ) -> Option<Hash> {
+    ) -> Option<FecSetRoot> {
         debug_assert_eq!(
             shred::layout::get_shred_variant(shred).unwrap(),
             ShredVariant::MerkleCode {
@@ -369,7 +373,7 @@ macro_rules! impl_merkle_shred {
             Ok(())
         }
 
-        pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
+        pub(super) fn merkle_root(&self) -> Result<FecSetRoot, Error> {
             let proof_size = self.proof_size()?;
             let index = self.erasure_shard_index()?;
             let proof_offset = self.proof_offset()?;
@@ -553,7 +557,7 @@ impl<'a> ShredTrait<'a> for ShredData {
     }
 
     fn signed_data(&'a self) -> Result<Self::SignedData, Error> {
-        self.merkle_root()
+        self.merkle_root().map(Hash::from)
     }
 }
 
@@ -609,7 +613,7 @@ impl<'a> ShredTrait<'a> for ShredCode {
     }
 
     fn signed_data(&'a self) -> Result<Self::SignedData, Error> {
-        self.merkle_root()
+        self.merkle_root().map(Hash::from)
     }
 }
 
@@ -839,7 +843,7 @@ pub(super) fn recover(
     // The attached signature verifies only if we obtain the same Merkle root.
     // Because shreds obtained from turbine or repair are sig-verified, this
     // also means that we don't need to verify signatures for recovered shreds.
-    if tree.root() != &merkle_root {
+    if tree.root() != merkle_root {
         return Err(Error::InvalidMerkleRoot);
     }
     let set_merkle_proof = move |(index, (mut shred, mask)): (_, (Shred, _))| {
@@ -1183,6 +1187,7 @@ pub(crate) fn make_shreds_from_data(
                     Some(chained_merkle_root),
                     reed_solomon_cache,
                 )
+                .map(Hash::from)
             })?;
     } else if batches.len() <= 1 {
         for batch in batches {
@@ -1227,7 +1232,7 @@ fn finish_erasure_batch(
     // The Merkle root of the previous erasure batch if chained.
     chained_merkle_root: Option<Hash>,
     reed_solomon_cache: &ReedSolomonCache,
-) -> Result</*Merkle root:*/ Hash, Error> {
+) -> Result<FecSetRoot, Error> {
     debug_assert_eq!(shreds.iter().map(Shred::fec_set_index).dedup().count(), 1);
     // Write common and {data,coding} headers into shreds' payload.
     fn write_headers(shred: &mut Shred) -> Result<(), bincode::Error> {
@@ -1306,7 +1311,7 @@ fn finish_erasure_batch(
             &Shred::from_payload(shred).unwrap()
         });
     }
-    Ok(*tree.root())
+    Ok(tree.root())
 }
 
 #[cfg(test)]
@@ -1849,7 +1854,9 @@ mod test {
                             .iter()
                             .sorted_unstable_by_key(|shred| shred.fec_set_index())
                             .dedup_by(|shred, other| shred.fec_set_index() == other.fec_set_index())
-                            .map(|shred| (shred.fec_set_index(), shred.merkle_root().unwrap())),
+                            .map(|shred| {
+                                (shred.fec_set_index(), shred.merkle_root().unwrap().into())
+                            }),
                     )
                     .tuple_windows()
                     .map(|((_, merkle_root), (fec_set_index, _))| (fec_set_index, merkle_root))

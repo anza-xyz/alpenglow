@@ -85,7 +85,7 @@ use {solana_keypair::Keypair, solana_perf::packet::Packet, solana_signer::Signer
 
 mod common;
 pub(crate) mod merkle;
-pub(crate) mod merkle_tree;
+pub mod merkle_tree;
 mod payload;
 mod shred_code;
 mod shred_data;
@@ -378,6 +378,7 @@ macro_rules! dispatch {
 }
 
 use dispatch;
+use merkle_tree::fec_set_root::FecSetRoot;
 
 impl Shred {
     dispatch!(fn common_header(&self) -> &ShredCommonHeader);
@@ -389,7 +390,7 @@ impl Shred {
     dispatch!(pub(crate) fn retransmitter_signature(&self) -> Result<Signature, Error>);
 
     dispatch!(pub fn into_payload(self) -> Payload);
-    dispatch!(pub fn merkle_root(&self) -> Result<Hash, Error>);
+    dispatch!(pub fn merkle_root(&self) -> Result<FecSetRoot, Error>);
     dispatch!(pub fn payload(&self) -> &Payload);
     dispatch!(pub fn sanitize(&self) -> Result<(), Error>);
 

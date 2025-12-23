@@ -2392,6 +2392,7 @@ pub fn process_single_slot(
                     );
                 }
             })?
+            .map(Hash::from)
     };
     bank.set_block_id(block_id);
     bank.freeze(); // all banks handled by this routine are created from complete slots

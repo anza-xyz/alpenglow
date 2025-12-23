@@ -166,7 +166,7 @@ impl StandardBroadcastRun {
                 .inspect(|shred| stats.record_shred(shred))
                 .collect();
         if let Some(shred) = shreds.iter().max_by_key(|shred| shred.fec_set_index()) {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+            self.chained_merkle_root = shred.merkle_root().unwrap().into();
         }
         self.report_and_reset_stats(/*was_interrupted:*/ true);
         self.completed = true;
@@ -211,7 +211,7 @@ impl StandardBroadcastRun {
             .iter()
             .unique_by(|shred| shred.fec_set_index())
             .sorted_unstable_by_key(|shred| shred.fec_set_index())
-            .map(|shred| shred.merkle_root().expect("no more legacy shreds"));
+            .map(|shred| Hash::from(shred.merkle_root().expect("no more legacy shreds")));
         // If necessary for perf, these leaves could start being joined in the background
         self.double_merkle_leaves.extend(fec_set_roots);
 

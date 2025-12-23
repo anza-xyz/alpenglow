@@ -1,10 +1,9 @@
 #![allow(clippy::implicit_hasher)]
 use {
-    crate::shred::{self, SIZE_OF_MERKLE_ROOT},
+    crate::shred::{self, merkle_tree::fec_set_root::FecSetRoot, SIZE_OF_MERKLE_ROOT},
     itertools::{izip, Itertools},
     rayon::{prelude::*, ThreadPool},
     solana_clock::Slot,
-    solana_hash::Hash,
     solana_metrics::inc_new_counter_debug,
     solana_nohash_hasher::BuildNoHashHasher,
     solana_perf::{
@@ -37,7 +36,7 @@ use {
 #[cfg(test)]
 const SIGN_SHRED_GPU_MIN: usize = 256;
 
-pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, /*merkle root:*/ Hash), ()>;
+pub type LruCache = lazy_lru::LruCache<(Signature, Pubkey, FecSetRoot), ()>;
 
 pub type SlotPubkeys = HashMap<Slot, Pubkey, BuildNoHashHasher<Slot>>;
 
@@ -169,7 +168,7 @@ fn get_merkle_roots(
     PinnedVec<u8>,      // Merkle roots
     Vec<Option<usize>>, // Offsets
 ) {
-    let merkle_roots: Vec<Option<Hash>> = thread_pool.install(|| {
+    let merkle_roots = thread_pool.install(|| {
         packets
             .par_iter()
             .flat_map(|packets| {
@@ -181,7 +180,7 @@ fn get_merkle_roots(
                     shred::layout::get_merkle_root(shred)
                 })
             })
-            .collect()
+            .collect::<Vec<_>>()
     });
     let num_merkle_roots = merkle_roots.iter().flatten().count();
     let mut buffer = recycler_cache.buffer().allocate("shred_gpu_merkle_roots");

@@ -3555,12 +3555,14 @@ impl ReplayStage {
         } else {
             // Once SIMD-0317 is activated, this can simply grab the merkle root of the last shred.
             // Then there is no need for the error checking or to potentially mark the slot as dead below.
-            blockstore.check_last_fec_set_and_get_block_id(
-                bank.slot(),
-                bank.hash(),
-                is_leader_block,
-                &bank.feature_set,
-            )
+            blockstore
+                .check_last_fec_set_and_get_block_id(
+                    bank.slot(),
+                    bank.hash(),
+                    is_leader_block,
+                    &bank.feature_set,
+                )
+                .map(|r| r.map(Hash::from))
         };
 
         // If the block does not have at least DATA_SHREDS_PER_FEC_BLOCK correctly retransmitted
