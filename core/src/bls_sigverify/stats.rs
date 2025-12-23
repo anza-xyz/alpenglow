@@ -139,6 +139,7 @@ pub(crate) struct BLSSigVerifierStats {
     pub(crate) received_bad_rank: AtomicU64,
     pub(crate) received_bad_signature_certs: AtomicU64,
     pub(crate) received_bad_signature_votes: AtomicU64,
+    pub(crate) received_not_enough_stake: AtomicU64,
     pub(crate) received_discarded: AtomicU64,
     pub(crate) received_malformed: AtomicU64,
     pub(crate) received_no_epoch_stakes: AtomicU64,
@@ -171,6 +172,7 @@ impl BLSSigVerifierStats {
             received_bad_rank: AtomicU64::new(0),
             received_bad_signature_certs: AtomicU64::new(0),
             received_bad_signature_votes: AtomicU64::new(0),
+            received_not_enough_stake: AtomicU64::new(0),
             received_discarded: AtomicU64::new(0),
             received_malformed: AtomicU64::new(0),
             received_no_epoch_stakes: AtomicU64::new(0),
@@ -273,6 +275,11 @@ impl BLSSigVerifierStats {
             (
                 "received_bad_signature_votes",
                 self.received_bad_signature_votes.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "received_not_enough_stake",
+                self.received_not_enough_stake.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

@@ -1,12 +1,18 @@
 //! Fraction type for precise stake threshold comparisons.
 
-use std::num::NonZeroU64;
+use std::{fmt::Display, num::NonZeroU64};
 
 /// Numerator / denominator, for precise comparisons without floating point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fraction {
     numerator: u64,
     denominator: NonZeroU64,
+}
+
+impl Display for Fraction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.approx_f64())
+    }
 }
 
 impl Fraction {

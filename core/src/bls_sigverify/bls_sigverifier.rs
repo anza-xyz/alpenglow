@@ -24,13 +24,18 @@ use {
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
-    solana_votor::consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+    solana_votor::{
+        common::certificate_limits_and_vote_types,
+        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+    },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        fraction::Fraction,
         vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
+        num::NonZeroU64,
         sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
@@ -41,12 +46,12 @@ use {
 //            is brittle, but another bincode serialization would be wasteful.
 //            Revisit this to figure out the best way to handle this.
 
-fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
     let stakes = bank.epoch_stakes_map();
     let epoch = bank.epoch_schedule().get_epoch(slot);
     stakes
         .get(&epoch)
-        .map(|stake| stake.bls_pubkey_to_rank_map())
+        .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -56,6 +61,9 @@ enum CertVerifyError {
 
     #[error("Cert Verification Error {0:?}")]
     CertVerifyFailed(#[from] BLSCertVerifyError),
+
+    #[error("Not enough stake {0}: {1} < {2}")]
+    NotEnoughStake(u64, Fraction, Fraction),
 }
 
 pub struct BLSSigVerifier {
@@ -119,7 +127,7 @@ impl BLSSigVerifier {
             match message {
                 ConsensusMessage::Vote(vote_message) => {
                     // Missing epoch states
-                    let Some(key_to_rank_map) =
+                    let Some((key_to_rank_map, _)) =
                         get_key_to_rank_map(&root_bank, vote_message.vote.slot())
                     else {
                         self.stats
@@ -130,8 +138,8 @@ impl BLSSigVerifier {
                     };
 
                     // Invalid rank
-                    let Some((solana_pubkey, bls_pubkey)) =
-                        key_to_rank_map.get_pubkey(vote_message.rank.into())
+                    let Some((solana_pubkey, bls_pubkey, _stake)) =
+                        key_to_rank_map.get_pubkey_and_stake(vote_message.rank.into())
                     else {
                         self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
@@ -454,9 +462,15 @@ impl BLSSigVerifier {
                             "Failed to verify BLS certificate: {:?}, error: {e}",
                             cert_to_verify.cert_type
                         );
-                        self.stats
-                            .received_bad_signature_certs
-                            .fetch_add(1, Ordering::Relaxed);
+                        if let CertVerifyError::NotEnoughStake(..) = e {
+                            self.stats
+                                .received_not_enough_stake
+                                .fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            self.stats
+                                .received_bad_signature_certs
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                         false
                     }
                 },
@@ -485,15 +499,26 @@ impl BLSSigVerifier {
         }
 
         let slot = cert_to_verify.cert_type.slot();
-        let Some(key_to_rank_map) = get_key_to_rank_map(bank, slot) else {
+        let Some((key_to_rank_map, total_stake)) = get_key_to_rank_map(bank, slot) else {
             return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
-        verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
-            key_to_rank_map
-                .get_pubkey(rank)
-                .map(|(_, bls_pubkey)| *bls_pubkey)
-        })?;
+        let (required_stake_fraction, _) =
+            certificate_limits_and_vote_types(&cert_to_verify.cert_type);
+        let aggregate_stake =
+            verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
+                key_to_rank_map
+                    .get_pubkey_and_stake(rank)
+                    .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
+            })?;
+        let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
+        if my_fraction < required_stake_fraction {
+            return Err(CertVerifyError::NotEnoughStake(
+                aggregate_stake,
+                my_fraction,
+                required_stake_fraction,
+            ));
+        }
 
         self.verified_certs
             .write()
@@ -659,13 +684,14 @@ mod tests {
             create_keypairs_and_bls_sig_verifier();
 
         let vote_rank1 = 2;
+        let cert_ranks = [0, 2, 3, 4, 5, 7, 8, 9];
         let cert_type = CertificateType::Finalize(4);
         let vote_message1 = create_signed_vote_message(
             &validator_keypairs,
             Vote::new_finalization_vote(5),
             vote_rank1,
         );
-        let cert = create_signed_certificate_message(&validator_keypairs, cert_type, &[vote_rank1]);
+        let cert = create_signed_certificate_message(&validator_keypairs, cert_type, &cert_ranks);
         let messages1 = vec![
             ConsensusMessage::Vote(vote_message1),
             ConsensusMessage::Certificate(cert),
@@ -1124,6 +1150,72 @@ mod tests {
     }
 
     #[test]
+    fn test_verify_certificate_base2_just_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let num_signers = 6; // = 60% of 10 validators
+        let cert_type = CertificateType::Notarize(10, Hash::new_unique());
+        let cert = create_signed_certificate_message(
+            &validator_keypairs,
+            cert_type,
+            &(0..num_signers).collect::<Vec<_>>(),
+        );
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            1,
+            "Valid Base2 certificate should be sent"
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base2_not_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let num_signers = 5; // < 60% of 10 validators
+        let cert_type = CertificateType::Notarize(10, Hash::new_unique());
+        let cert = create_signed_certificate_message(
+            &validator_keypairs,
+            cert_type,
+            &(0..num_signers).collect::<Vec<_>>(),
+        );
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        // The call still succeeds, but the packet is marked for discard.
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            0,
+            "This certificate should be invalid"
+        );
+        assert_eq!(
+            verifier
+                .stats
+                .received_not_enough_stake
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
     fn test_verify_certificate_base3_valid() {
         let (validator_keypairs, mut verifier, _, message_receiver) =
             create_keypairs_and_bls_sig_verifier();
@@ -1161,6 +1253,107 @@ mod tests {
             message_receiver.try_iter().count(),
             1,
             "Valid Base3 certificate should be sent"
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base3_just_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let slot = 20;
+        let block_hash = Hash::new_unique();
+        let notarize_vote = Vote::new_notarization_vote(slot, block_hash);
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, block_hash);
+        let mut all_vote_messages = Vec::new();
+        (0..4).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_vote,
+                i,
+            ))
+        });
+        (4..6).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_fallback_vote,
+                i,
+            ))
+        });
+        let cert_type = CertificateType::NotarizeFallback(slot, block_hash);
+        let mut builder = CertificateBuilder::new(cert_type);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert = builder.build().expect("Failed to build certificate");
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            1,
+            "Valid Base3 certificate should be sent"
+        );
+    }
+
+    #[test]
+    fn test_verify_certificate_base3_not_enough_stake() {
+        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
+        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
+        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
+            verified_vote_sender,
+            message_sender,
+            consensus_metrics_sender,
+        );
+
+        let slot = 20;
+        let block_hash = Hash::new_unique();
+        let notarize_vote = Vote::new_notarization_vote(slot, block_hash);
+        let notarize_fallback_vote = Vote::new_notarization_fallback_vote(slot, block_hash);
+        let mut all_vote_messages = Vec::new();
+        (0..4).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_vote,
+                i,
+            ))
+        });
+        (4..5).for_each(|i| {
+            all_vote_messages.push(create_signed_vote_message(
+                &validator_keypairs,
+                notarize_fallback_vote,
+                i,
+            ))
+        });
+        let cert_type = CertificateType::NotarizeFallback(slot, block_hash);
+        let mut builder = CertificateBuilder::new(cert_type);
+        builder
+            .aggregate(&all_vote_messages)
+            .expect("Failed to aggregate votes");
+        let cert = builder.build().expect("Failed to build certificate");
+        let consensus_message = ConsensusMessage::Certificate(cert);
+        let packet_batches = messages_to_batches(&[consensus_message]);
+
+        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        assert_eq!(
+            message_receiver.try_iter().count(),
+            0,
+            "This certificate should be invalid"
+        );
+        assert_eq!(
+            verifier
+                .stats
+                .received_not_enough_stake
+                .load(Ordering::Relaxed),
+            1
         );
     }
 

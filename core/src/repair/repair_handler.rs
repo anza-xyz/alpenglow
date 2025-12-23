@@ -15,7 +15,6 @@ use {
     solana_ledger::{
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
-        blockstore_meta::BlockLocation,
         shred::Nonce,
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
@@ -61,30 +60,41 @@ pub trait RepairHandler {
         )
     }
 
+    fn run_window_request_for_block_id(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        shred_index: u64,
+        block_id: Hash,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        self.run_window_request(
+            recycler,
+            from_addr,
+            slot,
+            shred_index,
+            Some(block_id),
+            nonce,
+        )
+    }
+
     fn run_highest_window_request(
         &self,
         recycler: &PacketBatchRecycler,
         from_addr: &SocketAddr,
         slot: Slot,
         highest_index: u64,
-        block_id: Option<Hash>,
         nonce: Nonce,
     ) -> Option<PacketBatch> {
-        let location = match block_id {
-            None => BlockLocation::Original,
-            Some(block_id) => self
-                .blockstore()
-                .get_block_location(slot, block_id)
-                .expect("Unable to fetch block location from blockstore")?,
-        };
         let meta = self
             .blockstore()
-            .meta_from_location(slot, location)
+            .meta(slot)
             .expect("Unable to fetch slot meta from blockstore")?;
         if meta.received > highest_index {
             // meta.received must be at least 1 by this point
             let packet =
-                self.repair_response_packet(slot, meta.received - 1, block_id, from_addr, nonce)?;
+                self.repair_response_packet(slot, meta.received - 1, None, from_addr, nonce)?;
             return Some(
                 PinnedPacketBatch::new_unpinned_with_recycler_data(
                     recycler,
@@ -102,10 +112,29 @@ pub trait RepairHandler {
         recycler: &PacketBatchRecycler,
         from_addr: &SocketAddr,
         slot: Slot,
-        block_id: Option<Hash>,
         max_responses: usize,
         nonce: Nonce,
-    ) -> Option<PacketBatch>;
+    ) -> Option<PacketBatch> {
+        let mut res =
+            PinnedPacketBatch::new_unpinned_with_recycler(recycler, max_responses, "run_orphan");
+        // Try to find the next "n" parent slots of the input slot
+        let packets = std::iter::successors(self.blockstore().meta(slot).ok()?, |meta| {
+            self.blockstore().meta(meta.parent_slot?).ok()?
+        })
+        .map_while(|meta| {
+            repair_response::repair_response_packet(
+                self.blockstore(),
+                meta.slot,
+                meta.received.checked_sub(1u64)?,
+                from_addr,
+                nonce,
+            )
+        });
+        for packet in packets.take(max_responses) {
+            res.push(packet);
+        }
+        (!res.is_empty()).then_some(res.into())
+    }
 
     fn run_ancestor_hashes(
         &self,

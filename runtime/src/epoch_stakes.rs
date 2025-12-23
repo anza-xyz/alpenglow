@@ -21,7 +21,7 @@ pub struct BLSPubkeyToRankMap {
     rank_map: HashMap<BLSPubkey, u16>,
     //TODO(wen): We can make SortedPubkeys a Vec<BLSPubkey> after we remove ed25519
     // pubkey from certificate pool.
-    sorted_pubkeys: Vec<(Pubkey, BLSPubkey)>,
+    sorted_pubkeys: Vec<(Pubkey, BLSPubkey, u64)>,
 }
 
 impl BLSPubkeyToRankMap {
@@ -49,8 +49,8 @@ impl BLSPubkeyToRankMap {
         });
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
-        for (rank, (pubkey, bls_pubkey, _stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            sorted_pubkeys.push((pubkey, bls_pubkey));
+        for (rank, (pubkey, bls_pubkey, stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
+            sorted_pubkeys.push((pubkey, bls_pubkey, stake));
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
@@ -71,7 +71,7 @@ impl BLSPubkeyToRankMap {
         self.rank_map.get(bls_pubkey)
     }
 
-    pub fn get_pubkey(&self, index: usize) -> Option<&(Pubkey, BLSPubkey)> {
+    pub fn get_pubkey_and_stake(&self, index: usize) -> Option<&(Pubkey, BLSPubkey, u64)> {
         self.sorted_pubkeys.get(index)
     }
 }
@@ -426,7 +426,7 @@ pub(crate) mod tests {
         let epoch_stakes = VersionedEpochStakes::new_for_tests(epoch_vote_accounts.clone(), 0);
         let bls_pubkey_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
-        for (pubkey, (_, vote_account)) in epoch_vote_accounts {
+        for (pubkey, (stake, vote_account)) in epoch_vote_accounts {
             let vote_state_view = vote_account.vote_state_view();
             let bls_pubkey_compressed = bincode::deserialize::<BLSPubkeyCompressed>(
                 &vote_state_view.bls_pubkey_compressed().unwrap(),
@@ -436,8 +436,8 @@ pub(crate) mod tests {
             let index = bls_pubkey_to_rank_map.get_rank(&bls_pubkey).unwrap();
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
-                bls_pubkey_to_rank_map.get_pubkey(*index as usize),
-                Some(&(pubkey, bls_pubkey))
+                bls_pubkey_to_rank_map.get_pubkey_and_stake(*index as usize),
+                Some(&(pubkey, bls_pubkey, stake))
             );
         }
 
