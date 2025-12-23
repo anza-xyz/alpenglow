@@ -1151,14 +1151,8 @@ mod tests {
 
     #[test]
     fn test_verify_certificate_base2_just_enough_stake() {
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
-        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
-            verified_vote_sender,
-            message_sender,
-            consensus_metrics_sender,
-        );
+        let (validator_keypairs, mut verifier, _, message_receiver) =
+            create_keypairs_and_bls_sig_verifier();
 
         let num_signers = 6; // = 60% of 10 validators
         let cert_type = CertificateType::Notarize(10, Hash::new_unique());
@@ -1180,14 +1174,8 @@ mod tests {
 
     #[test]
     fn test_verify_certificate_base2_not_enough_stake() {
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
-        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
-            verified_vote_sender,
-            message_sender,
-            consensus_metrics_sender,
-        );
+        let (validator_keypairs, mut verifier, _, message_receiver) =
+            create_keypairs_and_bls_sig_verifier();
 
         let num_signers = 5; // < 60% of 10 validators
         let cert_type = CertificateType::Notarize(10, Hash::new_unique());
@@ -1258,14 +1246,8 @@ mod tests {
 
     #[test]
     fn test_verify_certificate_base3_just_enough_stake() {
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
-        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
-            verified_vote_sender,
-            message_sender,
-            consensus_metrics_sender,
-        );
+        let (validator_keypairs, mut verifier, _, message_receiver) =
+            create_keypairs_and_bls_sig_verifier();
 
         let slot = 20;
         let block_hash = Hash::new_unique();
@@ -1305,14 +1287,8 @@ mod tests {
 
     #[test]
     fn test_verify_certificate_base3_not_enough_stake() {
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
-        let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
-        let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier(
-            verified_vote_sender,
-            message_sender,
-            consensus_metrics_sender,
-        );
+        let (validator_keypairs, mut verifier, _, message_receiver) =
+            create_keypairs_and_bls_sig_verifier();
 
         let slot = 20;
         let block_hash = Hash::new_unique();
