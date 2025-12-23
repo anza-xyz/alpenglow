@@ -431,6 +431,21 @@ impl BankForks {
             .unzip()
     }
 
+    /// Clears a bank from bank forks.
+    pub fn clear_bank(&mut self, slot: Slot) {
+        let (slots_to_purge, removed_banks) = self.dump_slots(std::iter::once(&slot));
+
+        let root_bank = self.root_bank();
+        root_bank.remove_unrooted_slots(&slots_to_purge);
+
+        drop(removed_banks);
+
+        for (slot, _) in slots_to_purge {
+            root_bank.clear_slot_signatures(slot);
+            root_bank.prune_program_cache_by_deployment_slot(slot);
+        }
+    }
+
     fn do_set_root_return_metrics(
         &mut self,
         root: Slot,

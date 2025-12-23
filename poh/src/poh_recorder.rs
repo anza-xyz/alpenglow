@@ -65,6 +65,12 @@ pub enum PohRecorderError {
 
     #[error("channel disconnected")]
     ChannelDisconnected,
+
+    #[error("parent ready not observed")]
+    ParentReadyNotObserved,
+
+    #[error("couldn't reset bank during fast leader handover slot {0} -> slot {1}")]
+    ResetBankError(Slot, Slot),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
@@ -999,6 +1005,12 @@ impl PohRecorder {
     #[cfg(feature = "dev-context-only-utils")]
     pub fn clear_bank_for_test(&mut self) {
         self.clear_bank();
+    }
+
+    pub fn clear_working_bank(&mut self) {
+        if self.working_bank.take().is_some() {
+            self.shared_working_bank.clear();
+        }
     }
 
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64, footer: BlockFooterV1) {
