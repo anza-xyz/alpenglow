@@ -2285,26 +2285,24 @@ impl Bank {
 
     fn burn_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
         let mut total_vat = 0;
-        for vote_pubkey in
-            epoch_stakes
-                .stakes()
-                .staked_nodes()
-                .iter()
-                .filter_map(|(vote_pubkey, stake)| {
-                    if *stake != 0u64 {
-                        Some(vote_pubkey)
-                    } else {
-                        None
-                    }
-                })
-        {
-            // burn VAT from each staked vote account
-            let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
-            let mut account = self.get_account(vote_pubkey).unwrap();
-            total_vat += vat;
-            account.set_lamports(account.lamports().saturating_sub(vat));
-            self.store_account(vote_pubkey, &account);
-        }
+        let accounts_to_store = epoch_stakes
+            .stakes()
+            .staked_nodes()
+            .iter()
+            .filter_map(|(vote_pubkey, stake)| {
+                if *stake == 0u64 {
+                    None
+                } else {
+                    // burn VAT from each staked vote account
+                    let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
+                    let mut account = self.get_account(vote_pubkey).unwrap();
+                    total_vat += vat;
+                    account.set_lamports(account.lamports().saturating_sub(vat));
+                    Some((*vote_pubkey, account))
+                }
+            })
+            .collect::<Vec<_>>();
+        self.store_accounts((self.slot, accounts_to_store.as_slice()));
         info!("BURNED total VAT of {total_vat} lamports from staked accounts");
         self.capitalization.fetch_sub(total_vat, Relaxed);
     }
