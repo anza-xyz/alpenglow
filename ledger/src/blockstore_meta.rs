@@ -2,7 +2,9 @@ use {
     crate::{
         bit_vec::BitVec,
         blockstore::BlockstoreError,
-        shred::{self, Shred, ShredType, MAX_DATA_SHREDS_PER_SLOT},
+        shred::{
+            self, merkle_tree::fec_set_root::FecSetRoot, Shred, ShredType, MAX_DATA_SHREDS_PER_SLOT,
+        },
     },
     bincode::Options,
     bitflags::bitflags,
@@ -397,7 +399,7 @@ pub(crate) struct ErasureConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MerkleRootMeta {
     /// The merkle root, `None` for legacy shreds
-    merkle_root: Option<Hash>,
+    merkle_root: Option<FecSetRoot>,
     /// The first received shred index
     first_received_shred_index: u32,
     /// The shred type of the first received shred
@@ -891,7 +893,7 @@ impl MerkleRootMeta {
         }
     }
 
-    pub(crate) fn merkle_root(&self) -> Option<Hash> {
+    pub(crate) fn merkle_root(&self) -> Option<FecSetRoot> {
         self.merkle_root
     }
 

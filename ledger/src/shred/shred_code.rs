@@ -1,4 +1,5 @@
 use {
+    super::merkle_tree::fec_set_root::FecSetRoot,
     crate::shred::{
         common::dispatch,
         merkle,
@@ -44,7 +45,7 @@ impl ShredCode {
         }
     }
 
-    pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
+    pub(super) fn merkle_root(&self) -> Result<FecSetRoot, Error> {
         match self {
             Self::Merkle(shred) => shred.merkle_root(),
         }

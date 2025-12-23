@@ -39,7 +39,9 @@ use {
     solana_keypair::{signable::Signable, Keypair},
     solana_ledger::{
         blockstore_meta::BlockLocation,
-        shred::{self, Nonce, ShredFetchStats, SIZE_OF_NONCE},
+        shred::{
+            self, merkle_tree::fec_set_root::FecSetRoot, Nonce, ShredFetchStats, SIZE_OF_NONCE,
+        },
     },
     solana_packet::PACKET_DATA_SIZE,
     solana_perf::{
@@ -113,7 +115,7 @@ pub enum ShredRepairType {
     ShredForBlockId {
         slot: Slot,
         index: u64,
-        fec_set_merkle_root: Hash,
+        fec_set_merkle_root: FecSetRoot,
         // Double merkle block id
         block_id: Hash,
     },
@@ -304,7 +306,7 @@ pub enum RepairProtocol {
         header: RepairRequestHeader,
         slot: Slot,
         shred_index: u64,
-        fec_set_merkle_root: Hash,
+        fec_set_merkle_root: FecSetRoot,
         block_id: Hash,
     },
 }

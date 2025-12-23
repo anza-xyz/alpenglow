@@ -3,6 +3,7 @@ use {
         self,
         common::dispatch,
         merkle,
+        merkle_tree::fec_set_root::FecSetRoot,
         payload::Payload,
         traits::{Shred as _, ShredData as ShredDataTrait},
         DataShredHeader, Error, ShredCommonHeader, ShredFlags, ShredType, ShredVariant,
@@ -40,7 +41,7 @@ impl ShredData {
         }
     }
 
-    pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
+    pub(super) fn merkle_root(&self) -> Result<FecSetRoot, Error> {
         match self {
             Self::Merkle(shred) => shred.merkle_root(),
         }
