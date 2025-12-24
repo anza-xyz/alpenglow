@@ -11,9 +11,7 @@ use {
     },
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockMarker,
-    },
+    solana_entry::block_component::{BlockFooterV1, GenesisCertificate, VersionedBlockMarker},
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
@@ -692,12 +690,10 @@ fn maybe_include_genesis_certificate(parent_slot: Slot, ctx: &LeaderContext) {
     if parent_slot != ctx.genesis_cert.slot || parent_slot == 0 {
         return;
     }
-    let genesis_marker = VersionedBlockMarker::new(BlockMarkerV1::new_genesis_certificate(
-        ctx.genesis_cert.clone(),
-    ));
 
-    let mut poh_recorder = ctx.poh_recorder.write().unwrap();
     // Send the genesis certificate
+    let genesis_marker = VersionedBlockMarker::new_genesis_certificate(ctx.genesis_cert.clone());
+    let mut poh_recorder = ctx.poh_recorder.write().unwrap();
     poh_recorder
         .send_marker(genesis_marker)
         .expect("Max tick height cannot have been reached");
