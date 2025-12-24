@@ -6,7 +6,7 @@ use {
     },
     crate::repair::{
         repair_response,
-        serve_repair::{AncestorHashesResponse, MAX_ANCESTOR_RESPONSES},
+        serve_repair::{AncestorHashesResponse, BlockIdRepairResponse, MAX_ANCESTOR_RESPONSES},
     },
     bincode::serialize,
     solana_clock::Slot,
@@ -15,7 +15,7 @@ use {
     solana_ledger::{
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
-        shred::Nonce,
+        shred::{ErasureSetId, Nonce},
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
     solana_pubkey::Pubkey,
@@ -171,6 +171,121 @@ pub trait RepairHandler {
             )
             .into(),
         )
+    }
+
+    fn run_parent_fec_set_count(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        block_id: Hash,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        let location = self.blockstore().get_block_location(slot, block_id)?;
+        // `get_block_location()` only returns if `DoubleMerkleMeta` is populated.
+        // `DoubleMerkleMeta` is only populated if the slot is full, thus all expects here as safe
+        debug_assert!(self
+            .blockstore()
+            .meta_from_location(slot, location)
+            .unwrap()
+            .unwrap()
+            .is_full());
+
+        let double_merkle_meta = self
+            .blockstore()
+            .get_double_merkle_meta(slot, location)
+            .expect("Unable to fetch double merkle meta")
+            .expect("If location exists, double merkle meta must be populated");
+        let fec_set_count = double_merkle_meta.fec_set_count;
+
+        let parent_meta = self
+            .blockstore()
+            .get_parent_meta(slot, location)
+            .expect("Unable to fetch ParentMeta")
+            .expect("ParentMeta must exist if location exists");
+
+        let response = BlockIdRepairResponse::ParentFecSetCount {
+            fec_set_count,
+            parent_info: (parent_meta.parent_slot, parent_meta.parent_block_id),
+            parent_proof: double_merkle_meta
+                .proofs
+                .get(fec_set_count)
+                .expect("Blockstore inconsistency in DoubleMerkleMeta")
+                .clone(),
+        };
+        let serialized_response = serialize(&response).expect("Serialization cannot fail");
+        let packet = repair_response::repair_response_packet_from_bytes(
+            serialized_response,
+            from_addr,
+            nonce,
+        )
+        .expect("Packet construction cannot fail");
+
+        Some(PacketBatch::from(
+            PinnedPacketBatch::new_unpinned_with_recycler_data(
+                recycler,
+                "run_parent_fec_set_count",
+                vec![packet],
+            ),
+        ))
+    }
+
+    fn run_fec_set_root(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        block_id: Hash,
+        fec_set_index: u32,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        let location = self.blockstore().get_block_location(slot, block_id)?;
+        // `get_block_location()` only returns if `DoubleMerkleMeta` is populated.
+        // `DoubleMerkleMeta` is only populated if the slot is full, thus all expects here as safe
+        debug_assert!(self
+            .blockstore()
+            .meta_from_location(slot, location)
+            .unwrap()
+            .unwrap()
+            .is_full());
+
+        let double_merkle_meta = self
+            .blockstore()
+            .get_double_merkle_meta(slot, location)
+            .expect("Unable to fetch double merkle meta")
+            .expect("If location exists, double merkle meta must be populated");
+
+        let fec_set_root = self
+            .blockstore()
+            .merkle_root_meta_from_location(ErasureSetId::new(slot, fec_set_index), location)
+            .expect("Unable to fetch merkle root meta")
+            .expect("Slot is full, MerkleRootMeta must exist")
+            .merkle_root()
+            .expect("Legacy shreds are gone, merkle root must exist");
+        let fec_set_proof = double_merkle_meta
+            .proofs
+            .get(usize::try_from(fec_set_index).ok()?)?
+            .clone();
+
+        let response = BlockIdRepairResponse::FecSetRoot {
+            fec_set_root,
+            fec_set_proof,
+        };
+        let serialized_response = serialize(&response).expect("Serialization cannot fail");
+        let packet = repair_response::repair_response_packet_from_bytes(
+            serialized_response,
+            from_addr,
+            nonce,
+        )
+        .expect("Packet construction cannot fail");
+
+        Some(PacketBatch::from(
+            PinnedPacketBatch::new_unpinned_with_recycler_data(
+                recycler,
+                "run_parent_fec_set_count",
+                vec![packet],
+            ),
+        ))
     }
 }
 
