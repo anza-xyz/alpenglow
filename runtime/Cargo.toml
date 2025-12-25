@@ -50,6 +50,7 @@ frozen-abi = [
 ]
 
 [dependencies]
+agave-bls-cert-verify = { workspace = true }
 agave-feature-set = { workspace = true }
 agave-precompiles = { workspace = true }
 agave-reserved-account-keys = { workspace = true }

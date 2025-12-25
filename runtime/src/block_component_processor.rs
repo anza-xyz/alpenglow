@@ -1,13 +1,18 @@
 use {
     crate::bank::Bank,
+    agave_bls_cert_verify::cert_verify,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
         VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
-    solana_votor_messages::{consensus_message::Certificate, migration::MigrationStatus},
-    std::sync::Arc,
+    solana_votor_messages::{
+        consensus_message::Certificate,
+        fraction::Fraction,
+        migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
+    },
+    std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
 };
 
@@ -21,6 +26,8 @@ pub enum BlockComponentProcessorError {
     GenesisCertificateInAlpenglowCluster,
     #[error("GenesisCertificate marker detected on a block which is not a child of genesis")]
     GenesisCertificateOnNonChild,
+    #[error("GenesisCertificate was invalid and failed to verify")]
+    GenesisCertificateFailedVerification,
     #[error("Missing block footer")]
     MissingBlockFooter,
     #[error("Missing parent marker (neither a header nor an update parent was present)")]
@@ -162,8 +169,7 @@ impl BlockComponentProcessor {
         }
 
         let genesis_cert = Certificate::from(genesis_cert);
-        // TODO(ashwin): verify genesis cert using bls sigverify and bank
-
+        Self::verify_genesis_certificate(&bank, &genesis_cert)?;
         bank.set_alpenglow_genesis_certificate(&genesis_cert);
 
         if migration_status.is_alpenglow_enabled() {
@@ -190,6 +196,35 @@ impl BlockComponentProcessor {
         );
         migration_status.set_genesis_certificate(Arc::new(genesis_cert));
         assert!(migration_status.is_ready_to_enable());
+
+        Ok(())
+    }
+
+    fn verify_genesis_certificate(
+        bank: &Bank,
+        cert: &Certificate,
+    ) -> Result<(), BlockComponentProcessorError> {
+        let slot = cert.cert_type.slot();
+        let epoch = bank.epoch_schedule().get_epoch(slot);
+        let epoch_stakes = bank
+            .epoch_stakes_map()
+            .get(&epoch)
+            .ok_or(BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
+        let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
+        let total_stake = epoch_stakes.total_stake();
+
+        let genesis_stake =
+            cert_verify::verify_votor_message_certificate(cert, key_to_rank_map.len(), |rank| {
+                key_to_rank_map
+                    .get_pubkey_and_stake(rank)
+                    .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
+            })
+            .map_err(|_| BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
+
+        let genesis_percent = Fraction::new(genesis_stake, NonZeroU64::new(total_stake).unwrap());
+        if genesis_percent < GENESIS_VOTE_THRESHOLD {
+            return Err(BlockComponentProcessorError::GenesisCertificateFailedVerification);
+        }
 
         Ok(())
     }
