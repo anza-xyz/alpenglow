@@ -1,6 +1,6 @@
 use {
     crate::bank::Bank,
-    agave_bls_cert_verify::cert_verify,
+    agave_bls_cert_verify::cert_verify::verify_votor_message_certificate,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
@@ -213,13 +213,12 @@ impl BlockComponentProcessor {
         let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         let total_stake = epoch_stakes.total_stake();
 
-        let genesis_stake =
-            cert_verify::verify_votor_message_certificate(cert, key_to_rank_map.len(), |rank| {
-                key_to_rank_map
-                    .get_pubkey_and_stake(rank)
-                    .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
-            })
-            .map_err(|_| BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
+        let genesis_stake = verify_votor_message_certificate(cert, key_to_rank_map.len(), |rank| {
+            key_to_rank_map
+                .get_pubkey_and_stake(rank)
+                .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
+        })
+        .map_err(|_| BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
 
         let genesis_percent = Fraction::new(genesis_stake, NonZeroU64::new(total_stake).unwrap());
         if genesis_percent < GENESIS_VOTE_THRESHOLD {
