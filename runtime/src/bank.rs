@@ -2297,7 +2297,9 @@ impl Bank {
                     let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
                     let mut account = self.get_account(vote_pubkey).unwrap();
                     total_vat += vat;
-                    account.set_lamports(account.lamports().saturating_sub(vat));
+                    // Since we checked that there is enough balance already, subtraction here
+                    // should always succeed.
+                    account.set_lamports(account.lamports().checked_sub(vat).unwrap());
                     Some((*vote_pubkey, account))
                 }
             })
