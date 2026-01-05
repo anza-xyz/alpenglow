@@ -1422,6 +1422,7 @@ impl Validator {
 
         let (leader_window_info_sender, leader_window_info_receiver) = bounded(7);
         let highest_parent_ready = Arc::new(RwLock::default());
+        let highest_finalized = Arc::new(RwLock::default());
 
         let poh_service = PohService::new(
             poh_recorder.clone(),
@@ -1452,6 +1453,7 @@ impl Validator {
             leader_window_info_receiver: leader_window_info_receiver.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
             highest_parent_ready: highest_parent_ready.clone(),
+            highest_finalized: highest_finalized.clone(),
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
@@ -1701,6 +1703,7 @@ impl Validator {
             replay_highest_frozen.clone(),
             leader_window_info_sender.clone(),
             highest_parent_ready.clone(),
+            highest_finalized.clone(),
             config.voting_service_test_override.clone(),
             votor_event_sender.clone(),
             votor_event_receiver,

@@ -21,7 +21,9 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
-        consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        consensus_message::{
+            Certificate, CertificateType, ConsensusMessage, FinalizationCertPair, VoteMessage,
+        },
         fraction::Fraction,
         migration::MigrationStatus,
         vote::{Vote, VoteType},
@@ -30,7 +32,7 @@ use {
         cmp::Ordering,
         collections::{BTreeMap, HashMap},
         num::NonZeroU64,
-        sync::Arc,
+        sync::{Arc, RwLock},
     },
     thiserror::Error,
 };
@@ -113,7 +115,7 @@ pub struct ConsensusPool {
     highest_finalized_slot: Option<Slot>,
     /// Highest slot that has Finalize+Notarize or FinalizeFast, for use in standstill
     /// Also add a bool to indicate whether this slot has FinalizeFast certificate
-    highest_finalized_with_notarize: Option<(Slot, bool)>,
+    highest_finalized: Arc<RwLock<FinalizationCertPair>>,
     /// Stats for the certificate pool
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
@@ -127,13 +129,18 @@ impl ConsensusPool {
         my_pubkey: Pubkey,
         bank: &Bank,
         migration_status: Arc<MigrationStatus>,
+        highest_finalized: Arc<RwLock<FinalizationCertPair>>,
     ) -> Self {
-        let mut pool = Self::new_from_root_bank(my_pubkey, bank);
+        let mut pool = Self::new_from_root_bank(my_pubkey, bank, highest_finalized);
         pool.migration_status = Some(migration_status);
         pool
     }
 
-    pub fn new_from_root_bank(my_pubkey: Pubkey, bank: &Bank) -> Self {
+    pub fn new_from_root_bank(
+        my_pubkey: Pubkey,
+        bank: &Bank,
+        highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
         let root_block = (bank.slot(), bank.block_id().unwrap_or_default());
@@ -144,7 +151,7 @@ impl ConsensusPool {
             vote_pools: BTreeMap::new(),
             completed_certificates: BTreeMap::new(),
             highest_finalized_slot: None,
-            highest_finalized_with_notarize: None,
+            highest_finalized,
             parent_ready_tracker,
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
@@ -285,6 +292,19 @@ impl ConsensusPool {
         None
     }
 
+    fn is_highest_finalized_too_old(&self, new_slot: Slot, replace_equal_slot: bool) -> bool {
+        let highest_finalized_r = self.highest_finalized.read().unwrap();
+        let (prev_final_cert, _) = &*highest_finalized_r;
+        prev_final_cert.as_ref().is_none_or(|cert| {
+            let current_slot = cert.cert_type.slot();
+            if replace_equal_slot {
+                current_slot <= new_slot
+            } else {
+                current_slot < new_slot
+            }
+        })
+    }
+
     fn insert_certificate(
         &mut self,
         cert_type: CertificateType,
@@ -307,22 +327,30 @@ impl ConsensusPool {
                     // It's fine to set FastFinalization to false here, because
                     // we will report correctly as long as we have FastFinalization cert.
                     events.push(VotorEvent::Finalized((slot, block_id), false));
-                    if self
-                        .highest_finalized_with_notarize
-                        .is_none_or(|(s, _)| s < slot)
-                    {
-                        self.highest_finalized_with_notarize = Some((slot, false));
+                    if self.is_highest_finalized_too_old(slot, false) {
+                        let mut highest_finalized = self.highest_finalized.write().unwrap();
+                        if let Some(finalization_cert) = self
+                            .completed_certificates
+                            .get(&CertificateType::Finalize(slot))
+                        {
+                            if let CertificateType::FinalizeFast(_, _) = finalization_cert.cert_type
+                            {
+                                *highest_finalized = (Some(finalization_cert.clone()), None);
+                            } else {
+                                *highest_finalized =
+                                    (Some(finalization_cert.clone()), Some(cert.clone()));
+                            }
+                        }
                     }
                 }
             }
             CertificateType::Finalize(slot) => {
-                if let Some(block) = self.get_notarized_block(slot) {
+                if let Some(notarization_cert) = self.get_notarization_cert(slot) {
+                    let block = notarization_cert.cert_type.to_block().unwrap();
                     events.push(VotorEvent::Finalized(block, false));
-                    if self
-                        .highest_finalized_with_notarize
-                        .is_none_or(|(s, _)| s < slot)
-                    {
-                        self.highest_finalized_with_notarize = Some((slot, false));
+                    if self.is_highest_finalized_too_old(slot, false) {
+                        let mut highest_finalized = self.highest_finalized.write().unwrap();
+                        *highest_finalized = (Some(cert.clone()), Some(notarization_cert));
                     }
                 }
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
@@ -336,11 +364,9 @@ impl ConsensusPool {
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
                     self.highest_finalized_slot = Some(slot);
                 }
-                if self
-                    .highest_finalized_with_notarize
-                    .is_none_or(|(s, _)| s <= slot)
-                {
-                    self.highest_finalized_with_notarize = Some((slot, true));
+                if self.is_highest_finalized_too_old(slot, true) {
+                    let mut highest_finalized = self.highest_finalized.write().unwrap();
+                    *highest_finalized = (Some(cert.clone()), None);
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -488,12 +514,11 @@ impl ConsensusPool {
         Ok(vec![cert])
     }
 
-    /// Get the notarized block in `slot`
-    pub fn get_notarized_block(&self, slot: Slot) -> Option<Block> {
+    pub fn get_notarization_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
         self.completed_certificates
             .iter()
-            .find_map(|(cert_type, _)| match cert_type {
-                CertificateType::Notarize(s, block_id) if slot == *s => Some((*s, *block_id)),
+            .find_map(|(cert_type, cert)| match cert_type {
+                CertificateType::Notarize(s, _) if slot == *s => Some(cert.clone()),
                 _ => None,
             })
     }
@@ -636,8 +661,18 @@ impl ConsensusPool {
     }
 
     pub fn get_certs_for_standstill(&self) -> Vec<Arc<Certificate>> {
-        let (highest_finalized_with_notarize_slot, has_fast_finalize) =
-            self.highest_finalized_with_notarize.unwrap_or((0, false));
+        let (highest_finalized_with_notarize_slot, has_fast_finalize) = {
+            let highest_finalized = self.highest_finalized.read().unwrap();
+            let (finalization_cert, notarization_cert) = &*highest_finalized;
+            if let Some(finalization_cert) = finalization_cert {
+                (
+                    finalization_cert.cert_type.slot(),
+                    notarization_cert.is_none(),
+                )
+            } else {
+                (0, false)
+            }
+        };
         self.completed_certificates
             .iter()
             .filter_map(|(cert_type, cert)| {
@@ -720,7 +755,9 @@ mod tests {
         BankForks::new_rw_arc(bank0)
     }
 
-    fn create_initial_state() -> (
+    fn create_initial_state(
+        highest_finalized: Option<Arc<RwLock<FinalizationCertPair>>>,
+    ) -> (
         Vec<ValidatorVoteKeypairs>,
         ConsensusPool,
         Arc<RwLock<BankForks>>,
@@ -733,7 +770,11 @@ mod tests {
         let root_bank = bank_forks.read().unwrap().root_bank();
         (
             validator_keypairs,
-            ConsensusPool::new_from_root_bank(Pubkey::new_unique(), &root_bank),
+            ConsensusPool::new_from_root_bank(
+                Pubkey::new_unique(),
+                &root_bank,
+                highest_finalized.unwrap_or(Arc::new(RwLock::default())),
+            ),
             bank_forks,
         )
     }
@@ -801,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_does_not_start_if_notarization_missing() {
-        let (_, pool, _) = create_initial_state();
+        let (_, pool, _) = create_initial_state(None);
 
         // No notarization set, pool is default
         let parent_slot = 2;
@@ -817,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_1() {
-        let (_, pool, _) = create_initial_state();
+        let (_, pool, _) = create_initial_state(None);
 
         // If parent_slot == 0, you don't need a notarization certificate
         // Because leader_slot == parent_slot + 1, you don't need a skip certificate
@@ -829,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_2() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // If parent_slot < first_alpenglow_slot, and parent_slot > 0
         // no notarization certificate is required, but a skip
@@ -856,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_3() {
-        let (_, pool, _) = create_initial_state();
+        let (_, pool, _) = create_initial_state(None);
         // If parent_slot == first_alpenglow_slot, and
         // first_alpenglow_slot > 0, you need a notarization certificate
         let parent_slot = 2;
@@ -871,7 +912,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_4() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // If parent_slot < first_alpenglow_slot, and parent_slot == 0,
         // no notarization certificate is required, but a skip certificate will
@@ -897,7 +938,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_5() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
@@ -918,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_first_alpenglow_slot_edge_case_6() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // Valid skip certificate for 1-9 exists
         for slot in 1..=9 {
@@ -938,7 +979,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_does_not_start_if_skip_certificate_missing() {
-        let (validator_keypairs, mut pool, _) = create_initial_state();
+        let (validator_keypairs, mut pool, _) = create_initial_state(None);
 
         let bank_forks = create_bank_forks(&validator_keypairs);
         let my_pubkey = validator_keypairs[0].vote_keypair.pubkey();
@@ -971,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_when_no_skip_required() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // Notarize slot 5
         add_certificate(
@@ -991,7 +1032,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_notarized_and_skips_valid() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // Notarize slot 5
         add_certificate(
@@ -1020,7 +1061,7 @@ mod tests {
 
     #[test]
     fn test_make_decision_leader_starts_if_skip_range_superset() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // Notarize slot 5
         add_certificate(
@@ -1058,7 +1099,7 @@ mod tests {
         vote: Vote,
         expected_cert_types: Vec<CertificateType>,
     ) {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         let my_validator_ix = 5;
         let highest_slot_fn = match &vote {
             Vote::Finalize(_) => |pool: &ConsensusPool| pool.highest_finalized_slot(),
@@ -1161,7 +1202,7 @@ mod tests {
     )]
     #[test_case(CertificateType::Skip(8), Vote::new_skip_vote(8))]
     fn test_add_certificate_with_types(cert_type: CertificateType, vote: Vote) {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         let cert = Certificate {
             cert_type,
@@ -1226,7 +1267,7 @@ mod tests {
 
     #[test]
     fn test_add_vote_zero_stake() {
-        let (_, mut pool, bank_forks) = create_initial_state();
+        let (_, mut pool, bank_forks) = create_initial_state(None);
         let bank = bank_forks.read().unwrap().root_bank();
         assert_eq!(
             pool.add_message(
@@ -1257,7 +1298,7 @@ mod tests {
 
     #[test]
     fn test_consecutive_slots() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         add_certificate(
             &mut pool,
@@ -1289,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_multi_skip_cert() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // We have 10 validators, 40% voted for (5, 15)
         for rank in 0..4 {
@@ -1338,7 +1379,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_votes() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
 
         // 10 validators, half vote for (5, 15), the other (20, 30)
         for rank in 0..5 {
@@ -1379,7 +1420,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_disjoint_votes() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         // 50% of the validators vote for (1, 10)
         for rank in 0..5 {
             add_skip_vote_range(
@@ -1454,7 +1495,7 @@ mod tests {
 
     #[test]
     fn test_update_existing_singleton_vote() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         // 50% voted on (1, 6)
         for rank in 0..5 {
             add_skip_vote_range(
@@ -1494,7 +1535,7 @@ mod tests {
 
     #[test]
     fn test_update_existing_vote() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         let bank = bank_forks.read().unwrap().root_bank();
         // 50% voted for (10, 25)
         for rank in 0..5 {
@@ -1521,7 +1562,7 @@ mod tests {
 
     #[test]
     fn test_threshold_not_reached() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         // half voted (5, 15) and the other half voted (20, 30)
         for rank in 0..5 {
             add_skip_vote_range(
@@ -1550,7 +1591,7 @@ mod tests {
 
     #[test]
     fn test_update_and_skip_range_certify() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         // half voted (5, 15) and the other half voted (10, 30)
         for rank in 0..5 {
             add_skip_vote_range(
@@ -1584,7 +1625,7 @@ mod tests {
     #[test]
     fn test_safe_to_notar() {
         solana_logger::setup();
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         let bank = bank_forks.read().unwrap().root_bank();
         let (my_vote_key, _, _) =
             get_key_and_stakes(bank.epoch_schedule(), bank.epoch_stakes_map(), 0, 0).unwrap();
@@ -1722,7 +1763,7 @@ mod tests {
 
     #[test]
     fn test_safe_to_skip() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         let bank = bank_forks.read().unwrap().root_bank();
         let (my_vote_key, _, _) =
             get_key_and_stakes(bank.epoch_schedule(), bank.epoch_stakes_map(), 0, 0).unwrap();
@@ -1827,7 +1868,7 @@ mod tests {
 
     #[test]
     fn test_reject_conflicting_votes_with_type() {
-        let (validator_keypairs, mut pool, bank_forks) = create_initial_state();
+        let (validator_keypairs, mut pool, bank_forks) = create_initial_state(None);
         let mut slot = 2;
         for vote_type_1 in [
             VoteType::Finalize,
@@ -1860,6 +1901,7 @@ mod tests {
         let mut pool = ConsensusPool::new_from_root_bank(
             Pubkey::new_unique(),
             &bank_forks.read().unwrap().root_bank(),
+            Arc::new(RwLock::default()),
         );
 
         let root_bank = bank_forks.read().unwrap().root_bank();
@@ -1941,7 +1983,8 @@ mod tests {
 
     #[test]
     fn test_get_certs_for_standstill() {
-        let (_, mut pool, bank_forks) = create_initial_state();
+        let highest_finalized = Arc::new(RwLock::default());
+        let (_, mut pool, bank_forks) = create_initial_state(Some(highest_finalized.clone()));
 
         // Should return empty vector if no certificates
         assert!(pool.get_certs_for_standstill().is_empty());
@@ -1985,6 +2028,11 @@ mod tests {
             && matches!(cert.cert_type, CertificateType::NotarizeFallback(_, _))));
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 4
             && matches!(cert.cert_type, CertificateType::Finalize(_))));
+        // highest_finalized should be empty now
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert!(highest_finalized_r.0.is_none());
+        assert!(highest_finalized_r.1.is_none());
+        drop(highest_finalized_r);
 
         // Add Notarize cert on 5
         let cert_5 = Certificate {
@@ -2019,6 +2067,10 @@ mod tests {
                 &mut vec![]
             )
             .is_ok());
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
+        assert!(highest_finalized_r.1.is_some());
+        drop(highest_finalized_r);
 
         // Add FinalizeFast cert on 5
         let cert_5 = Certificate {
@@ -2043,6 +2095,10 @@ mod tests {
             certs[0].cert_type.slot() == 5
                 && matches!(certs[0].cert_type, CertificateType::FinalizeFast(_, _))
         );
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
+        assert!(highest_finalized_r.1.is_none());
+        drop(highest_finalized_r);
 
         // Now add Notarize cert on 6
         let cert_6 = Certificate {
@@ -2067,6 +2123,10 @@ mod tests {
             && matches!(cert.cert_type, CertificateType::FinalizeFast(_, _))));
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 6
             && matches!(cert.cert_type, CertificateType::Notarize(_, _))));
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
+        assert!(highest_finalized_r.1.is_none());
+        drop(highest_finalized_r);
 
         // Add another Finalize cert on 6
         let cert_6_finalize = Certificate {
@@ -2108,6 +2168,10 @@ mod tests {
             && matches!(cert.cert_type, CertificateType::Finalize(_))));
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 6
             && matches!(cert.cert_type, CertificateType::Notarize(_, _))));
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 6);
+        assert!(highest_finalized_r.1.is_some());
+        drop(highest_finalized_r);
 
         // Add another skip on 7
         let cert_7 = Certificate {
@@ -2168,6 +2232,10 @@ mod tests {
                 &mut vec![]
             )
             .is_ok());
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 8);
+        assert!(highest_finalized_r.1.is_some());
+        drop(highest_finalized_r);
 
         // Should only return certs on 8 now
         let certs = pool.get_certs_for_standstill();
@@ -2180,7 +2248,7 @@ mod tests {
 
     #[test]
     fn test_new_parent_ready_with_certificates() {
-        let (_, mut pool, bank_forks) = create_initial_state();
+        let (_, mut pool, bank_forks) = create_initial_state(None);
         let bank = bank_forks.read().unwrap().root_bank();
         let mut events = vec![];
 
@@ -2286,7 +2354,7 @@ mod tests {
 
     #[test]
     fn test_vote_message_signature_verification() {
-        let (validator_keypairs, _, _) = create_initial_state();
+        let (validator_keypairs, _, _) = create_initial_state(None);
         let rank_to_test = 3;
         let vote = Vote::new_notarization_vote(42, Hash::new_unique());
 
@@ -2315,7 +2383,7 @@ mod tests {
     #[test]
     fn test_update_pubkey() {
         let new_pubkey = Pubkey::new_unique();
-        let (_, mut pool, _) = create_initial_state();
+        let (_, mut pool, _) = create_initial_state(None);
         let old_pubkey = pool.my_pubkey();
         assert_eq!(pool.parent_ready_tracker.my_pubkey(), old_pubkey);
         assert_ne!(old_pubkey, new_pubkey);

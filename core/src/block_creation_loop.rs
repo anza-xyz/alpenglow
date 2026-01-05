@@ -12,7 +12,7 @@ use {
     crossbeam_channel::Receiver,
     solana_clock::Slot,
     solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockMarker,
+        BlockFooterV1, BlockMarkerV1, FinalCertificate, GenesisCertificate, VersionedBlockMarker,
     },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -35,6 +35,7 @@ use {
     },
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor_messages::consensus_message::FinalizationCertPair,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -89,6 +90,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCertPair>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -100,6 +102,7 @@ struct LeaderContext {
     my_pubkey: Pubkey,
     leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    highest_finalized: Arc<RwLock<FinalizationCertPair>>,
 
     blockstore: Arc<Blockstore>,
     record_receiver: RecordReceiver,
@@ -163,6 +166,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         leader_window_info_receiver,
         replay_highest_frozen,
         highest_parent_ready,
+        highest_finalized,
         optimistic_parent_receiver,
     } = config;
 
@@ -198,6 +202,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         exit,
         my_pubkey,
         highest_parent_ready,
+        highest_finalized,
         leader_window_info_receiver,
         blockstore,
         poh_recorder: poh_recorder.clone(),
@@ -333,6 +338,7 @@ fn produce_window(
             &mut ctx.record_receiver,
             skip_timer,
             timeout,
+            &ctx.highest_finalized,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -384,7 +390,10 @@ fn skew_block_producer_time_nanos(
 
 /// Produces a block footer with the current timestamp and version information.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
-fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    highest_finalized: &RwLock<FinalizationCertPair>,
+) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Misconfigured system clock; couldn't measure block producer time.")
@@ -411,12 +420,30 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
-        // TODO(ksn, wen): fill this field
-        final_cert: None,
+        final_cert: produce_final_certificate(highest_finalized),
         // TODO(akhi): include reward certs
         skip_reward_cert: None,
         notar_reward_cert: None,
     }
+}
+
+fn produce_final_certificate(
+    highest_finalized: &RwLock<FinalizationCertPair>,
+) -> Option<FinalCertificate> {
+    let (finalization_cert, notarize_cert) = highest_finalized.read().unwrap().clone();
+    let Some(finalization_cert) = finalization_cert else {
+        if notarize_cert.is_some() {
+            warn!("Finalized certificate is None but notarize certificate is Some");
+        }
+        return None;
+    };
+    let final_cert =
+        FinalCertificate::new_from_certificate(&finalization_cert, notarize_cert.as_deref())
+            .map_err(|e| {
+                warn!("Failed to create FinalCertificate: {e:?}");
+            })
+            .ok()?;
+    Some(final_cert)
 }
 
 /// Shutdowns the record receiver and drains any remaining records.
@@ -452,6 +479,7 @@ fn record_and_complete_block(
     record_receiver: &mut RecordReceiver,
     block_timer: Instant,
     block_timeout: Duration,
+    highest_finalized: &RwLock<FinalizationCertPair>,
 ) -> Result<(), PohRecorderError> {
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
@@ -493,7 +521,10 @@ fn record_and_complete_block(
 
     // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler());
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        highest_finalized,
+    );
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),

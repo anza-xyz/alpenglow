@@ -333,6 +333,60 @@ pub struct FinalCertificate {
 }
 
 impl FinalCertificate {
+    pub fn new_from_certificate(
+        final_cert: &Certificate,
+        notar_cert: Option<&Certificate>,
+    ) -> Result<Self, String> {
+        let (slot, block_id) = if let Some(notar_cert) = &notar_cert {
+            if let CertificateType::Notarize(slot, notar_block_id) = notar_cert.cert_type {
+                if let CertificateType::Finalize(finalize_slot) = final_cert.cert_type {
+                    if slot != finalize_slot {
+                        return Err(format!(
+                            "notarization slot {slot} does not match finalization slot \
+                             {finalize_slot}",
+                        ));
+                    }
+                } else {
+                    return Err("expected final certificate".into());
+                }
+                (slot, notar_block_id)
+            } else {
+                return Err("expected notarization certificate".into());
+            }
+        } else {
+            match final_cert.cert_type {
+                CertificateType::FinalizeFast(slot, block_id) => (slot, block_id),
+                _ => return Err("expected final fast certificate".into()),
+            }
+        };
+        let final_signature: BLSSignatureCompressed = final_cert
+            .signature
+            .try_into()
+            .map_err(|e| format!("failed to compress final signature: {e}"))?;
+        let final_aggregate = VotesAggregate {
+            signature: final_signature,
+            bitmap: final_cert.bitmap.clone(),
+        };
+        let notar_aggregate = if let Some(cert) = notar_cert {
+            let notar_signature: BLSSignatureCompressed = cert
+                .signature
+                .try_into()
+                .map_err(|e| format!("failed to compress notar signature: {e}"))?;
+            Some(VotesAggregate {
+                signature: notar_signature,
+                bitmap: cert.bitmap.clone(),
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            slot,
+            block_id,
+            final_aggregate,
+            notar_aggregate,
+        })
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_for_tests() -> FinalCertificate {
         FinalCertificate {
@@ -578,7 +632,7 @@ impl<'de> SchemaRead<'de> for BlockComponent {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, std::iter::repeat_n};
+    use {super::*, solana_bls_signatures::keypair::Keypair as BLSKeypair, std::iter::repeat_n};
 
     fn mock_entries(n: usize) -> Vec<Entry> {
         repeat_n(Entry::default(), n).collect()
@@ -644,5 +698,119 @@ mod tests {
         let bytes = wincode::serialize(&comp).unwrap();
         let deser: BlockComponent = wincode::deserialize(&bytes).unwrap();
         assert_eq!(comp, deser);
+    }
+
+    #[test]
+    fn test_create_finalization_certificate() {
+        let slot = 42;
+        let block_id = Hash::new_unique();
+        let keypair = BLSKeypair::new();
+        let final_signature: BLSSignature = keypair.sign(b"finalization message").into();
+        let notar_signature: BLSSignature = keypair.sign(b"notarization message").into();
+
+        let final_cert = Certificate {
+            cert_type: CertificateType::Finalize(slot),
+            signature: final_signature,
+            bitmap: vec![1, 2, 3, 4],
+        };
+
+        let notar_cert = Certificate {
+            cert_type: CertificateType::Notarize(slot, block_id),
+            signature: notar_signature,
+            bitmap: vec![1, 3, 4, 5],
+        };
+
+        let finalization_cert =
+            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert))
+                .expect("Failed to create FinalCertificate");
+
+        assert_eq!(finalization_cert.slot, slot);
+        assert_eq!(finalization_cert.block_id, block_id);
+        assert_eq!(finalization_cert.final_aggregate.bitmap, vec![1, 2, 3, 4]);
+        assert_eq!(
+            finalization_cert.notar_aggregate.as_ref().unwrap().bitmap,
+            vec![1, 3, 4, 5]
+        );
+        assert_eq!(
+            finalization_cert.final_aggregate.signature,
+            final_signature.try_into().unwrap()
+        );
+        assert_eq!(
+            finalization_cert
+                .notar_aggregate
+                .as_ref()
+                .unwrap()
+                .signature,
+            notar_signature.try_into().unwrap()
+        );
+
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_cert, None).err(),
+            Some("expected final fast certificate".to_string())
+        );
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&notar_cert, Some(&notar_cert)).err(),
+            Some("expected final certificate".to_string())
+        );
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_cert, Some(&final_cert)).err(),
+            Some("expected notarization certificate".to_string())
+        );
+        let notar_cert_bad_slot = Certificate {
+            cert_type: CertificateType::Notarize(slot + 1, block_id),
+            signature: notar_signature,
+            bitmap: vec![1, 3, 4, 5],
+        };
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert_bad_slot)).err(),
+            Some(format!(
+                "notarization slot {} does not match finalization slot {}",
+                slot + 1,
+                slot
+            ))
+        );
+        let notar_cert_bad_sig = Certificate {
+            cert_type: CertificateType::Notarize(slot, block_id),
+            signature: BLSSignature::default(),
+            bitmap: vec![1, 3, 4, 5],
+        };
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert_bad_sig)).err(),
+            Some(
+                "failed to compress notar signature: Point representation conversion failed"
+                    .to_string()
+            )
+        );
+        let final_cert_bad_sig = Certificate {
+            cert_type: CertificateType::Finalize(slot),
+            signature: BLSSignature::default(),
+            bitmap: vec![1, 2, 3, 4],
+        };
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_cert_bad_sig, Some(&notar_cert)).err(),
+            Some(
+                "failed to compress final signature: Point representation conversion failed"
+                    .to_string()
+            )
+        );
+        let final_fast_cert = Certificate {
+            cert_type: CertificateType::FinalizeFast(slot, block_id),
+            signature: final_signature,
+            bitmap: vec![1, 2, 3, 4],
+        };
+        let finalization_cert = FinalCertificate::new_from_certificate(&final_fast_cert, None)
+            .expect("Failed to create FinalCertificate");
+        assert_eq!(finalization_cert.slot, slot);
+        assert_eq!(finalization_cert.block_id, block_id);
+        assert_eq!(finalization_cert.final_aggregate.bitmap, vec![1, 2, 3, 4]);
+        assert!(finalization_cert.notar_aggregate.is_none());
+        assert_eq!(
+            finalization_cert.final_aggregate.signature,
+            final_signature.try_into().unwrap()
+        );
+        assert_eq!(
+            FinalCertificate::new_from_certificate(&final_fast_cert, Some(&notar_cert)).err(),
+            Some("expected final certificate".to_string())
+        );
     }
 }

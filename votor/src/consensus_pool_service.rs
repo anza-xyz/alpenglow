@@ -23,14 +23,14 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage},
+        consensus_message::{Certificate, ConsensusMessage, FinalizationCertPair},
         migration::MigrationStatus,
     },
     stats::ConsensusPoolServiceStats,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -57,6 +57,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
+    pub(crate) highest_finalized: Arc<RwLock<FinalizationCertPair>>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -188,12 +189,13 @@ impl ConsensusPoolService {
         // Unlike the other votor threads, consensus pool starts even before alpenglow is enabled
         // As it is required to track the Genesis Vote.
         let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
-            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank)
+            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.highest_finalized.clone())
         } else {
             ConsensusPool::new_from_root_bank_pre_migration(
                 my_pubkey,
                 &root_bank,
                 ctx.migration_status.clone(),
+                ctx.highest_finalized.clone(),
             )
         };
 
@@ -515,6 +517,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let leader_schedule_cache =
             Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
+        let highest_finalized = Arc::new(RwLock::default());
         let ctx = ConsensusPoolContext {
             exit: exit.clone(),
             migration_status: Arc::new(MigrationStatus::post_migration_status()),
@@ -527,6 +530,7 @@ mod tests {
             bls_sender,
             event_sender,
             commitment_sender,
+            highest_finalized,
         };
         ConsensusPoolServiceTestComponents {
             consensus_pool_service: ConsensusPoolService::new(ctx),

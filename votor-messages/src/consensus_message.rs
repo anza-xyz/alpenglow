@@ -5,7 +5,11 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    std::sync::Arc,
 };
+
+/// Define the finalization cert pair type
+pub type FinalizationCertPair = (Option<Arc<Certificate>>, Option<Arc<Certificate>>);
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
