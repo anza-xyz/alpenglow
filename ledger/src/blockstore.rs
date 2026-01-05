@@ -6345,10 +6345,7 @@ pub mod tests {
         },
         solana_clock::{DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT},
         solana_entry::{
-            block_component::{
-                BlockHeaderV1, BlockMarkerV1, UpdateParentV1, VersionedBlockHeader,
-                VersionedBlockMarker, VersionedUpdateParent,
-            },
+            block_component::{BlockHeaderV1, UpdateParentV1, VersionedBlockMarker},
             entry::{next_entry, next_entry_mut},
         },
         solana_hash::Hash,
@@ -13136,13 +13133,10 @@ pub mod tests {
         shred_index: u32,
         is_last_in_slot: bool,
     ) -> Vec<Shred> {
-        let component = UpdateParentV1 {
+        let component = VersionedBlockMarker::new_update_parent(UpdateParentV1 {
             new_parent_slot: parent_slot,
             new_parent_block_id: parent_block_id,
-        };
-        let component = VersionedUpdateParent::V1(component);
-        let component = BlockMarkerV1::new_update_parent(component);
-        let component = VersionedBlockMarker::V1(component);
+        });
         let component = BlockComponent::new_block_marker(component);
 
         Shredder::new(slot, 0, 0, 0)
@@ -13165,13 +13159,10 @@ pub mod tests {
         parent_slot: Slot,
         parent_block_id: Hash,
     ) -> Vec<Shred> {
-        let component = BlockHeaderV1 {
+        let component = VersionedBlockMarker::new_block_header(BlockHeaderV1 {
             parent_slot,
             parent_block_id,
-        };
-        let component = VersionedBlockHeader::V1(component);
-        let component = BlockMarkerV1::new_block_header(component);
-        let component = VersionedBlockMarker::V1(component);
+        });
         let component = BlockComponent::new_block_marker(component);
 
         Shredder::new(slot, parent_slot, 0, 0)
