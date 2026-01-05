@@ -498,6 +498,29 @@ impl VersionedBlockMarker {
     pub const fn new(marker: BlockMarkerV1) -> Self {
         Self::V1(marker)
     }
+
+    pub fn new_block_footer(f: BlockFooterV1) -> Self {
+        let f = VersionedBlockFooter::V1(f);
+        let f = BlockMarkerV1::BlockFooter(LengthPrefixed::new(f));
+        VersionedBlockMarker::V1(f)
+    }
+
+    pub fn new_block_header(h: BlockHeaderV1) -> Self {
+        let h = VersionedBlockHeader::V1(h);
+        let h = BlockMarkerV1::BlockHeader(LengthPrefixed::new(h));
+        VersionedBlockMarker::V1(h)
+    }
+
+    pub fn new_update_parent(u: UpdateParentV1) -> Self {
+        let u = VersionedUpdateParent::V1(u);
+        let u = BlockMarkerV1::UpdateParent(LengthPrefixed::new(u));
+        VersionedBlockMarker::V1(u)
+    }
+
+    pub fn new_genesis_certificate(g: GenesisCertificate) -> Self {
+        let g = BlockMarkerV1::GenesisCertificate(LengthPrefixed::new(g));
+        VersionedBlockMarker::V1(g)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -680,9 +703,7 @@ mod tests {
             wincode::deserialize::<GenesisCertificate>(&bytes).unwrap()
         );
 
-        let marker = VersionedBlockMarker::new(BlockMarkerV1::new_block_footer(
-            VersionedBlockFooter::V1(footer.clone()),
-        ));
+        let marker = VersionedBlockMarker::new_block_footer(footer.clone());
         let bytes = wincode::serialize(&marker).unwrap();
         assert_eq!(
             marker,

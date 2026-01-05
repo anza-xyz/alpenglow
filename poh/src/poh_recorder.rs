@@ -22,9 +22,7 @@ use {
     log::*,
     solana_clock::{Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::{
-        block_component::{
-            BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockMarker,
-        },
+        block_component::{BlockFooterV1, VersionedBlockMarker},
         entry::Entry,
         entry_marker::EntryMarker,
         poh::{Poh, PohEntry},
@@ -600,9 +598,7 @@ impl PohRecorder {
         let mut footer = footer.clone();
         footer.bank_hash = working_bank.bank.hash();
 
-        let footer = VersionedBlockFooter::V1(footer.clone());
-        let footer = BlockMarkerV1::new_block_footer(footer);
-        let footer = VersionedBlockMarker::V1(footer);
+        let footer = VersionedBlockMarker::new_block_footer(footer);
 
         let footer_entry_marker = (
             EntryMarker::Marker(footer),
