@@ -546,7 +546,7 @@ fn start_leader_retry_replay(
                     .slot_delay_hist
                     .increment(slot_delay_start.as_us());
 
-                ctx.slot_metrics.report();
+                ctx.slot_metrics.report(slot);
 
                 return Ok(());
             }
