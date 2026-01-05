@@ -1,18 +1,18 @@
 use {
+    notar_entry::NotarEntry,
     partial_cert::PartialCert,
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
-    solana_hash::Hash,
     solana_signer_store::EncodeError,
     solana_votor_messages::{
         consensus_message::VoteMessage,
         reward_certificate::{NotarRewardCertificate, RewardCertError, SkipRewardCertificate},
         vote::Vote,
     },
-    std::collections::HashMap,
     thiserror::Error,
 };
 
+mod notar_entry;
 mod partial_cert;
 
 /// Different types of errors that can be returned from adding votes.
@@ -36,12 +36,13 @@ pub(super) enum BuildCertError {
     #[error("creating a reward cert failed")]
     RewardCert(#[from] RewardCertError),
 }
+
 /// Per slot container for storing notar and skip votes for creating rewards certificates.
 pub(super) struct Entry {
-    /// skip partial aggregate.
+    /// [`PartialCert`] for observed skip votes.
     skip: PartialCert,
-    /// Notar partial aggregate are indexed by block id as different validators may vote for different blocks.
-    notar: HashMap<Hash, PartialCert>,
+    /// struct to store state for observed notar votes.
+    notar: NotarEntry,
     /// Maximum number of validators for the slot this entry is working on.
     max_validators: usize,
 }
@@ -51,8 +52,7 @@ impl Entry {
     pub(super) fn new(max_validators: usize) -> Self {
         Self {
             skip: PartialCert::new(max_validators),
-            // under normal operations, all validators should vote for a single block id, still allocate space for a few more to hopefully avoid allocations.
-            notar: HashMap::with_capacity(5),
+            notar: NotarEntry::new(max_validators),
             max_validators,
         }
     }
@@ -60,11 +60,8 @@ impl Entry {
     /// Returns true if the [`Entry`] needs the vote else false.
     pub(super) fn wants_vote(&self, vote: &VoteMessage) -> bool {
         match vote.vote {
-            Vote::Skip(_) => self.skip.wants_vote(vote),
-            Vote::Notarize(notar) => match self.notar.get(&notar.block_id) {
-                None => true,
-                Some(sub_entry) => sub_entry.wants_vote(vote),
-            },
+            Vote::Skip(_) => self.skip.wants_vote(vote.rank),
+            Vote::Notarize(_) => self.notar.wants_vote(vote.rank),
             Vote::Finalize(_)
             | Vote::NotarizeFallback(_)
             | Vote::SkipFallback(_)
@@ -75,19 +72,18 @@ impl Entry {
     /// Adds the given [`VoteMessage`] to the aggregate.
     pub(super) fn add_vote(&mut self, vote: &VoteMessage) -> Result<(), AddVoteError> {
         match vote.vote {
-            Vote::Notarize(notar) => {
-                let sub_entry = self
-                    .notar
-                    .entry(notar.block_id)
-                    .or_insert(PartialCert::new(self.max_validators));
-                sub_entry.add_vote(vote)
-            }
-            Vote::Skip(_) => self.skip.add_vote(vote),
+            Vote::Notarize(notar) => self.notar.add_vote(
+                vote.rank,
+                &vote.signature,
+                notar.block_id,
+                self.max_validators,
+            ),
+            Vote::Skip(_) => self.skip.add_vote(vote.rank, &vote.signature),
             _ => Ok(()),
         }
     }
 
-    /// Builds a skip reward certificate from the collected votes.
+    /// Builds a [`SkipRewardCertificate`] from the collected votes.
     pub(super) fn build_skip_cert(
         &self,
         slot: Slot,
@@ -102,35 +98,12 @@ impl Entry {
         }
     }
 
-    /// Builds a notar reward certificate from the collected votes.
+    /// Builds a [`NotarRewardCertificate`] from the collected votes.
     pub(super) fn build_notar_cert(
         &self,
         slot: Slot,
     ) -> Result<Option<NotarRewardCertificate>, BuildCertError> {
-        // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
-        // pick the block_id with most votes.
-        let mut max_entry = None;
-        for (block_id, sub_entry) in &self.notar {
-            match max_entry {
-                None => max_entry = Some((block_id, sub_entry)),
-                Some((_, max_sub_entry)) => {
-                    if sub_entry.votes_seen() > max_sub_entry.votes_seen() {
-                        max_entry = Some((block_id, sub_entry));
-                    }
-                }
-            }
-        }
-        match max_entry {
-            None => Ok(None),
-            Some((block_id, sub_entry)) => match sub_entry.build_sig_bitmap() {
-                Err(e) => Err(e),
-                Ok(None) => Ok(None),
-                Ok(Some((signature, bitmap))) => {
-                    let cert = NotarRewardCertificate::try_new(slot, *block_id, signature, bitmap)?;
-                    Ok(Some(cert))
-                }
-            },
-        }
+        self.notar.build_cert(slot)
     }
 }
 
@@ -139,6 +112,7 @@ mod tests {
     use {
         super::*,
         solana_bls_signatures::Keypair as BLSKeypair,
+        solana_hash::Hash,
         solana_signer_store::{decode, Decoded},
     };
 
