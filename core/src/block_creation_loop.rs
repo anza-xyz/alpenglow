@@ -11,7 +11,9 @@ use {
     },
     crossbeam_channel::Receiver,
     solana_clock::Slot,
-    solana_entry::block_component::{BlockFooterV1, FinalCertificate, GenesisCertificate, VersionedBlockMarker},
+    solana_entry::block_component::{
+        BlockFooterV1, FinalCertificate, GenesisCertificate, VersionedBlockMarker,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{

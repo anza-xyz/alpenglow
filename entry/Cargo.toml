@@ -57,7 +57,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-system-transaction = { workspace = true }
 solana-transaction = { workspace = true, features = ["verify"] }
-solana-votor-messages = { workspace = true, features = ["dev-context-only-utils"]}
+solana-votor-messages = { workspace = true, features = ["dev-context-only-utils"] }
 
 [[bench]]
 name = "entry_sigverify"
