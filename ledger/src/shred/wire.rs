@@ -2,6 +2,7 @@
 // deserializing the entire payload.
 #![deny(clippy::indexing_slicing)]
 use {
+    super::merkle_tree::fec_set_root::FecSetRoot,
     crate::shred::{
         self, merkle_tree::SIZE_OF_MERKLE_ROOT, traits::Shred, Error, Nonce, ShredFlags, ShredId,
         ShredType, ShredVariant, SIZE_OF_COMMON_SHRED_HEADER,
@@ -182,7 +183,7 @@ pub fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
     Ok(flags & ShredFlags::SHRED_TICK_REFERENCE_MASK.bits())
 }
 
-pub fn get_merkle_root(shred: &[u8]) -> Option<Hash> {
+pub fn get_merkle_root(shred: &[u8]) -> Option<FecSetRoot> {
     match get_shred_variant(shred).ok()? {
         ShredVariant::MerkleCode {
             proof_size,

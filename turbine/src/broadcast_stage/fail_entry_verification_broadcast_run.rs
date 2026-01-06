@@ -136,7 +136,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             (vec![], vec![])
         };
         if let Some(shred) = header_data_shreds.iter().max_by_key(|shred| shred.index()) {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+            self.chained_merkle_root = shred.merkle_root().unwrap().into();
         }
         self.next_shred_index += header_data_shreds.len() as u32;
         if let Some(index) = header_coding_shreds.iter().map(Shred::index).max() {
@@ -158,7 +158,7 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
             .iter()
             .max_by_key(|shred| shred.index())
         {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+            self.chained_merkle_root = shred.merkle_root().unwrap().into();
         }
         self.next_shred_index += component_data_shreds.len() as u32;
         if let Some(index) = component_coding_shreds.iter().map(Shred::index).max() {
@@ -195,7 +195,12 @@ impl BroadcastRun for FailEntryVerificationBroadcastRun {
                 &mut stats,
             );
             assert_eq!(good_last_data_shred.len(), 1);
-            self.chained_merkle_root = good_last_data_shred.last().unwrap().merkle_root().unwrap();
+            self.chained_merkle_root = good_last_data_shred
+                .last()
+                .unwrap()
+                .merkle_root()
+                .unwrap()
+                .into();
             self.next_shred_index += 1;
             (good_last_data_shred, bad_last_data_shred)
         });

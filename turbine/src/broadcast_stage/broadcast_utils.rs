@@ -232,10 +232,12 @@ pub(super) fn get_chained_merkle_root_from_parent(
             slot: parent,
             index,
         })?;
-    shred::layout::get_merkle_root(&shred).ok_or(Error::InvalidMerkleRoot {
-        slot: parent,
-        index,
-    })
+    shred::layout::get_merkle_root(&shred)
+        .ok_or(Error::InvalidMerkleRoot {
+            slot: parent,
+            index,
+        })
+        .map(Hash::from)
 }
 
 /// Set the block id on the bank and send it for consideration in voting

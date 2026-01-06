@@ -109,7 +109,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             (vec![], vec![])
         };
         if let Some(shred) = header_data_shreds.iter().max_by_key(|shred| shred.index()) {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+            self.chained_merkle_root = shred.merkle_root().unwrap().into();
         }
         self.next_shred_index += header_data_shreds.len() as u32;
         if let Some(index) = header_coding_shreds.iter().map(Shred::index).max() {
@@ -131,7 +131,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             .iter()
             .max_by_key(|shred| shred.index())
         {
-            self.chained_merkle_root = shred.merkle_root().unwrap();
+            self.chained_merkle_root = shred.merkle_root().unwrap().into();
         }
         self.next_shred_index += component_data_shreds.len() as u32;
         if let Some(index) = component_coding_shreds.iter().map(Shred::index).max() {
