@@ -333,13 +333,8 @@ impl ConsensusPool {
                             .completed_certificates
                             .get(&CertificateType::Finalize(slot))
                         {
-                            if let CertificateType::FinalizeFast(_, _) = finalization_cert.cert_type
-                            {
-                                *highest_finalized = (Some(finalization_cert.clone()), None);
-                            } else {
-                                *highest_finalized =
-                                    (Some(finalization_cert.clone()), Some(cert.clone()));
-                            }
+                            *highest_finalized =
+                                (Some(finalization_cert.clone()), Some(cert.clone()));
                         }
                     }
                 }
@@ -514,6 +509,7 @@ impl ConsensusPool {
         Ok(vec![cert])
     }
 
+    /// Get the notarization certificate in `slot`
     pub fn get_notarization_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
         self.completed_certificates
             .iter()
