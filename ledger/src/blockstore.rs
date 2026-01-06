@@ -5384,8 +5384,22 @@ impl Blockstore {
 
         if should_propagate_is_connected {
             meta.borrow_mut().set_connected();
+            self.propagate_parent_connected_to_children(meta, working_set, new_chained_slots)?;
+        }
+
+        Ok(())
+    }
+
+    /// If `slot_meta` is connected, propagate `parent_connected` to its children.
+    fn propagate_parent_connected_to_children(
+        &self,
+        slot_meta: &Rc<RefCell<SlotMeta>>,
+        working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
+        new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
+    ) -> Result<()> {
+        if slot_meta.borrow().is_connected() {
             self.traverse_children_mut(
-                meta,
+                slot_meta,
                 working_set,
                 new_chained_slots,
                 SlotMeta::set_parent_connected,
@@ -5398,8 +5412,8 @@ impl Blockstore {
     /// Handles chaining updates when an UpdateParent marker overrides a previously
     /// set parent from a BlockHeader.
     ///
-    /// TODO(ashwin, ksn): this chaining only occurs for `SlotMeta`s in the column associated with
-    /// `BlockLocation::Original`
+    /// Note: `working_set` entries must have `did_insert_occur = true`, otherwise
+    /// slot metas may be updated here but skipped when committing to the DB.
     fn update_chaining_for_parent_metas(
         &self,
         working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
@@ -5448,15 +5462,12 @@ impl Blockstore {
 
             // Propagate or clear connectivity based on new parent's state.
             if new_parent_meta.borrow().is_connected() {
-                if !slot_meta.borrow().is_parent_connected() {
-                    slot_meta.borrow_mut().set_parent_connected();
-                    self.traverse_children_mut(
-                        &slot_meta,
-                        working_set,
-                        new_chained_slots,
-                        SlotMeta::set_parent_connected,
-                    )?;
-                }
+                slot_meta.borrow_mut().set_parent_connected();
+                self.propagate_parent_connected_to_children(
+                    &slot_meta,
+                    working_set,
+                    new_chained_slots,
+                )?;
             } else if slot_meta.borrow_mut().clear_parent_connected() {
                 self.traverse_children_mut(
                     &slot_meta,
@@ -13519,7 +13530,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_connectivity_propagates_through_incomplete_slot() {
+    fn test_connectivity_does_not_propagate_through_incomplete_slot() {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -13561,8 +13572,8 @@ pub mod tests {
         assert!(meta_50.is_parent_connected());
         assert!(!meta_50.is_connected());
 
-        // Full children become connected
-        assert!(blockstore.meta(60).unwrap().unwrap().is_connected());
-        assert!(blockstore.meta(70).unwrap().unwrap().is_connected());
+        // Children stay disconnected since parent 50 is incomplete
+        assert!(!blockstore.meta(60).unwrap().unwrap().is_connected());
+        assert!(!blockstore.meta(70).unwrap().unwrap().is_connected());
     }
 }
