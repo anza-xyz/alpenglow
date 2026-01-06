@@ -1,10 +1,11 @@
 use {
     crate::stakes::SerdeStakesToStakeFormat,
     serde::{Deserialize, Serialize},
-    solana_bls_signatures::{Pubkey as BLSPubkey, PubkeyCompressed as BLSPubkeyCompressed},
+    solana_bls_signatures::{pubkey::PubkeyCompressed as BLSPubkeyCompressed, Pubkey as BLSPubkey},
     solana_clock::Epoch,
     solana_pubkey::Pubkey,
     solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote_interface::state::BLS_PUBLIC_KEY_COMPRESSED_SIZE,
     std::{
         collections::HashMap,
         sync::{Arc, OnceLock},
@@ -24,33 +25,40 @@ pub struct BLSPubkeyToRankMap {
     sorted_pubkeys: Vec<(Pubkey, BLSPubkey, u64)>,
 }
 
+pub(crate) fn bls_pubkey_compressed_bytes_to_bls_pubkey(
+    bls_pubkey_compressed_bytes: [u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE],
+) -> Option<BLSPubkey> {
+    let bls_pubkey_compressed: BLSPubkeyCompressed =
+        bincode::deserialize(&bls_pubkey_compressed_bytes).ok()?;
+    BLSPubkey::try_from(bls_pubkey_compressed).ok()
+}
+
 impl BLSPubkeyToRankMap {
     pub fn new(epoch_vote_accounts_hash_map: &VoteAccountsHashMap) -> Self {
-        let mut pubkey_stake_pair_vec: Vec<(Pubkey, BLSPubkey, u64)> = epoch_vote_accounts_hash_map
-            .iter()
-            .filter_map(|(pubkey, (stake, account))| {
-                if *stake > 0 {
-                    account
-                        .vote_state_view()
-                        .bls_pubkey_compressed()
-                        .and_then(|bls_pubkey_compressed_bytes| {
-                            let bls_pubkey_compressed =
-                                BLSPubkeyCompressed(bls_pubkey_compressed_bytes);
-                            BLSPubkey::try_from(bls_pubkey_compressed).ok()
-                        })
-                        .map(|bls_pubkey| (*pubkey, bls_pubkey, *stake))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut pubkey_stake_pair_vec: Vec<(&Pubkey, BLSPubkey, u64)> =
+            epoch_vote_accounts_hash_map
+                .iter()
+                .filter_map(|(pubkey, (stake, account))| {
+                    if *stake > 0 {
+                        account
+                            .vote_state_view()
+                            .bls_pubkey_compressed()
+                            .map(bls_pubkey_compressed_bytes_to_bls_pubkey)
+                            .and_then(|bls_pubkey| {
+                                bls_pubkey.map(|bls_pubkey| (pubkey, bls_pubkey, *stake))
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         pubkey_stake_pair_vec.sort_by(|(_, a_pubkey, a_stake), (_, b_pubkey, b_stake)| {
             b_stake.cmp(a_stake).then(a_pubkey.cmp(b_pubkey))
         });
         let mut sorted_pubkeys = Vec::new();
         let mut bls_pubkey_to_rank_map = HashMap::new();
         for (rank, (pubkey, bls_pubkey, stake)) in pubkey_stake_pair_vec.into_iter().enumerate() {
-            sorted_pubkeys.push((pubkey, bls_pubkey, stake));
+            sorted_pubkeys.push((*pubkey, bls_pubkey, stake));
             bls_pubkey_to_rank_map.insert(bls_pubkey, rank as u16);
         }
         Self {
@@ -428,11 +436,10 @@ pub(crate) mod tests {
         assert_eq!(bls_pubkey_to_rank_map.len(), num_vote_accounts);
         for (pubkey, (stake, vote_account)) in epoch_vote_accounts {
             let vote_state_view = vote_account.vote_state_view();
-            let bls_pubkey_compressed = bincode::deserialize::<BLSPubkeyCompressed>(
-                &vote_state_view.bls_pubkey_compressed().unwrap(),
+            let bls_pubkey = bls_pubkey_compressed_bytes_to_bls_pubkey(
+                vote_state_view.bls_pubkey_compressed().unwrap(),
             )
             .unwrap();
-            let bls_pubkey = BLSPubkey::try_from(bls_pubkey_compressed).unwrap();
             let index = bls_pubkey_to_rank_map.get_rank(&bls_pubkey).unwrap();
             assert!(index >= &0 && index < &(num_vote_accounts as u16));
             assert_eq!(
