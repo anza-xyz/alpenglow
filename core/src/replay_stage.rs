@@ -3796,7 +3796,10 @@ impl ReplayStage {
                 let next_slot = bank.slot().saturating_add(1);
 
                 if let Some(block_id) = bank.block_id() {
-                    if is_next_leader && next_slot == first_of_consecutive_leader_slots(next_slot) {
+                    if is_next_leader
+                        && next_slot == first_of_consecutive_leader_slots(next_slot)
+                        && migration_status.should_allow_fast_leader_handover(bank.slot())
+                    {
                         let start_slot = next_slot;
                         let end_slot = next_slot.saturating_add(NUM_CONSECUTIVE_LEADER_SLOTS - 1);
                         let parent_block = (bank.slot(), block_id);

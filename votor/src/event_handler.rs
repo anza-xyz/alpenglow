@@ -247,7 +247,10 @@ impl EventHandler {
                 let now = Instant::now();
                 let mut consensus_metrics_events =
                     vec![ConsensusMetricsEvent::StartOfSlot { slot }];
-                if slot == first_of_consecutive_leader_slots(slot) {
+
+                if slot == last_of_consecutive_leader_slots(slot) && slot >= 8 {
+                    Self::try_skip_window(my_pubkey, slot, vctx, &mut votes)?;
+                } else if slot == first_of_consecutive_leader_slots(slot) {
                     // all slots except the first in the window would typically start when the block is seen so the recording would essentially record 0.
                     // hence we skip it.
                     consensus_metrics_events.push(ConsensusMetricsEvent::BlockHashSeen {

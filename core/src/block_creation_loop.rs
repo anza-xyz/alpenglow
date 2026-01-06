@@ -247,50 +247,30 @@ fn start_loop(config: BlockCreationLoopConfig) {
 
         // Race between parent ready notification and optimistic parent events
         // Parent ready is checked first and has priority if both channels are ready
-        let window_source = if ctx
-            .bank_forks
-            .read()
-            .unwrap()
-            .migration_status()
-            .should_allow_block_markers(ctx.bank_forks.read().unwrap().root())
-        {
-            select_biased! {
-                recv(ctx.leader_window_info_receiver) -> msg => {
-                    // Drain all pending messages and keep the latest one
-                    msg.ok()
-                        .and_then(|window| {
-                            ctx.leader_window_info_receiver
-                                .try_iter()
-                                .last()
-                                .or(Some(window))
-                        })
-                        .map(ParentSource::ParentReady)
-                },
-                recv(optimistic_parent_receiver) -> msg => {
-                    // Drain all pending messages and keep the latest one
-                    msg.ok()
-                        .and_then(|bank| {
-                            optimistic_parent_receiver
-                                .try_iter()
-                                .last()
-                                .or(Some(bank))
-                        })
-                        .map(ParentSource::OptimisticParent)
-                },
-                default(Duration::from_secs(1)) => None,
-            }
-        } else {
-            // Pre-Alpenglow: no fast leader handover
-            ctx.leader_window_info_receiver
-                .recv_timeout(Duration::from_secs(1))
-                .ok()
-                .and_then(|window| {
-                    ctx.leader_window_info_receiver
-                        .try_iter()
-                        .last()
-                        .or(Some(window))
-                })
-                .map(ParentSource::ParentReady)
+        let window_source = select_biased! {
+            recv(ctx.leader_window_info_receiver) -> msg => {
+                // Drain all pending messages and keep the latest one
+                msg.ok()
+                    .and_then(|window| {
+                        ctx.leader_window_info_receiver
+                            .try_iter()
+                            .last()
+                            .or(Some(window))
+                    })
+                    .map(ParentSource::ParentReady)
+            },
+            recv(optimistic_parent_receiver) -> msg => {
+                // Drain all pending messages and keep the latest one
+                msg.ok()
+                    .and_then(|bank| {
+                        optimistic_parent_receiver
+                            .try_iter()
+                            .last()
+                            .or(Some(bank))
+                    })
+                    .map(ParentSource::OptimisticParent)
+            },
+            default(Duration::from_secs(1)) => None,
         };
 
         let Some(window_source) = window_source else {
