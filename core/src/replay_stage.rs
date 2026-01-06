@@ -87,6 +87,7 @@ use {
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
+        consensus_rewards::AddVoteMessage,
         event::{
             CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventReceiver, VotorEventSender,
         },
@@ -300,6 +301,7 @@ pub struct ReplayStageConfig {
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     pub migration_status: Arc<MigrationStatus>,
+    pub reward_votes_receiver: Receiver<AddVoteMessage>,
 }
 
 pub struct ReplaySenders {
@@ -621,6 +623,7 @@ impl ReplayStage {
             consensus_metrics_sender,
             consensus_metrics_receiver,
             migration_status,
+            reward_votes_receiver,
         } = config;
 
         let ReplaySenders {
@@ -695,6 +698,7 @@ impl ReplayStage {
             consensus_metrics_sender,
             consensus_metrics_receiver,
             migration_status: migration_status.clone(),
+            reward_votes_receiver,
         };
         let votor = Votor::new(votor_config);
 

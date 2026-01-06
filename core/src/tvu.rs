@@ -268,14 +268,18 @@ impl Tvu {
             alpenglow_quic_server_config,
         )
         .unwrap();
+        let (reward_votes_sender, reward_votes_receiver) = unbounded();
         let alpenglow_sigverify_service = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
             let verifier = BLSSigVerifier::new(
                 sharable_banks,
                 verified_vote_sender.clone(),
+                reward_votes_sender,
                 consensus_message_sender.clone(),
                 consensus_metrics_sender.clone(),
                 alpenglow_last_voted.clone(),
+                cluster_info.clone(),
+                leader_schedule_cache.clone(),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
@@ -449,6 +453,7 @@ impl Tvu {
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
             migration_status,
+            reward_votes_receiver,
         };
 
         let voting_service = VotingService::new(
