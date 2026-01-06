@@ -432,8 +432,11 @@ fn produce_final_certificate(
 ) -> Option<FinalCertificate> {
     let (finalization_cert, notarize_cert) = highest_finalized.read().unwrap().clone();
     let Some(finalization_cert) = finalization_cert else {
-        if notarize_cert.is_some() {
-            warn!("Finalized certificate is None but notarize certificate is Some");
+        if let Some(cert) = &notarize_cert {
+            warn!(
+                "Inconsistent state: finalized cert is None but notarize cert is Some (slot: {})",
+                cert.cert_type.slot(),
+            );
         }
         return None;
     };
