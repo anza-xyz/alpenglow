@@ -60,36 +60,24 @@ impl NotarEntry {
     /// Builds a [`NotarRewardCertificate`] from the collected votes.
     pub(super) fn build_cert(self, slot: Slot) -> Option<NotarRewardCertificate> {
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
-        // pick the block_id with most votes.
-        let mut max_entry = None;
-        for (block_id, partial) in self.partials {
-            match &mut max_entry {
-                None => max_entry = Some((block_id, partial)),
-                Some((_, max_partial)) => {
-                    if partial.votes_seen() > max_partial.votes_seen() {
-                        max_entry = Some((block_id, partial));
-                    }
-                }
-            }
-        }
-        match max_entry {
-            None => None,
-            Some((block_id, partial)) => match partial.build_sig_bitmap() {
-                Err(e) => {
-                    warn!("Build notar reward cert failed with {e}");
-                    None
-                }
-                Ok((signature, bitmap)) => {
-                    match NotarRewardCertificate::try_new(slot, block_id, signature, bitmap) {
-                        Ok(c) => Some(c),
-                        Err(e) => {
-                            warn!("Build notar reward cert failed with {e}");
-                            None
-                        }
-                    }
-                }
-            },
-        }
+        // ideally we should pick the block_id with the most stake to maximum leader rewards.
+        // we expect this to be rare enough that picking the block_id with the most votes should be fine in most cases.
+
+        let (block_id, partial) = self
+            .partials
+            .into_iter()
+            .max_by_key(|(_block_id, partial)| partial.votes_seen())?;
+        let (signature, bitmap) = partial
+            .build_sig_bitmap()
+            .inspect_err(|e| {
+                warn!("Build notar reward cert failed with {e}");
+            })
+            .ok()?;
+        NotarRewardCertificate::try_new(slot, block_id, signature, bitmap)
+            .inspect_err(|e| {
+                warn!("Build notar reward cert failed with {e}");
+            })
+            .ok()
     }
 }
 

@@ -80,15 +80,11 @@ impl Entry {
                 warn!("Build skip reward cert failed with {e}");
                 None
             }
-            Ok((signature, bitmap)) => {
-                match SkipRewardCertificate::try_new(slot, signature, bitmap) {
-                    Ok(c) => Some(c),
-                    Err(e) => {
-                        warn!("Build skip reward cert failed with {e}");
-                        None
-                    }
-                }
-            }
+            Ok((signature, bitmap)) => SkipRewardCertificate::try_new(slot, signature, bitmap)
+                .inspect_err(|e| {
+                    warn!("Build skip reward cert failed with {e}");
+                })
+                .ok(),
         };
         BuildRewardCertsResponse { skip, notar }
     }

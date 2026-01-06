@@ -42,7 +42,7 @@ pub fn wants_vote(
         | Vote::Genesis(_) => return false,
     }
     let vote_slot = vote.vote.slot();
-    if vote_slot.saturating_add(NUM_SLOTS_FOR_REWARD) < root_slot {
+    if vote_slot.saturating_add(NUM_SLOTS_FOR_REWARD) <= root_slot {
         return false;
     }
     let my_pubkey = cluster_info.id();
@@ -161,13 +161,13 @@ impl ConsensusRewards {
     }
 
     /// Adds received [`VoteMessage`] from other validators.
-    fn add_vote(&mut self, bank: &Bank, vote: &VoteMessage) {
+    fn add_vote(&mut self, root_bank: &Bank, vote: &VoteMessage) {
         let slot = vote.vote.slot();
-        let Some(max_validators) = get_max_validators(bank, slot) else {
+        let Some(max_validators) = get_max_validators(root_bank, slot) else {
             warn!("failed to look up max_validators for slot {slot}");
             return;
         };
-        let root_slot = bank.slot();
+        let root_slot = root_bank.slot();
         // drop state that is too old based on how the root slot has progressed
         self.votes = self.votes.split_off(
             &(root_slot
