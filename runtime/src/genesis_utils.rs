@@ -365,7 +365,9 @@ pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
 fn do_activate_all_features<const IS_ALPENGLOW: bool>(genesis_config: &mut GenesisConfig) {
     // Activate all features at genesis in development mode
     for feature_id in FeatureSet::default().inactive() {
-        if (IS_ALPENGLOW || *feature_id != agave_feature_set::alpenglow::id())
+        if (IS_ALPENGLOW
+            || (*feature_id != agave_feature_set::alpenglow::id()
+                && *feature_id != agave_feature_set::alpenglow_vat_and_limit_validators::id()))
             // TODO: Remove me once SIMD-0464 is no longer hard-coded as `false` in
             // `FeatureSet::runtime_features` and omitted from `FEATURE_NAMES` in
             // agave-feature-set.

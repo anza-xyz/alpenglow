@@ -1,5 +1,6 @@
 use {
     crate::vote_state_view::VoteStateView,
+    log::{info, warn},
     serde::{
         Deserialize, Serialize,
         de::{MapAccess, Visitor},
@@ -167,6 +168,68 @@ impl VoteAccounts {
 
     pub fn is_empty(&self) -> bool {
         self.vote_accounts.is_empty()
+    }
+
+    // This implements the filtering logic described in SIMD-357.
+    // 1. Filter out any vote accounts without BLS pubkey
+    // 2. Given minimum_vote_account_balance, filter out any vote account without required balance
+    // 3. If we have more than max_vote_accounts vote accounts after above filtering, sort by
+    //    stake and truncate
+    // 4. If any vote account in the resulting list has the same stake as any truncated vote
+    //    account, remove it as well to avoid tie-breaker bias
+    pub fn clone_and_filter_for_alpenglow(
+        &self,
+        max_vote_accounts: usize,
+        minimum_vote_account_balance: u64,
+    ) -> VoteAccounts {
+        assert!(max_vote_accounts > 0, "max_vote_accounts must be > 0");
+
+        let mut entries_to_sort: Vec<(&Pubkey, &VoteAccount, u64)> = self
+            .vote_accounts
+            .iter()
+            .filter_map(|(pubkey, (stake, vote_account))| {
+                if vote_account
+                    .vote_state_view()
+                    .bls_pubkey_compressed()
+                    .is_none()
+                    || *stake == 0
+                    || vote_account.lamports() < minimum_vote_account_balance
+                {
+                    return None;
+                }
+                Some((pubkey, vote_account, *stake))
+            })
+            .collect();
+
+        let valid_entries: HashMap<Pubkey, (u64, VoteAccount)> =
+            if entries_to_sort.len() > max_vote_accounts {
+                entries_to_sort.sort_by(|a, b| b.2.cmp(&a.2));
+                let floor_stake = entries_to_sort[max_vote_accounts].2;
+                entries_to_sort
+                    .into_iter()
+                    .take_while(|(_, _, stake)| *stake > floor_stake)
+                    .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
+                    .collect()
+            } else {
+                entries_to_sort
+                    .into_iter()
+                    .map(|(pubkey, vote_account, stake)| (*pubkey, (stake, vote_account.clone())))
+                    .collect()
+            };
+
+        if valid_entries.is_empty() {
+            warn!("no valid alpenglow vote accounts found");
+        }
+        info!(
+            "Out of {} vote accounts, {} are valid alpenglow vote accounts after filtering",
+            self.vote_accounts.len(),
+            valid_entries.len()
+        );
+
+        VoteAccounts {
+            vote_accounts: Arc::new(valid_entries),
+            staked_nodes: OnceLock::new(),
+        }
     }
 
     pub fn staked_nodes(&self) -> Arc<HashMap</*node_pubkey:*/ Pubkey, /*stake:*/ u64>> {
