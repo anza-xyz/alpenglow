@@ -218,10 +218,21 @@ impl BlockComponentProcessor {
                 .get_pubkey_and_stake(rank)
                 .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
         })
-        .map_err(|_| BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
+        .map_err(|_| {
+            warn!(
+                "Failed to verify genesis certificate for {slot} in bank slot {}",
+                bank.slot()
+            );
+            BlockComponentProcessorError::GenesisCertificateFailedVerification
+        })?;
 
         let genesis_percent = Fraction::new(genesis_stake, NonZeroU64::new(total_stake).unwrap());
         if genesis_percent < GENESIS_VOTE_THRESHOLD {
+            warn!(
+                "Recieived a genesis certificate for {slot} in bank slot {} with \
+                 {genesis_percent} stake < {GENESIS_VOTE_THRESHOLD}",
+                bank.slot()
+            );
             return Err(BlockComponentProcessorError::GenesisCertificateFailedVerification);
         }
 
