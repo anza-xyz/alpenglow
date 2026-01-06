@@ -2,7 +2,7 @@
 //! The struct handles different validators voting for different block ids and ensures that a given validator does not vote for multiple block ids.
 
 use {
-    super::{partial_cert::PartialCert, AddVoteError, BuildCertError},
+    super::{partial_cert::PartialCert, AddVoteError},
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -11,6 +11,7 @@ use {
 };
 
 /// Struct to manage per slot state for notar votes used to build a [`NotarRewardCertificate`].
+#[derive(Clone)]
 pub(super) struct NotarEntry {
     /// Stores which validators have already voted.
     voted: HashSet<u16>,
@@ -57,15 +58,12 @@ impl NotarEntry {
     }
 
     /// Builds a [`NotarRewardCertificate`] from the collected votes.
-    pub(super) fn build_cert(
-        &self,
-        slot: Slot,
-    ) -> Result<Option<NotarRewardCertificate>, BuildCertError> {
+    pub(super) fn build_cert(self, slot: Slot) -> Option<NotarRewardCertificate> {
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
         // pick the block_id with most votes.
         let mut max_entry = None;
-        for (block_id, partial) in &self.partials {
-            match max_entry {
+        for (block_id, partial) in self.partials {
+            match &mut max_entry {
                 None => max_entry = Some((block_id, partial)),
                 Some((_, max_partial)) => {
                     if partial.votes_seen() > max_partial.votes_seen() {
@@ -75,13 +73,20 @@ impl NotarEntry {
             }
         }
         match max_entry {
-            None => Ok(None),
+            None => None,
             Some((block_id, partial)) => match partial.build_sig_bitmap() {
-                Err(e) => Err(e),
-                Ok(None) => Ok(None),
-                Ok(Some((signature, bitmap))) => {
-                    let cert = NotarRewardCertificate::try_new(slot, *block_id, signature, bitmap)?;
-                    Ok(Some(cert))
+                Err(e) => {
+                    warn!("Build notar reward cert failed with {e}");
+                    None
+                }
+                Ok((signature, bitmap)) => {
+                    match NotarRewardCertificate::try_new(slot, block_id, signature, bitmap) {
+                        Ok(c) => Some(c),
+                        Err(e) => {
+                            warn!("Build notar reward cert failed with {e}");
+                            None
+                        }
+                    }
                 }
             },
         }
@@ -155,7 +160,7 @@ mod tests {
         let slot = 123;
         let max_validators = 5;
         let mut entry = NotarEntry::new(max_validators);
-        assert!(matches!(entry.build_cert(slot), Ok(None)));
+        assert_eq!(entry.clone().build_cert(slot), None);
 
         let blockid0 = Hash::new_unique();
         let blockid1 = Hash::new_unique();
@@ -174,7 +179,7 @@ mod tests {
                 .add_vote(vote.rank, &vote.signature, blockid1, max_validators)
                 .unwrap();
         }
-        let notar_cert = entry.build_cert(slot).unwrap().unwrap();
+        let notar_cert = entry.build_cert(slot).unwrap();
         assert_eq!(notar_cert.slot, slot);
         assert_eq!(notar_cert.block_id, blockid1);
         validate_bitmap(notar_cert.bitmap(), 3, 5);

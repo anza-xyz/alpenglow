@@ -1,15 +1,26 @@
 use {
-    super::{AddVoteError, BuildCertError},
+    super::AddVoteError,
     bitvec::{order::Lsb0, vec::BitVec},
     solana_bls_signatures::{
         Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
         SignatureProjective,
     },
-    solana_signer_store::encode_base2,
+    solana_signer_store::{encode_base2, EncodeError},
+    thiserror::Error,
 };
 
-/// State for when we have not seen votes from all validators.
-pub(super) struct InProgressState {
+/// Different types of errors that can be returned from building signature and the associated bitmap.
+#[derive(Debug, Error)]
+pub(super) enum BuildSigBitmapError {
+    #[error("Encoding failed: {0:?}")]
+    Encode(EncodeError),
+    #[error("Empty bitvec")]
+    Empty,
+}
+
+/// Struct to hold state for building a single reward cert.
+#[derive(Clone)]
+pub(super) struct PartialCert {
     /// In progress signature aggregate.
     signature: SignatureProjective,
     /// bitvec of ranks whose signatures is included in the aggregate above.
@@ -18,43 +29,21 @@ pub(super) struct InProgressState {
     cnt: usize,
 }
 
-/// State for when we have seen votes from all the validators so the cert can be pre-built.
-pub(super) struct DoneState {
-    /// The final aggregate signature.
-    signature: BLSSignatureCompressed,
-    /// Bitmap of rank of validators included in the aggregate above.
-    bitmap: Vec<u8>,
-    /// max number of validators for this slot.
-    max_validators: usize,
-}
-
-/// Struct to hold state for building a single reward cert.
-pub(super) enum PartialCert {
-    /// Variant for when we have not seen votes from all validators.
-    InProgress(InProgressState),
-    /// Variant for when we have seen votes from all the validators.
-    Done(DoneState),
-}
-
 impl PartialCert {
     /// Returns a new instance of [`PartialCert`].
     pub(super) fn new(max_validators: usize) -> Self {
-        let state = InProgressState {
+        Self {
             signature: SignatureProjective::identity(),
             bitvec: BitVec::repeat(false, max_validators),
             cnt: 0,
-        };
-        Self::InProgress(state)
+        }
     }
 
     /// Returns true if the [`PartialCert`] needs the vote else false.
     pub(super) fn wants_vote(&self, rank: u16) -> bool {
-        match self {
-            Self::Done(_) => false,
-            Self::InProgress(state) => match state.bitvec.get(rank as usize) {
-                None => false,
-                Some(ind) => !*ind,
-            },
+        match self.bitvec.get(rank as usize) {
+            None => false,
+            Some(ind) => !*ind,
         }
     }
 
@@ -64,61 +53,38 @@ impl PartialCert {
         rank: u16,
         signature: &BLSSignature,
     ) -> Result<(), AddVoteError> {
-        match self {
-            Self::Done(_) => Err(AddVoteError::Duplicate),
-            Self::InProgress(state) => {
-                match state.bitvec.get_mut(rank as usize) {
-                    None => return Err(AddVoteError::InvalidRank),
-                    Some(mut ind) => {
-                        if *ind {
-                            return Err(AddVoteError::Duplicate);
-                        }
-                        state.signature.aggregate_with(std::iter::once(signature))?;
-                        *ind = true;
-                    }
+        match self.bitvec.get_mut(rank as usize) {
+            None => return Err(AddVoteError::InvalidRank),
+            Some(mut ind) => {
+                if *ind {
+                    return Err(AddVoteError::Duplicate);
                 }
-                state.cnt = state.cnt.saturating_add(1);
-                if state.cnt == state.bitvec.len() {
-                    let signature = BLSSignature::from(state.signature).try_into().unwrap();
-                    *self = Self::Done(DoneState {
-                        signature,
-                        bitmap: encode_base2(&state.bitvec).map_err(AddVoteError::Encode)?,
-                        max_validators: state.bitvec.len(),
-                    });
-                }
-                Ok(())
+                self.signature.aggregate_with(std::iter::once(signature))?;
+                *ind = true;
             }
         }
+        self.cnt = self.cnt.saturating_add(1);
+        Ok(())
     }
 
     /// Builds a signature and associated bitmap from the collected votes.
-    ///
-    /// Returns Ok(None) if no votes were collected.
     pub(super) fn build_sig_bitmap(
-        &self,
-    ) -> Result<Option<(BLSSignatureCompressed, Vec<u8>)>, BuildCertError> {
-        match self {
-            Self::Done(state) => Ok(Some((state.signature, state.bitmap.clone()))),
-            Self::InProgress(state) => {
-                if state.cnt == 0 {
-                    return Ok(None);
-                }
-                let mut bitvec = state.bitvec.clone();
-                let new_len = bitvec.last_one().map_or(0, |i| i.saturating_add(1));
-                bitvec.resize(new_len, false);
-                let bitmap = encode_base2(&bitvec).map_err(BuildCertError::Encode)?;
-                let signature = BLSSignature::from(state.signature).try_into().unwrap();
-                Ok(Some((signature, bitmap)))
-            }
+        self,
+    ) -> Result<(BLSSignatureCompressed, Vec<u8>), BuildSigBitmapError> {
+        if self.cnt == 0 {
+            return Err(BuildSigBitmapError::Empty);
         }
+        let mut bitvec = self.bitvec.clone();
+        let new_len = bitvec.last_one().map_or(0, |i| i.saturating_add(1));
+        bitvec.resize(new_len, false);
+        let bitmap = encode_base2(&bitvec).map_err(BuildSigBitmapError::Encode)?;
+        let signature = BLSSignature::from(self.signature).try_into().unwrap();
+        Ok((signature, bitmap))
     }
 
-    /// Returns how many votes have been seen.
+    /// Returns how many votes have been observed.
     pub(super) fn votes_seen(&self) -> usize {
-        match self {
-            Self::InProgress(state) => state.cnt,
-            Self::Done(state) => state.max_validators,
-        }
+        self.cnt
     }
 }
 
@@ -166,12 +132,15 @@ mod tests {
     fn validate_build_sig_bitmap() {
         let max_validators = 2;
         let mut partial_cert = PartialCert::new(max_validators);
-        assert!(matches!(partial_cert.build_sig_bitmap(), Ok(None)));
+        assert!(matches!(
+            partial_cert.clone().build_sig_bitmap(),
+            Err(BuildSigBitmapError::Empty)
+        ));
         let skip = Vote::new_skip_vote(7);
         for rank in 0..max_validators {
             let vote = new_vote(skip, rank);
             partial_cert.add_vote(vote.rank, &vote.signature).unwrap();
-            let (_signature, bitmap) = partial_cert.build_sig_bitmap().unwrap().unwrap();
+            let (_signature, bitmap) = partial_cert.clone().build_sig_bitmap().unwrap();
             validate_bitmap(&bitmap, rank + 1, max_validators);
         }
     }

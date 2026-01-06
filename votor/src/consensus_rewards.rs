@@ -4,6 +4,7 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
         consensus_message::VoteMessage,
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
@@ -56,6 +57,15 @@ pub fn wants_vote(
     true
 }
 
+/// Returns the maximum number of validators for the given slot.
+fn get_max_validators(bank: &Bank, slot: Slot) -> Option<usize> {
+    let epoch_stakes = bank.epoch_stakes_map();
+    let epoch = bank.epoch_schedule().get_epoch(slot);
+    let stake = epoch_stakes.get(&epoch).unwrap();
+    let rank_map = stake.bls_pubkey_to_rank_map();
+    Some(rank_map.len())
+}
+
 /// Container to store state needed to generate reward certificates.
 struct ConsensusRewards {
     /// Per [`Slot`], stores skip and notar votes.
@@ -64,6 +74,7 @@ struct ConsensusRewards {
     cluster_info: Arc<ClusterInfo>,
     /// Stores the leader schedules.
     leader_schedule: Arc<LeaderScheduleCache>,
+    sharable_banks: SharableBanks,
     /// Flag to indicate when the channel receiving loop should exit.
     exit: Arc<AtomicBool>,
     /// Channel to receive messages to build reward certificates.
@@ -79,6 +90,7 @@ impl ConsensusRewards {
     fn new(
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
+        sharable_banks: SharableBanks,
         exit: Arc<AtomicBool>,
         build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
         reward_certs_sender: Sender<BuildRewardCertsResponse>,
@@ -88,6 +100,7 @@ impl ConsensusRewards {
             votes: BTreeMap::default(),
             cluster_info,
             leader_schedule,
+            sharable_banks,
             exit,
             build_reward_certs_receiver,
             reward_certs_sender,
@@ -103,11 +116,7 @@ impl ConsensusRewards {
                 recv(self.build_reward_certs_receiver) -> msg => {
                     match msg {
                         Ok(msg) => {
-                            let (skip, notar) = self.build_certs(msg.slot);
-                            let resp = BuildRewardCertsResponse {
-                                skip,
-                                notar,
-                            };
+                            let resp = self.build_certs(msg.slot);
                             if self.reward_certs_sender.send(resp).is_err() {
                                 warn!("cert sender channel is disconnected; exiting.");
                                 break;
@@ -122,8 +131,9 @@ impl ConsensusRewards {
                 recv(self.votes_receiver) -> msg => {
                     match msg {
                         Ok(msg) => {
-                            for entry in msg.votes {
-                                self.add_vote(msg.root_slot, entry.max_validators, &entry.vote);
+                            let bank = self.sharable_banks.root();
+                            for vote in msg.votes {
+                                self.add_vote(&bank, &vote);
                             }
                         }
                         Err(_) => {
@@ -150,9 +160,15 @@ impl ConsensusRewards {
         entry.wants_vote(vote)
     }
 
-    /// Adds received [`VoteMessage`]s from other validators.
-    fn add_vote(&mut self, root_slot: Slot, max_validators: usize, vote: &VoteMessage) {
-        // drop old state no longer needed
+    /// Adds received [`VoteMessage`] from other validators.
+    fn add_vote(&mut self, bank: &Bank, vote: &VoteMessage) {
+        let slot = vote.vote.slot();
+        let Some(max_validators) = get_max_validators(bank, slot) else {
+            warn!("failed to look up max_validators for slot {slot}");
+            return;
+        };
+        let root_slot = bank.slot();
+        // drop state that is too old based on how the root slot has progressed
         self.votes = self.votes.split_off(
             &(root_slot
                 .saturating_add(NUM_SLOTS_FOR_REWARD)
@@ -176,52 +192,23 @@ impl ConsensusRewards {
     }
 
     /// Builds reward certificates.
-    fn build_certs(
-        &self,
-        slot: Slot,
-    ) -> (
-        Option<SkipRewardCertificate>,
-        Option<NotarRewardCertificate>,
-    ) {
-        match self.votes.get(&slot) {
-            None => (None, None),
-            Some(entry) => {
-                let skip = entry.build_skip_cert(slot);
-                let notar = entry.build_notar_cert(slot);
-                let skip = match skip {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("Build skip reward cert failed with {e}");
-                        None
-                    }
-                };
-                let notar = match notar {
-                    Ok(n) => n,
-                    Err(e) => {
-                        warn!("Build notar reward cert failed with {e}");
-                        None
-                    }
-                };
-                (skip, notar)
-            }
+    fn build_certs(&mut self, slot: Slot) -> BuildRewardCertsResponse {
+        // we assume that the block creation loop will only ever request to build reward certs in a strictly increasing order so we can drop older state
+        self.votes = self.votes.split_off(&slot);
+        match self.votes.remove(&slot) {
+            None => BuildRewardCertsResponse {
+                skip: None,
+                notar: None,
+            },
+            Some(entry) => entry.build_certs(slot),
         }
     }
 }
 
 /// Message to add votes to the rewards container.
 pub struct AddVoteMessage {
-    /// The current root slot.
-    pub root_slot: Slot,
-    /// List of [`AddVoteEntry`], one per vote.
-    pub votes: Vec<AddVoteEntry>,
-}
-
-/// Data structure for sending per vote state in the [`AddVoteMessage`].
-pub struct AddVoteEntry {
-    /// Maximum number of validators in the slot that this vote is for.
-    pub max_validators: usize,
-    /// The actual vote.
-    pub vote: VoteMessage,
+    /// List of [`VoteMessage`]s.
+    pub votes: Vec<VoteMessage>,
 }
 
 /// Request to build reward certificates.
@@ -244,13 +231,15 @@ pub struct ConsensusRewardsService {
 }
 
 impl ConsensusRewardsService {
+    /// Creates a new instance of [`ConsensusRewardsService`].
     pub fn new(
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
+        sharable_banks: SharableBanks,
+        exit: Arc<AtomicBool>,
         votes_receiver: Receiver<AddVoteMessage>,
         build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
         reward_certs_sender: Sender<BuildRewardCertsResponse>,
-        exit: Arc<AtomicBool>,
     ) -> Self {
         let handle = Builder::new()
             .name("solConsRew".to_string())
@@ -258,6 +247,7 @@ impl ConsensusRewardsService {
                 ConsensusRewards::new(
                     cluster_info,
                     leader_schedule,
+                    sharable_banks,
                     exit,
                     build_reward_certs_receiver,
                     reward_certs_sender,

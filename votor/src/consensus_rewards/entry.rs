@@ -1,13 +1,11 @@
 use {
+    super::BuildRewardCertsResponse,
     notar_entry::NotarEntry,
     partial_cert::PartialCert,
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
-    solana_signer_store::EncodeError,
     solana_votor_messages::{
-        consensus_message::VoteMessage,
-        reward_certificate::{NotarRewardCertificate, RewardCertError, SkipRewardCertificate},
-        vote::Vote,
+        consensus_message::VoteMessage, reward_certificate::SkipRewardCertificate, vote::Vote,
     },
     thiserror::Error,
 };
@@ -24,24 +22,14 @@ pub(super) enum AddVoteError {
     Duplicate,
     #[error("BLS error: {0}")]
     Bls(#[from] BlsError),
-    #[error("Encoding failed: {0:?}")]
-    Encode(EncodeError),
-}
-
-/// Different types of errors that can be returned from building reward certs.
-#[derive(Debug, Error)]
-pub(super) enum BuildCertError {
-    #[error("Encoding failed: {0:?}")]
-    Encode(EncodeError),
-    #[error("creating a reward cert failed")]
-    RewardCert(#[from] RewardCertError),
 }
 
 /// Per slot container for storing notar and skip votes for creating rewards certificates.
+#[derive(Clone)]
 pub(super) struct Entry {
     /// [`PartialCert`] for observed skip votes.
     skip: PartialCert,
-    /// struct to store state for observed notar votes.
+    /// Struct to store state for observed notar votes.
     notar: NotarEntry,
     /// Maximum number of validators for the slot this entry is working on.
     max_validators: usize,
@@ -83,27 +71,26 @@ impl Entry {
         }
     }
 
-    /// Builds a [`SkipRewardCertificate`] from the collected votes.
-    pub(super) fn build_skip_cert(
-        &self,
-        slot: Slot,
-    ) -> Result<Option<SkipRewardCertificate>, BuildCertError> {
-        match self.skip.build_sig_bitmap() {
-            Err(e) => Err(e),
-            Ok(None) => Ok(None),
-            Ok(Some((signature, bitmap))) => {
-                let cert = SkipRewardCertificate::try_new(slot, signature, bitmap)?;
-                Ok(Some(cert))
-            }
-        }
-    }
+    /// Builds reward certificates from the observed votes.
+    pub(super) fn build_certs(self, slot: Slot) -> BuildRewardCertsResponse {
+        let notar = self.notar.build_cert(slot);
 
-    /// Builds a [`NotarRewardCertificate`] from the collected votes.
-    pub(super) fn build_notar_cert(
-        &self,
-        slot: Slot,
-    ) -> Result<Option<NotarRewardCertificate>, BuildCertError> {
-        self.notar.build_cert(slot)
+        let skip = match self.skip.build_sig_bitmap() {
+            Err(e) => {
+                warn!("Build skip reward cert failed with {e}");
+                None
+            }
+            Ok((signature, bitmap)) => {
+                match SkipRewardCertificate::try_new(slot, signature, bitmap) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        warn!("Build skip reward cert failed with {e}");
+                        None
+                    }
+                }
+            }
+        };
+        BuildRewardCertsResponse { skip, notar }
     }
 }
 
@@ -139,20 +126,27 @@ mod tests {
     fn validate_build_skip_cert() {
         let slot = 123;
         let mut entry = Entry::new(5);
-        assert!(matches!(entry.build_skip_cert(slot), Ok(None)));
+        let resp = entry.clone().build_certs(slot);
+        assert_eq!(resp.skip, None);
+        assert_eq!(resp.notar, None);
+
         let skip = Vote::new_skip_vote(7);
         let vote = new_vote(skip, 0);
         entry.add_vote(&vote).unwrap();
-        let skip_cert = entry.build_skip_cert(slot).unwrap().unwrap();
-        assert_eq!(skip_cert.slot, slot);
-        validate_bitmap(skip_cert.bitmap(), 1, 5);
+        let resp = entry.build_certs(slot);
+        assert_eq!(resp.notar, None);
+        let skip = resp.skip.unwrap();
+        assert_eq!(skip.slot, slot);
+        validate_bitmap(skip.bitmap(), 1, 5);
     }
 
     #[test]
     fn validate_build_notar_cert() {
         let slot = 123;
         let mut entry = Entry::new(5);
-        assert!(matches!(entry.build_notar_cert(slot), Ok(None)));
+        let resp = entry.clone().build_certs(slot);
+        assert_eq!(resp.skip, None);
+        assert_eq!(resp.notar, None);
 
         let blockid0 = Hash::new_unique();
         let blockid1 = Hash::new_unique();
@@ -167,9 +161,11 @@ mod tests {
             let vote = new_vote(notar, rank);
             entry.add_vote(&vote).unwrap();
         }
-        let notar_cert = entry.build_notar_cert(slot).unwrap().unwrap();
-        assert_eq!(notar_cert.slot, slot);
-        assert_eq!(notar_cert.block_id, blockid1);
-        validate_bitmap(notar_cert.bitmap(), 3, 5);
+        let resp = entry.build_certs(slot);
+        assert_eq!(resp.skip, None);
+        let notar = resp.notar.unwrap();
+        assert_eq!(notar.slot, slot);
+        assert_eq!(notar.block_id, blockid1);
+        validate_bitmap(notar.bitmap(), 3, 5);
     }
 }
