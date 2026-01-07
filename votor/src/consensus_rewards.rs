@@ -61,9 +61,9 @@ pub fn wants_vote(
 fn get_max_validators(bank: &Bank, slot: Slot) -> Option<usize> {
     let epoch_stakes = bank.epoch_stakes_map();
     let epoch = bank.epoch_schedule().get_epoch(slot);
-    let stake = epoch_stakes.get(&epoch).unwrap();
-    let rank_map = stake.bls_pubkey_to_rank_map();
-    Some(rank_map.len())
+    epoch_stakes
+        .get(&epoch)
+        .map(|stake| stake.bls_pubkey_to_rank_map().len())
 }
 
 /// Container to store state needed to generate reward certificates.
