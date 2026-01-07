@@ -293,13 +293,7 @@ mod tests {
             consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
             vote::Vote,
         },
-        std::{
-            net::SocketAddr,
-            sync::{
-                atomic::{AtomicBool, Ordering},
-                Arc,
-            },
-        },
+        std::{net::SocketAddr, sync::Arc},
         test_case::test_case,
         tokio_util::sync::CancellationToken,
     };
