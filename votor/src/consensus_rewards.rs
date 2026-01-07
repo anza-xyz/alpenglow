@@ -56,7 +56,6 @@ pub fn wants_vote(
     }
     true
 }
-
 /// Container to store state needed to generate reward certificates.
 struct ConsensusRewards {
     /// Per [`Slot`], stores skip and notar votes.
