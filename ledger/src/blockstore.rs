@@ -5460,12 +5460,14 @@ impl Blockstore {
             // Propagate or clear connectivity based on new parent's state.
             if new_parent_meta.borrow().is_connected() {
                 if !slot_meta.borrow().is_parent_connected() {
-                    slot_meta.borrow_mut().set_parent_connected();
-                    self.propagate_parent_connected_to_children(
-                        &slot_meta,
-                        working_set,
-                        new_chained_slots,
-                    )?;
+                    let became_connected = slot_meta.borrow_mut().set_parent_connected();
+                    if became_connected {
+                        self.propagate_parent_connected_to_children(
+                            &slot_meta,
+                            working_set,
+                            new_chained_slots,
+                        )?;
+                    }
                 }
             } else if slot_meta.borrow_mut().clear_parent_connected() {
                 self.traverse_children_mut(
