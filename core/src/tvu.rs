@@ -271,7 +271,9 @@ impl Tvu {
             alpenglow_quic_server_config,
         )
         .unwrap();
-        let (reward_votes_sender, reward_votes_receiver) = unbounded();
+
+        // At the moment there are roughly 1K validators and the sigverifier receives votes in batches and sends them to the consensus reward container in batches so hopefully using a channel of 1K slots would never block.
+        let (reward_votes_sender, reward_votes_receiver) = bounded(1000);
         let alpenglow_sigverify_service = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
             let verifier = BLSSigVerifier::new(

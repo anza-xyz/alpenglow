@@ -1437,9 +1437,9 @@ impl Validator {
         );
 
         let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
-        // There will only ever be a single msg in flight so use bounded channel for [`BuildRewardCertsRequest`] messages.
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsRequest`] to 1 message.
         let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
-        // There will only ever be a single msg in flight so use bounded channel for [`BuildRewardCertsResponse`] messages.
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsResponse`] to 1 message.
         let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
         let block_creation_loop_config = BlockCreationLoopConfig {

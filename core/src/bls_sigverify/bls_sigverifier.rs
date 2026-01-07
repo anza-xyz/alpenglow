@@ -233,8 +233,18 @@ impl BLSSigVerifier {
             warn!("could not send consensus metrics, receive side of channel is closed");
         }
 
-        if self.reward_votes_sender.send(add_vote_msg).is_err() {
-            warn!("could not send votes to reward container, receive side of channel is closed");
+        let res = self.reward_votes_sender.try_send(add_vote_msg);
+        match res {
+            Ok(()) => (),
+            Err(TrySendError::Full(_)) => {
+                self.stats.consensus_reward_send_failed =
+                    self.stats.consensus_reward_send_failed.saturating_add(1);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                warn!(
+                    "could not send votes to reward container, receive side of channel is closed"
+                );
+            }
         }
 
         self.stats.maybe_report_stats();
