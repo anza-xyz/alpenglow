@@ -389,7 +389,7 @@ mod tests {
 
         // Start a quick streamer to handle quick control packets
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let exit = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let stakes = validator_keypairs
             .iter()
             .map(|x| (x.node_keypair.pubkey(), 100))
@@ -409,7 +409,7 @@ mod tests {
             sender,
             staked_nodes,
             QuicServerParams::default_for_tests(),
-            CancellationToken::new(),
+            cancel.clone(),
         )
         .unwrap();
         let packets = receiver.recv().unwrap();
@@ -424,7 +424,7 @@ mod tests {
                 )
             });
         assert_eq!(received_message, expected_message);
-        exit.store(true, Ordering::Relaxed);
+        cancel.cancel();
         quic_server_thread.join().unwrap();
     }
 }
