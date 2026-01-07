@@ -1,12 +1,17 @@
 use {
     crate::bank::Bank,
-    agave_votor_messages::migration::MigrationStatus,
+    agave_votor_messages::{
+        consensus_message::Certificate,
+        fraction::Fraction,
+        migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
+    },
+    log::warn,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, VersionedBlockFooter, VersionedBlockHeader,
-        VersionedBlockMarker, VersionedUpdateParent,
+        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
+        VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
-    std::sync::Arc,
+    std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
 };
 
@@ -24,6 +29,14 @@ pub enum BlockComponentProcessorError {
     MultipleUpdateParents,
     #[error("BlockComponent detected pre-migration")]
     BlockComponentPreMigration,
+    #[error("GenesisCertificate marker detected when GenesisCertificate is already populated")]
+    GenesisCertificateAlreadyPopulated,
+    #[error("GenesisCertificate marker detected when the cluster has Alpenglow enabled at slot 0")]
+    GenesisCertificateInAlpenglowCluster,
+    #[error("GenesisCertificate marker detected on a block which is not a child of genesis")]
+    GenesisCertificateOnNonChild,
+    #[error("GenesisCertificate was invalid and failed to verify")]
+    GenesisCertificateFailedVerification,
     #[error("Nanosecond clock out of bounds")]
     NanosecondClockOutOfBounds,
     #[error("Spurious update parent")]
@@ -109,6 +122,83 @@ impl BlockComponentProcessor {
             // We process GenesisCertificate messages elsewhere, so no callback needed here.
             BlockMarkerV1::GenesisCertificate(_) => Ok(()),
         }
+    }
+
+    pub fn on_genesis_certificate(
+        &self,
+        bank: Arc<Bank>,
+        genesis_cert: GenesisCertificate,
+        migration_status: &MigrationStatus,
+    ) -> Result<(), BlockComponentProcessorError> {
+        if bank.parent_slot() == 0 {
+            return Err(BlockComponentProcessorError::GenesisCertificateInAlpenglowCluster);
+        }
+
+        let parent_block_id = bank
+            .parent_block_id()
+            .expect("Block id is populated for all slots > 0");
+        if (bank.parent_slot(), parent_block_id) != (genesis_cert.slot, genesis_cert.block_id) {
+            return Err(BlockComponentProcessorError::GenesisCertificateOnNonChild);
+        }
+
+        if bank.get_alpenglow_genesis_certificate().is_some() {
+            return Err(BlockComponentProcessorError::GenesisCertificateAlreadyPopulated);
+        }
+
+        let genesis_cert = Certificate::from(genesis_cert);
+        Self::verify_genesis_certificate(&bank, &genesis_cert)?;
+        bank.set_alpenglow_genesis_certificate(&genesis_cert);
+
+        if migration_status.is_alpenglow_enabled() {
+            // We participated in the migration, nothing to do.
+            return Ok(());
+        }
+
+        // We ingested the first alpenglow block while replaying, so store migration state to
+        // let replay transition us to ReadyToEnable.
+        warn!(
+            "{}: Alpenglow genesis marker processed during replay of {}. Transitioning Alpenglow \
+             to ReadyToEnable",
+            migration_status.my_pubkey(),
+            bank.slot()
+        );
+        migration_status.set_genesis_block(
+            genesis_cert
+                .cert_type
+                .to_block()
+                .expect("Genesis cert must correspond to a block"),
+        );
+        migration_status.set_genesis_certificate(Arc::new(genesis_cert));
+        assert!(migration_status.is_ready_to_enable());
+
+        Ok(())
+    }
+
+    fn verify_genesis_certificate(
+        bank: &Bank,
+        cert: &Certificate,
+    ) -> Result<(), BlockComponentProcessorError> {
+        let slot = cert.cert_type.slot();
+        let (genesis_stake, total_stake) = bank.verify_certificate(cert).map_err(|_| {
+            warn!(
+                "Failed to verify genesis certificate for {slot} in bank slot {}",
+                bank.slot()
+            );
+            BlockComponentProcessorError::GenesisCertificateFailedVerification
+        })?;
+        let total_stake = NonZeroU64::new(total_stake)
+            .ok_or(BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
+        let genesis_percent = Fraction::new(genesis_stake, total_stake);
+        if genesis_percent < GENESIS_VOTE_THRESHOLD {
+            warn!(
+                "Received a genesis certificate for {slot} in bank slot {} with \
+                 {genesis_percent} stake < {GENESIS_VOTE_THRESHOLD}",
+                bank.slot()
+            );
+            return Err(BlockComponentProcessorError::GenesisCertificateFailedVerification);
+        }
+
+        Ok(())
     }
 
     fn on_footer(
