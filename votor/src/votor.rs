@@ -47,7 +47,10 @@ use {
             ConsensusMetrics, ConsensusMetricsEventReceiver, ConsensusMetricsEventSender,
         },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
-        consensus_rewards::{AddVoteMessage, ConsensusRewardsService},
+        consensus_rewards::{
+            AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse,
+            ConsensusRewardsService,
+        },
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
@@ -57,7 +60,7 @@ use {
         voting_service::BLSOp,
         voting_utils::VotingContext,
     },
-    crossbeam_channel::{unbounded, Receiver, Sender},
+    crossbeam_channel::{Receiver, Sender},
     parking_lot::RwLock as PlRwLock,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -112,12 +115,14 @@ pub struct VotorConfig {
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
+    pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
 
     // Receivers
     pub event_receiver: VotorEventReceiver,
     pub consensus_message_receiver: Receiver<ConsensusMessage>,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     pub reward_votes_receiver: Receiver<AddVoteMessage>,
+    pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
 }
 
 /// Context shared with block creation, replay, gossip, banking stage etc
@@ -168,6 +173,8 @@ impl Votor {
             consensus_metrics_sender,
             consensus_metrics_receiver,
             reward_votes_receiver,
+            reward_certs_sender,
+            build_reward_certs_receiver,
         } = config;
 
         let identity_keypair = cluster_info.keypair().clone();
@@ -244,8 +251,6 @@ impl Votor {
         let event_handler = EventHandler::new(event_handler_context);
         let consensus_pool_service = ConsensusPoolService::new(consensus_pool_context);
 
-        let (_build_reward_certs_sender, build_reward_certs_receiver) = unbounded();
-        let (reward_certs_sender, _reward_certs_receiver) = unbounded();
         let consensus_rewards_service = ConsensusRewardsService::new(
             cluster_info,
             leader_schedule_cache,

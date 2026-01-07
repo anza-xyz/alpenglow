@@ -61,6 +61,7 @@ use {
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
+        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
@@ -216,6 +217,8 @@ impl Tvu {
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         migration_status: Arc<MigrationStatus>,
+        reward_certs_sender: Sender<BuildRewardCertsResponse>,
+        build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -454,6 +457,8 @@ impl Tvu {
             consensus_metrics_receiver,
             migration_status,
             reward_votes_receiver,
+            build_reward_certs_receiver,
+            reward_certs_sender,
         };
 
         let voting_service = VotingService::new(
@@ -685,6 +690,8 @@ pub mod tests {
         let (votor_event_sender, votor_event_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::default());
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
+        let (reward_certs_sender, _reward_certs_receiver) = bounded(1);
+        let (_build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -764,6 +771,8 @@ pub mod tests {
             Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),
             Arc::new(MigrationStatus::default()),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {
