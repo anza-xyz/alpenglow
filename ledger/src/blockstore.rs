@@ -5390,23 +5390,20 @@ impl Blockstore {
         Ok(())
     }
 
-    /// If `slot_meta` is connected, propagate `parent_connected` to its children.
+    /// Propagate `parent_connected` to children. Requires `slot_meta` to be connected.
     fn propagate_parent_connected_to_children(
         &self,
         slot_meta: &Rc<RefCell<SlotMeta>>,
         working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
         new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
     ) -> Result<()> {
-        if slot_meta.borrow().is_connected() {
-            self.traverse_children_mut(
-                slot_meta,
-                working_set,
-                new_chained_slots,
-                SlotMeta::set_parent_connected,
-            )?;
-        }
-
-        Ok(())
+        debug_assert!(slot_meta.borrow().is_connected());
+        self.traverse_children_mut(
+            slot_meta,
+            working_set,
+            new_chained_slots,
+            SlotMeta::set_parent_connected,
+        )
     }
 
     /// Handles chaining updates when an UpdateParent marker overrides a previously
@@ -5462,12 +5459,14 @@ impl Blockstore {
 
             // Propagate or clear connectivity based on new parent's state.
             if new_parent_meta.borrow().is_connected() {
-                slot_meta.borrow_mut().set_parent_connected();
-                self.propagate_parent_connected_to_children(
-                    &slot_meta,
-                    working_set,
-                    new_chained_slots,
-                )?;
+                if !slot_meta.borrow().is_parent_connected() {
+                    slot_meta.borrow_mut().set_parent_connected();
+                    self.propagate_parent_connected_to_children(
+                        &slot_meta,
+                        working_set,
+                        new_chained_slots,
+                    )?;
+                }
             } else if slot_meta.borrow_mut().clear_parent_connected() {
                 self.traverse_children_mut(
                     &slot_meta,
