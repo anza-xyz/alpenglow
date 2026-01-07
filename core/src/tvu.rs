@@ -257,8 +257,7 @@ impl Tvu {
             bounded(MAX_ALPENGLOW_PACKET_NUM);
         let (consensus_metrics_sender, consensus_metrics_receiver) =
             bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
-        // TODO: once the bls sigverifier is upstreamed, it will need the sender side.
-        let (_reward_votes_sender, reward_votes_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
+        let (reward_votes_sender, reward_votes_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
 
         // The BLS socket is currently only available on Testnet and Development clusters.
         // Closer to release we will enable this for all clusters.
@@ -303,7 +302,10 @@ impl Tvu {
                 bls_packet_receiver,
                 banks,
                 verified_voter_slots_sender,
+                reward_votes_sender,
                 consensus_message_sender.clone(),
+                cluster_info.clone(),
+                leader_schedule_cache.clone(),
                 migration_status.clone(),
             );
 

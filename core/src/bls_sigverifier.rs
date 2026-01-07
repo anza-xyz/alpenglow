@@ -1,11 +1,15 @@
 use {
     crate::cluster_info_vote_listener::VerifiedVoterSlotsSender,
+    agave_votor::consensus_rewards,
     agave_votor_messages::{
         consensus_message::{Certificate, ConsensusMessage, VoteMessage},
         migration::MigrationStatus,
+        reward_certificate::AddVoteMessage,
     },
     crossbeam_channel::{Receiver, Sender, TrySendError},
     solana_clock::Slot,
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_perf::packet::PacketBatch,
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
@@ -25,10 +29,21 @@ pub fn spawn_service(
     packet_receiver: Receiver<PacketBatch>,
     banks: SharableBanks,
     vote_sender: VerifiedVoterSlotsSender,
+    reward_votes_sender: Sender<AddVoteMessage>,
     message_sender: Sender<Vec<ConsensusMessage>>,
+    cluster_info: Arc<ClusterInfo>,
+    leader_schedule: Arc<LeaderScheduleCache>,
     migration_status: Arc<MigrationStatus>,
 ) -> thread::JoinHandle<()> {
-    let verifier = BLSSigVerifier::new(banks, vote_sender, message_sender, migration_status);
+    let verifier = BLSSigVerifier::new(
+        banks,
+        vote_sender,
+        reward_votes_sender,
+        message_sender,
+        cluster_info,
+        leader_schedule,
+        migration_status,
+    );
 
     Builder::new()
         .name("solSigVerBLS".to_string())
@@ -40,8 +55,12 @@ pub struct BLSSigVerifier {
     banks: SharableBanks,
     /// Sender to repair service
     vote_sender: VerifiedVoterSlotsSender,
+    /// Sender to consensus rewards service
+    reward_votes_sender: Sender<AddVoteMessage>,
     /// Sender to votor
     message_sender: Sender<Vec<ConsensusMessage>>,
+    cluster_info: Arc<ClusterInfo>,
+    leader_schedule: Arc<LeaderScheduleCache>,
     migration_status: Arc<MigrationStatus>,
 }
 
@@ -49,13 +68,19 @@ impl BLSSigVerifier {
     pub fn new(
         banks: SharableBanks,
         vote_sender: VerifiedVoterSlotsSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
         message_sender: Sender<Vec<ConsensusMessage>>,
+        cluster_info: Arc<ClusterInfo>,
+        leader_schedule: Arc<LeaderScheduleCache>,
         migration_status: Arc<MigrationStatus>,
     ) -> Self {
         Self {
             banks,
             vote_sender,
+            reward_votes_sender,
             message_sender,
+            cluster_info,
+            leader_schedule,
             migration_status,
         }
     }
@@ -94,8 +119,10 @@ impl BLSSigVerifier {
 
         let verified_votes = self.verify_votes(votes, &root);
         let verified_certs = self.verify_certificates(certs, &root);
+        let reward_votes = self.collect_reward_votes(&verified_votes, root.slot());
 
         self.send_results(verified_votes, verified_certs)?;
+        self.send_reward_votes(reward_votes);
 
         Ok(())
     }
@@ -197,6 +224,35 @@ impl BLSSigVerifier {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Ok(()),
             Err(TrySendError::Disconnected(_)) => Err(()),
+        }
+    }
+
+    fn collect_reward_votes(
+        &self,
+        votes: &[(VoteMessage, Pubkey)],
+        root_slot: Slot,
+    ) -> AddVoteMessage {
+        let votes = votes
+            .iter()
+            .filter_map(|(vote, _)| {
+                consensus_rewards::wants_vote(
+                    &self.cluster_info,
+                    &self.leader_schedule,
+                    root_slot,
+                    vote,
+                )
+                .then_some(*vote)
+            })
+            .collect();
+        AddVoteMessage { votes }
+    }
+
+    fn send_reward_votes(&self, votes: AddVoteMessage) {
+        match self.reward_votes_sender.try_send(votes) {
+            Ok(()) | Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => {
+                warn!("reward vote channel disconnected");
+            }
         }
     }
 }
