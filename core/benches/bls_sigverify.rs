@@ -4,7 +4,7 @@ use {
     criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput},
     crossbeam_channel::unbounded,
     solana_bls_signatures::signature::Signature as BlsSignature,
-    solana_core::bls_sigverify::bls_sigverifier::BLSSigVerifier,
+    solana_core::bls_sigverifier::BLSSigVerifier,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
     solana_hash::Hash,
     solana_keypair::Keypair,

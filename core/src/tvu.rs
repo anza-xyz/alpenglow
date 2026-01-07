@@ -6,9 +6,7 @@ use {
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
         banking_trace::BankingTracer,
         block_creation_loop::ReplayHighestFrozen,
-        bls_sigverify::{
-            bls_sigverifier::BLSSigVerifier, bls_sigverify_service::BLSSigverifyService,
-        },
+        bls_sigverifier,
         cluster_info_vote_listener::{
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VerifiedVoteReceiver,
             VerifiedVoteSender, VoteTracker,
@@ -102,7 +100,7 @@ pub struct Tvu {
     warm_quic_cache_service: Option<WarmQuicCacheService>,
     drop_bank_service: DropBankService,
     duplicate_shred_listener: DuplicateShredListener,
-    alpenglow_sigverify_service: BLSSigverifyService,
+    alpenglow_sigverify_service: thread::JoinHandle<()>,
     alpenglow_quic_t: thread::JoinHandle<()>,
 }
 
@@ -278,7 +276,8 @@ impl Tvu {
         let (reward_votes_sender, reward_votes_receiver) = bounded(2000);
         let alpenglow_sigverify_service = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-            let verifier = BLSSigVerifier::new(
+            bls_sigverifier::spawn_service(
+                bls_packet_receiver,
                 sharable_banks,
                 verified_vote_sender.clone(),
                 reward_votes_sender,
@@ -287,8 +286,7 @@ impl Tvu {
                 alpenglow_last_voted.clone(),
                 cluster_info.clone(),
                 leader_schedule_cache.clone(),
-            );
-            BLSSigverifyService::new(bls_packet_receiver, verifier)
+            )
         };
 
         let mut key_notifiers = key_notifiers.write().unwrap();
