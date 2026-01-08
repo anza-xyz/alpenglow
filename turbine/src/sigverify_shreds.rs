@@ -297,13 +297,22 @@ fn extract_shred_and_location(
     };
 
     // Repaired shred
+    let slot = shred::layout::get_slot(shred);
+    let index = shred::layout::get_index(shred);
     if let Some(location) = block_location_lookup.get_location(nonce) {
+        debug!(
+            "[sigverify] extract_shred_and_location: SUCCESS nonce={nonce} slot={slot:?} \
+             index={index:?} location={location:?}",
+        );
         Some((shred.to_vec(), Some(location)))
     } else {
         // Although we requested repair of this shred (nonce was previously verified),
         // The location is missing. This means we have oversaturated the cache. We should
         // throw away this shred
-        error!("block location lookup is saturated, discarding repaired shred nonce {nonce}");
+        error!(
+            "block location lookup is saturated, discarding repaired shred nonce {nonce} \
+             slot={slot:?} index={index:?}",
+        );
         stats.num_unknown_block_location += 1;
         None
     }

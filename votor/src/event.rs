@@ -1,10 +1,44 @@
 use {
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
+    solana_hash::Hash,
     solana_runtime::bank::Bank,
     solana_votor_messages::consensus_message::Block,
     std::{sync::Arc, time::Instant},
 };
+
+pub type RepairEventSender = Sender<RepairEvent>;
+pub type RepairEventReceiver = Receiver<RepairEvent>;
+
+/// Events sent by votor to the block id repair service for informed repair
+#[derive(Debug, Copy, Clone)]
+pub enum RepairEvent {
+    /// We require that this block be fetched. This can happen for the following reasons:
+    /// - The block has received a NotarizeFallback certificate or stronger
+    /// - The specific SafetoNotar case requires parent information, we must repair at least the block header
+    /// - We received a block through turbine which specifies a parent that we do not currently have
+    FetchBlock { slot: Slot, block_id: Hash },
+}
+
+impl RepairEvent {
+    pub fn slot(&self) -> Slot {
+        match self {
+            RepairEvent::FetchBlock { slot, .. } => *slot,
+        }
+    }
+}
+
+pub type SwitchBlockEventSender = Sender<SwitchBlockEvent>;
+pub type SwitchBlockEventReceiver = Receiver<SwitchBlockEvent>;
+
+/// Events sent to replay_stage when a block becomes canonical or needs to be switched
+#[derive(Debug, Copy, Clone)]
+pub enum SwitchBlockEvent {
+    /// The block has become canonical (notarized or finalized)
+    Canonical { slot: Slot, block_id: Hash },
+    /// We need to switch to a different block version
+    Switch { slot: Slot, block_id: Hash },
+}
 
 #[derive(Debug, Clone)]
 pub struct CompletedBlock {
@@ -34,6 +68,9 @@ pub enum VotorEvent {
 
     /// The block has received a notarization certificate
     BlockNotarized(Block),
+
+    /// The block has received a notarize-fallback certificate
+    BlockNotarizeFallback(Block),
 
     /// Received the first shred for the slot.
     FirstShred(Slot),
@@ -82,6 +119,7 @@ impl VotorEvent {
             | VotorEvent::SafeToNotar((s, _))
             | VotorEvent::Finalized((s, _), _)
             | VotorEvent::BlockNotarized((s, _))
+            | VotorEvent::BlockNotarizeFallback((s, _))
             | VotorEvent::ParentReady {
                 slot: s,
                 parent_block: _,

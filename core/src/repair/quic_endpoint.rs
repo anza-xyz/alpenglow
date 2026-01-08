@@ -207,7 +207,7 @@ pub(crate) fn new_quic_endpoints(
         keypair,
         sockets.ancestor_hashes_quic_socket,
         senders.ancestor_hashes_response_quic_sender,
-        bank_forks,
+        bank_forks.clone(),
     )?;
     Ok((
         [

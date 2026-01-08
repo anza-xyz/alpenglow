@@ -11,6 +11,7 @@ use {
         cluster_slots_service::cluster_slots::ClusterSlots,
         repair::{
             duplicate_repair_status::get_ancestor_hash_repair_sample_size,
+            outstanding_requests::OutstandingRequests,
             quic_endpoint::RemoteRequest,
             repair_handler::RepairHandler,
             repair_service::{OutstandingShredRepairs, RepairInfo, RepairStats, REPAIR_MS},
@@ -62,7 +63,7 @@ use {
         streamer::PacketBatchSender,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},
@@ -218,13 +219,13 @@ impl RequestResponse for AncestorHashesRepairType {
     }
 }
 
-#[derive(Copy, Clone)]
-// TODO(ashwin): plug in the next PR
-pub(crate) enum BlockIdRepairType {
-    #[allow(dead_code)]
-    ParentAndFecSetCount { slot: Slot, block_id: Hash },
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockIdRepairType {
+    ParentAndFecSetCount {
+        slot: Slot,
+        block_id: Hash,
+    },
 
-    #[allow(dead_code)]
     FecSetRoot {
         slot: Slot,
         block_id: Hash,
@@ -232,8 +233,17 @@ pub(crate) enum BlockIdRepairType {
     },
 }
 
+impl BlockIdRepairType {
+    pub(crate) fn block(&self) -> Block {
+        match self {
+            BlockIdRepairType::ParentAndFecSetCount { slot, block_id } => (*slot, *block_id),
+            BlockIdRepairType::FecSetRoot { slot, block_id, .. } => (*slot, *block_id),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) enum BlockIdRepairResponse {
+pub enum BlockIdRepairResponse {
     ParentFecSetCount {
         fec_set_count: usize,
         parent_info: (Slot, Hash),
@@ -381,6 +391,11 @@ impl RepairRequestHeader {
             timestamp,
             nonce,
         }
+    }
+
+    /// Returns the nonce for this repair request.
+    pub fn nonce(&self) -> Nonce {
+        self.nonce
     }
 }
 
@@ -727,18 +742,39 @@ impl ServeRepair {
                     block_id,
                 } => {
                     stats.parent += 1;
-                    let response = if self
+                    let should_respond = self
                         .migration_status
-                        .should_use_double_merkle_block_id(*slot)
-                    {
+                        .should_use_double_merkle_block_id(*slot);
+                    info!(
+                        "[ServeRepair] Received ParentAndFecSetCount request: slot={}, \
+                         block_id={:?}, should_respond={}",
+                        slot, block_id, should_respond
+                    );
+                    let response = if should_respond {
                         let response = self.repair_handler.run_parent_fec_set_count(
                             recycler, from_addr, *slot, *block_id, *nonce,
                         );
                         if response.is_none() {
                             stats.parent_misses += 1;
+                            info!(
+                                "[ServeRepair] ParentAndFecSetCount: no response for slot={}, \
+                                 block_id={:?} (block not found)",
+                                slot, block_id
+                            );
+                        } else {
+                            info!(
+                                "[ServeRepair] ParentAndFecSetCount: sending response for \
+                                 slot={}, block_id={:?}",
+                                slot, block_id
+                            );
                         }
                         response
                     } else {
+                        info!(
+                            "[ServeRepair] ParentAndFecSetCount: migration_status says not \
+                             alpenglow for slot={}",
+                            slot
+                        );
                         None
                     };
                     (response, "Parent")
@@ -1451,6 +1487,50 @@ impl ServeRepair {
         }
     }
 
+    /// Similar to [`Self::repair_request`] but for [`BlockIdRepairType`] requests.
+    /// Uses stake-weighted peer selection rather than cluster_slots weights.
+    pub(crate) fn block_id_repair_request(
+        &self,
+        repair_validators: &Option<HashSet<Pubkey>>,
+        repair_request: BlockIdRepairType,
+        peers_cache: &mut LruCache<Slot, RepairPeers>,
+        outstanding_requests: &mut OutstandingRequests<BlockIdRepairType>,
+        identity_keypair: &Keypair,
+        staked_nodes: &HashMap<Pubkey, u64>,
+    ) -> Result<(Vec<u8>, SocketAddr)> {
+        let slot = repair_request.block().0;
+        let repair_peers = match peers_cache.get(&slot) {
+            Some(entry) if entry.asof.elapsed() < REPAIR_PEERS_CACHE_TTL => entry,
+            _ => {
+                peers_cache.pop(&slot);
+                let repair_peers = self.repair_peers(repair_validators, slot);
+                let weights: Vec<u64> = repair_peers
+                    .iter()
+                    .map(|peer| staked_nodes.get(peer.pubkey()).copied().unwrap_or(0))
+                    .collect();
+                let repair_peers = RepairPeers::new(Instant::now(), &repair_peers, &weights)?;
+                peers_cache.put(slot, repair_peers);
+                peers_cache.get(&slot).unwrap()
+            }
+        };
+        let peer = repair_peers.sample(&mut rand::thread_rng());
+        let nonce = outstanding_requests.add_request(repair_request, timestamp());
+
+        let out = self.map_block_id_repair_request(
+            &repair_request,
+            &peer.pubkey,
+            nonce,
+            identity_keypair,
+        )?;
+        debug!(
+            "Sending block_id repair request from {} to {} for {:#?}",
+            identity_keypair.pubkey(),
+            peer.pubkey,
+            repair_request
+        );
+        Ok((out, peer.serve_repair))
+    }
+
     pub(crate) fn repair_request_ancestor_hashes_sample_peers(
         &self,
         slot: Slot,
@@ -1557,6 +1637,43 @@ impl ServeRepair {
                     block_id: *block_id,
                 }
             }
+        };
+        Self::repair_proto_to_bytes(&request_proto, identity_keypair)
+    }
+
+    /// Transforms a [`BlockIdRepairType`] into a signed repair protocol message.
+    pub(crate) fn map_block_id_repair_request(
+        &self,
+        repair_request: &BlockIdRepairType,
+        repair_peer_id: &Pubkey,
+        nonce: Nonce,
+        identity_keypair: &Keypair,
+    ) -> Result<Vec<u8>> {
+        let header = RepairRequestHeader {
+            signature: Signature::default(),
+            sender: self.my_id(),
+            recipient: *repair_peer_id,
+            timestamp: timestamp(),
+            nonce,
+        };
+        let request_proto = match repair_request {
+            BlockIdRepairType::ParentAndFecSetCount { slot, block_id } => {
+                RepairProtocol::ParentAndFecSetCount {
+                    header,
+                    slot: *slot,
+                    block_id: *block_id,
+                }
+            }
+            BlockIdRepairType::FecSetRoot {
+                slot,
+                block_id,
+                fec_set_index,
+            } => RepairProtocol::FecSetRoot {
+                header,
+                slot: *slot,
+                block_id: *block_id,
+                fec_set_index: *fec_set_index,
+            },
         };
         Self::repair_proto_to_bytes(&request_proto, identity_keypair)
     }

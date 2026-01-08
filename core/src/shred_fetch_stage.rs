@@ -151,7 +151,11 @@ impl ShredFetchStage {
             let max_slot = last_slot + MAX_SHRED_DISTANCE_MINIMUM.max(2 * slots_per_epoch);
             let turbine_disabled = turbine_disabled.load(Ordering::Relaxed);
             for mut packet in packet_batch.iter_mut().filter(|p| !p.meta().discard()) {
-                if turbine_disabled
+                // When turbine is disabled, only discard non-repair shreds.
+                // Repair shreds (which have the REPAIR flag set earlier in the pipeline)
+                // should still be accepted to support informed repair.
+                let is_repair = packet.meta().repair();
+                if (turbine_disabled && !is_repair)
                     || should_discard_shred(
                         packet.as_ref(),
                         last_root,
