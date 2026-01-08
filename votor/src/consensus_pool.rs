@@ -23,7 +23,7 @@ use {
     solana_runtime::{bank::Bank, epoch_stakes::VersionedEpochStakes},
     solana_votor_messages::{
         consensus_message::{
-            Certificate, CertificateType, ConsensusMessage, FinalizationCertPair, VoteMessage,
+            Certificate, CertificateType, ConsensusMessage, FinalizationCerts, VoteMessage,
         },
         fraction::Fraction,
         migration::MigrationStatus,
@@ -116,7 +116,7 @@ pub struct ConsensusPool {
     highest_finalized_slot: Option<Slot>,
     /// Highest slot that has Finalize+Notarize or FinalizeFast, for use in standstill
     /// Also add a bool to indicate whether this slot has FinalizeFast certificate
-    highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    highest_finalized: Arc<RwLock<FinalizationCerts>>,
     /// Stats for the certificate pool
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
@@ -130,7 +130,7 @@ impl ConsensusPool {
         cluster_info: Arc<ClusterInfo>,
         bank: &Bank,
         migration_status: Arc<MigrationStatus>,
-        highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+        highest_finalized: Arc<RwLock<FinalizationCerts>>,
     ) -> Self {
         let mut pool = Self::new_from_root_bank(cluster_info, bank, highest_finalized);
         pool.migration_status = Some(migration_status);
@@ -140,7 +140,7 @@ impl ConsensusPool {
     pub fn new_from_root_bank(
         cluster_info: Arc<ClusterInfo>,
         bank: &Bank,
-        highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+        highest_finalized: Arc<RwLock<FinalizationCerts>>,
     ) -> Self {
         // To account for genesis and snapshots we allow default block id until
         // block id can be serialized  as part of the snapshot
@@ -295,15 +295,16 @@ impl ConsensusPool {
 
     fn is_highest_finalized_too_old(&self, new_slot: Slot, replace_equal_slot: bool) -> bool {
         let highest_finalized_r = self.highest_finalized.read().unwrap();
-        let (prev_final_cert, _) = &*highest_finalized_r;
-        prev_final_cert.as_ref().is_none_or(|cert| {
-            let current_slot = cert.cert_type.slot();
-            if replace_equal_slot {
-                current_slot <= new_slot
-            } else {
-                current_slot < new_slot
-            }
-        })
+        let current_slot = match &*highest_finalized_r {
+            FinalizationCerts::Finalize(prev_final_cert, _)
+            | FinalizationCerts::FinalizeFast(prev_final_cert) => prev_final_cert.cert_type.slot(),
+            FinalizationCerts::Uninitialized => return true,
+        };
+        if replace_equal_slot {
+            current_slot <= new_slot
+        } else {
+            current_slot < new_slot
+        }
     }
 
     fn insert_certificate(
@@ -338,8 +339,10 @@ impl ConsensusPool {
                             .completed_certificates
                             .get(&CertificateType::Finalize(slot))
                         {
-                            *highest_finalized =
-                                (Some(finalization_cert.clone()), Some(cert.clone()));
+                            *highest_finalized = FinalizationCerts::Finalize(
+                                finalization_cert.clone(),
+                                cert.clone(),
+                            );
                         }
                     }
                 }
@@ -350,7 +353,8 @@ impl ConsensusPool {
                     events.push(VotorEvent::Finalized(block, false));
                     if self.is_highest_finalized_too_old(slot, false) {
                         let mut highest_finalized = self.highest_finalized.write().unwrap();
-                        *highest_finalized = (Some(cert.clone()), Some(notarization_cert));
+                        *highest_finalized =
+                            FinalizationCerts::Finalize(notarization_cert.clone(), cert.clone());
                     }
                 }
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
@@ -366,7 +370,7 @@ impl ConsensusPool {
                 }
                 if self.is_highest_finalized_too_old(slot, true) {
                     let mut highest_finalized = self.highest_finalized.write().unwrap();
-                    *highest_finalized = (Some(cert.clone()), None);
+                    *highest_finalized = FinalizationCerts::FinalizeFast(cert.clone());
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -651,14 +655,14 @@ impl ConsensusPool {
     pub fn get_certs_for_standstill(&self) -> Vec<Arc<Certificate>> {
         let (highest_finalized_with_notarize_slot, has_fast_finalize) = {
             let highest_finalized = self.highest_finalized.read().unwrap();
-            let (finalization_cert, notarization_cert) = &*highest_finalized;
-            if let Some(finalization_cert) = finalization_cert {
-                (
-                    finalization_cert.cert_type.slot(),
-                    notarization_cert.is_none(),
-                )
-            } else {
-                (0, false)
+            match &*highest_finalized {
+                FinalizationCerts::Finalize(finalization_cert, _) => {
+                    (finalization_cert.cert_type.slot(), false)
+                }
+                FinalizationCerts::FinalizeFast(finalization_cert) => {
+                    (finalization_cert.cert_type.slot(), true)
+                }
+                FinalizationCerts::Uninitialized => (0, false),
             }
         };
         self.completed_certificates
@@ -761,7 +765,7 @@ mod tests {
     }
 
     fn create_initial_state(
-        highest_finalized: Option<Arc<RwLock<FinalizationCertPair>>>,
+        highest_finalized: Option<Arc<RwLock<FinalizationCerts>>>,
     ) -> (
         Vec<ValidatorVoteKeypairs>,
         ConsensusPool,
@@ -776,7 +780,7 @@ mod tests {
         (
             validator_keypairs,
             ConsensusPool::new_from_root_bank(
-                new_cluster_info()
+                new_cluster_info(),
                 &root_bank,
                 highest_finalized.unwrap_or(Arc::new(RwLock::default())),
             ),
@@ -1986,6 +1990,31 @@ mod tests {
             .is_err());
     }
 
+    fn test_highest_finalized(
+        highest_finalized: Arc<RwLock<FinalizationCerts>>,
+        expected_slot: Slot,
+        expected_fast_finalize: bool,
+        expected_uninitialized: bool,
+    ) {
+        let highest_finalized_r = highest_finalized.read().unwrap();
+        match &*highest_finalized_r {
+            FinalizationCerts::Uninitialized => {
+                assert!(expected_uninitialized);
+            }
+            FinalizationCerts::Finalize(final_cert, notar_cert) => {
+                assert_eq!(final_cert.cert_type.slot(), expected_slot);
+                assert_eq!(notar_cert.cert_type.slot(), expected_slot);
+                assert!(!expected_fast_finalize);
+                assert!(!expected_uninitialized);
+            }
+            FinalizationCerts::FinalizeFast(final_cert) => {
+                assert_eq!(final_cert.cert_type.slot(), expected_slot);
+                assert!(expected_fast_finalize);
+                assert!(!expected_uninitialized);
+            }
+        }
+    }
+
     #[test]
     fn test_get_certs_for_standstill() {
         let highest_finalized = Arc::new(RwLock::default());
@@ -2034,10 +2063,7 @@ mod tests {
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 4
             && matches!(cert.cert_type, CertificateType::Finalize(_))));
         // highest_finalized should be empty now
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert!(highest_finalized_r.0.is_none());
-        assert!(highest_finalized_r.1.is_none());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 0, false, true);
 
         // Add Notarize cert on 5
         let cert_5 = Certificate {
@@ -2072,10 +2098,7 @@ mod tests {
                 &mut vec![]
             )
             .is_ok());
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
-        assert!(highest_finalized_r.1.is_some());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 5, false, false);
 
         // Add FinalizeFast cert on 5
         let cert_5 = Certificate {
@@ -2100,10 +2123,7 @@ mod tests {
             certs[0].cert_type.slot() == 5
                 && matches!(certs[0].cert_type, CertificateType::FinalizeFast(_, _))
         );
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
-        assert!(highest_finalized_r.1.is_none());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 5, true, false);
 
         // Now add Notarize cert on 6
         let cert_6 = Certificate {
@@ -2128,10 +2148,7 @@ mod tests {
             && matches!(cert.cert_type, CertificateType::FinalizeFast(_, _))));
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 6
             && matches!(cert.cert_type, CertificateType::Notarize(_, _))));
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 5);
-        assert!(highest_finalized_r.1.is_none());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 5, true, false);
 
         // Add another Finalize cert on 6
         let cert_6_finalize = Certificate {
@@ -2173,10 +2190,7 @@ mod tests {
             && matches!(cert.cert_type, CertificateType::Finalize(_))));
         assert!(certs.iter().any(|cert| cert.cert_type.slot() == 6
             && matches!(cert.cert_type, CertificateType::Notarize(_, _))));
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 6);
-        assert!(highest_finalized_r.1.is_some());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 6, false, false);
 
         // Add another skip on 7
         let cert_7 = Certificate {
@@ -2237,10 +2251,7 @@ mod tests {
                 &mut vec![]
             )
             .is_ok());
-        let highest_finalized_r = highest_finalized.read().unwrap();
-        assert_eq!(highest_finalized_r.0.as_ref().unwrap().cert_type.slot(), 8);
-        assert!(highest_finalized_r.1.is_some());
-        drop(highest_finalized_r);
+        test_highest_finalized(highest_finalized.clone(), 8, false, false);
 
         // Should only return certs on 8 now
         let certs = pool.get_certs_for_standstill();

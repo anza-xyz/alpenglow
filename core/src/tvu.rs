@@ -67,7 +67,7 @@ use {
         vote_history_storage::VoteHistoryStorage,
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
-    solana_votor_messages::{consensus_message::FinalizationCertPair, migration::MigrationStatus},
+    solana_votor_messages::{consensus_message::FinalizationCerts, migration::MigrationStatus},
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -208,7 +208,7 @@ impl Tvu {
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_info_sender: Sender<LeaderWindowInfo>,
         highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-        highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+        highest_finalized: Arc<RwLock<FinalizationCerts>>,
         voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,

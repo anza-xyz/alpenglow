@@ -8,8 +8,17 @@ use {
     std::sync::Arc,
 };
 
-/// Define the finalization cert pair type
-pub type FinalizationCertPair = (Option<Arc<Certificate>>, Option<Arc<Certificate>>);
+/// Define the finalization certs type
+#[derive(Default, PartialEq, Debug, Clone)]
+pub enum FinalizationCerts {
+    /// Finalize certificate and Notarization certificate
+    Finalize(Arc<Certificate>, Arc<Certificate>),
+    /// Fast finalize certificate
+    FinalizeFast(Arc<Certificate>),
+    /// Not initialized
+    #[default]
+    Uninitialized,
+}
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";

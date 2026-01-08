@@ -77,7 +77,7 @@ use {
         snapshot_controller::SnapshotController,
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, FinalizationCertPair},
+        consensus_message::{ConsensusMessage, FinalizationCerts},
         migration::MigrationStatus,
     },
     std::{
@@ -116,7 +116,7 @@ pub struct VotorConfig {
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCerts>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,

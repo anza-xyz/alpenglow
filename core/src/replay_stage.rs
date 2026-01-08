@@ -99,7 +99,7 @@ use {
         votor::{Votor, VotorConfig},
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, FinalizationCertPair},
+        consensus_message::{ConsensusMessage, FinalizationCerts},
         migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
         vote::Vote,
     },
@@ -298,7 +298,7 @@ pub struct ReplayStageConfig {
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCerts>>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     pub migration_status: Arc<MigrationStatus>,

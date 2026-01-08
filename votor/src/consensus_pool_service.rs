@@ -23,7 +23,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage, FinalizationCertPair},
+        consensus_message::{Certificate, ConsensusMessage, FinalizationCerts},
         migration::MigrationStatus,
     },
     stats::ConsensusPoolServiceStats,
@@ -57,7 +57,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
-    pub(crate) highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    pub(crate) highest_finalized: Arc<RwLock<FinalizationCerts>>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -189,7 +189,11 @@ impl ConsensusPoolService {
         // Unlike the other votor threads, consensus pool starts even before alpenglow is enabled
         // As it is required to track the Genesis Vote.
         let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
-            ConsensusPool::new_from_root_bank(ctx.cluster_info.clone(), &root_bank, ctx.highest_finalized.clone())
+            ConsensusPool::new_from_root_bank(
+                ctx.cluster_info.clone(),
+                &root_bank,
+                ctx.highest_finalized.clone(),
+            )
         } else {
             ConsensusPool::new_from_root_bank_pre_migration(
                 ctx.cluster_info.clone(),

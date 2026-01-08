@@ -137,7 +137,7 @@ use {
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
+        consensus_message::{Certificate, CertificateType, FinalizationCerts},
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
     },
     std::mem::MaybeUninit,
@@ -333,31 +333,33 @@ pub struct FinalCertificate {
 }
 
 impl FinalCertificate {
-    pub fn new_from_certificate(
-        final_cert: &Certificate,
-        notar_cert: Option<&Certificate>,
-    ) -> Result<Self, String> {
-        let (slot, block_id) = if let Some(notar_cert) = &notar_cert {
-            if let CertificateType::Notarize(slot, notar_block_id) = notar_cert.cert_type {
-                if let CertificateType::Finalize(finalize_slot) = final_cert.cert_type {
-                    if slot != finalize_slot {
-                        return Err(format!(
-                            "notarization slot {slot} does not match finalization slot \
-                             {finalize_slot}",
-                        ));
+    pub fn new_from_certificate(final_certs: FinalizationCerts) -> Result<Option<Self>, String> {
+        let (slot, block_id, final_cert, notar_cert) = match final_certs {
+            FinalizationCerts::Finalize(final_cert, notar_cert) => {
+                if let CertificateType::Notarize(slot, notar_block_id) = notar_cert.cert_type {
+                    if let CertificateType::Finalize(finalize_slot) = final_cert.cert_type {
+                        if slot != finalize_slot {
+                            return Err(format!(
+                                "notarization slot {slot} does not match finalization slot \
+                                 {finalize_slot}",
+                            ));
+                        }
+                    } else {
+                        return Err("expected final certificate".into());
                     }
+                    (slot, notar_block_id, final_cert, Some(notar_cert))
                 } else {
-                    return Err("expected final certificate".into());
+                    return Err("expected notarization certificate".into());
                 }
-                (slot, notar_block_id)
-            } else {
-                return Err("expected notarization certificate".into());
             }
-        } else {
-            match final_cert.cert_type {
-                CertificateType::FinalizeFast(slot, block_id) => (slot, block_id),
-                _ => return Err("expected final fast certificate".into()),
+            FinalizationCerts::FinalizeFast(final_cert) => {
+                if let CertificateType::FinalizeFast(slot, block_id) = final_cert.cert_type {
+                    (slot, block_id, final_cert, None)
+                } else {
+                    return Err("expected final fast certificate".into());
+                }
             }
+            FinalizationCerts::Uninitialized => return Ok(None),
         };
         let final_signature: BLSSignatureCompressed = final_cert
             .signature
@@ -379,12 +381,12 @@ impl FinalCertificate {
         } else {
             None
         };
-        Ok(Self {
+        Ok(Some(Self {
             slot,
             block_id,
             final_aggregate,
             notar_aggregate,
-        })
+        }))
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -655,7 +657,11 @@ impl<'de> SchemaRead<'de> for BlockComponent {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, solana_bls_signatures::keypair::Keypair as BLSKeypair, std::iter::repeat_n};
+    use {
+        super::*,
+        solana_bls_signatures::keypair::Keypair as BLSKeypair,
+        std::{iter::repeat_n, sync::Arc},
+    };
 
     fn mock_entries(n: usize) -> Vec<Entry> {
         repeat_n(Entry::default(), n).collect()
@@ -723,6 +729,12 @@ mod tests {
 
     #[test]
     fn test_create_finalization_certificate() {
+        // Uninitalized certs will return None
+        assert_eq!(
+            FinalCertificate::new_from_certificate(FinalizationCerts::Uninitialized).unwrap(),
+            None
+        );
+
         let slot = 42;
         let block_id = Hash::new_unique();
         let keypair = BLSKeypair::new();
@@ -741,9 +753,11 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
 
-        let finalization_cert =
-            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert))
-                .expect("Failed to create FinalCertificate");
+        let finalization_cert = FinalCertificate::new_from_certificate(
+            FinalizationCerts::Finalize(Arc::new(final_cert.clone()), Arc::new(notar_cert.clone())),
+        )
+        .expect("Failed to create FinalCertificate")
+        .unwrap();
 
         assert_eq!(finalization_cert.slot, slot);
         assert_eq!(finalization_cert.block_id, block_id);
@@ -766,15 +780,26 @@ mod tests {
         );
 
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_cert, None).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::FinalizeFast(Arc::new(
+                final_cert.clone()
+            )))
+            .err(),
             Some("expected final fast certificate".to_string())
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(&notar_cert, Some(&notar_cert)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(notar_cert.clone()),
+                Arc::new(notar_cert.clone())
+            ))
+            .err(),
             Some("expected final certificate".to_string())
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_cert, Some(&final_cert)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(final_cert.clone()),
+                Arc::new(final_cert.clone())
+            ))
+            .err(),
             Some("expected notarization certificate".to_string())
         );
         let notar_cert_bad_slot = Certificate {
@@ -783,7 +808,11 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert_bad_slot)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(final_cert.clone()),
+                Arc::new(notar_cert_bad_slot.clone())
+            ))
+            .err(),
             Some(format!(
                 "notarization slot {} does not match finalization slot {}",
                 slot + 1,
@@ -796,7 +825,11 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_cert, Some(&notar_cert_bad_sig)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(final_cert.clone()),
+                Arc::new(notar_cert_bad_sig.clone())
+            ))
+            .err(),
             Some(
                 "failed to compress notar signature: Point representation conversion failed"
                     .to_string()
@@ -808,7 +841,11 @@ mod tests {
             bitmap: vec![1, 2, 3, 4],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_cert_bad_sig, Some(&notar_cert)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(final_cert_bad_sig.clone()),
+                Arc::new(notar_cert.clone())
+            ))
+            .err(),
             Some(
                 "failed to compress final signature: Point representation conversion failed"
                     .to_string()
@@ -819,8 +856,11 @@ mod tests {
             signature: final_signature,
             bitmap: vec![1, 2, 3, 4],
         };
-        let finalization_cert = FinalCertificate::new_from_certificate(&final_fast_cert, None)
-            .expect("Failed to create FinalCertificate");
+        let finalization_cert = FinalCertificate::new_from_certificate(
+            FinalizationCerts::FinalizeFast(Arc::new(final_fast_cert.clone())),
+        )
+        .expect("Failed to create FinalCertificate")
+        .unwrap();
         assert_eq!(finalization_cert.slot, slot);
         assert_eq!(finalization_cert.block_id, block_id);
         assert_eq!(finalization_cert.final_aggregate.bitmap, vec![1, 2, 3, 4]);
@@ -830,7 +870,11 @@ mod tests {
             final_signature.try_into().unwrap()
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(&final_fast_cert, Some(&notar_cert)).err(),
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
+                Arc::new(final_fast_cert.clone()),
+                Arc::new(notar_cert.clone())
+            ))
+            .err(),
             Some("expected final certificate".to_string())
         );
     }

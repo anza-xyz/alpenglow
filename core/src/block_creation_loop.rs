@@ -39,7 +39,7 @@ use {
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::LeaderWindowInfo,
     },
-    solana_votor_messages::consensus_message::FinalizationCertPair,
+    solana_votor_messages::consensus_message::FinalizationCerts,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -94,7 +94,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCerts>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -113,7 +113,7 @@ struct LeaderContext {
     my_pubkey: Pubkey,
     leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    highest_finalized: Arc<RwLock<FinalizationCertPair>>,
+    highest_finalized: Arc<RwLock<FinalizationCerts>>,
 
     blockstore: Arc<Blockstore>,
     record_receiver: RecordReceiver,
@@ -405,7 +405,7 @@ fn skew_block_producer_time_nanos(
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
 fn produce_block_footer(
     bank: Arc<Bank>,
-    highest_finalized: &RwLock<FinalizationCertPair>,
+    highest_finalized: &RwLock<FinalizationCerts>,
 ) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -441,25 +441,14 @@ fn produce_block_footer(
 }
 
 fn produce_final_certificate(
-    highest_finalized: &RwLock<FinalizationCertPair>,
+    highest_finalized: &RwLock<FinalizationCerts>,
 ) -> Option<FinalCertificate> {
-    let (finalization_cert, notarize_cert) = highest_finalized.read().unwrap().clone();
-    let Some(finalization_cert) = finalization_cert else {
-        if let Some(cert) = &notarize_cert {
-            warn!(
-                "Inconsistent state: finalized cert is None but notarize cert is Some (slot: {})",
-                cert.cert_type.slot(),
-            );
-        }
-        return None;
-    };
-    let final_cert =
-        FinalCertificate::new_from_certificate(&finalization_cert, notarize_cert.as_deref())
-            .map_err(|e| {
-                warn!("Failed to create FinalCertificate: {e:?}");
-            })
-            .ok()?;
-    Some(final_cert)
+    let finalization_certs = highest_finalized.read().unwrap().clone();
+    FinalCertificate::new_from_certificate(finalization_certs)
+        .map_err(|e| {
+            warn!("Failed to create FinalCertificate: {e:?}");
+        })
+        .ok()?
 }
 
 /// Shutdowns the record receiver and drains any remaining records.
@@ -495,7 +484,7 @@ fn record_and_complete_block(
     record_receiver: &mut RecordReceiver,
     block_timer: Instant,
     block_timeout: Duration,
-    highest_finalized: &RwLock<FinalizationCertPair>,
+    highest_finalized: &RwLock<FinalizationCerts>,
 ) -> Result<(), PohRecorderError> {
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
