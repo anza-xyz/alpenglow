@@ -1,6 +1,7 @@
 use {
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
+    solana_hash::Hash,
     solana_runtime::bank::Bank,
     solana_votor_messages::consensus_message::Block,
     std::{sync::Arc, time::Instant},
@@ -89,6 +90,32 @@ impl VotorEvent {
             VotorEvent::ProduceWindow(_) => false,
             VotorEvent::Standstill(_) => false,
             VotorEvent::SetIdentity => false,
+        }
+    }
+}
+
+pub type RepairEventSender = Sender<RepairEvent>;
+pub type RepairEventReceiver = Receiver<RepairEvent>;
+
+/// Events sent by votor to the block id repair service for informed repair
+#[derive(Debug, Copy, Clone)]
+pub enum RepairEvent {
+    /// We require that this block be fetched. This can happen for the following reasons:
+    /// - The block has received a NotarizeFallback certificate or stronger
+    /// - The specific SafetoNotar case requires parent information, we must repair at least the block header
+    /// - TODO(ashwin) (?): We received a block through turbine which specifies a parent that we do not currently have
+    FetchBlock { slot: Slot, block_id: Hash },
+
+    /// This block has become canonical (Notarized or Finalized). No other block in this slot is of interest.
+    /// Thus we should fetch this block and also switch out the replayed bank in this slot to this block if not already
+    Canonical { slot: Slot, block_id: Hash },
+}
+
+impl RepairEvent {
+    pub fn slot(&self) -> Slot {
+        match self {
+            RepairEvent::FetchBlock { slot, .. } => *slot,
+            RepairEvent::Canonical { slot, .. } => *slot,
         }
     }
 }

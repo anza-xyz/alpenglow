@@ -2390,6 +2390,9 @@ pub struct Sockets {
     // and receiving AncestorHashesResponse from the cluster.
     pub ancestor_hashes_requests: UdpSocket,
     pub ancestor_hashes_requests_quic: UdpSocket,
+    // Socket sending out BlockIdRepairType requests,
+    // and receiving BlockIdRepairResponse from the cluster.
+    pub block_id_repair: UdpSocket,
     pub tpu_quic: Vec<UdpSocket>,
     pub tpu_forwards_quic: Vec<UdpSocket>,
     pub tpu_vote_quic: Vec<UdpSocket>,

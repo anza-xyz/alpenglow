@@ -571,8 +571,7 @@ impl ShredIndexV2 {
         }
     }
 
-    #[allow(unused)]
-    pub(crate) fn contains(&self, idx: u64) -> bool {
+    pub fn contains(&self, idx: u64) -> bool {
         self.index.contains(idx as usize)
     }
 
