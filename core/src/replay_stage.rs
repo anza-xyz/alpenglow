@@ -3652,15 +3652,16 @@ impl ReplayStage {
                         };
 
                         info!(
-                            "AbandonedBank at slot {bank_slot}: switching parent from {} to {new_parent_slot}",
+                            "AbandonedBank at slot {bank_slot}: switching parent from {} to \
+                             {new_parent_slot}",
                             bank.parent_slot()
                         );
 
                         // The new parent must be earlier than the current slot.
                         assert!(
                             new_parent_slot < bank_slot,
-                            "UpdateParent new_parent_slot ({new_parent_slot}) must be < \
-                             bank_slot ({bank_slot})"
+                            "UpdateParent new_parent_slot ({new_parent_slot}) must be < bank_slot \
+                             ({bank_slot})"
                         );
 
                         // Clear the bank from bank_forks. It will be recreated with the
@@ -3677,8 +3678,8 @@ impl ReplayStage {
                                 let mut replay_progress =
                                     slot_progress.replay_progress.write().unwrap();
                                 info!(
-                                    "AbandonedBank slot {bank_slot}: updating last_entry to {new_parent_blockhash}, \
-                                     num_shreds = {}",
+                                    "AbandonedBank slot {bank_slot}: updating last_entry to \
+                                     {new_parent_blockhash}, num_shreds = {}",
                                     replay_progress.num_shreds
                                 );
                                 replay_progress.last_entry = new_parent_blockhash;
