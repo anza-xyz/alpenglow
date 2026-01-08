@@ -37,6 +37,7 @@ use {
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::LeaderWindowInfo,
     },
+    solana_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -97,10 +98,8 @@ pub struct BlockCreationLoopConfig {
     pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
 
     /// Channel to send the request to build reward certs.
-    #[allow(dead_code)]
     pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     /// Channel to receive the built reward certs.
-    #[allow(dead_code)]
     pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 }
 
@@ -119,6 +118,8 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -173,8 +174,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         highest_parent_ready,
         optimistic_parent_receiver,
-        build_reward_certs_sender: _,
-        reward_certs_receiver: _,
+        build_reward_certs_sender,
+        reward_certs_receiver,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -222,6 +223,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
+        build_reward_certs_sender,
+        reward_certs_receiver,
     };
 
     // Setup poh
@@ -342,8 +345,11 @@ fn produce_window(
         if let Err(e) = record_and_complete_block(
             ctx.poh_recorder.as_ref(),
             &mut ctx.record_receiver,
+            &ctx.build_reward_certs_sender,
+            &ctx.reward_certs_receiver,
             skip_timer,
             timeout,
+            slot,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -393,9 +399,13 @@ fn skew_block_producer_time_nanos(
         .min(max_working_bank_time)
 }
 
-/// Produces a block footer with the current timestamp and version information.
+/// Produces a block footer with the current timestamp; version; and reward certs.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
-fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    skip_reward_cert: Option<SkipRewardCertificate>,
+    notar_reward_cert: Option<NotarRewardCertificate>,
+) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Misconfigured system clock; couldn't measure block producer time.")
@@ -424,9 +434,8 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
         // TODO(ksn, wen): fill this field
         final_cert: None,
-        // TODO(akhi): include reward certs
-        skip_reward_cert: None,
-        notar_reward_cert: None,
+        skip_reward_cert,
+        notar_reward_cert,
     }
 }
 
@@ -461,9 +470,15 @@ fn shutdown_and_drain_record_receiver(
 fn record_and_complete_block(
     poh_recorder: &RwLock<PohRecorder>,
     record_receiver: &mut RecordReceiver,
+    build_reward_certs_sender: &Sender<BuildRewardCertsRequest>,
+    reward_certs_receiver: &Receiver<BuildRewardCertsResponse>,
     block_timer: Instant,
     block_timeout: Duration,
+    slot: Slot,
 ) -> Result<(), PohRecorderError> {
+    build_reward_certs_sender
+        .send(BuildRewardCertsRequest { slot })
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     loop {
         let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
         if remaining_slot_time.is_zero() {
@@ -502,9 +517,11 @@ fn record_and_complete_block(
     bank.set_tick_height(max_tick_height - 1);
     // Write the single tick for this slot
 
-    // Produce the footer with the current timestamp
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler());
+    let BuildRewardCertsResponse { skip, notar } = reward_certs_receiver
+        .recv()
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
+    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
