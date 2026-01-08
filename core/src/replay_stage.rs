@@ -4788,8 +4788,8 @@ impl ReplayStage {
 
         frozen_banks.get(&new_parent_slot).map(|new_parent| {
             info!(
-                "generate_new_bank_forks: slot {child_slot} using pending \
-                 new parent {new_parent_slot} instead of {}",
+                "generate_new_bank_forks: slot {child_slot} using pending new parent \
+                 {new_parent_slot} instead of {}",
                 default_parent.slot()
             );
             (new_parent.clone(), true)
