@@ -32,6 +32,7 @@ use {
         voting_service::{VotingService as BLSVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
+    agave_votor_messages::reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     bytes::Bytes,
     crossbeam_channel::{Receiver, Sender, bounded, unbounded},
     solana_client::connection_cache::ConnectionCache,
@@ -156,6 +157,8 @@ pub struct AlpenglowInitializationState {
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
+    pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
+    pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
 
     // Main communication channel
     pub votor_event_sender: VotorEventSender,
@@ -250,6 +253,8 @@ impl Tvu {
             bls_connection_cache,
             voting_service_test_override,
             optimistic_parent_sender,
+            build_reward_certs_receiver,
+            reward_certs_sender,
         } = votor_init;
 
         // streamer and sigverify for A2A BLS messages
@@ -435,11 +440,6 @@ impl Tvu {
                 rpc_subscriptions.clone(),
             );
 
-        // TODO: when the block component processor is upstreamed,
-        // it will use the unused channels below.
-        let (reward_certs_sender, _reward_certs_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
-        let (_build_reward_certs_receiver, build_reward_certs_receiver) =
-            bounded(MAX_ALPENGLOW_PACKET_NUM);
         let votor_config = VotorConfig {
             exit: exit.clone(),
             vote_account: *vote_account,
@@ -756,6 +756,8 @@ pub mod tests {
         let (leader_window_info_sender, _leader_window_info_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::new((0, (0, Hash::default()))));
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
+        let (_build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
+        let (reward_certs_sender, _reward_certs_receiver) = bounded(1);
         let (votor_event_sender, votor_event_receiver): (VotorEventSender, VotorEventReceiver) =
             unbounded();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
@@ -837,6 +839,8 @@ pub mod tests {
                 replay_highest_frozen,
                 highest_parent_ready,
                 optimistic_parent_sender,
+                build_reward_certs_receiver,
+                reward_certs_sender,
                 votor_event_sender,
                 votor_event_receiver,
                 cancel,

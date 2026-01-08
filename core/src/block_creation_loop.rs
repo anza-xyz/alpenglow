@@ -9,11 +9,19 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    agave_votor::{common::block_timeout, event::LeaderWindowInfo},
-    crossbeam_channel::Receiver,
+    agave_votor::{
+        common::block_timeout,
+        event::LeaderWindowInfo,
+    },
+    agave_votor_messages::reward_certificate::{
+        BuildRewardCertsRequest, BuildRewardCertsResponse,
+    },
+    crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
-        BlockFooterV1, GenesisCertificate, VersionedBlockMarker,
+        BlockFooterV1, GenesisCertificate,
+        NotarRewardCertificate as FooterNotarRewardCertificate,
+        SkipRewardCertificate as FooterSkipRewardCertificate, VersionedBlockMarker,
     },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -42,6 +50,7 @@ use {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     thiserror::Error,
+    wincode::serialize,
 };
 
 mod stats;
@@ -92,6 +101,11 @@ pub struct BlockCreationLoopConfig {
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
     pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
+
+    /// Channel to send requests to build reward certificates.
+    pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    /// Channel to receive built reward certificates.
+    pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 }
 
 struct LeaderContext {
@@ -109,6 +123,8 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
     // Metrics
     metrics: LoopMetrics,
@@ -142,14 +158,18 @@ enum StartLeaderError {
     ),
 }
 
-fn produce_block_footer_with_timestamp(block_producer_time_nanos: u64) -> BlockFooterV1 {
+fn produce_block_footer_with_timestamp(
+    block_producer_time_nanos: u64,
+    skip_reward_cert: Option<FooterSkipRewardCertificate>,
+    notar_reward_cert: Option<FooterNotarRewardCertificate>,
+) -> BlockFooterV1 {
     BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
         final_cert: None,
-        skip_reward_cert: None,
-        notar_reward_cert: None,
+        skip_reward_cert,
+        notar_reward_cert,
     }
 }
 
@@ -174,6 +194,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         record_receiver_receiver,
         optimistic_parent_receiver,
+        build_reward_certs_sender,
+        reward_certs_receiver,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -216,6 +238,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         slot_status_notifier,
         banking_tracer,
         replay_highest_frozen,
+        build_reward_certs_sender,
+        reward_certs_receiver,
         metrics: LoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -341,8 +365,11 @@ fn produce_window(
         if let Err(e) = record_and_complete_block(
             ctx.poh_recorder.as_ref(),
             &mut ctx.record_receiver,
+            &ctx.build_reward_certs_sender,
+            &ctx.reward_certs_receiver,
             skip_timer,
             timeout,
+            slot,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -393,9 +420,13 @@ fn skew_block_producer_time_nanos(
         .min(max_working_bank_time)
 }
 
-/// Produces a block footer with the current timestamp and version information.
+/// Produces a block footer with the current timestamp, version, and reward certs.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
-fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
+fn produce_block_footer(
+    bank: Arc<Bank>,
+    skip_reward_cert: Option<FooterSkipRewardCertificate>,
+    notar_reward_cert: Option<FooterNotarRewardCertificate>,
+) -> BlockFooterV1 {
     let mut block_producer_time_nanos = i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -422,7 +453,11 @@ fn produce_block_footer(bank: Arc<Bank>) -> BlockFooterV1 {
     }
 
     let block_producer_time_nanos = u64::try_from(block_producer_time_nanos).unwrap_or_default();
-    produce_block_footer_with_timestamp(block_producer_time_nanos)
+    produce_block_footer_with_timestamp(
+        block_producer_time_nanos,
+        skip_reward_cert,
+        notar_reward_cert,
+    )
 }
 /// Shutdowns the record receiver and drains any remaining records.
 fn shutdown_and_drain_record_receiver(
@@ -454,9 +489,16 @@ fn shutdown_and_drain_record_receiver(
 fn record_and_complete_block(
     poh_recorder: &RwLock<PohRecorder>,
     record_receiver: &mut RecordReceiver,
+    build_reward_certs_sender: &Sender<BuildRewardCertsRequest>,
+    reward_certs_receiver: &Receiver<BuildRewardCertsResponse>,
     block_timer: Instant,
     block_timeout: Duration,
+    slot: Slot,
 ) -> Result<(), PohRecorderError> {
+    build_reward_certs_sender
+        .send(BuildRewardCertsRequest { bank_slot: slot })
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
+
     // loop until we hit the block timeout
     while !block_timeout
         .saturating_sub(block_timer.elapsed())
@@ -481,7 +523,35 @@ fn record_and_complete_block(
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
-    let footer = produce_block_footer(bank.clone());
+    let (skip_reward_cert, notar_reward_cert) = match reward_certs_receiver
+        .recv()
+        .map_err(|_| PohRecorderError::ChannelDisconnected)?
+    {
+        Ok(resp) => {
+            let skip_reward_cert = resp.skip.and_then(|cert| {
+                serialize(&cert)
+                    .inspect_err(|err| {
+                        warn!("failed to serialize skip reward cert for slot {slot}: {err}");
+                    })
+                    .ok()
+                    .map(|data| FooterSkipRewardCertificate { data })
+            });
+            let notar_reward_cert = resp.notar.and_then(|cert| {
+                serialize(&cert)
+                    .inspect_err(|err| {
+                        warn!("failed to serialize notar reward cert for slot {slot}: {err}");
+                    })
+                    .ok()
+                    .map(|data| FooterNotarRewardCertificate { data })
+            });
+            (skip_reward_cert, notar_reward_cert)
+        }
+        Err(err) => {
+            warn!("failed to build reward certs for slot {slot}: {err}");
+            (None, None)
+        }
+    };
+    let footer = produce_block_footer(bank.clone(), skip_reward_cert, notar_reward_cert);
     w_poh_recorder.send_marker(VersionedBlockMarker::new_block_footer(footer.clone()))?;
 
     // Alpentick and clear bank
