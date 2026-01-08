@@ -61,6 +61,7 @@ use {
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
+        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
@@ -217,6 +218,8 @@ impl Tvu {
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         migration_status: Arc<MigrationStatus>,
+        reward_certs_sender: Sender<BuildRewardCertsResponse>,
+        build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -269,14 +272,20 @@ impl Tvu {
             alpenglow_quic_server_config,
         )
         .unwrap();
+
+        // At the moment there are roughly 1K validators and the sigverifier receives votes in batches and sends them to the consensus reward container in batches so hopefully using a channel of 2K slots would never block.
+        let (reward_votes_sender, reward_votes_receiver) = bounded(2000);
         let alpenglow_sigverify_service = {
             let sharable_banks = bank_forks.read().unwrap().sharable_banks();
             let verifier = BLSSigVerifier::new(
                 sharable_banks,
                 verified_vote_sender.clone(),
+                reward_votes_sender,
                 consensus_message_sender.clone(),
                 consensus_metrics_sender.clone(),
                 alpenglow_last_voted.clone(),
+                cluster_info.clone(),
+                leader_schedule_cache.clone(),
             );
             BLSSigverifyService::new(bls_packet_receiver, verifier)
         };
@@ -451,6 +460,9 @@ impl Tvu {
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
             migration_status,
+            reward_votes_receiver,
+            build_reward_certs_receiver,
+            reward_certs_sender,
         };
 
         let voting_service = VotingService::new(
@@ -683,6 +695,8 @@ pub mod tests {
         let highest_parent_ready = Arc::new(RwLock::default());
         let highest_finalized = Arc::new(RwLock::default());
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
+        let (reward_certs_sender, _reward_certs_receiver) = bounded(1);
+        let (_build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
 
         let tvu = Tvu::new(
             &vote_keypair.pubkey(),
@@ -763,6 +777,8 @@ pub mod tests {
             Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),
             Arc::new(MigrationStatus::default()),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .expect("assume success");
         if enable_wen_restart {

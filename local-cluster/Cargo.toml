@@ -82,6 +82,7 @@ solana-votor-messages = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+tokio-util = { workspace = true }
 trees = { workspace = true }
 
 [dev-dependencies]

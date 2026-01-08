@@ -9,7 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::Receiver,
+    crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
         BlockFooterV1, FinalCertificate, GenesisCertificate, VersionedBlockMarker,
@@ -34,7 +34,11 @@ use {
         block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
-    solana_votor::{common::block_timeout, event::LeaderWindowInfo},
+    solana_votor::{
+        common::block_timeout,
+        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+        event::LeaderWindowInfo,
+    },
     solana_votor_messages::consensus_message::FinalizationCertPair,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -95,6 +99,13 @@ pub struct BlockCreationLoopConfig {
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
     pub optimistic_parent_receiver: Receiver<LeaderWindowInfo>,
+
+    /// Channel to send the request to build reward certs.
+    #[allow(dead_code)]
+    pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
+    /// Channel to receive the built reward certs.
+    #[allow(dead_code)]
+    pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 }
 
 struct LeaderContext {
@@ -168,6 +179,8 @@ fn start_loop(config: BlockCreationLoopConfig) {
         highest_parent_ready,
         highest_finalized,
         optimistic_parent_receiver,
+        build_reward_certs_sender: _,
+        reward_certs_receiver: _,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator

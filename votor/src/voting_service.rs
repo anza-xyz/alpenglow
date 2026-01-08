@@ -285,7 +285,7 @@ mod tests {
         },
         solana_signer::Signer,
         solana_streamer::{
-            quic::{spawn_server, QuicServerParams, SpawnServerResult},
+            quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
             socket::SocketAddrSpace,
             streamer::StakedNodes,
         },
@@ -293,14 +293,9 @@ mod tests {
             consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
             vote::Vote,
         },
-        std::{
-            net::SocketAddr,
-            sync::{
-                atomic::{AtomicBool, Ordering},
-                Arc,
-            },
-        },
+        std::{net::SocketAddr, sync::Arc},
         test_case::test_case,
+        tokio_util::sync::CancellationToken,
     };
 
     fn create_voting_service(
@@ -388,7 +383,7 @@ mod tests {
 
         // Start a quick streamer to handle quick control packets
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let exit = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let stakes = validator_keypairs
             .iter()
             .map(|x| (x.node_keypair.pubkey(), 100))
@@ -400,15 +395,15 @@ mod tests {
         let SpawnServerResult {
             thread: quic_server_thread,
             ..
-        } = spawn_server(
+        } = spawn_server_with_cancel(
             "AlpenglowLocalClusterTest",
             "quic_streamer_test",
             [socket],
             &Keypair::new(),
             sender,
-            exit.clone(),
             staked_nodes,
             QuicServerParams::default_for_tests(),
+            cancel.clone(),
         )
         .unwrap();
         let packets = receiver.recv().unwrap();
@@ -423,7 +418,7 @@ mod tests {
                 )
             });
         assert_eq!(received_message, expected_message);
-        exit.store(true, Ordering::Relaxed);
+        cancel.cancel();
         quic_server_thread.join().unwrap();
     }
 }

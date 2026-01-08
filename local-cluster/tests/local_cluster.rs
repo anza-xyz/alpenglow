@@ -6645,7 +6645,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     let mut post_experiment_roots = HashSet::new();
 
     // Start quic streamer to listen for votes
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         &validator_keys,
         &node_stakes,
@@ -6699,7 +6699,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                             post_experiment_roots.insert(vote.slot());
 
                             if post_experiment_roots.len() >= 10 {
-                                exit.store(true, Ordering::Relaxed);
+                                cancel.cancel();
                                 break;
                             }
                         }
@@ -7034,7 +7034,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     }
 
     // Start quic streamer to listen for votes
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         &validator_keys,
         &node_stakes,
@@ -7075,7 +7075,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     // Check for finalization votes to determine test completion
                     if vote_message.vote.is_finalize() && state.handle_finalize_vote(&vote_message)
                     {
-                        exit.store(true, Ordering::Relaxed);
+                        cancel.cancel();
                         break;
                     }
                 }
@@ -7276,7 +7276,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     }
 
     // Start quic streamer to listen for votes
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         &validator_keys,
         &node_stakes,
@@ -7297,7 +7297,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                 };
 
                 for packet in packet_batch.iter() {
-                    if exit.load(Ordering::Relaxed) {
+                    if cancel.is_cancelled() {
                         return;
                     }
 
@@ -7353,7 +7353,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                                 experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
-                                    exit.store(true, Ordering::Relaxed);
+                                    cancel.cancel();
                                     break;
                                 }
                             }
@@ -7622,7 +7622,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     }
 
     // Start quic streamer to listen for votes
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         &validator_keys,
         &node_stakes,
@@ -7694,7 +7694,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                                 experiment_state.record_certificate(certificate.cert_type.slot());
 
                                 if experiment_state.sufficient_roots_created() {
-                                    exit.store(true, Ordering::Relaxed);
+                                    cancel.cancel();
                                     break;
                                 }
                             }
@@ -7923,7 +7923,7 @@ fn test_alpenglow_add_missing_parent_ready() {
     }
 
     // Start a quick streamer to handle quick control packets
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         &validator_keys,
         &node_stakes,
@@ -7992,7 +7992,7 @@ fn test_alpenglow_add_missing_parent_ready() {
                         }
                     }
                     if experiment_state.sufficient_roots_created() {
-                        exit.store(true, Ordering::Relaxed);
+                        cancel.cancel();
                         break;
                     }
                 }

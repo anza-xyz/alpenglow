@@ -759,8 +759,8 @@ impl Validator {
         timer.stop();
         info!("Cleaning orphaned account snapshot directories done. {timer}");
 
-        // token used to cancel tpu-client-next.
-        let cancel_tpu_client_next = CancellationToken::new();
+        // token used to cancel tpu-client-next and streamer.
+        let cancel = CancellationToken::new();
         {
             let exit = exit.clone();
             config
@@ -768,12 +768,12 @@ impl Validator {
                 .write()
                 .unwrap()
                 .register_exit(Box::new(move || exit.store(true, Ordering::Relaxed)));
-            let cancel_tpu_client_next = cancel_tpu_client_next.clone();
+            let cancel = cancel.clone();
             config
                 .validator_exit
                 .write()
                 .unwrap()
-                .register_exit(Box::new(move || cancel_tpu_client_next.cancel()));
+                .register_exit(Box::new(move || cancel.cancel()));
         }
 
         let (
@@ -1223,7 +1223,7 @@ impl Validator {
                     Arc::as_ref(&identity_keypair),
                     node.sockets.rpc_sts_client,
                     runtime_handle.clone(),
-                    cancel_tpu_client_next.clone(),
+                    cancel.clone(),
                 )
             } else {
                 let Some(connection_cache) = &connection_cache else {
@@ -1438,6 +1438,10 @@ impl Validator {
         );
 
         let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsRequest`] to 1 message.
+        let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsResponse`] to 1 message.
+        let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
@@ -1455,6 +1459,8 @@ impl Validator {
             highest_parent_ready: highest_parent_ready.clone(),
             highest_finalized: highest_finalized.clone(),
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
+            build_reward_certs_sender,
+            reward_certs_receiver,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1713,6 +1719,8 @@ impl Validator {
             key_notifiers.clone(),
             alpenglow_last_voted.clone(),
             migration_status.clone(),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1747,7 +1755,7 @@ impl Validator {
                 Arc::as_ref(&identity_keypair),
                 tpu_transactions_forwards_client_sockets.take().unwrap(),
                 runtime_handle.clone(),
-                cancel_tpu_client_next,
+                cancel.clone(),
                 node_multihoming.clone(),
             ))
         };
@@ -1805,6 +1813,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
+            cancel,
             migration_status,
         );
 

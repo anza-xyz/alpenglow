@@ -189,10 +189,10 @@ impl ConsensusPoolService {
         // Unlike the other votor threads, consensus pool starts even before alpenglow is enabled
         // As it is required to track the Genesis Vote.
         let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
-            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank, ctx.highest_finalized.clone())
+            ConsensusPool::new_from_root_bank(ctx.cluster_info.clone(), &root_bank, ctx.highest_finalized.clone())
         } else {
             ConsensusPool::new_from_root_bank_pre_migration(
-                my_pubkey,
+                ctx.cluster_info.clone(),
                 &root_bank,
                 ctx.migration_status.clone(),
                 ctx.highest_finalized.clone(),
@@ -215,8 +215,7 @@ impl ConsensusPoolService {
             let new_pubkey = ctx.cluster_info.id();
             if my_pubkey != new_pubkey {
                 my_pubkey = new_pubkey;
-                consensus_pool.update_pubkey(my_pubkey);
-                warn!("Certificate pool pubkey updated to {my_pubkey}");
+                info!("Consensus pool pubkey updated to {my_pubkey}");
             }
 
             // Kick off parent ready event, this either happens:
@@ -420,10 +419,7 @@ impl ConsensusPoolService {
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
                 ctx.exit.store(true, Ordering::Relaxed);
-                panic!(
-                    "Must have a block production parent: {:#?}",
-                    consensus_pool.parent_ready_tracker
-                );
+                panic!("Must have a block production parent");
             }
             BlockProductionParent::Parent(parent_block) => {
                 events.push(VotorEvent::ProduceWindow(LeaderWindowInfo {
