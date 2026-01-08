@@ -544,7 +544,6 @@ fn handle_parent_ready(
     let (new_parent_slot, _) = leader_window_info.parent_block;
 
     ctx.bank_forks.write().unwrap().clear_bank(slot);
-    ctx.poh_recorder.write().unwrap().clear_working_bank();
 
     // Wait for new parent to be frozen
     start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
