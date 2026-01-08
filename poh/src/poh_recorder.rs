@@ -1007,12 +1007,6 @@ impl PohRecorder {
         self.clear_bank();
     }
 
-    pub fn clear_working_bank(&mut self) {
-        if self.working_bank.take().is_some() {
-            self.shared_working_bank.clear();
-        }
-    }
-
     pub fn tick_alpenglow(&mut self, slot_max_tick_height: u64, footer: BlockFooterV1) {
         let (poh_entry, tick_lock_contention_us) = measure_us!({
             let mut poh_l = self.poh.lock().unwrap();
