@@ -973,7 +973,6 @@ pub fn execute(
         max_unstaked_connections: 0,
         max_streams_per_ms,
         max_connections_per_ipaddr_per_min: tpu_max_connections_per_ipaddr_per_minute,
-        coalesce: tpu_coalesce,
         num_threads: tpu_alpenglow_receive_threads,
         ..Default::default()
     };
