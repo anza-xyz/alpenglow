@@ -11,10 +11,18 @@ use {
 /// Define the finalization certs type
 #[derive(Default, PartialEq, Debug, Clone)]
 pub enum FinalizationCerts {
-    /// Finalize certificate and Notarization certificate
-    Finalize(Arc<Certificate>, Arc<Certificate>),
+    /// Finalize certificate and Notarize certificate
+    Finalize {
+        /// Finalize certificate
+        final_cert: Arc<Certificate>,
+        /// Notarize certificate
+        notar_cert: Arc<Certificate>,
+    },
     /// Fast finalize certificate
-    FinalizeFast(Arc<Certificate>),
+    FinalizeFast {
+        /// Fast finalize certificate
+        final_fast_cert: Arc<Certificate>,
+    },
     /// Not initialized
     #[default]
     Uninitialized,

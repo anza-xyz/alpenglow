@@ -296,8 +296,13 @@ impl ConsensusPool {
     fn is_highest_finalized_too_old(&self, new_slot: Slot, replace_equal_slot: bool) -> bool {
         let highest_finalized_r = self.highest_finalized.read().unwrap();
         let current_slot = match &*highest_finalized_r {
-            FinalizationCerts::Finalize(prev_final_cert, _)
-            | FinalizationCerts::FinalizeFast(prev_final_cert) => prev_final_cert.cert_type.slot(),
+            FinalizationCerts::Finalize {
+                final_cert: prev_final_cert,
+                notar_cert: _,
+            }
+            | FinalizationCerts::FinalizeFast {
+                final_fast_cert: prev_final_cert,
+            } => prev_final_cert.cert_type.slot(),
             FinalizationCerts::Uninitialized => return true,
         };
         if replace_equal_slot {
@@ -335,26 +340,28 @@ impl ConsensusPool {
                     events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self.is_highest_finalized_too_old(slot, false) {
                         let mut highest_finalized = self.highest_finalized.write().unwrap();
-                        if let Some(finalization_cert) = self
+                        if let Some(final_cert) = self
                             .completed_certificates
                             .get(&CertificateType::Finalize(slot))
                         {
-                            *highest_finalized = FinalizationCerts::Finalize(
-                                finalization_cert.clone(),
-                                cert.clone(),
-                            );
+                            *highest_finalized = FinalizationCerts::Finalize {
+                                final_cert: final_cert.clone(),
+                                notar_cert: cert.clone(),
+                            };
                         }
                     }
                 }
             }
             CertificateType::Finalize(slot) => {
-                if let Some(notarization_cert) = self.get_notarization_cert(slot) {
-                    let block = notarization_cert.cert_type.to_block().unwrap();
+                if let Some(notar_cert) = self.get_notarization_cert(slot) {
+                    let block = notar_cert.cert_type.to_block().unwrap();
                     events.push(VotorEvent::Finalized(block, false));
                     if self.is_highest_finalized_too_old(slot, false) {
                         let mut highest_finalized = self.highest_finalized.write().unwrap();
-                        *highest_finalized =
-                            FinalizationCerts::Finalize(notarization_cert.clone(), cert.clone());
+                        *highest_finalized = FinalizationCerts::Finalize {
+                            final_cert: cert.clone(),
+                            notar_cert: notar_cert.clone(),
+                        };
                     }
                 }
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
@@ -370,7 +377,9 @@ impl ConsensusPool {
                 }
                 if self.is_highest_finalized_too_old(slot, true) {
                     let mut highest_finalized = self.highest_finalized.write().unwrap();
-                    *highest_finalized = FinalizationCerts::FinalizeFast(cert.clone());
+                    *highest_finalized = FinalizationCerts::FinalizeFast {
+                        final_fast_cert: cert.clone(),
+                    };
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -656,12 +665,13 @@ impl ConsensusPool {
         let (highest_finalized_with_notarize_slot, has_fast_finalize) = {
             let highest_finalized = self.highest_finalized.read().unwrap();
             match &*highest_finalized {
-                FinalizationCerts::Finalize(finalization_cert, _) => {
-                    (finalization_cert.cert_type.slot(), false)
-                }
-                FinalizationCerts::FinalizeFast(finalization_cert) => {
-                    (finalization_cert.cert_type.slot(), true)
-                }
+                FinalizationCerts::Finalize {
+                    final_cert,
+                    notar_cert: _,
+                } => (final_cert.cert_type.slot(), false),
+                FinalizationCerts::FinalizeFast {
+                    final_fast_cert: final_cert,
+                } => (final_cert.cert_type.slot(), true),
                 FinalizationCerts::Uninitialized => (0, false),
             }
         };
@@ -2001,14 +2011,17 @@ mod tests {
             FinalizationCerts::Uninitialized => {
                 assert!(expected_uninitialized);
             }
-            FinalizationCerts::Finalize(final_cert, notar_cert) => {
+            FinalizationCerts::Finalize {
+                final_cert,
+                notar_cert,
+            } => {
                 assert_eq!(final_cert.cert_type.slot(), expected_slot);
                 assert_eq!(notar_cert.cert_type.slot(), expected_slot);
                 assert!(!expected_fast_finalize);
                 assert!(!expected_uninitialized);
             }
-            FinalizationCerts::FinalizeFast(final_cert) => {
-                assert_eq!(final_cert.cert_type.slot(), expected_slot);
+            FinalizationCerts::FinalizeFast { final_fast_cert } => {
+                assert_eq!(final_fast_cert.cert_type.slot(), expected_slot);
                 assert!(expected_fast_finalize);
                 assert!(!expected_uninitialized);
             }

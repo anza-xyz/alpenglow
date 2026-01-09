@@ -335,7 +335,10 @@ pub struct FinalCertificate {
 impl FinalCertificate {
     pub fn new_from_certificate(final_certs: FinalizationCerts) -> Result<Option<Self>, String> {
         let (slot, block_id, final_cert, notar_cert) = match final_certs {
-            FinalizationCerts::Finalize(final_cert, notar_cert) => {
+            FinalizationCerts::Finalize {
+                final_cert,
+                notar_cert,
+            } => {
                 if let CertificateType::Notarize(slot, notar_block_id) = notar_cert.cert_type {
                     if let CertificateType::Finalize(finalize_slot) = final_cert.cert_type {
                         if slot != finalize_slot {
@@ -345,18 +348,24 @@ impl FinalCertificate {
                             ));
                         }
                     } else {
-                        return Err("expected final certificate".into());
+                        panic!("expected final certificate got {:?}", final_cert.cert_type);
                     }
                     (slot, notar_block_id, final_cert, Some(notar_cert))
                 } else {
-                    return Err("expected notarization certificate".into());
+                    panic!(
+                        "expected notarization certificate got {:?}",
+                        notar_cert.cert_type
+                    );
                 }
             }
-            FinalizationCerts::FinalizeFast(final_cert) => {
-                if let CertificateType::FinalizeFast(slot, block_id) = final_cert.cert_type {
-                    (slot, block_id, final_cert, None)
+            FinalizationCerts::FinalizeFast { final_fast_cert } => {
+                if let CertificateType::FinalizeFast(slot, block_id) = final_fast_cert.cert_type {
+                    (slot, block_id, final_fast_cert, None)
                 } else {
-                    return Err("expected final fast certificate".into());
+                    panic!(
+                        "expected final fast certificate got {:?}",
+                        final_fast_cert.cert_type
+                    );
                 }
             }
             FinalizationCerts::Uninitialized => return Ok(None),
@@ -753,11 +762,13 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
 
-        let finalization_cert = FinalCertificate::new_from_certificate(
-            FinalizationCerts::Finalize(Arc::new(final_cert.clone()), Arc::new(notar_cert.clone())),
-        )
-        .expect("Failed to create FinalCertificate")
-        .unwrap();
+        let finalization_cert =
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert.clone()),
+                notar_cert: Arc::new(notar_cert.clone()),
+            })
+            .expect("Failed to create FinalCertificate")
+            .unwrap();
 
         assert_eq!(finalization_cert.slot, slot);
         assert_eq!(finalization_cert.block_id, block_id);
@@ -780,25 +791,25 @@ mod tests {
         );
 
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::FinalizeFast(Arc::new(
-                final_cert.clone()
-            )))
+            FinalCertificate::new_from_certificate(FinalizationCerts::FinalizeFast {
+                final_fast_cert: Arc::new(final_cert.clone())
+            })
             .err(),
             Some("expected final fast certificate".to_string())
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(notar_cert.clone()),
-                Arc::new(notar_cert.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert.clone()),
+                notar_cert: Arc::new(notar_cert.clone())
+            })
             .err(),
             Some("expected final certificate".to_string())
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(final_cert.clone()),
-                Arc::new(final_cert.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert.clone()),
+                notar_cert: Arc::new(final_cert.clone())
+            })
             .err(),
             Some("expected notarization certificate".to_string())
         );
@@ -808,10 +819,10 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(final_cert.clone()),
-                Arc::new(notar_cert_bad_slot.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert.clone()),
+                notar_cert: Arc::new(notar_cert_bad_slot.clone())
+            })
             .err(),
             Some(format!(
                 "notarization slot {} does not match finalization slot {}",
@@ -825,10 +836,10 @@ mod tests {
             bitmap: vec![1, 3, 4, 5],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(final_cert.clone()),
-                Arc::new(notar_cert_bad_sig.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert.clone()),
+                notar_cert: Arc::new(notar_cert_bad_sig.clone())
+            })
             .err(),
             Some(
                 "failed to compress notar signature: Point representation conversion failed"
@@ -841,10 +852,10 @@ mod tests {
             bitmap: vec![1, 2, 3, 4],
         };
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(final_cert_bad_sig.clone()),
-                Arc::new(notar_cert.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_cert_bad_sig.clone()),
+                notar_cert: Arc::new(notar_cert.clone())
+            })
             .err(),
             Some(
                 "failed to compress final signature: Point representation conversion failed"
@@ -856,11 +867,12 @@ mod tests {
             signature: final_signature,
             bitmap: vec![1, 2, 3, 4],
         };
-        let finalization_cert = FinalCertificate::new_from_certificate(
-            FinalizationCerts::FinalizeFast(Arc::new(final_fast_cert.clone())),
-        )
-        .expect("Failed to create FinalCertificate")
-        .unwrap();
+        let finalization_cert =
+            FinalCertificate::new_from_certificate(FinalizationCerts::FinalizeFast {
+                final_fast_cert: Arc::new(final_fast_cert.clone()),
+            })
+            .expect("Failed to create FinalCertificate")
+            .unwrap();
         assert_eq!(finalization_cert.slot, slot);
         assert_eq!(finalization_cert.block_id, block_id);
         assert_eq!(finalization_cert.final_aggregate.bitmap, vec![1, 2, 3, 4]);
@@ -870,10 +882,10 @@ mod tests {
             final_signature.try_into().unwrap()
         );
         assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize(
-                Arc::new(final_fast_cert.clone()),
-                Arc::new(notar_cert.clone())
-            ))
+            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
+                final_cert: Arc::new(final_fast_cert.clone()),
+                notar_cert: Arc::new(notar_cert.clone())
+            })
             .err(),
             Some("expected final certificate".to_string())
         );
