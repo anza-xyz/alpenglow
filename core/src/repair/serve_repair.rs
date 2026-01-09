@@ -272,7 +272,7 @@ impl RequestResponse for BlockIdRepairType {
 
                 let node = hashv(&[&parent_slot.to_le_bytes(), parent_block_id.as_ref()]);
                 merkle_tree::verify_merkle_proof(node, *fec_set_count, parent_proof, *block_id)
-                    .unwrap_or(false)
+                    .is_ok()
             }
 
             (
@@ -291,7 +291,7 @@ impl RequestResponse for BlockIdRepairType {
                 fec_set_proof,
                 *block_id,
             )
-            .unwrap_or(false),
+            .is_ok(),
 
             (Self::ParentAndFecSetCount { .. }, _) | (Self::FecSetRoot { .. }, _) => false,
         }

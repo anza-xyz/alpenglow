@@ -126,14 +126,16 @@ where
 
 /// Given a flattened merkle `proof` for `node` at `index`,
 /// verify the proof against merkle root `root`
-pub fn verify_merkle_proof(node: Hash, index: usize, proof: &[u8], expected_root: Hash) -> Result<bool, Error> {
+pub fn verify_merkle_proof(node: Hash, index: usize, proof: &[u8], expected_root: Hash) -> Result<(), Error> {
     let proof = proof
         .chunks(SIZE_OF_MERKLE_PROOF_ENTRY)
         .map(<&MerkleProofEntry>::try_from)
         .map(|entry| entry.map_err(|_| Error::InvalidMerkleProof))
         .collect::<Result<Vec<_>, Error>>()?;
     let merkle_root = get_merkle_root(index, node, proof)?;
-    Ok(merkle_root == expected_root)
+
+    (merkle_root == expected_root).then_some(())
+        .ok_or(Error::InvalidMerkleProof)
 }
 
 // Given number of shreds, returns the number of nodes in the Merkle tree.
