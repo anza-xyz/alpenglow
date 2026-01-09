@@ -348,24 +348,27 @@ impl FinalCertificate {
                             ));
                         }
                     } else {
-                        panic!("expected final certificate got {:?}", final_cert.cert_type);
+                        return Err(format!(
+                            "expected final certificate got {:?}",
+                            final_cert.cert_type
+                        ));
                     }
                     (slot, notar_block_id, final_cert, Some(notar_cert))
                 } else {
-                    panic!(
+                    return Err(format!(
                         "expected notarization certificate got {:?}",
                         notar_cert.cert_type
-                    );
+                    ));
                 }
             }
             FinalizationCerts::FinalizeFast { final_fast_cert } => {
                 if let CertificateType::FinalizeFast(slot, block_id) = final_fast_cert.cert_type {
                     (slot, block_id, final_fast_cert, None)
                 } else {
-                    panic!(
+                    return Err(format!(
                         "expected final fast certificate got {:?}",
                         final_fast_cert.cert_type
-                    );
+                    ));
                 }
             }
             FinalizationCerts::Uninitialized => return Ok(None),
@@ -749,6 +752,7 @@ mod tests {
         let keypair = BLSKeypair::new();
         let final_signature: BLSSignature = keypair.sign(b"finalization message").into();
         let notar_signature: BLSSignature = keypair.sign(b"notarization message").into();
+        let final_fast_signature: BLSSignature = keypair.sign(b"final fast message").into();
 
         let final_cert = Certificate {
             cert_type: CertificateType::Finalize(slot),
@@ -795,15 +799,22 @@ mod tests {
                 final_fast_cert: Arc::new(final_cert.clone())
             })
             .err(),
-            Some("expected final fast certificate".to_string())
+            Some("expected final fast certificate got Finalize(42)".to_string())
         );
+        let final_fast_cert = Certificate {
+            cert_type: CertificateType::FinalizeFast(slot, block_id),
+            signature: final_fast_signature,
+            bitmap: vec![1, 2, 3, 4],
+        };
         assert_eq!(
             FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
-                final_cert: Arc::new(final_cert.clone()),
+                final_cert: Arc::new(final_fast_cert.clone()),
                 notar_cert: Arc::new(notar_cert.clone())
             })
             .err(),
-            Some("expected final certificate".to_string())
+            Some(
+                format!("expected final certificate got FinalizeFast(42, {block_id})").to_string()
+            )
         );
         assert_eq!(
             FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
@@ -811,7 +822,7 @@ mod tests {
                 notar_cert: Arc::new(final_cert.clone())
             })
             .err(),
-            Some("expected notarization certificate".to_string())
+            Some("expected notarization certificate got Finalize(42)".to_string())
         );
         let notar_cert_bad_slot = Certificate {
             cert_type: CertificateType::Notarize(slot + 1, block_id),
@@ -880,14 +891,6 @@ mod tests {
         assert_eq!(
             finalization_cert.final_aggregate.signature,
             final_signature.try_into().unwrap()
-        );
-        assert_eq!(
-            FinalCertificate::new_from_certificate(FinalizationCerts::Finalize {
-                final_cert: Arc::new(final_fast_cert.clone()),
-                notar_cert: Arc::new(notar_cert.clone())
-            })
-            .err(),
-            Some("expected final certificate".to_string())
         );
     }
 }
