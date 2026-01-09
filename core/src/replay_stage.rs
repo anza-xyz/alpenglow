@@ -40,7 +40,7 @@ use {
     },
     solana_accounts_db::contains::Contains,
     solana_clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
-    solana_entry::entry::VerifyRecyclers,
+    solana_entry::{block_component::VersionedUpdateParent, entry::VerifyRecyclers},
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -74,6 +74,7 @@ use {
     solana_runtime::{
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
+        block_component_processor::BlockComponentProcessorError,
         commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
@@ -3538,7 +3539,7 @@ impl ReplayStage {
             start_slot: next_slot,
             end_slot,
             parent_block: (bank.slot(), block_id),
-            skip_timer: Instant::now(), // ignore for now
+            block_timer: Instant::now(),
         };
 
         optimistic_parent_sender
@@ -3632,6 +3633,70 @@ impl ReplayStage {
             if let Some(replay_result) = &replay_result.replay_result {
                 match replay_result {
                     Ok(replay_tx_count) => tx_count += replay_tx_count,
+                    Err(BlockstoreProcessorError::BlockComponentProcessor(
+                        BlockComponentProcessorError::AbandonedBank(update_parent),
+                    )) => {
+                        // Handle UpdateParent marker during fast leader handover.
+                        // The leader built on an optimistic parent that didn't match the
+                        // finalized parent. When AbandonedBank is returned, progress.num_shreds
+                        // points *to* the UpdateParent marker (not past it), because the shred
+                        // count increment is skipped on early return.
+                        //
+                        // We clear the bank so it can be recreated with the correct parent,
+                        // and update last_entry to the new parent's blockhash. When replay
+                        // restarts, it will begin *on* the UpdateParent marker, which will
+                        // succeed because the new bank's block_component_processor is fresh
+                        // (has_header = false).
+                        let new_parent_slot = match &update_parent {
+                            VersionedUpdateParent::V1(x) => x.new_parent_slot,
+                        };
+
+                        info!(
+                            "AbandonedBank at slot {bank_slot}: switching parent from {} to \
+                             {new_parent_slot}",
+                            bank.parent_slot()
+                        );
+
+                        // The new parent must be earlier than the current slot.
+                        assert!(
+                            new_parent_slot < bank_slot,
+                            "UpdateParent new_parent_slot ({new_parent_slot}) must be < bank_slot \
+                             ({bank_slot})"
+                        );
+
+                        // Clear the bank from bank_forks. It will be recreated with the
+                        // correct parent by generate_new_bank_forks on the next iteration.
+                        bank_forks.write().unwrap().clear_bank(bank_slot);
+
+                        // Update last_entry to the new parent's blockhash for entry verification.
+                        // Keep num_shreds unchanged - it points to the UpdateParent marker.
+                        if let Some(slot_progress) = progress.get_mut(&bank_slot) {
+                            let mut replay_progress =
+                                slot_progress.replay_progress.write().unwrap();
+
+                            if let Some(parent_bank) =
+                                bank_forks.read().unwrap().get(new_parent_slot)
+                            {
+                                // New parent available - update last_entry now
+                                let new_parent_blockhash = parent_bank.last_blockhash();
+                                info!(
+                                    "AbandonedBank slot {bank_slot}: updating last_entry to \
+                                     {new_parent_blockhash}, num_shreds = {}",
+                                    replay_progress.num_shreds
+                                );
+                                replay_progress.last_entry = new_parent_blockhash;
+                                replay_progress.pending_new_parent = None;
+                            } else {
+                                // Defer until new parent is frozen
+                                info!(
+                                    "AbandonedBank slot {bank_slot}: waiting for new parent \
+                                     {new_parent_slot}, num_shreds = {}",
+                                    replay_progress.num_shreds
+                                );
+                                replay_progress.pending_new_parent = Some(new_parent_slot);
+                            }
+                        }
+                    }
                     Err(err) => {
                         let root = bank_forks.read().unwrap().root();
                         Self::mark_dead_slot(
@@ -4705,6 +4770,32 @@ impl ReplayStage {
         Ok(())
     }
 
+    /// Returns the parent to use for `child_slot`, or None if we're waiting
+    /// for a pending new parent from UpdateParent to be frozen.
+    fn resolve_pending_parent(
+        child_slot: Slot,
+        default_parent: &Arc<Bank>,
+        progress: &ProgressMap,
+        frozen_banks: &HashMap<Slot, Arc<Bank>>,
+    ) -> Option<(Arc<Bank>, bool)> {
+        let new_parent_slot = progress
+            .get(&child_slot)
+            .and_then(|p| p.replay_progress.read().unwrap().pending_new_parent);
+
+        let Some(new_parent_slot) = new_parent_slot else {
+            return Some((default_parent.clone(), false));
+        };
+
+        frozen_banks.get(&new_parent_slot).map(|new_parent| {
+            info!(
+                "generate_new_bank_forks: slot {child_slot} using pending new parent \
+                 {new_parent_slot} instead of {}",
+                default_parent.slot()
+            );
+            (new_parent.clone(), true)
+        })
+    }
+
     fn generate_new_bank_forks(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
@@ -4752,13 +4843,21 @@ impl ReplayStage {
                     trace!("child already active or frozen {child_slot}");
                     continue;
                 }
+
+                // Check whether this slot has a pending parent switch from UpdateParent
+                let Some((actual_parent_bank, should_update_last_entry)) =
+                    Self::resolve_pending_parent(child_slot, parent_bank, progress, &frozen_banks)
+                else {
+                    continue;
+                };
+
                 let leader = leader_schedule_cache
-                    .slot_leader_at(child_slot, Some(parent_bank))
+                    .slot_leader_at(child_slot, Some(&actual_parent_bank))
                     .unwrap();
                 info!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
-                    parent_slot,
+                    actual_parent_bank.slot(),
                     forks.root()
                 );
                 // Migration period banks are VoM
@@ -4769,7 +4868,7 @@ impl ReplayStage {
                     info!("Replaying block in slot {child_slot} in VoM");
                 }
                 let child_bank = Self::new_bank_from_parent_with_notify(
-                    parent_bank.clone(),
+                    actual_parent_bank.clone(),
                     child_slot,
                     forks.root(),
                     &leader,
@@ -4778,12 +4877,26 @@ impl ReplayStage {
                     options,
                 );
                 blockstore_processor::set_alpenglow_ticks(&child_bank, migration_status);
+
+                if should_update_last_entry {
+                    if let Some(fork_progress) = progress.get(&child_slot) {
+                        let mut replay_progress = fork_progress.replay_progress.write().unwrap();
+                        replay_progress.last_entry = actual_parent_bank.last_blockhash();
+                        replay_progress.pending_new_parent = None;
+                        info!(
+                            "slot {child_slot} reparented to {}, resuming at shred {}",
+                            actual_parent_bank.slot(),
+                            replay_progress.num_shreds
+                        );
+                    }
+                }
+
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(
                     progress,
                     empty,
                     vec![leader],
-                    parent_bank.slot(),
+                    actual_parent_bank.slot(),
                     &forks,
                 );
                 new_banks.insert(child_slot, child_bank);

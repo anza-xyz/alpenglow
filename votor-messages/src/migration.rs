@@ -256,8 +256,10 @@ impl MigrationPhase {
     }
 
     /// Should this block allow the UpdateParent marker, i.e., support fast leader handover?
-    fn should_allow_fast_leader_handover(&self, slot: Slot) -> bool {
-        self.is_alpenglow_block(slot)
+    fn should_allow_fast_leader_handover(&self, _slot: Slot) -> bool {
+        // TODO(ksn): enable this after we finish the remainder of FLH core.
+        // self.is_alpenglow_block(slot)
+        false
     }
 
     /// Should this block use the double merkle root as the block id (instead of chained merkle root)?
