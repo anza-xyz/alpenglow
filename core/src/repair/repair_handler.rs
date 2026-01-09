@@ -6,16 +6,17 @@ use {
     },
     crate::repair::{
         repair_response,
-        serve_repair::{AncestorHashesResponse, MAX_ANCESTOR_RESPONSES},
+        serve_repair::{AncestorHashesResponse, BlockIdRepairResponse, MAX_ANCESTOR_RESPONSES},
     },
     agave_votor_messages::migration::MigrationStatus,
     bincode::serialize,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
+    solana_hash::Hash,
     solana_ledger::{
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
-        shred::Nonce,
+        shred::{ErasureSetId, Nonce},
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, RecycledPacketBatch},
     solana_poh::poh_recorder::SharedLeaderState,
@@ -27,6 +28,22 @@ use {
         sync::{Arc, RwLock},
     },
 };
+
+/// Helper function to create a PacketBatch from a serializable response
+fn create_response_packet_batch<T: serde::Serialize>(
+    recycler: &PacketBatchRecycler,
+    response: &T,
+    from_addr: &SocketAddr,
+    nonce: Nonce,
+    debug_label: &'static str,
+) -> Option<PacketBatch> {
+    let serialized_response = serialize(response).ok()?;
+    let packet =
+        repair_response::repair_response_packet_from_bytes(serialized_response, from_addr, nonce)?;
+    Some(
+        RecycledPacketBatch::new_with_recycler_data(recycler, debug_label, vec![packet]).into(),
+    )
+}
 
 pub trait RepairHandler {
     fn blockstore(&self) -> &Blockstore;
@@ -57,6 +74,22 @@ pub trait RepairHandler {
             )
             .into(),
         )
+    }
+
+    fn run_window_request_for_block_id(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        shred_index: u64,
+        block_id: Hash,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        let dmr = self.blockstore().get_double_merkle_root(slot)?;
+        if dmr != block_id {
+            return None;
+        }
+        self.run_window_request(recycler, from_addr, slot, shred_index, nonce)
     }
 
     fn run_highest_window_request(
@@ -110,24 +143,94 @@ pub trait RepairHandler {
             vec![]
         };
         let response = AncestorHashesResponse::Hashes(ancestor_slot_hashes);
-        let serialized_response = serialize(&response).ok()?;
+        create_response_packet_batch(recycler, &response, from_addr, nonce, "run_ancestor_hashes")
+    }
 
-        // Could probably directly write response into packet via `serialize_into()`
-        // instead of incurring extra copy in `repair_response_packet_from_bytes`, but
-        // serialize_into doesn't return the written size...
-        let packet = repair_response::repair_response_packet_from_bytes(
-            serialized_response,
+    fn run_parent_fec_set_count(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        block_id: Hash,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        let dmr = self.blockstore().get_double_merkle_root(slot)?;
+        if dmr != block_id {
+            return None;
+        }
+
+        debug_assert!(self.blockstore().meta(slot).unwrap().unwrap().is_full());
+
+        let double_merkle_meta = self
+            .blockstore()
+            .get_double_merkle_meta(slot)
+            .expect("Unable to fetch double merkle meta")
+            .expect("If location exists, double merkle meta must be populated");
+        let fec_set_count = double_merkle_meta.fec_set_count;
+
+        let parent_meta = self
+            .blockstore()
+            .get_parent_meta(slot)
+            .expect("Unable to fetch ParentMeta")
+            .expect("ParentMeta must exist if location exists");
+
+        let response = BlockIdRepairResponse::ParentFecSetCount {
+            fec_set_count,
+            parent_info: (parent_meta.parent_slot, parent_meta.parent_block_id),
+            parent_proof: double_merkle_meta
+                .proofs
+                .get(fec_set_count)
+                .expect("Blockstore inconsistency in DoubleMerkleMeta")
+                .clone(),
+        };
+        create_response_packet_batch(
+            recycler,
+            &response,
             from_addr,
             nonce,
-        )?;
-        Some(
-            RecycledPacketBatch::new_with_recycler_data(
-                recycler,
-                "run_ancestor_hashes",
-                vec![packet],
-            )
-            .into(),
+            "run_parent_fec_set_count",
         )
+    }
+
+    fn run_fec_set_root(
+        &self,
+        recycler: &PacketBatchRecycler,
+        from_addr: &SocketAddr,
+        slot: Slot,
+        block_id: Hash,
+        fec_set_index: u32,
+        nonce: Nonce,
+    ) -> Option<PacketBatch> {
+        let dmr = self.blockstore().get_double_merkle_root(slot)?;
+        if dmr != block_id {
+            return None;
+        }
+
+        debug_assert!(self.blockstore().meta(slot).unwrap().unwrap().is_full());
+
+        let double_merkle_meta = self
+            .blockstore()
+            .get_double_merkle_meta(slot)
+            .expect("Unable to fetch double merkle meta")
+            .expect("If location exists, double merkle meta must be populated");
+
+        let fec_set_root = self
+            .blockstore()
+            .merkle_root_meta_for_fec_set(ErasureSetId::new(slot, fec_set_index))
+            .expect("Unable to fetch merkle root meta")
+            .expect("Slot is full, MerkleRootMeta must exist")
+            .merkle_root()
+            .expect("Legacy shreds are gone, merkle root must exist");
+        let fec_set_proof = double_merkle_meta
+            .proofs
+            .get(usize::try_from(fec_set_index).ok()?)?
+            .clone();
+
+        let response = BlockIdRepairResponse::FecSetRoot {
+            fec_set_root,
+            fec_set_proof,
+        };
+        create_response_packet_batch(recycler, &response, from_addr, nonce, "run_fec_set_root")
     }
 }
 

@@ -37,9 +37,13 @@ use {
         ping_pong::{self, Pong},
         weighted_shuffle::WeightedShuffle,
     },
-    solana_hash::{HASH_BYTES, Hash},
-    solana_keypair::{Keypair, signable::Signable},
-    solana_ledger::shred::{self, Nonce, SIZE_OF_NONCE, ShredFetchStats},
+    solana_hash::{Hash, HASH_BYTES},
+    solana_keypair::{signable::Signable, Keypair},
+    solana_ledger::shred::{
+        self,
+        merkle_tree::{self, SIZE_OF_MERKLE_PROOF_ENTRY},
+        Nonce, ShredFetchStats, MAX_FEC_SETS_PER_SLOT, SIZE_OF_NONCE,
+    },
     solana_net_utils::SocketAddrSpace,
     solana_packet::PACKET_DATA_SIZE,
     solana_perf::{
@@ -49,7 +53,8 @@ use {
     solana_poh::poh_recorder::SharedLeaderState,
     solana_pubkey::{PUBKEY_BYTES, Pubkey},
     solana_runtime::bank_forks::SharableBanks,
-    solana_signature::{SIGNATURE_BYTES, Signature},
+    solana_sha256_hasher::hashv,
+    solana_signature::{Signature, SIGNATURE_BYTES},
     solana_signer::Signer,
     solana_streamer::{
         sendmmsg::{SendPktsError, batch_send},
@@ -174,6 +179,102 @@ impl RequestResponse for AncestorHashesRepairType {
     }
 }
 
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
+// TODO(ashwin): plug in the next PR
+pub(crate) enum BlockIdRepairType {
+    #[allow(dead_code)]
+    ParentAndFecSetCount { slot: Slot, block_id: Hash },
+
+    #[allow(dead_code)]
+    FecSetRoot {
+        slot: Slot,
+        block_id: Hash,
+        fec_set_index: u32,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) enum BlockIdRepairResponse {
+    ParentFecSetCount {
+        fec_set_count: usize,
+        parent_info: (Slot, Hash),
+        parent_proof: Vec<u8>,
+    },
+
+    FecSetRoot {
+        fec_set_root: Hash,
+        fec_set_proof: Vec<u8>,
+    },
+}
+
+impl RequestResponse for BlockIdRepairType {
+    type Response = BlockIdRepairResponse;
+
+    fn num_expected_responses(&self) -> u32 {
+        // The only variable in the response are the merkle proofs.
+        // Even assuming an extreme of u64::MAX fec sets, that corresponds to
+        // 63 * 20 = 1260 bytes for a proof which fits in one packet.
+        1
+    }
+
+    fn verify_response(&self, response: &Self::Response) -> bool {
+        match (self, response) {
+            (
+                Self::ParentAndFecSetCount {
+                    slot: _slot,
+                    block_id,
+                },
+                Self::Response::ParentFecSetCount {
+                    fec_set_count,
+                    parent_info: (parent_slot, parent_block_id),
+                    parent_proof,
+                },
+            ) => {
+                if *fec_set_count > MAX_FEC_SETS_PER_SLOT {
+                    return false;
+                }
+
+                // + 1 here to account for the parent info which is the final leaf of the tree
+                let proof_size = merkle_tree::get_proof_size(fec_set_count + 1);
+                if parent_proof.len() != proof_size as usize * SIZE_OF_MERKLE_PROOF_ENTRY {
+                    return false;
+                }
+
+                let parent_info_leaf =
+                    hashv(&[&parent_slot.to_le_bytes(), parent_block_id.as_ref()]);
+                merkle_tree::verify_merkle_proof(
+                    parent_info_leaf,
+                    *fec_set_count,
+                    parent_proof,
+                    *block_id,
+                )
+                .is_ok()
+            }
+
+            (
+                Self::FecSetRoot {
+                    slot: _slot,
+                    block_id,
+                    fec_set_index,
+                },
+                Self::Response::FecSetRoot {
+                    fec_set_root,
+                    fec_set_proof,
+                },
+            ) => merkle_tree::verify_merkle_proof(
+                *fec_set_root,
+                *fec_set_index as usize,
+                fec_set_proof,
+                *block_id,
+            )
+            .is_ok(),
+
+            (Self::ParentAndFecSetCount { .. }, _) | (Self::FecSetRoot { .. }, _) => false,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ServeRepairStats {
     total_requests: usize,
@@ -191,7 +292,13 @@ struct ServeRepairStats {
     orphan: usize,
     pong: usize,
     ancestor_hashes: usize,
+    parent: usize,
+    fec_set_root: usize,
+    window_index_for_block_id: usize,
     window_index_misses: usize,
+    parent_misses: usize,
+    fec_set_root_misses: usize,
+    window_index_for_block_id_misses: usize,
     ping_cache_check_failed: usize,
     pings_sent: usize,
     decode_time_us: u64,
@@ -232,10 +339,14 @@ type Ping = ping_pong::Ping<REPAIR_PING_TOKEN_SIZE>;
 type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 
 /// Window protocol messages
+/// Appending new messages here is safe as long as it is feature gated.
+/// Changing the format of an existing message is possible but not advised.
+/// Removing a message is possible by first removing the sender and feature gating the response.
+/// The message can then be removed once the feature gate is active and there are no responders.
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
-    frozen_abi(digest = "HbUQDATKfpN8pjyyarSGa8uN4SuLNTvMf7T5b66ajnNZ")
+    frozen_abi(digest = "7XVfjbxcWhiwubU3BkE5QPT6qQLkKBraYGhAHZKWx6UZ")
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RepairProtocol {
@@ -264,6 +375,28 @@ pub enum RepairProtocol {
     AncestorHashes {
         header: RepairRequestHeader,
         slot: Slot,
+    },
+    // TODO(ashwin): plug this in next pr
+    #[allow(dead_code)]
+    ParentAndFecSetCount {
+        header: RepairRequestHeader,
+        slot: Slot,
+        block_id: Hash,
+    },
+    // TODO(ashwin): plug this in next pr
+    #[allow(dead_code)]
+    FecSetRoot {
+        header: RepairRequestHeader,
+        slot: Slot,
+        block_id: Hash,
+        fec_set_index: u32,
+    },
+    WindowIndexForBlockId {
+        header: RepairRequestHeader,
+        slot: Slot,
+        shred_index: u64,
+        fec_set_merkle_root: Hash,
+        block_id: Hash,
     },
 }
 
@@ -296,10 +429,13 @@ impl RepairProtocol {
             | Self::LegacyOrphanWithNonce
             | Self::LegacyAncestorHashes => None,
             Self::Pong(pong) => Some(pong.from()),
-            Self::WindowIndex { header, .. } => Some(&header.sender),
-            Self::HighestWindowIndex { header, .. } => Some(&header.sender),
-            Self::Orphan { header, .. } => Some(&header.sender),
-            Self::AncestorHashes { header, .. } => Some(&header.sender),
+            Self::WindowIndex { header, .. }
+            | Self::HighestWindowIndex { header, .. }
+            | Self::Orphan { header, .. }
+            | Self::AncestorHashes { header, .. }
+            | Self::ParentAndFecSetCount { header, .. }
+            | Self::FecSetRoot { header, .. }
+            | Self::WindowIndexForBlockId { header, .. } => Some(&header.sender),
         }
     }
 
@@ -316,7 +452,10 @@ impl RepairProtocol {
             | Self::WindowIndex { .. }
             | Self::HighestWindowIndex { .. }
             | Self::Orphan { .. }
-            | Self::AncestorHashes { .. } => true,
+            | Self::AncestorHashes { .. }
+            | Self::ParentAndFecSetCount { .. }
+            | Self::FecSetRoot { .. }
+            | Self::WindowIndexForBlockId { .. } => true,
         }
     }
 
@@ -324,7 +463,10 @@ impl RepairProtocol {
         match self {
             RepairProtocol::WindowIndex { .. }
             | RepairProtocol::HighestWindowIndex { .. }
-            | RepairProtocol::AncestorHashes { .. } => 1,
+            | RepairProtocol::AncestorHashes { .. }
+            | RepairProtocol::ParentAndFecSetCount { .. }
+            | RepairProtocol::FecSetRoot { .. }
+            | RepairProtocol::WindowIndexForBlockId { .. } => 1,
             RepairProtocol::Orphan { .. } => MAX_ORPHAN_REPAIR_RESPONSES,
             RepairProtocol::Pong(_) => 0, // no response
             RepairProtocol::LegacyWindowIndex
@@ -550,6 +692,85 @@ impl ServeRepair {
                     stats.pong += 1;
                     ping_cache.add(pong, *from_addr, Instant::now());
                     (None, "Pong")
+                }
+                RepairProtocol::ParentAndFecSetCount {
+                    header: RepairRequestHeader { nonce, .. },
+                    slot,
+                    block_id,
+                } => {
+                    stats.parent += 1;
+                    let response = if self
+                        .migration_status
+                        .should_use_double_merkle_block_id(*slot)
+                    {
+                        let response = self.repair_handler.run_parent_fec_set_count(
+                            recycler, from_addr, *slot, *block_id, *nonce,
+                        );
+                        if response.is_none() {
+                            stats.parent_misses += 1;
+                        }
+                        response
+                    } else {
+                        None
+                    };
+                    (response, "Parent")
+                }
+                RepairProtocol::FecSetRoot {
+                    header: RepairRequestHeader { nonce, .. },
+                    slot,
+                    block_id,
+                    fec_set_index,
+                } => {
+                    stats.fec_set_root += 1;
+                    let response = if self
+                        .migration_status
+                        .should_use_double_merkle_block_id(*slot)
+                    {
+                        let response = self.repair_handler.run_fec_set_root(
+                            recycler,
+                            from_addr,
+                            *slot,
+                            *block_id,
+                            *fec_set_index,
+                            *nonce,
+                        );
+                        if response.is_none() {
+                            stats.fec_set_root_misses += 1;
+                        }
+                        response
+                    } else {
+                        None
+                    };
+                    (response, "FecSetRoot")
+                }
+                RepairProtocol::WindowIndexForBlockId {
+                    header: RepairRequestHeader { nonce, .. },
+                    slot,
+                    shred_index,
+                    fec_set_merkle_root: _,
+                    block_id,
+                } => {
+                    stats.window_index_for_block_id += 1;
+                    let response = if self
+                        .migration_status
+                        .should_use_double_merkle_block_id(*slot)
+                    {
+                        let batch = self.repair_handler.run_window_request_for_block_id(
+                            recycler,
+                            from_addr,
+                            *slot,
+                            *shred_index,
+                            *block_id,
+                            *nonce,
+                        );
+                        if batch.is_none() {
+                            stats.window_index_for_block_id_misses += 1;
+                        }
+                        batch
+                    } else {
+                        None
+                    };
+                    (response, "WindowIndexForBlockIdWithNonce")
                 }
                 RepairProtocol::LegacyWindowIndex
                 | RepairProtocol::LegacyWindowIndexWithNonce
@@ -843,6 +1064,8 @@ impl ServeRepair {
             ),
             ("self_repair", stats.err_self_repair, i64),
             ("window_index", stats.window_index, i64),
+            ("parent", stats.parent, i64),
+            ("fec_set_root", stats.fec_set_root, i64),
             (
                 "request-highest-window-index",
                 stats.highest_window_index,
@@ -856,6 +1079,8 @@ impl ServeRepair {
             ),
             ("pong", stats.pong, i64),
             ("window_index_misses", stats.window_index_misses, i64),
+            ("parent_misses", stats.parent_misses, i64),
+            ("fec_set_root_misses", stats.fec_set_root_misses, i64),
             (
                 "ping_cache_check_failed",
                 stats.ping_cache_check_failed,
@@ -953,7 +1178,10 @@ impl ServeRepair {
             RepairProtocol::WindowIndex { header, .. }
             | RepairProtocol::HighestWindowIndex { header, .. }
             | RepairProtocol::Orphan { header, .. }
-            | RepairProtocol::AncestorHashes { header, .. } => {
+            | RepairProtocol::AncestorHashes { header, .. }
+            | RepairProtocol::ParentAndFecSetCount { header, .. }
+            | RepairProtocol::FecSetRoot { header, .. }
+            | RepairProtocol::WindowIndexForBlockId { header, .. } => {
                 if &header.recipient != my_id {
                     return Err(Error::from(RepairVerifyError::IdMismatch));
                 }
@@ -1009,7 +1237,10 @@ impl ServeRepair {
             match request {
                 RepairProtocol::WindowIndex { .. }
                 | RepairProtocol::HighestWindowIndex { .. }
-                | RepairProtocol::Orphan { .. } => {
+                | RepairProtocol::Orphan { .. }
+                | RepairProtocol::ParentAndFecSetCount { .. }
+                | RepairProtocol::FecSetRoot { .. }
+                | RepairProtocol::WindowIndexForBlockId { .. } => {
                     let ping = RepairResponse::Ping(ping);
                     Packet::from_data(Some(from_addr), ping).ok()
                 }

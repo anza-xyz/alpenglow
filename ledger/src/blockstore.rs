@@ -573,11 +573,8 @@ impl Blockstore {
         self.meta_cf.get(slot)
     }
 
-    /// Returns the ParentMeta for the specified slot and location.
-    pub fn get_parent_meta(
-        &self,
-        slot: Slot,
-    ) -> Result<Option<ParentMeta>> {
+    /// Returns the ParentMeta for the specified slot.
+    pub fn get_parent_meta(&self, slot: Slot) -> Result<Option<ParentMeta>> {
         self.parent_meta_cf.get(slot)
     }
     /// Returns true if the specified slot is full.
@@ -673,6 +670,19 @@ impl Blockstore {
 
     fn merkle_root_meta(&self, erasure_set: ErasureSetId) -> Result<Option<MerkleRootMeta>> {
         self.merkle_root_meta_cf.get(erasure_set.store_key())
+    }
+
+    /// Returns the MerkleRootMeta for the specified FEC set.
+    pub fn merkle_root_meta_for_fec_set(
+        &self,
+        erasure_set: ErasureSetId,
+    ) -> Result<Option<MerkleRootMeta>> {
+        self.merkle_root_meta(erasure_set)
+    }
+
+    /// Returns the DoubleMerkleMeta for the specified slot.
+    pub fn get_double_merkle_meta(&self, slot: Slot) -> Result<Option<DoubleMerkleMeta>> {
+        self.double_merkle_meta_cf.get(slot)
     }
 
     /// Returns the double merkle root for a block, computing and persisting it

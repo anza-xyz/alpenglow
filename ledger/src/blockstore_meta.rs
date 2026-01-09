@@ -786,7 +786,7 @@ impl MerkleRootMeta {
         }
     }
 
-    pub(crate) fn merkle_root(&self) -> Option<Hash> {
+    pub fn merkle_root(&self) -> Option<Hash> {
         self.merkle_root
     }
 
