@@ -28,6 +28,23 @@ use {
     },
 };
 
+/// Helper function to create a PacketBatch from a serializable response
+fn create_response_packet_batch<T: serde::Serialize>(
+    recycler: &PacketBatchRecycler,
+    response: &T,
+    from_addr: &SocketAddr,
+    nonce: Nonce,
+    debug_label: &'static str,
+) -> Option<PacketBatch> {
+    let serialized_response = serialize(response).ok()?;
+    let packet =
+        repair_response::repair_response_packet_from_bytes(serialized_response, from_addr, nonce)?;
+    Some(
+        PinnedPacketBatch::new_unpinned_with_recycler_data(recycler, debug_label, vec![packet])
+            .into(),
+    )
+}
+
 pub trait RepairHandler {
     fn blockstore(&self) -> &Blockstore;
 
@@ -153,24 +170,7 @@ pub trait RepairHandler {
             vec![]
         };
         let response = AncestorHashesResponse::Hashes(ancestor_slot_hashes);
-        let serialized_response = serialize(&response).ok()?;
-
-        // Could probably directly write response into packet via `serialize_into()`
-        // instead of incurring extra copy in `repair_response_packet_from_bytes`, but
-        // serialize_into doesn't return the written size...
-        let packet = repair_response::repair_response_packet_from_bytes(
-            serialized_response,
-            from_addr,
-            nonce,
-        )?;
-        Some(
-            PinnedPacketBatch::new_unpinned_with_recycler_data(
-                recycler,
-                "run_ancestor_hashes",
-                vec![packet],
-            )
-            .into(),
-        )
+        create_response_packet_batch(recycler, &response, from_addr, nonce, "run_ancestor_hashes")
     }
 
     fn run_parent_fec_set_count(
@@ -213,21 +213,13 @@ pub trait RepairHandler {
                 .expect("Blockstore inconsistency in DoubleMerkleMeta")
                 .clone(),
         };
-        let serialized_response = serialize(&response).expect("Serialization cannot fail");
-        let packet = repair_response::repair_response_packet_from_bytes(
-            serialized_response,
+        create_response_packet_batch(
+            recycler,
+            &response,
             from_addr,
             nonce,
+            "run_parent_fec_set_count",
         )
-        .expect("Packet construction cannot fail");
-
-        Some(PacketBatch::from(
-            PinnedPacketBatch::new_unpinned_with_recycler_data(
-                recycler,
-                "run_parent_fec_set_count",
-                vec![packet],
-            ),
-        ))
     }
 
     fn run_fec_set_root(
@@ -271,21 +263,7 @@ pub trait RepairHandler {
             fec_set_root,
             fec_set_proof,
         };
-        let serialized_response = serialize(&response).expect("Serialization cannot fail");
-        let packet = repair_response::repair_response_packet_from_bytes(
-            serialized_response,
-            from_addr,
-            nonce,
-        )
-        .expect("Packet construction cannot fail");
-
-        Some(PacketBatch::from(
-            PinnedPacketBatch::new_unpinned_with_recycler_data(
-                recycler,
-                "run_parent_fec_set_count",
-                vec![packet],
-            ),
-        ))
+        create_response_packet_batch(recycler, &response, from_addr, nonce, "run_fec_set_root")
     }
 }
 
