@@ -699,7 +699,7 @@ impl ServeRepair {
                     block_id,
                 } => {
                     stats.parent += 1;
-                    if self
+                    let response = if self
                         .migration_status
                         .should_use_double_merkle_block_id(*slot)
                     {
@@ -709,10 +709,11 @@ impl ServeRepair {
                         if response.is_none() {
                             stats.parent_misses += 1;
                         }
-                        (response, "Parent")
+                        response
                     } else {
-                        (None, "Parent")
-                    }
+                        None
+                    };
+                    (response, "Parent")
                 }
                 RepairProtocol::FecSetRoot {
                     header: RepairRequestHeader { nonce, .. },
@@ -721,7 +722,7 @@ impl ServeRepair {
                     fec_set_index,
                 } => {
                     stats.fec_set_root += 1;
-                    if self
+                    let response = if self
                         .migration_status
                         .should_use_double_merkle_block_id(*slot)
                     {
@@ -736,10 +737,11 @@ impl ServeRepair {
                         if response.is_none() {
                             stats.fec_set_root += 1;
                         }
-                        (response, "FecSetRoot")
+                        response
                     } else {
-                        (None, "FecSetRoot")
-                    }
+                        None
+                    };
+                    (response, "FecSetRoot")
                 }
                 RepairProtocol::WindowIndexForBlockId {
                     header: RepairRequestHeader { nonce, .. },
@@ -749,7 +751,7 @@ impl ServeRepair {
                     block_id,
                 } => {
                     stats.window_index_for_block_id += 1;
-                    if self
+                    let response = if self
                         .migration_status
                         .should_use_double_merkle_block_id(*slot)
                     {
@@ -764,10 +766,11 @@ impl ServeRepair {
                         if batch.is_none() {
                             stats.window_index_for_block_id_misses += 1;
                         }
-                        (batch, "WindowIndexForBlockIdWithNonce")
+                        batch
                     } else {
-                        (None, "WindowIndexForBlockIdWithNonce")
-                    }
+                        None
+                    };
+                    (response, "WindowIndexForBlockIdWithNonce")
                 }
                 RepairProtocol::LegacyWindowIndex
                 | RepairProtocol::LegacyWindowIndexWithNonce
