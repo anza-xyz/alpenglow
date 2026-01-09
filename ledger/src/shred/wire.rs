@@ -172,22 +172,6 @@ pub fn get_shred_id(shred: &[u8]) -> Option<ShredId> {
     ))
 }
 
-pub(crate) fn get_signed_data(shred: &[u8]) -> Option<Hash> {
-    let data = match get_shred_variant(shred).ok()? {
-        ShredVariant::MerkleCode {
-            proof_size,
-            chained,
-            resigned,
-        } => shred::merkle::ShredCode::get_merkle_root(shred, proof_size, chained, resigned)?,
-        ShredVariant::MerkleData {
-            proof_size,
-            chained,
-            resigned,
-        } => shred::merkle::ShredData::get_merkle_root(shred, proof_size, chained, resigned)?,
-    };
-    Some(data)
-}
-
 pub fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
     if get_shred_type(shred)? != ShredType::Data {
         return Err(Error::InvalidShredType);
@@ -403,12 +387,12 @@ pub(crate) fn corrupt_packet<R: Rng>(
     let signature = get_signature(shred).unwrap();
     if coin_flip {
         let pubkey = keypairs[&slot].pubkey();
-        let data = get_signed_data(shred).unwrap();
+        let data = get_merkle_root(shred).unwrap();
         assert!(!signature.verify(pubkey.as_ref(), data.as_ref()));
     } else {
         // Slot may have been corrupted and no longer mapping to a keypair.
         let pubkey = keypairs.get(&slot).map(Keypair::pubkey).unwrap_or_default();
-        if let Some(data) = get_signed_data(shred) {
+        if let Some(data) = get_merkle_root(shred) {
             assert!(!signature.verify(pubkey.as_ref(), data.as_ref()));
         }
     }
@@ -554,7 +538,7 @@ mod tests {
                 )
             });
             assert_eq!(
-                get_signed_data(bytes).unwrap(),
+                get_merkle_root(bytes).unwrap(),
                 shred.merkle_root().unwrap()
             );
             assert_eq!(
