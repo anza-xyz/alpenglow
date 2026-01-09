@@ -455,7 +455,7 @@ fn produce_final_certificate(
     let finalization_certs = highest_finalized.read().unwrap().clone();
     FinalCertificate::new_from_certificate(finalization_certs)
         .map_err(|e| {
-            warn!("Failed to create FinalCertificate: {e:?}");
+            error!("Failed to create FinalCertificate: {e:?}");
         })
         .ok()?
 }
