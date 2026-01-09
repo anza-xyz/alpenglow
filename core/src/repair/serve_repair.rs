@@ -364,6 +364,10 @@ type Ping = ping_pong::Ping<REPAIR_PING_TOKEN_SIZE>;
 type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 
 /// Window protocol messages
+/// Appending new messages here is safe as long as it is feature gated.
+/// Changing the format of an existing message is posisble but not advised.
+/// Removing a message is possible by first removing the sender and feature gating the response.
+/// The message can then be removed once the feature gate is active and there are no responders.
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
