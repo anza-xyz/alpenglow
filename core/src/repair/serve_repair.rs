@@ -265,14 +265,21 @@ impl RequestResponse for BlockIdRepairType {
                     return false;
                 }
 
+                // + 1 here to account for the parent info which is the final leaf of the tree
                 let proof_size = merkle_tree::get_proof_size(fec_set_count + 1);
                 if parent_proof.len() != proof_size as usize * SIZE_OF_MERKLE_PROOF_ENTRY {
                     return false;
                 }
 
-                let node = hashv(&[&parent_slot.to_le_bytes(), parent_block_id.as_ref()]);
-                merkle_tree::verify_merkle_proof(node, *fec_set_count, parent_proof, *block_id)
-                    .is_ok()
+                let parent_info_leaf =
+                    hashv(&[&parent_slot.to_le_bytes(), parent_block_id.as_ref()]);
+                merkle_tree::verify_merkle_proof(
+                    parent_info_leaf,
+                    *fec_set_count,
+                    parent_proof,
+                    *block_id,
+                )
+                .is_ok()
             }
 
             (
