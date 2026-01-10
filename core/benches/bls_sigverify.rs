@@ -270,7 +270,7 @@ fn generate_two_certs_batch(env: &BenchEnvironment) -> Vec<PacketBatch> {
 }
 
 fn bench_votes(c: &mut Criterion) {
-    solana_logger::setup();
+    agave_logger::setup();
     let env = setup_environment();
     let mut group = c.benchmark_group("verify_votes");
 
@@ -305,7 +305,7 @@ fn bench_votes(c: &mut Criterion) {
 }
 
 fn bench_certificates(c: &mut Criterion) {
-    solana_logger::setup();
+    agave_logger::setup();
     let env = setup_environment();
     let mut group = c.benchmark_group("verify_certificates");
 

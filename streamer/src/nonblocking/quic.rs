@@ -1739,7 +1739,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_timeout() {
-        solana_logger::setup();
+        agave_logger::setup();
         let SpawnTestServerResult {
             join_handle,
             receiver,
@@ -1755,7 +1755,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_packet_batcher() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (pkt_batch_sender, pkt_batch_receiver) = unbounded();
         let (ptk_sender, pkt_receiver) = unbounded();
         let cancel = CancellationToken::new();
@@ -1806,7 +1806,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_stream_timeout() {
-        solana_logger::setup();
+        agave_logger::setup();
         let SpawnTestServerResult {
             join_handle,
             receiver: _,
@@ -1841,7 +1841,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_block_multiple_connections() {
-        solana_logger::setup();
+        agave_logger::setup();
         let SpawnTestServerResult {
             join_handle,
             receiver: _,
@@ -1856,7 +1856,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_multiple_connections_on_single_client_endpoint() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let SpawnTestServerResult {
             join_handle,
@@ -1932,7 +1932,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_multiple_writes() {
-        solana_logger::setup();
+        agave_logger::setup();
         let SpawnTestServerResult {
             join_handle,
             receiver,
@@ -1947,7 +1947,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_staked_connection_removal() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let client_keypair = Keypair::new();
         let stakes = HashMap::from([(client_keypair.pubkey(), 100_000)]);
@@ -1979,7 +1979,7 @@ pub mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_zero_staked_connection_removal() {
         // In this test, the client has a pubkey, but is not in stake table.
-        solana_logger::setup();
+        agave_logger::setup();
 
         let client_keypair = Keypair::new();
         let stakes = HashMap::from([(client_keypair.pubkey(), 0)]);
@@ -2010,7 +2010,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_unstaked_connection_removal() {
-        solana_logger::setup();
+        agave_logger::setup();
         let SpawnTestServerResult {
             join_handle,
             receiver,
@@ -2034,7 +2034,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_unstaked_node_connect_failure() {
-        solana_logger::setup();
+        agave_logger::setup();
         let s = bind_to_localhost_unique().expect("should bind");
         let (sender, _) = unbounded();
         let keypair = Keypair::new();
@@ -2067,7 +2067,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quic_server_multiple_streams() {
-        solana_logger::setup();
+        agave_logger::setup();
         let s = bind_to_localhost_unique().expect("should bind");
         let (sender, receiver) = unbounded();
         let keypair = Keypair::new();
@@ -2111,7 +2111,7 @@ pub mod test {
     #[test]
     fn test_prune_table_with_ip() {
         use std::net::Ipv4Addr;
-        solana_logger::setup();
+        agave_logger::setup();
         let cancel = CancellationToken::new();
         let mut table = ConnectionTable::new(false, cancel);
         let mut num_entries = 5;
@@ -2165,7 +2165,7 @@ pub mod test {
 
     #[test]
     fn test_prune_table_with_unique_pubkeys() {
-        solana_logger::setup();
+        agave_logger::setup();
         let cancel = CancellationToken::new();
         let mut table = ConnectionTable::new(false, cancel);
 
@@ -2204,7 +2204,7 @@ pub mod test {
 
     #[test]
     fn test_prune_table_with_non_unique_pubkeys() {
-        solana_logger::setup();
+        agave_logger::setup();
         let cancel = CancellationToken::new();
         let mut table = ConnectionTable::new(false, cancel);
 
@@ -2271,7 +2271,7 @@ pub mod test {
     #[test]
     fn test_prune_table_random() {
         use std::net::Ipv4Addr;
-        solana_logger::setup();
+        agave_logger::setup();
         let cancel = CancellationToken::new();
         let mut table = ConnectionTable::new(false, cancel);
 
@@ -2315,7 +2315,7 @@ pub mod test {
     #[test]
     fn test_remove_connections() {
         use std::net::Ipv4Addr;
-        solana_logger::setup();
+        agave_logger::setup();
         let cancel = CancellationToken::new();
         let mut table = ConnectionTable::new(false, cancel);
 
@@ -2443,7 +2443,7 @@ pub mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_throttling_check_no_packet_drop() {
-        solana_logger::setup_with_default_filter();
+        agave_logger::setup_with_default_filter();
 
         let SpawnTestServerResult {
             join_handle,

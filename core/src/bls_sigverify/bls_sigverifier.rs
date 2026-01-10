@@ -893,7 +893,7 @@ mod tests {
 
     #[test]
     fn test_blssigverifier_send_packets_channel_full() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (verified_votes_sender, _verified_votes_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::bounded(1);
         let (consensus_metrics_sender, _consensus_metrics_receiver) =

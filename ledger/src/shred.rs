@@ -85,7 +85,7 @@ use {solana_keypair::Keypair, solana_perf::packet::Packet, solana_signer::Signer
 
 mod common;
 pub(crate) mod merkle;
-pub(crate) mod merkle_tree;
+pub mod merkle_tree;
 mod payload;
 mod shred_code;
 mod shred_data;
@@ -123,6 +123,8 @@ pub const SHREDS_PER_FEC_BLOCK: usize = DATA_SHREDS_PER_FEC_BLOCK + CODING_SHRED
 /// (32K shreds per slot * 4 TX per shred * 2.5 slots per sec)
 pub const MAX_DATA_SHREDS_PER_SLOT: usize = 32_768;
 pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
+
+pub const MAX_FEC_SETS_PER_SLOT : usize = MAX_DATA_SHREDS_PER_SLOT / DATA_SHREDS_PER_FEC_BLOCK;
 
 // Statically compute the typical data batch size assuming:
 // 1. 32:32 erasure coding batch
@@ -321,10 +323,10 @@ impl ShredId {
 
 /// Tuple which identifies erasure coding set that the shred belongs to.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub(crate) struct ErasureSetId(Slot, /*fec_set_index:*/ u32);
+pub struct ErasureSetId(Slot, /*fec_set_index:*/ u32);
 
 impl ErasureSetId {
-    pub(crate) fn new(slot: Slot, fec_set_index: u32) -> Self {
+    pub fn new(slot: Slot, fec_set_index: u32) -> Self {
         Self(slot, fec_set_index)
     }
 
@@ -1060,7 +1062,7 @@ mod tests {
     #[test_case(true ; "last_in_slot")]
     #[test_case(false ; "not_last_in_slot")]
     fn test_should_discard_shred(is_last_in_slot: bool) {
-        solana_logger::setup();
+        agave_logger::setup();
         let mut rng = rand::thread_rng();
         let slot = 18_291;
         let shreds = make_merkle_shreds_for_tests(

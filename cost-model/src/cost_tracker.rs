@@ -469,7 +469,7 @@ mod tests {
     }
 
     fn test_setup() -> Keypair {
-        solana_logger::setup();
+        agave_logger::setup();
         Keypair::new()
     }
 
