@@ -966,7 +966,7 @@ mod test {
     #[test_case(MigrationStatus::default(); "pre_migration")]
     #[test_case(MigrationStatus::post_migration_status(); "post_migration")]
     fn entries_to_shreds_max(migration_status: MigrationStatus) {
-        solana_logger::setup();
+        agave_logger::setup();
         let keypair = Keypair::new();
         let mut bs = StandardBroadcastRun::new(0, Arc::new(migration_status));
         bs.slot = 1;

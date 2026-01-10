@@ -1833,7 +1833,7 @@ mod tests {
 
     #[test]
     fn test_vote_process_instruction() {
-        solana_logger::setup();
+        agave_logger::setup();
         let instructions = create_account_with_config(
             &Pubkey::new_unique(),
             &Pubkey::new_unique(),

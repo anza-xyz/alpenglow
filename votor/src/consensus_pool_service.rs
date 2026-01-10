@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_receive_and_send_consensus_message() {
-        solana_logger::setup();
+        agave_logger::setup();
         let setup_result = setup();
 
         // validator 0 to 7 send Notarize on slot 2

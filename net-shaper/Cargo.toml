@@ -17,9 +17,9 @@ name = "solana-net-shaper"
 path = "src/main.rs"
 
 [dependencies]
+agave-logger = { workspace = true }
 clap = { version = "3.1.5", features = ["cargo"] }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
-solana-logger = "=3.0.0"

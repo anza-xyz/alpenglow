@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_bind_two_in_range_with_offset() {
-        solana_logger::setup();
+        agave_logger::setup();
         let config = SocketConfiguration::default();
         let ip_addr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
         let offset = 6;

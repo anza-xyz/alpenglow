@@ -17,6 +17,7 @@ path = "src/main.rs"
 program = []
 
 [dependencies]
+agave-logger = { workspace = true }
 bzip2 = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { version = "3.1.5", features = ["cargo", "env"] }
@@ -27,7 +28,6 @@ reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 semver = { workspace = true }
 solana-file-download = "=3.0.0"
 solana-keypair = "=3.0.1"
-solana-logger = "=3.0.0"
 tar = { workspace = true }
 
 [dev-dependencies]

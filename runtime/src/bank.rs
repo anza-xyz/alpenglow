@@ -1409,7 +1409,8 @@ impl Bank {
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
 
-            // If Alpenglow is enabled, update the clock from the footer.
+            // If Alpenglow isn't enabled, set the clock here using traditional stake-weighted
+            // timestamp voting.
             if new.get_alpenglow_genesis_certificate().is_none() {
                 new.update_clock(Some(parent.epoch()));
             }

@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn test_build_known_snapshot_hashes() {
-        solana_logger::setup();
+        agave_logger::setup();
         let full_snapshot_hash1 = (400_000, Hash::new_unique());
         let full_snapshot_hash2 = (400_000, Hash::new_unique());
 

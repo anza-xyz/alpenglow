@@ -14,9 +14,9 @@ name = "cargo-test-sbf"
 path = "src/main.rs"
 
 [dependencies]
+agave-logger = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { version = "3.1.5", features = ["cargo"] }
 itertools = { workspace = true }
 log = { workspace = true, features = ["std"] }
 regex = { workspace = true }
-solana-logger = "=3.0.0"
