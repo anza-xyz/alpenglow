@@ -11,7 +11,9 @@ use {
     },
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
-    solana_entry::block_component::{BlockFooterV1, GenesisCertificate, VersionedBlockMarker},
+    solana_entry::block_component::{
+        BlockFooterV1, FinalCertificate, GenesisCertificate, VersionedBlockMarker,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
@@ -37,7 +39,10 @@ use {
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::LeaderWindowInfo,
     },
-    solana_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    solana_votor_messages::{
+        consensus_message::FinalizationCerts,
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -92,6 +97,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCerts>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -108,6 +114,7 @@ struct LeaderContext {
     my_pubkey: Pubkey,
     leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    highest_finalized: Arc<RwLock<FinalizationCerts>>,
 
     blockstore: Arc<Blockstore>,
     record_receiver: RecordReceiver,
@@ -173,6 +180,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         leader_window_info_receiver,
         replay_highest_frozen,
         highest_parent_ready,
+        highest_finalized,
         optimistic_parent_receiver,
         build_reward_certs_sender,
         reward_certs_receiver,
@@ -210,6 +218,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         exit,
         my_pubkey,
         highest_parent_ready,
+        highest_finalized,
         leader_window_info_receiver,
         blockstore,
         poh_recorder: poh_recorder.clone(),
@@ -350,6 +359,7 @@ fn produce_window(
             skip_timer,
             timeout,
             slot,
+            &ctx.highest_finalized,
         ) {
             panic!("PohRecorder record failed: {e:?}");
         }
@@ -403,6 +413,7 @@ fn skew_block_producer_time_nanos(
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
 fn produce_block_footer(
     bank: Arc<Bank>,
+    highest_finalized: &RwLock<FinalizationCerts>,
     skip_reward_cert: Option<SkipRewardCertificate>,
     notar_reward_cert: Option<NotarRewardCertificate>,
 ) -> BlockFooterV1 {
@@ -432,11 +443,18 @@ fn produce_block_footer(
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
-        // TODO(ksn, wen): fill this field
-        final_cert: None,
+        final_cert: produce_final_certificate(highest_finalized),
         skip_reward_cert,
         notar_reward_cert,
     }
+}
+
+fn produce_final_certificate(
+    highest_finalized: &RwLock<FinalizationCerts>,
+) -> Option<FinalCertificate> {
+    let finalization_certs = highest_finalized.read().unwrap().clone();
+    FinalCertificate::new_from_certificate(finalization_certs)
+        .expect("Failed to create FinalCertificate")
 }
 
 /// Shutdowns the record receiver and drains any remaining records.
@@ -475,6 +493,7 @@ fn record_and_complete_block(
     block_timer: Instant,
     block_timeout: Duration,
     slot: Slot,
+    highest_finalized: &RwLock<FinalizationCerts>,
 ) -> Result<(), PohRecorderError> {
     build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
@@ -521,7 +540,12 @@ fn record_and_complete_block(
     let BuildRewardCertsResponse { skip, notar } = reward_certs_receiver
         .recv()
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        highest_finalized,
+        skip,
+        notar,
+    );
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
