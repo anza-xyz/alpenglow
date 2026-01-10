@@ -7,7 +7,7 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
         consensus_message::VoteMessage,
-        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
         vote::Vote,
     },
     std::{
@@ -22,9 +22,6 @@ use {
 };
 
 mod entry;
-
-/// Number of slots in the past that the the current leader is responsible for producing the reward certificates.
-const NUM_SLOTS_FOR_REWARD: u64 = 8;
 
 /// Returns [`false`] if the rewards container is not interested in the [`VoteMessage`].
 /// Returns [`true`] if the rewards container might be interested in the [`VoteMessage`].

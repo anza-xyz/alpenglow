@@ -14,6 +14,9 @@ use {
     },
 };
 
+/// Number of slots in the past that the the current leader is responsible for producing the reward certificates.
+pub const NUM_SLOTS_FOR_REWARD: u64 = 8;
+
 /// Different types of errors that can be returned when constructing a new reward certificate.
 #[derive(Debug, Error)]
 pub enum RewardCertError {
