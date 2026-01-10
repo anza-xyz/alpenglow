@@ -1505,6 +1505,7 @@ mod tests {
 
     #[test]
     fn test_received_finalized() {
+        agave_logger::setup();
         let mut test_context = setup();
 
         let root_bank = test_context

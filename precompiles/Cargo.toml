@@ -19,6 +19,7 @@ agave-unstable-api = []
 
 [dependencies]
 agave-feature-set = { workspace = true }
+agave-logger = { workspace = true }
 bincode = { workspace = true }
 digest = { workspace = true }
 ed25519-dalek = { workspace = true }

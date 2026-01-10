@@ -10833,6 +10833,7 @@ dependencies = [
 name = "solana-svm"
 version = "4.0.0-alpha.0"
 dependencies = [
+ "agave-logger",
  "agave-syscalls",
  "ahash 0.8.12",
  "assert_matches",

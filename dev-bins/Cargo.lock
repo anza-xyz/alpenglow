@@ -237,6 +237,7 @@ name = "agave-precompiles"
 version = "4.0.0-alpha.0"
 dependencies = [
  "agave-feature-set",
+ "agave-logger",
  "bincode",
  "digest 0.10.7",
  "ed25519-dalek 1.0.1",
