@@ -454,10 +454,7 @@ fn produce_final_certificate(
 ) -> Option<FinalCertificate> {
     let finalization_certs = highest_finalized.read().unwrap().clone();
     FinalCertificate::new_from_certificate(finalization_certs)
-        .map_err(|e| {
-            error!("Failed to create FinalCertificate: {e:?}");
-        })
-        .ok()?
+        .expect("Failed to create FinalCertificate")
 }
 
 /// Shutdowns the record receiver and drains any remaining records.
