@@ -8,7 +8,7 @@ use {
         cluster_info_vote_listener::VerifiedVoteSender,
     },
     agave_bls_cert_verify::cert_verify::{
-        verify_votor_message_certificate, CertVerifyError as BLSCertVerifyError,
+        verify_cert_get_total_stake, Error as BlsCertVerifyError,
     },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{
@@ -57,13 +57,13 @@ fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankM
         .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
 }
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error)]
 enum CertVerifyError {
     #[error("Failed to find key to rank map for slot {0}")]
     KeyToRankMapNotFound(Slot),
 
     #[error("Cert Verification Error {0:?}")]
-    CertVerifyFailed(#[from] BLSCertVerifyError),
+    CertVerifyFailed(#[from] BlsCertVerifyError),
 
     #[error("Not enough stake {0}: {1} < {2}")]
     NotEnoughStake(u64, Fraction, Fraction),
@@ -559,10 +559,10 @@ impl BLSSigVerifier {
         let (required_stake_fraction, _) =
             certificate_limits_and_vote_types(&cert_to_verify.cert_type);
         let aggregate_stake =
-            verify_votor_message_certificate(cert_to_verify, key_to_rank_map.len(), |rank| {
+            verify_cert_get_total_stake(cert_to_verify, key_to_rank_map.len(), |rank| {
                 key_to_rank_map
                     .get_pubkey_and_stake(rank)
-                    .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
+                    .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
             })?;
         let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
         if my_fraction < required_stake_fraction {
