@@ -896,8 +896,7 @@ impl Blockstore {
         block_location: BlockLocation,
     ) -> Option<Hash> {
         let slot_meta = self
-            .meta_cf
-            .get(slot)
+            .meta_from_location(slot, block_location)
             .expect("Blockstore operations must succeed")?;
 
         if !slot_meta.is_full() {
