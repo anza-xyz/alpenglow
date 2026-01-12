@@ -630,6 +630,7 @@ fn record_and_complete_block(
         }
     }
 
+    // Shutdown and clear any inflight records
     shutdown_and_drain_record_receiver(&ctx.poh_recorder, &mut ctx.record_receiver)?;
 
     // By now, we should have received ParentReady and called handle_parent_ready().
