@@ -896,8 +896,7 @@ impl Blockstore {
         block_location: BlockLocation,
     ) -> Option<Hash> {
         let slot_meta = self
-            .meta_cf
-            .get(slot)
+            .meta_from_location(slot, block_location)
             .expect("Blockstore operations must succeed")?;
 
         if !slot_meta.is_full() {
@@ -13128,6 +13127,75 @@ pub mod tests {
 
         assert!(blockstore
             .get_double_merkle_root(incomplete_slot, block_location)
+            .is_none());
+    }
+
+    #[test]
+    fn test_get_double_merkle_root_alternate_location() {
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let parent_slot = 990;
+        let slot = 1000;
+        let num_entries = 200;
+
+        let (data_shreds, coding_shreds, leader_schedule) =
+            setup_erasure_shreds(slot, parent_slot, num_entries);
+
+        let block_id = Hash::new_unique();
+        let block_location = BlockLocation::Alternate { block_id };
+
+        // Insert shreds to populate merkle_root_meta_cf
+        for shred in data_shreds.iter().chain(coding_shreds.iter()) {
+            let duplicates =
+                blockstore.insert_shred_return_duplicate(shred.clone(), &leader_schedule);
+            assert!(duplicates.is_empty());
+        }
+
+        let slot_meta = blockstore.meta(slot).unwrap().unwrap();
+        assert!(slot_meta.is_full());
+
+        // Move slot meta to alternate column only
+        blockstore
+            .alt_meta_cf
+            .put((slot, block_id), &slot_meta)
+            .unwrap();
+        blockstore.meta_cf.delete(slot).unwrap();
+
+        let parent_meta = ParentMeta {
+            parent_slot,
+            parent_block_id: Hash::default(),
+            replay_fec_set_index: 0,
+        };
+        blockstore
+            .parent_meta_cf
+            .put((slot, block_location), &parent_meta)
+            .unwrap();
+
+        assert!(blockstore.meta(slot).unwrap().is_none());
+        assert!(blockstore
+            .alt_meta_cf
+            .get((slot, block_id))
+            .unwrap()
+            .unwrap()
+            .is_full());
+
+        // Should read slot meta from alt_meta_cf, not meta_cf
+        let double_merkle_root = blockstore
+            .get_double_merkle_root(slot, block_location)
+            .unwrap();
+
+        let double_merkle_meta = blockstore
+            .double_merkle_meta_cf
+            .get((slot, block_location))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+
+        // Original location has no slot meta
+        assert!(blockstore
+            .get_double_merkle_root(slot, BlockLocation::Original)
             .is_none());
     }
 

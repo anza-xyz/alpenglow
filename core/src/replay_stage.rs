@@ -4794,7 +4794,7 @@ impl ReplayStage {
                 let (actual_parent_bank, replay_offset) = if progress.contains_key(&child_slot) {
                     (parent_bank.clone(), None)
                 } else {
-                    match blockstore.get_parent_meta(child_slot, Some(BlockLocation::Original)) {
+                    match blockstore.get_parent_meta(child_slot, BlockLocation::Original) {
                         Ok(Some(parent_meta)) if parent_meta.populated_from_update_parent() => {
                             // UpdateParent: use new parent and calculate replay offset
                             let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot)
