@@ -6,8 +6,13 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    solana_pubkey::Pubkey,
+    solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_votor_messages::reward_certificate::NotarRewardCertificate,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// Struct to manage per slot state for notar votes used to build a [`NotarRewardCertificate`].
@@ -38,6 +43,7 @@ impl NotarEntry {
     /// Adds a new observed vote to the aggregate.
     pub(super) fn add_vote(
         &mut self,
+        rank_map: &Arc<BLSPubkeyToRankMap>,
         rank: u16,
         signature: &BLSSignature,
         block_id: Hash,
@@ -50,15 +56,17 @@ impl NotarEntry {
             .partials
             .entry(block_id)
             .or_insert(PartialCert::new(max_validators));
-        let res = partial.add_vote(rank, signature);
+        let res = partial.add_vote(rank_map, rank, signature);
         if res.is_err() {
             self.voted.remove(&rank);
         }
         res
     }
 
-    /// Builds a [`NotarRewardCertificate`] from the collected votes.
-    pub(super) fn build_cert(self, slot: Slot) -> Option<NotarRewardCertificate> {
+    /// Builds a [`NotarRewardCertificate`] from the observed votes.
+    ///
+    /// On success, returns the built [`NotarRewardCertificate`] and the list of validators in the cert.
+    pub(super) fn build_cert(self, slot: Slot) -> Option<(NotarRewardCertificate, Vec<Pubkey>)> {
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
         // ideally we should pick the block_id with the most stake to maximum leader rewards.
         // we expect this to be rare enough that picking the block_id with the most votes should be fine in most cases.
@@ -67,17 +75,19 @@ impl NotarEntry {
             .partials
             .into_iter()
             .max_by_key(|(_block_id, partial)| partial.votes_seen())?;
-        let (signature, bitmap) = partial
+        let (signature, bitmap, validators) = partial
             .build_sig_bitmap()
             .inspect_err(|e| {
                 warn!("Build notar reward cert failed with {e}");
             })
             .ok()?;
-        NotarRewardCertificate::try_new(slot, block_id, signature, bitmap)
-            .inspect_err(|e| {
+        match NotarRewardCertificate::try_new(slot, block_id, signature, bitmap) {
+            Err(e) => {
                 warn!("Build notar reward cert failed with {e}");
-            })
-            .ok()
+                None
+            }
+            Ok(c) => Some((c, validators)),
+        }
     }
 }
 
@@ -85,35 +95,18 @@ impl NotarEntry {
 mod tests {
     use {
         super::*,
-        solana_bls_signatures::Keypair as BLSKeypair,
+        crate::consensus_rewards::entry::tests::{
+            get_rank_map_keypairs, new_vote, validate_bitmap,
+        },
         solana_hash::Hash,
-        solana_signer_store::{decode, Decoded},
         solana_votor_messages::{consensus_message::VoteMessage, vote::Vote},
     };
-
-    fn validate_bitmap(bitmap: &[u8], num_set: usize, max_len: usize) {
-        let bitvec = decode(bitmap, max_len).unwrap();
-        match bitvec {
-            Decoded::Base2(bitvec) => assert_eq!(bitvec.count_ones(), num_set),
-            Decoded::Base3(_, _) => panic!("unexpected variant"),
-        }
-    }
-
-    fn new_vote(vote: Vote, rank: usize) -> VoteMessage {
-        let serialized = bincode::serialize(&vote).unwrap();
-        let keypair = BLSKeypair::new();
-        let signature = keypair.sign(&serialized).into();
-        VoteMessage {
-            vote,
-            signature,
-            rank: rank.try_into().unwrap(),
-        }
-    }
 
     #[test]
     fn validator_add_vote() {
         let slot = 123;
         let max_validators = 5;
+        let (rank_map, keypairs) = get_rank_map_keypairs(max_validators, slot);
         let rank = 0;
         let mut entry = NotarEntry::new(max_validators);
 
@@ -126,6 +119,7 @@ mod tests {
         };
         entry
             .add_vote(
+                &rank_map,
                 invalid_vote.rank,
                 &invalid_vote.signature,
                 blockid0,
@@ -133,12 +127,24 @@ mod tests {
             )
             .unwrap_err();
 
-        let vote = new_vote(notar, rank as usize);
+        let vote = new_vote(notar, rank as usize, &keypairs);
         entry
-            .add_vote(vote.rank, &vote.signature, blockid0, max_validators)
+            .add_vote(
+                &rank_map,
+                vote.rank,
+                &vote.signature,
+                blockid0,
+                max_validators,
+            )
             .unwrap();
         let err = entry
-            .add_vote(vote.rank, &vote.signature, blockid0, max_validators)
+            .add_vote(
+                &rank_map,
+                vote.rank,
+                &vote.signature,
+                blockid0,
+                max_validators,
+            )
             .unwrap_err();
         assert!(matches!(err, AddVoteError::Duplicate));
     }
@@ -147,6 +153,8 @@ mod tests {
     fn validate_build_cert() {
         let slot = 123;
         let max_validators = 5;
+        let (rank_map, keypairs) = get_rank_map_keypairs(max_validators, slot);
+
         let mut entry = NotarEntry::new(max_validators);
         assert_eq!(entry.clone().build_cert(slot), None);
 
@@ -155,19 +163,31 @@ mod tests {
 
         for rank in 0..2 {
             let notar = Vote::new_notarization_vote(slot, blockid0);
-            let vote = new_vote(notar, rank);
+            let vote = new_vote(notar, rank, &keypairs);
             entry
-                .add_vote(vote.rank, &vote.signature, blockid0, max_validators)
+                .add_vote(
+                    &rank_map,
+                    vote.rank,
+                    &vote.signature,
+                    blockid0,
+                    max_validators,
+                )
                 .unwrap();
         }
         for rank in 2..5 {
             let notar = Vote::new_notarization_vote(slot, blockid1);
-            let vote = new_vote(notar, rank);
+            let vote = new_vote(notar, rank, &keypairs);
             entry
-                .add_vote(vote.rank, &vote.signature, blockid1, max_validators)
+                .add_vote(
+                    &rank_map,
+                    vote.rank,
+                    &vote.signature,
+                    blockid1,
+                    max_validators,
+                )
                 .unwrap();
         }
-        let notar_cert = entry.build_cert(slot).unwrap();
+        let (notar_cert, _) = entry.build_cert(slot).unwrap();
         assert_eq!(notar_cert.slot, slot);
         assert_eq!(notar_cert.block_id, blockid1);
         validate_bitmap(notar_cert.bitmap(), 3, 5);

@@ -518,7 +518,11 @@ fn record_and_complete_block(
     // Write the single tick for this slot
 
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let BuildRewardCertsResponse { skip, notar } = reward_certs_receiver
+    let BuildRewardCertsResponse {
+        skip,
+        notar,
+        validators,
+    } = reward_certs_receiver
         .recv()
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
@@ -526,6 +530,7 @@ fn record_and_complete_block(
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
         &footer,
+        &validators,
     );
 
     drop(bank);

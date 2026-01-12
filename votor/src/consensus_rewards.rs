@@ -4,6 +4,7 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
+    solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
         consensus_message::VoteMessage,
@@ -151,13 +152,12 @@ impl ConsensusRewards {
     /// Adds received [`VoteMessage`] from other validators.
     fn add_vote(&mut self, root_bank: &Bank, vote: &VoteMessage) {
         let slot = vote.vote.slot();
-        let Some(max_validators) = root_bank
-            .epoch_stakes_from_slot(slot)
-            .map(|s| s.bls_pubkey_to_rank_map().len())
-        else {
+        let Some(epoch_stakes) = root_bank.epoch_stakes_from_slot(slot) else {
             warn!("failed to look up max_validators for slot {slot}");
             return;
         };
+        let rank_map = epoch_stakes.bls_pubkey_to_rank_map();
+        let max_validators = rank_map.len();
         let root_slot = root_bank.slot();
         // drop state that is too old based on how the root slot has progressed
         self.votes = self.votes.split_off(
@@ -173,7 +173,7 @@ impl ConsensusRewards {
             .votes
             .entry(vote.vote.slot())
             .or_insert(Entry::new(max_validators))
-            .add_vote(vote)
+            .add_vote(rank_map, vote)
         {
             Ok(()) => (),
             Err(e) => {
@@ -187,10 +187,7 @@ impl ConsensusRewards {
         // we assume that the block creation loop will only ever request to build reward certs in a strictly increasing order so we can drop older state
         self.votes = self.votes.split_off(&slot);
         match self.votes.remove(&slot) {
-            None => BuildRewardCertsResponse {
-                skip: None,
-                notar: None,
-            },
+            None => BuildRewardCertsResponse::empty(),
             Some(entry) => entry.build_certs(slot),
         }
     }
@@ -214,6 +211,18 @@ pub struct BuildRewardCertsResponse {
     pub skip: Option<SkipRewardCertificate>,
     /// Notar reward certificate.  None if building failed or no notar votes were registered.
     pub notar: Option<NotarRewardCertificate>,
+    /// List of validators in the above certs.
+    pub validators: Vec<Pubkey>,
+}
+
+impl BuildRewardCertsResponse {
+    fn empty() -> Self {
+        Self {
+            skip: None,
+            notar: None,
+            validators: vec![],
+        }
+    }
 }
 
 /// Service to run the consensus reward container in a dedicated thread.

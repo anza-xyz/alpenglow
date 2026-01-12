@@ -1,5 +1,8 @@
 use {
-    crate::bank::Bank,
+    crate::{
+        bank::Bank,
+        validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
+    },
     agave_bls_cert_verify::cert_verify::verify_votor_message_certificate,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
@@ -7,6 +10,7 @@ use {
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
         VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
+    solana_pubkey::Pubkey,
     solana_votor_messages::{
         consensus_message::Certificate,
         fraction::Fraction,
@@ -44,6 +48,8 @@ pub enum BlockComponentProcessorError {
     SpuriousUpdateParent,
     #[error("Abandoned bank")]
     AbandonedBank(VersionedUpdateParent),
+    #[error("invalid reward certs {0}")]
+    InvalidRewardCerts(#[from] ValidatedRewardCertError),
 }
 
 #[derive(Default)]
@@ -254,7 +260,12 @@ impl BlockComponentProcessor {
         let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
-        Self::update_bank_with_footer(bank, footer);
+        let validated_reward_cert = ValidatedRewardCert::try_new(
+            &bank,
+            &footer.skip_reward_cert,
+            &footer.notar_reward_cert,
+        )?;
+        Self::update_bank_with_footer(bank, footer, validated_reward_cert.validators());
 
         self.has_footer = true;
         Ok(())
@@ -345,7 +356,11 @@ impl BlockComponentProcessor {
         (min_working_bank_time, max_working_bank_time)
     }
 
-    pub fn update_bank_with_footer(bank: Arc<Bank>, footer: &BlockFooterV1) {
+    pub fn update_bank_with_footer(
+        bank: Arc<Bank>,
+        footer: &BlockFooterV1,
+        _validators_to_reward: &[Pubkey],
+    ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
@@ -362,9 +377,6 @@ mod tests {
             BlockFooterV1, BlockHeaderV1, FinalCertificate, UpdateParentV1, VersionedUpdateParent,
         },
         solana_program::{hash::Hash, pubkey::Pubkey},
-        solana_votor_messages::reward_certificate::{
-            NotarRewardCertificate, SkipRewardCertificate,
-        },
         std::sync::Arc,
     };
 
@@ -448,8 +460,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         // First footer should succeed
@@ -485,8 +497,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -548,8 +560,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         processor
@@ -589,8 +601,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
         processor
             .on_footer(bank.clone(), parent.clone(), &footer)
@@ -673,8 +685,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
         processor
             .on_marker(bank.clone(), parent, footer_marker, &migration_status)
@@ -732,8 +744,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         // Should succeed - footer is processed
@@ -804,8 +816,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         processor.on_footer(bank.clone(), parent, &footer).unwrap();
@@ -846,8 +858,8 @@ mod tests {
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
 
         let result = processor.on_footer(bank, parent, &footer);
@@ -1040,8 +1052,8 @@ mod tests {
             block_producer_time_nanos: (parent_time_nanos + 100_000_000) as u64,
             block_user_agent: vec![],
             final_cert: Some(FinalCertificate::new_for_tests()),
-            skip_reward_cert: Some(SkipRewardCertificate::new_for_tests()),
-            notar_reward_cert: Some(NotarRewardCertificate::new_for_tests()),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         });
         processor.on_footer(bank, parent, &footer).unwrap();
 
