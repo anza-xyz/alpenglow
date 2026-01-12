@@ -67,7 +67,7 @@ use {
         vote_history_storage::VoteHistoryStorage,
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{consensus_message::FinalizationCerts, migration::MigrationStatus},
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
@@ -208,6 +208,7 @@ impl Tvu {
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_info_sender: Sender<LeaderWindowInfo>,
         highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+        highest_finalized: Arc<RwLock<FinalizationCerts>>,
         voting_service_test_override: Option<VotingServiceOverride>,
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
@@ -455,6 +456,7 @@ impl Tvu {
             replay_highest_frozen,
             leader_window_info_sender,
             highest_parent_ready,
+            highest_finalized,
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
             migration_status,
@@ -691,6 +693,7 @@ pub mod tests {
         );
         let (votor_event_sender, votor_event_receiver) = unbounded();
         let highest_parent_ready = Arc::new(RwLock::default());
+        let highest_finalized = Arc::new(RwLock::default());
         let (optimistic_parent_sender, _optimistic_parent_receiver) = unbounded();
         let (reward_certs_sender, _reward_certs_receiver) = bounded(1);
         let (_build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
@@ -764,6 +767,7 @@ pub mod tests {
             Arc::new(ReplayHighestFrozen::default()),
             leader_window_info_sender,
             highest_parent_ready,
+            highest_finalized,
             None,
             votor_event_sender,
             votor_event_receiver,

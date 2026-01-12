@@ -5,7 +5,28 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    std::sync::Arc,
 };
+
+/// Define the finalization certs type
+#[derive(Default, PartialEq, Debug, Clone)]
+pub enum FinalizationCerts {
+    /// Finalize certificate and Notarize certificate
+    Finalize {
+        /// Finalize certificate
+        final_cert: Arc<Certificate>,
+        /// Notarize certificate
+        notar_cert: Arc<Certificate>,
+    },
+    /// Fast finalize certificate
+    FinalizeFast {
+        /// Fast finalize certificate
+        final_fast_cert: Arc<Certificate>,
+    },
+    /// Not initialized
+    #[default]
+    Uninitialized,
+}
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";

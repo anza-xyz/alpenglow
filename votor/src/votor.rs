@@ -76,7 +76,10 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
+    solana_votor_messages::{
+        consensus_message::{ConsensusMessage, FinalizationCerts},
+        migration::MigrationStatus,
+    },
     std::{
         collections::HashMap,
         sync::{atomic::AtomicBool, Arc, RwLock},
@@ -113,6 +116,7 @@ pub struct VotorConfig {
     pub bank_notification_sender: Option<BankNotificationSenderConfig>,
     pub leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub highest_finalized: Arc<RwLock<FinalizationCerts>>,
     pub event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
@@ -166,6 +170,7 @@ impl Votor {
             bank_notification_sender,
             leader_window_info_sender,
             highest_parent_ready,
+            highest_finalized,
             event_sender,
             own_vote_sender,
             event_receiver,
@@ -245,6 +250,7 @@ impl Votor {
             bls_sender,
             event_sender,
             commitment_sender,
+            highest_finalized,
         };
 
         ConsensusMetrics::start_metrics_loop(root_epoch, consensus_metrics_receiver, exit.clone());
