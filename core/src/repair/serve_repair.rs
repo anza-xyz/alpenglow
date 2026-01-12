@@ -117,7 +117,7 @@ pub enum ShredRepairType {
     /// Requesting the missing shred at a particular index for a specific block ID
     ShredForBlockId {
         slot: Slot,
-        index: u64,
+        index: u32,
         fec_set_merkle_root: Hash,
         // Double merkle block id
         block_id: Hash,
@@ -176,7 +176,7 @@ impl RequestResponse for ShredRepairType {
                 ..
             } => {
                 shred_slot == *slot
-                    && get_shred_index(shred) == Some(*index)
+                    && shred::layout::get_index(shred) == Some(*index)
                     && get_merkle_root(shred) == Some(*fec_set_merkle_root)
             }
         }
@@ -378,7 +378,7 @@ type PingCache = ping_pong::PingCache<REPAIR_PING_TOKEN_SIZE>;
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiEnumVisitor, AbiExample),
-    frozen_abi(digest = "7XVfjbxcWhiwubU3BkE5QPT6qQLkKBraYGhAHZKWx6UZ")
+    frozen_abi(digest = "GpwKFM1ddU5sXq38KtPyZtPvDMQig7VHKJ4NP7US5ke5")
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RepairProtocol {
@@ -426,7 +426,7 @@ pub enum RepairProtocol {
     WindowIndexForBlockId {
         header: RepairRequestHeader,
         slot: Slot,
-        shred_index: u64,
+        shred_index: u32,
         fec_set_merkle_root: Hash,
         block_id: Hash,
     },
@@ -770,7 +770,7 @@ impl ServeRepair {
                             recycler,
                             from_addr,
                             *slot,
-                            *shred_index,
+                            u64::from(*shred_index),
                             *block_id,
                             *nonce,
                         );
@@ -1533,7 +1533,7 @@ impl ServeRepair {
             } => {
                 repair_stats
                     .shred_for_block_id
-                    .update(repair_peer_id, *slot, *index);
+                    .update(repair_peer_id, *slot, u64::from(*index));
                 RepairProtocol::WindowIndexForBlockId {
                     header,
                     slot: *slot,
