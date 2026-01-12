@@ -205,10 +205,8 @@ impl BlockComponentProcessor {
         cert: &Certificate,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = cert.cert_type.slot();
-        let epoch = bank.epoch_schedule().get_epoch(slot);
         let epoch_stakes = bank
-            .epoch_stakes_map()
-            .get(&epoch)
+            .epoch_stakes_from_slot(slot)
             .ok_or(BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
         let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         let total_stake = epoch_stakes.total_stake();

@@ -54,15 +54,6 @@ pub fn wants_vote(
     true
 }
 
-/// Returns the maximum number of validators for the given slot.
-fn get_max_validators(bank: &Bank, slot: Slot) -> Option<usize> {
-    let epoch_stakes = bank.epoch_stakes_map();
-    let epoch = bank.epoch_schedule().get_epoch(slot);
-    epoch_stakes
-        .get(&epoch)
-        .map(|stake| stake.bls_pubkey_to_rank_map().len())
-}
-
 /// Container to store state needed to generate reward certificates.
 struct ConsensusRewards {
     /// Per [`Slot`], stores skip and notar votes.
@@ -160,7 +151,10 @@ impl ConsensusRewards {
     /// Adds received [`VoteMessage`] from other validators.
     fn add_vote(&mut self, root_bank: &Bank, vote: &VoteMessage) {
         let slot = vote.vote.slot();
-        let Some(max_validators) = get_max_validators(root_bank, slot) else {
+        let Some(max_validators) = root_bank
+            .epoch_stakes_from_slot(slot)
+            .map(|s| s.bls_pubkey_to_rank_map().len())
+        else {
             warn!("failed to look up max_validators for slot {slot}");
             return;
         };

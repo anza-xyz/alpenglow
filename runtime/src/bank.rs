@@ -5063,6 +5063,11 @@ impl Bank {
         self.epoch_stakes.get(&epoch)
     }
 
+    pub fn epoch_stakes_from_slot(&self, slot: Slot) -> Option<&VersionedEpochStakes> {
+        let epoch = self.epoch_schedule().get_epoch(slot);
+        self.epoch_stakes(epoch)
+    }
+
     pub fn epoch_stakes_map(&self) -> &HashMap<Epoch, VersionedEpochStakes> {
         &self.epoch_stakes
     }

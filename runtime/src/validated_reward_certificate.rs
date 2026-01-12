@@ -12,7 +12,6 @@ use {
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
         vote::Vote,
     },
-    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -78,15 +77,6 @@ fn extract_validators(
     Ok(())
 }
 
-/// Returns the rank map corresponding to the provided slot in the provided bank.
-fn get_rank_map(bank: &Bank, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
-    let stakes = bank.epoch_stakes_map();
-    let epoch = bank.epoch_schedule().get_epoch(slot);
-    stakes
-        .get(&epoch)
-        .map(|stake| stake.bls_pubkey_to_rank_map())
-}
-
 /// Extracts the slot corresponding to the provided reward certs.
 ///
 /// Returns Ok(None) if no certs were provided.
@@ -131,7 +121,10 @@ impl ValidatedRewardCert {
         let Some(slot) = extract_slot(bank.slot(), skip, notar)? else {
             return Ok(Self { validators: vec![] });
         };
-        let rank_map = get_rank_map(bank, slot).ok_or(Error::NoRankMap)?;
+        let rank_map = bank
+            .epoch_stakes_from_slot(slot)
+            .ok_or(Error::NoRankMap)?
+            .bls_pubkey_to_rank_map();
         let max_validators = rank_map.len();
 
         let mut validators = Vec::with_capacity(max_validators);
@@ -177,7 +170,7 @@ mod tests {
         solana_hash::Hash,
         solana_signer_store::encode_base2,
         solana_votor_messages::consensus_message::VoteMessage,
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::Arc},
     };
 
     fn new_vote(vote: Vote, rank: usize, keypair: &BLSKeypair) -> VoteMessage {
@@ -229,7 +222,10 @@ mod tests {
         let bank = Arc::new(Bank::new_for_tests(&genesis.genesis_config));
         let bank = Bank::new_from_parent(bank, &Pubkey::default(), bank_slot);
 
-        let rank_map = get_rank_map(&bank, reward_slot).unwrap();
+        let rank_map = bank
+            .epoch_stakes_from_slot(reward_slot)
+            .unwrap()
+            .bls_pubkey_to_rank_map();
         let signing_keys = (0..num_validators)
             .map(|index| {
                 keypair_map

@@ -50,10 +50,7 @@ use {
 //            Revisit this to figure out the best way to handle this.
 
 fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
-    let stakes = bank.epoch_stakes_map();
-    let epoch = bank.epoch_schedule().get_epoch(slot);
-    stakes
-        .get(&epoch)
+    bank.epoch_stakes_from_slot(slot)
         .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
 }
 
