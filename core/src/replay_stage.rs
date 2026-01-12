@@ -3663,8 +3663,8 @@ impl ReplayStage {
                         progress.remove(&bank_slot);
 
                         info!(
-                            "AbandonedBank at slot {bank_slot}: cleared bank and progress, \
-                             will recreate with parent {new_parent_slot}"
+                            "AbandonedBank at slot {bank_slot}: cleared bank and progress, will \
+                             recreate with parent {new_parent_slot}"
                         );
                     }
                     Err(err) => {
@@ -4804,8 +4804,8 @@ impl ReplayStage {
                             };
                             let num_shreds = u64::from(parent_meta.replay_fec_set_index);
                             info!(
-                                "slot {child_slot}: UpdateParent detected, using parent {} \
-                                 with replay offset {} shreds",
+                                "slot {child_slot}: UpdateParent detected, using parent {} with \
+                                 replay offset {} shreds",
                                 parent_meta.parent_slot, num_shreds
                             );
                             (new_parent.clone(), Some(num_shreds))
