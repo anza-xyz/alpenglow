@@ -4535,6 +4535,16 @@ impl Blockstore {
         // `consumed` is the next missing shred index, but shred `i` existing in
         // completed_data_end_indexes implies it's not missing
         assert!(!completed_data_indexes.contains(&consumed));
+
+        // When using UpdateParent's replay_fec_set_index as start_index, the shreds
+        // before that index might not have been received yet. For now, let's do the dumb
+        // thing of waiting for the previous shreds to arrive prior to replay.
+        //
+        // TODO(ksn): replay can get faster here by not having to wait for the shreds prior
+        // to an UpdateParent.
+        if start_index >= consumed {
+            return vec![];
+        }
         completed_data_indexes
             .range(start_index..consumed)
             .scan(start_index, |start, index| {
@@ -8893,6 +8903,23 @@ pub mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_get_completed_data_ranges_start_index_beyond_consumed() {
+        let completed_data_end_indexes = [2, 4, 9, 11].iter().copied().collect();
+
+        // start_index > consumed: out-of-order shred delivery during fast leader handover
+        assert_eq!(
+            Blockstore::get_completed_data_ranges(32, &completed_data_end_indexes, 3),
+            vec![]
+        );
+
+        // start_index == consumed
+        assert_eq!(
+            Blockstore::get_completed_data_ranges(5, &completed_data_end_indexes, 5),
+            vec![]
+        );
     }
 
     #[test]
