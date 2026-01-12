@@ -803,6 +803,14 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
         ctx.my_pubkey
     );
 
+    if ctx.poh_recorder.read().unwrap().start_slot() != parent_slot {
+        // Important to keep Poh somewhat accurate for
+        // parts of the system relying on PohRecorder::would_be_leader()
+        reset_poh_recorder(&parent_bank, ctx);
+    }
+
+    // After potentially resetting, there should be no working bank.
+    // If there still is one, something has gone wrong.
     if let Some(bank) = ctx.poh_recorder.read().unwrap().bank() {
         panic!(
             "{}: Attempting to produce a block for {slot}, however we still are in production of \
@@ -810,12 +818,6 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
             ctx.my_pubkey,
             bank.slot(),
         );
-    }
-
-    if ctx.poh_recorder.read().unwrap().start_slot() != parent_slot {
-        // Important to keep Poh somewhat accurate for
-        // parts of the system relying on PohRecorder::would_be_leader()
-        reset_poh_recorder(&parent_bank, ctx);
     }
 
     let tpu_bank = ReplayStage::new_bank_from_parent_with_notify(

@@ -4788,31 +4788,36 @@ impl ReplayStage {
                     continue;
                 }
 
-                // Determine actual parent and replay offset.
-                // If progress entry exists, the slot was already set up - use default parent.
-                // If no progress entry, check ParentMeta for UpdateParent info.
-                let (actual_parent_bank, replay_offset) = if progress.contains_key(&child_slot) {
-                    (parent_bank.clone(), None)
-                } else {
-                    match blockstore.get_parent_meta(child_slot, BlockLocation::Original) {
-                        Ok(Some(parent_meta)) if parent_meta.populated_from_update_parent() => {
-                            // UpdateParent: use new parent and calculate replay offset
-                            let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot)
-                            else {
-                                // New parent not frozen yet, skip
-                                continue;
-                            };
-                            let num_shreds = u64::from(parent_meta.replay_fec_set_index);
-                            info!(
-                                "slot {child_slot}: UpdateParent detected, using parent {} with \
-                                 replay offset {} shreds",
-                                parent_meta.parent_slot, num_shreds
-                            );
-                            (new_parent.clone(), Some(num_shreds))
-                        }
-                        _ => (parent_bank.clone(), None),
-                    }
+                // Determine actual parent and replay offset from ParentMeta.
+                // If ParentMeta doesn't exist yet (shred 0 not received), skip for now.
+                debug_assert!(!progress.contains_key(&child_slot));
+
+                let Some(parent_meta) = blockstore
+                    .get_parent_meta(child_slot, BlockLocation::Original)
+                    .expect("Blockstore should not fail")
+                else {
+                    // ParentMeta not populated yet - skip
+                    debug_assert!(!blockstore.is_full(child_slot));
+                    continue;
                 };
+
+                let (actual_parent_bank, replay_offset) =
+                    if parent_meta.populated_from_update_parent() {
+                        // UpdateParent: use new parent and calculate replay offset
+                        let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot) else {
+                            // New parent not frozen yet, skip
+                            continue;
+                        };
+                        let num_shreds = u64::from(parent_meta.replay_fec_set_index);
+                        info!(
+                            "slot {child_slot}: UpdateParent detected, using parent {} with \
+                             replay offset {} shreds",
+                            parent_meta.parent_slot, num_shreds
+                        );
+                        (new_parent.clone(), Some(num_shreds))
+                    } else {
+                        (parent_bank.clone(), None)
+                    };
 
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&actual_parent_bank))
