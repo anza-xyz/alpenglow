@@ -1470,7 +1470,6 @@ pub struct ConfirmationProgress {
     pub num_shreds: u64,
     pub num_entries: usize,
     pub num_txs: usize,
-    pub pending_new_parent: Option<Slot>,
 }
 
 impl ConfirmationProgress {
