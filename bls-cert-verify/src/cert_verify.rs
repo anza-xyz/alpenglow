@@ -29,6 +29,8 @@ pub enum Error {
 
 /// Verifies a [`Certificate`] that is signed at most by [`max_validators`] using the provided [`rank_map`] closure to look up the [`BlsPubkey`] and stake.
 ///
+/// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
+///
 /// On success, returns th total stake that signed the certificate.
 pub fn verify_cert_get_total_stake(
     cert: &Certificate,
@@ -88,9 +90,9 @@ pub fn verify_cert_get_total_stake(
     Ok(total_stake)
 }
 
-/// Verifies the [`signature`] of the [`payload`] which is signed by the validators in the base2 encoded [`ranks`] using the [`rank_map`] to lookup the [`BlsPubkey`].
+/// Verifies the [`signature`] of the [`payload`] which is signed by at most [`max_validators`] validators in the base2 encoded [`ranks`] using the [`rank_map`] to lookup the [`BlsPubkey`].
 ///
-/// [`rank_map`] is [`FnMut`] allowing caller to perform computation based on which validators signed the payload.
+/// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
 pub fn verify_base2<S: AsSignature>(
     payload: &[u8],
     signature: &S,
@@ -103,11 +105,29 @@ pub fn verify_base2<S: AsSignature>(
         Decoded::Base2(ranks) => ranks,
         Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
     };
-    let pk = get_pubkey(&ranks, rank_map)?;
+
+    let pk = get_pubkey(&ranks, checked_rank_map(rank_map, &ranks))?;
     if pk.verify_signature(signature, payload)? {
         Ok(())
     } else {
         Err(Error::VerifySigFalse)
+    }
+}
+
+/// Add assertions to ensure that the rank_map is only accessed for ranks that are actually set.
+fn checked_rank_map<F>(
+    mut rank_map: F,
+    ranks: &BitVec<u8>,
+) -> impl FnMut(usize) -> Option<BlsPubkey> + use<'_, F>
+where
+    F: FnMut(usize) -> Option<BlsPubkey>,
+{
+    move |ind: usize| {
+        let pos = ranks
+            .get(ind)
+            .unwrap_or_else(|| panic!("{ind} is not valid in {ranks:?}"));
+        assert!(pos == true, "{ind} is not set in {ranks:?}");
+        rank_map(ind)
     }
 }
 
@@ -148,8 +168,8 @@ fn verify_base3(
         }
         Decoded::Base3(ranks, fallback_ranks) => {
             let pubkeys = [
-                get_pubkey(&ranks, &mut rank_map)?.into(),
-                get_pubkey(&fallback_ranks, rank_map)?.into(),
+                get_pubkey(&ranks, checked_rank_map(&mut rank_map, &ranks))?.into(),
+                get_pubkey(&fallback_ranks, checked_rank_map(rank_map, &fallback_ranks))?.into(),
             ];
             let verified = SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
