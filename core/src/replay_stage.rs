@@ -4788,20 +4788,23 @@ impl ReplayStage {
                     continue;
                 }
 
-                // Determine actual parent and replay offset from ParentMeta.
-                // If ParentMeta doesn't exist yet (shred 0 not received), skip for now.
                 debug_assert!(!progress.contains_key(&child_slot));
 
-                let Some(parent_meta) = blockstore
-                    .get_parent_meta(child_slot, BlockLocation::Original)
-                    .expect("Blockstore should not fail")
-                else {
-                    // ParentMeta not populated yet - skip
-                    debug_assert!(!blockstore.is_full(child_slot));
-                    continue;
-                };
+                // Determine actual parent and replay offset from ParentMeta.
+                let (actual_parent_bank, replay_offset) = if !migration_status
+                    .should_allow_block_markers(child_slot)
+                {
+                    (parent_bank.clone(), None)
+                } else {
+                    let Some(parent_meta) = blockstore
+                        .get_parent_meta(child_slot, BlockLocation::Original)
+                        .expect("Blockstore should not fail")
+                    else {
+                        // Shred 0 shouldn't be present, since parent meta isn't present.
+                        debug_assert!(!blockstore.is_full(child_slot));
+                        continue;
+                    };
 
-                let (actual_parent_bank, replay_offset) =
                     if parent_meta.populated_from_update_parent() {
                         // UpdateParent: use new parent and calculate replay offset
                         let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot) else {
@@ -4817,7 +4820,8 @@ impl ReplayStage {
                         (new_parent.clone(), Some(num_shreds))
                     } else {
                         (parent_bank.clone(), None)
-                    };
+                    }
+                };
 
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&actual_parent_bank))
