@@ -1,13 +1,9 @@
 use {
-    crate::{bank::Bank, epoch_stakes::BLSPubkeyToRankMap},
-    rayon::iter::IntoParallelRefIterator,
-    solana_bls_signatures::{
-        pubkey::VerifiablePubkey, BlsError, Pubkey as BLSPubkey, PubkeyProjective,
-        SignatureCompressed as BLSSignatureCompressed,
-    },
+    crate::bank::Bank,
+    agave_bls_cert_verify::cert_verify::{verify_base2, Error as BlsCertVerifyError},
+    solana_bls_signatures::BlsError,
     solana_clock::Slot,
     solana_pubkey::Pubkey,
-    solana_signer_store::{decode, DecodeError, Decoded},
     solana_votor_messages::{
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
         vote::Vote,
@@ -22,59 +18,10 @@ pub enum Error {
     InvalidSlotNumbers,
     #[error("rank map unavailable")]
     NoRankMap,
-    #[error("decoding bitmap failed with {0:?}")]
-    Decode(DecodeError),
-    #[error("wrong encoding base")]
-    WrongEncoding,
-    #[error("missing rank in rank map")]
-    MissingRank,
+    #[error("bls cert verification failed with {0}")]
+    BlsCertVerify(#[from] BlsCertVerifyError),
     #[error("verify signature failed with {0:?}")]
     VerifySig(#[from] BlsError),
-    #[error("verify signature return false")]
-    VerifySigFalse,
-}
-
-/// Verifies the [`BLSSignatureCompressed`] that signed the [`payload`] using the [`Vec<BLSPubkey>`].
-fn verify_signature(
-    payload: &[u8],
-    signature: &BLSSignatureCompressed,
-    validators: Vec<BLSPubkey>,
-) -> Result<(), Error> {
-    let pubkeys = validators
-        .into_iter()
-        .map(PubkeyProjective::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let aggregate_pubkey = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
-    if aggregate_pubkey.verify_signature(signature, payload)? {
-        Ok(())
-    } else {
-        Err(Error::VerifySigFalse)
-    }
-}
-
-/// Extracts a list of validator pubkeys from the rank bitmap and pushes them to the validators Vec.
-fn extract_validators(
-    payload: &[u8],
-    signature: &BLSSignatureCompressed,
-    bitmap: &[u8],
-    rank_map: &BLSPubkeyToRankMap,
-    validators: &mut Vec<Pubkey>,
-) -> Result<(), Error> {
-    let bitmap = decode(bitmap, rank_map.len()).map_err(Error::Decode)?;
-    let bitmap = match bitmap {
-        Decoded::Base2(bitmap) => bitmap,
-        Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
-    };
-    let mut bls_pubkeys = vec![];
-    for rank in bitmap.iter_ones() {
-        let (pubkey, bls_pubkey, _) = rank_map
-            .get_pubkey_and_stake(rank)
-            .ok_or(Error::MissingRank)?;
-        validators.push(*pubkey);
-        bls_pubkeys.push(*bls_pubkey);
-    }
-    verify_signature(payload, signature, bls_pubkeys)?;
-    Ok(())
 }
 
 /// Extracts the slot corresponding to the provided reward certs.
@@ -124,30 +71,39 @@ impl ValidatedRewardCert {
             .ok_or(Error::NoRankMap)?
             .bls_pubkey_to_rank_map();
         let max_validators = rank_map.len();
-
         let mut validators = Vec::with_capacity(max_validators);
+
+        let mut rank_map = |ind: usize| {
+            rank_map
+                .get_pubkey_and_stake(ind)
+                .map(|(pubkey, bls_pubkey, _)| {
+                    validators.push(*pubkey);
+                    *bls_pubkey
+                })
+        };
+
         if let Some(skip) = skip {
             let vote = Vote::new_skip_vote(skip.slot);
             // unwrap should be safe as we contructed the vote ourselves.
             let payload = bincode::serialize(&vote).unwrap();
-            extract_validators(
+            verify_base2(
                 &payload,
                 &skip.signature,
                 skip.bitmap(),
-                rank_map,
-                &mut validators,
+                max_validators,
+                &mut rank_map,
             )?
         }
         if let Some(notar) = notar {
             let vote = Vote::new_notarization_vote(notar.slot, notar.block_id);
             // unwrap should be safe as we contructed the vote ourselves.
             let payload = bincode::serialize(&vote).unwrap();
-            extract_validators(
+            verify_base2(
                 &payload,
                 &notar.signature,
                 notar.bitmap(),
+                max_validators,
                 rank_map,
-                &mut validators,
             )?
         }
         Ok(Self { validators })
@@ -168,7 +124,8 @@ mod tests {
         },
         bitvec::vec::BitVec,
         solana_bls_signatures::{
-            Keypair as BLSKeypair, Signature as BLSSignature, SignatureProjective,
+            Keypair as BlsKeypair, Signature as BLSSignature,
+            SignatureCompressed as BlsSignatureCompressed, SignatureProjective,
         },
         solana_hash::Hash,
         solana_signer_store::encode_base2,
@@ -176,7 +133,7 @@ mod tests {
         std::{collections::HashMap, sync::Arc},
     };
 
-    fn new_vote(vote: Vote, rank: usize, keypair: &BLSKeypair) -> VoteMessage {
+    fn new_vote(vote: Vote, rank: usize, keypair: &BlsKeypair) -> VoteMessage {
         let serialized = bincode::serialize(&vote).unwrap();
         let signature = keypair.sign(&serialized).into();
         VoteMessage {
@@ -186,7 +143,7 @@ mod tests {
         }
     }
 
-    fn build_sig_bitmap(votes: &[VoteMessage]) -> (BLSSignatureCompressed, Vec<u8>) {
+    fn build_sig_bitmap(votes: &[VoteMessage]) -> (BlsSignatureCompressed, Vec<u8>) {
         let max_rank = votes.last().unwrap().rank;
         let mut signature = SignatureProjective::identity();
         let mut bitvec = BitVec::repeat(false, (max_rank + 1) as usize);

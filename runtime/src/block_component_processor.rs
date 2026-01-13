@@ -3,7 +3,7 @@ use {
         bank::Bank,
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
-    agave_bls_cert_verify::cert_verify::verify_votor_message_certificate,
+    agave_bls_cert_verify::cert_verify::verify_cert_get_total_stake,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
@@ -217,10 +217,10 @@ impl BlockComponentProcessor {
         let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         let total_stake = epoch_stakes.total_stake();
 
-        let genesis_stake = verify_votor_message_certificate(cert, key_to_rank_map.len(), |rank| {
+        let genesis_stake = verify_cert_get_total_stake(cert, key_to_rank_map.len(), |rank| {
             key_to_rank_map
                 .get_pubkey_and_stake(rank)
-                .map(|(_, bls_pubkey, stake)| (*bls_pubkey, *stake))
+                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
         })
         .map_err(|_| {
             warn!(
