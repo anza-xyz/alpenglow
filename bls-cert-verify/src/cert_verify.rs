@@ -106,7 +106,12 @@ pub fn verify_base2<S: AsSignature>(
         Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
     };
 
-    let pk = get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?;
+    let pk = if cfg!(debug_assertions) {
+        get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
+    } else {
+        get_pubkey(&ranks, rank_map, max_validators)?
+    };
+
     if pk.verify_signature(signature, payload)? {
         Ok(())
     } else {
@@ -160,7 +165,11 @@ fn verify_base3(
     let ranks = decode(ranks, max_validators).map_err(Error::Decode)?;
     match ranks {
         Decoded::Base2(ranks) => {
-            let pk = get_pubkey(&ranks, rank_map, max_validators)?;
+            let pk = if cfg!(debug_assertions) {
+                get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
+            } else {
+                get_pubkey(&ranks, rank_map, max_validators)?
+            };
             if pk.verify_signature(signature, payload)? {
                 Ok(())
             } else {
@@ -168,20 +177,27 @@ fn verify_base3(
             }
         }
         Decoded::Base3(ranks, fallback_ranks) => {
-            let pubkeys = [
-                get_pubkey(
-                    &ranks,
-                    checked_rank_map(&mut rank_map, &ranks),
-                    max_validators,
-                )?
-                .into(),
-                get_pubkey(
-                    &fallback_ranks,
-                    checked_rank_map(rank_map, &fallback_ranks),
-                    max_validators,
-                )?
-                .into(),
-            ];
+            let pubkeys = if cfg!(debug_assertions) {
+                [
+                    get_pubkey(
+                        &ranks,
+                        checked_rank_map(&mut rank_map, &ranks),
+                        max_validators,
+                    )?
+                    .into(),
+                    get_pubkey(
+                        &fallback_ranks,
+                        checked_rank_map(rank_map, &fallback_ranks),
+                        max_validators,
+                    )?
+                    .into(),
+                ]
+            } else {
+                [
+                    get_pubkey(&ranks, &mut rank_map, max_validators)?.into(),
+                    get_pubkey(&fallback_ranks, rank_map, max_validators)?.into(),
+                ]
+            };
             let verified = SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
                 signature,
