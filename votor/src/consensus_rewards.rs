@@ -214,8 +214,8 @@ pub struct BuildRewardCertsResponse {
     pub skip: Option<SkipRewardCertificate>,
     /// Notar reward certificate.  None if building failed or no notar votes were registered.
     pub notar: Option<NotarRewardCertificate>,
-    /// List of validators in the above certs.
-    pub validators: Vec<Pubkey>,
+    /// List of validators in the above certs and the slot for which the certs are generated.
+    pub reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
 }
 
 impl BuildRewardCertsResponse {
@@ -223,7 +223,7 @@ impl BuildRewardCertsResponse {
         Self {
             skip: None,
             notar: None,
-            validators: vec![],
+            reward_slot_and_validators: None,
         }
     }
 }
