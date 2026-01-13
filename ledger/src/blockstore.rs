@@ -658,6 +658,18 @@ impl Blockstore {
         self.parent_meta_cf.get((slot, location))
     }
 
+    /// Sets the ParentMeta for the specified slot and location.
+    /// Only available for testing.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn put_parent_meta(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        parent_meta: &ParentMeta,
+    ) -> Result<()> {
+        self.parent_meta_cf.put((slot, location), parent_meta)
+    }
+
     /// Returns true if the specified slot is full.
     pub fn is_full(&self, slot: Slot) -> bool {
         if let Ok(Some(meta)) = self.meta_cf.get(slot) {

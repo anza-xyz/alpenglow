@@ -42,7 +42,8 @@ use {
         shred::{
             self,
             merkle_tree::{self, SIZE_OF_MERKLE_PROOF_ENTRY},
-            Nonce, ShredFetchStats, MAX_FEC_SETS_PER_SLOT, SIZE_OF_NONCE,
+            Nonce, ShredFetchStats, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT,
+            SIZE_OF_NONCE,
         },
     },
     solana_packet::PACKET_DATA_SIZE,
@@ -299,13 +300,22 @@ impl RequestResponse for BlockIdRepairType {
                     fec_set_root,
                     fec_set_proof,
                 },
-            ) => merkle_tree::verify_merkle_proof(
-                *fec_set_root,
-                *fec_set_index as usize,
-                fec_set_proof,
-                *block_id,
-            )
-            .is_ok(),
+            ) => {
+                // Convert from shred-space to leaf-index
+                let Some(leaf_index) = usize::try_from(*fec_set_index)
+                    .ok()
+                    .and_then(|i| i.checked_div(DATA_SHREDS_PER_FEC_BLOCK))
+                else {
+                    return false;
+                };
+                merkle_tree::verify_merkle_proof(
+                    *fec_set_root,
+                    leaf_index,
+                    fec_set_proof,
+                    *block_id,
+                )
+                .is_ok()
+            }
 
             (Self::ParentAndFecSetCount { .. }, _) | (Self::FecSetRoot { .. }, _) => false,
         }
