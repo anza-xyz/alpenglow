@@ -1,5 +1,5 @@
 use {
-    crate::{bank::Bank, epoch_stakes::BLSPubkeyToRankMap},
+    crate::bank::Bank,
     agave_bls_cert_verify::cert_verify::{verify_base2, Error as BlsCertVerifyError},
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
