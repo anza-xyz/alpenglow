@@ -31,7 +31,7 @@ pub enum Error {
 ///
 /// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
 ///
-/// On success, returns th total stake that signed the certificate.
+/// On success, returns the total stake that signed the certificate.
 pub fn verify_cert_get_total_stake(
     cert: &Certificate,
     max_validators: usize,
@@ -106,7 +106,7 @@ pub fn verify_base2<S: AsSignature>(
         Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
     };
 
-    let pk = get_pubkey(&ranks, checked_rank_map(rank_map, &ranks))?;
+    let pk = get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?;
     if pk.verify_signature(signature, payload)? {
         Ok(())
     } else {
@@ -135,8 +135,9 @@ where
 fn get_pubkey(
     ranks: &BitVec<u8>,
     mut rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
+    max_validators: usize,
 ) -> Result<PubkeyProjective, Error> {
-    let mut pubkeys = vec![];
+    let mut pubkeys = Vec::with_capacity(max_validators);
     for rank in ranks.iter_ones() {
         let pubkey = rank_map(rank).ok_or(Error::MissingRank)?;
         let pubkey = PubkeyProjective::try_from(pubkey)?;
@@ -159,7 +160,7 @@ fn verify_base3(
     let ranks = decode(ranks, max_validators).map_err(Error::Decode)?;
     match ranks {
         Decoded::Base2(ranks) => {
-            let pk = get_pubkey(&ranks, rank_map)?;
+            let pk = get_pubkey(&ranks, rank_map, max_validators)?;
             if pk.verify_signature(signature, payload)? {
                 Ok(())
             } else {
@@ -168,8 +169,18 @@ fn verify_base3(
         }
         Decoded::Base3(ranks, fallback_ranks) => {
             let pubkeys = [
-                get_pubkey(&ranks, checked_rank_map(&mut rank_map, &ranks))?.into(),
-                get_pubkey(&fallback_ranks, checked_rank_map(rank_map, &fallback_ranks))?.into(),
+                get_pubkey(
+                    &ranks,
+                    checked_rank_map(&mut rank_map, &ranks),
+                    max_validators,
+                )?
+                .into(),
+                get_pubkey(
+                    &fallback_ranks,
+                    checked_rank_map(rank_map, &fallback_ranks),
+                    max_validators,
+                )?
+                .into(),
             ];
             let verified = SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
