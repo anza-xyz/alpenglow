@@ -4791,21 +4791,26 @@ impl ReplayStage {
                 debug_assert!(!progress.contains_key(&child_slot));
 
                 // Determine actual parent and replay offset from ParentMeta.
-                let (actual_parent_bank, replay_offset) = if !migration_status
-                    .should_allow_block_markers(child_slot)
-                {
-                    (parent_bank.clone(), None)
-                } else {
-                    let Some(parent_meta) = blockstore
-                        .get_parent_meta(child_slot, BlockLocation::Original)
-                        .expect("Blockstore should not fail")
-                    else {
-                        // Shred 0 shouldn't be present, since parent meta isn't present.
-                        debug_assert!(!blockstore.is_full(child_slot));
-                        continue;
-                    };
+                let (actual_parent_bank, replay_offset) =
+                    if !migration_status.should_allow_block_markers(child_slot) {
+                        (parent_bank.clone(), None)
+                    } else {
+                        let Some(parent_meta) = blockstore
+                            .get_parent_meta(child_slot, BlockLocation::Original)
+                            .expect("Blockstore should not fail")
+                        else {
+                            // Shred 0 shouldn't be present, since parent meta isn't present.
+                            debug_assert!(!blockstore.is_full(child_slot));
+                            continue;
+                        };
 
-                    if parent_meta.populated_from_update_parent() {
+                        // No lock is held between get_slots_since and get_parent_meta, so
+                        // ParentMeta could have been updated in between. If so, continue and
+                        // the next iteration of generate_new_bank_forks will have consistent values.
+                        if parent_meta.parent_slot != parent_slot {
+                            continue;
+                        }
+
                         // UpdateParent: use new parent and calculate replay offset
                         let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot) else {
                             // New parent not frozen yet, skip
@@ -4818,10 +4823,7 @@ impl ReplayStage {
                             parent_meta.parent_slot, num_shreds
                         );
                         (new_parent.clone(), Some(num_shreds))
-                    } else {
-                        (parent_bank.clone(), None)
-                    }
-                };
+                    };
 
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(&actual_parent_bank))

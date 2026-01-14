@@ -593,11 +593,11 @@ fn record_and_complete_block(
     ctx.build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
-    loop {
+    let window_has_moved_on = loop {
         // Don't timeout until we've received ParentReady
         let timeout = time_left(*block_timer, block_timeout);
         if timeout.is_zero() && optimistic_parent.is_none() {
-            break;
+            break false;
         }
 
         select_biased! {
@@ -605,7 +605,7 @@ fn record_and_complete_block(
                 match msg.ok() {
                     Some(info) if info.start_slot > slot => {
                         // Window has moved on; we're behind
-                        break;
+                        break true;
                     }
                     Some(info) => {
                         if let Some(optimistic_parent_block) = optimistic_parent.take() {
@@ -628,14 +628,15 @@ fn record_and_complete_block(
             },
             default(timeout) => {},
         }
-    }
+    };
 
     // Shutdown and clear any inflight records
     shutdown_and_drain_record_receiver(&ctx.poh_recorder, &mut ctx.record_receiver)?;
 
-    // By now, we should have received ParentReady and called handle_parent_ready().
-    assert!(
-        optimistic_parent.is_none(),
+    // By now, we should have received ParentReady and called handle_parent_ready(), unless
+    // we're behind and the window has moved on.
+    debug_assert!(
+        window_has_moved_on || optimistic_parent.is_none(),
         "optimistic_parent should be None after receiving ParentReady"
     );
 
