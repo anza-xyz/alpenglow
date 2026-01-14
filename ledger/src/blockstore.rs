@@ -18,10 +18,8 @@ use {
         leader_schedule_cache::LeaderScheduleCache,
         next_slots_iterator::NextSlotsIterator,
         shred::{
-            self,
-            merkle_tree::{get_proof_size, MerkleTree, SIZE_OF_MERKLE_PROOF_ENTRY},
-            ErasureSetId, ProcessShredsStats, ReedSolomonCache, Shred, ShredData, ShredFlags,
-            ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
+            self, merkle_tree::MerkleTree, ErasureSetId, ProcessShredsStats, ReedSolomonCache,
+            Shred, ShredData, ShredFlags, ShredId, ShredType, Shredder, DATA_SHREDS_PER_FEC_BLOCK,
         },
         slot_stats::{ShredSource, SlotsStats},
         transaction_address_lookup_table_scanner::scan_transaction,
@@ -870,131 +868,28 @@ impl Blockstore {
         self.double_merkle_meta_cf.get((slot, block_location))
     }
 
-    /// Gets the double merkle root for the given block, computing it if necessary.
-    /// Fails and returns `None` if the block is missing or not full
+    /// Gets the double merkle root for the block in the given location.
+    /// Returns `None` if the block is not full.
+    /// DoubleMerkleMeta is computed atomically during shred insertion when a slot becomes full.
     pub fn get_double_merkle_root(
         &self,
         slot: Slot,
         block_location: BlockLocation,
     ) -> Option<Hash> {
-        if let Some(double_merkle_meta) = self
+        let dmr = self
             .double_merkle_meta_cf
             .get((slot, block_location))
             .expect("Blockstore operations must succeed")
-        {
-            return Some(double_merkle_meta.double_merkle_root);
-        }
+            .map(|meta| meta.double_merkle_root);
 
-        self.compute_double_merkle_root(slot, block_location)
-    }
-
-    /// Computes the double merkle root & proofs for the given block and inserts the DoubleMerkleMeta.
-    /// Fails if the slot is not full returning `None` otherwise returns the double merkle root
-    fn compute_double_merkle_root(
-        &self,
-        slot: Slot,
-        block_location: BlockLocation,
-    ) -> Option<Hash> {
-        let slot_meta = self
-            .meta_cf
-            .get(slot)
-            .expect("Blockstore operations must succeed")?;
-
-        if !slot_meta.is_full() {
-            return None;
-        }
-
-        let last_index = slot_meta.last_index.expect("Slot is full");
-
-        // This function is only used post Alpenglow, so implicitly gated by SIMD-0317 as that is a prereq
-        let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
-
-        let parent_meta = self
-            .parent_meta_cf
-            .get((slot, block_location))
-            .expect("Blockstore operations must succeed")
-            .expect("Slot cannot be full without parent");
-
-        // Collect merkle roots for each FEC set
-        let fec_set_indices =
-            (0..fec_set_count).map(|i| (slot, (i * DATA_SHREDS_PER_FEC_BLOCK) as u32));
-        let keys = self.merkle_root_meta_cf.multi_get_keys(fec_set_indices);
-        let merkle_tree_leaves = self
-            .merkle_root_meta_cf
-            .multi_get_bytes(&keys)
-            .map(|get_result| {
-                let bytes = get_result
-                    .expect("Blockstore operations must succeed")
-                    .expect("Merkle root meta must exist for all fec sets in full slot");
-                let merkle_root = bincode::deserialize::<MerkleRootMeta>(bytes.as_ref())
-                    .expect("Merkle root meta column only contains valid MerkleRootMetas")
-                    .merkle_root()
-                    .expect("Legacy shreds no longer exist, merkle root must be present");
-                Ok(merkle_root)
-            })
-            // Add parent info as the last leaf
-            .chain(std::iter::once(Ok(hashv(&[
-                &parent_meta.parent_slot.to_le_bytes(),
-                parent_meta.parent_block_id.as_ref(),
-            ]))))
-            .collect::<Vec<_>>();
-
-        Some(self.build_and_insert_double_merkle_meta(
-            slot,
-            block_location,
-            fec_set_count,
-            merkle_tree_leaves.into_iter(),
-        ))
-    }
-
-    /// Given the leaves of the double merkle tree, build the tree and proofs and create & insert into the double merkle meta column
-    pub fn build_and_insert_double_merkle_meta(
-        &self,
-        slot: Slot,
-        block_location: BlockLocation,
-        fec_set_count: usize,
-        merkle_tree_leaves: impl ExactSizeIterator<
-            Item = std::result::Result<Hash, crate::shred::Error>,
-        >,
-    ) -> Hash {
-        // Build the merkle tree
-        let merkle_tree = MerkleTree::try_new(merkle_tree_leaves)
-            .expect("Merkle tree construction cannot have failed");
-        let double_merkle_root = *merkle_tree.root();
-
-        // Build proofs
-        let tree_size = fec_set_count + 1;
-        let proofs: Vec<Vec<u8>> = (0..tree_size)
-            .map(|leaf_index| {
-                merkle_tree
-                    .make_merkle_proof(leaf_index, tree_size)
-                    .map(|proof_entry| {
-                        proof_entry.expect("Merkle proof construction cannot have failed")
-                    })
-                    .flat_map(|proof_entry| proof_entry.as_slice())
-                    .copied()
-                    .collect()
-            })
-            .inspect(|proof: &Vec<u8>| {
-                debug_assert_eq!(
-                    proof.len(),
-                    get_proof_size(tree_size) as usize * SIZE_OF_MERKLE_PROOF_ENTRY
-                );
-            })
-            .collect();
-
-        // Create and store DoubleMerkleMeta
-        let double_merkle_meta = DoubleMerkleMeta {
-            double_merkle_root,
-            fec_set_count,
-            proofs,
-        };
-
-        self.double_merkle_meta_cf
-            .put((slot, block_location), &double_merkle_meta)
-            .expect("Blockstore operations must succeed");
-
-        double_merkle_root
+        debug_assert!(
+            dmr.is_some()
+                || self
+                    .meta_from_location(slot, block_location)
+                    .unwrap()
+                    .is_none_or(|meta| !meta.is_full())
+        );
+        dmr
     }
 
     /// Check whether the specified slot is an orphan slot which does not
@@ -1497,6 +1392,141 @@ impl Blockstore {
         }
     }
 
+    /// Computes and adds DoubleMerkleMeta to the write_batch for any newly completed slots.
+    fn compute_double_merkle_meta_for_newly_completed_slots(
+        &self,
+        shred_insertion_tracker: &mut ShredInsertionTracker,
+    ) -> Result<()> {
+        for (&(location, slot), slot_meta_entry) in
+            shred_insertion_tracker.slot_meta_working_set.iter()
+        {
+            let meta = RefCell::borrow(&*slot_meta_entry.new_slot_meta);
+            if !is_newly_completed_slot(&meta, &slot_meta_entry.old_slot_meta) {
+                continue;
+            }
+
+            self.build_double_merkle_meta_in_batch(
+                slot,
+                location,
+                meta.last_index.expect("Slot is full"),
+                &shred_insertion_tracker.parent_metas,
+                &shred_insertion_tracker.merkle_root_metas,
+                &mut shred_insertion_tracker.write_batch,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Builds DoubleMerkleMeta for a completed slot and adds it to the write batch.
+    /// Expects the block to be full
+    fn build_double_merkle_meta_in_batch(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        last_index: u64,
+        parent_metas: &HashMap<(BlockLocation, Slot), ParentMetaWorkingSetEntry>,
+        merkle_root_metas: &HashMap<(BlockLocation, ErasureSetId), WorkingEntry<MerkleRootMeta>>,
+        write_batch: &mut WriteBatch,
+    ) -> Result<()> {
+        let fec_set_count = (last_index / (DATA_SHREDS_PER_FEC_BLOCK as u64) + 1) as usize;
+
+        // Get parent meta from tracker first, then fall back to db
+        let Some(parent_meta) =
+            self.get_parent_meta_from_tracker_or_db(slot, location, parent_metas)
+        else {
+            // non alpenglow block
+            assert!(matches!(location, BlockLocation::Original));
+            trace!("Skipping dmr computation for {slot} {location}: Non Alpenglow block");
+            return Ok(());
+        };
+
+        // Collect merkle roots for each FEC set
+        let merkle_tree_leaves: Vec<_> = (0..fec_set_count)
+            .map(|i| {
+                let fec_set_index = (i * DATA_SHREDS_PER_FEC_BLOCK) as u32;
+                let erasure_set = ErasureSetId::new(slot, fec_set_index);
+                Ok(self
+                    .get_merkle_root_from_tracker_or_db(location, erasure_set, merkle_root_metas)
+                    .expect("Merkle roots must exist for a full block"))
+            })
+            // Add parent info as the last leaf
+            .chain(std::iter::once(Ok(hashv(&[
+                &parent_meta.parent_slot.to_le_bytes(),
+                parent_meta.parent_block_id.as_ref(),
+            ]))))
+            .collect();
+
+        // Build the merkle tree and proofs
+        let merkle_tree = MerkleTree::try_new(merkle_tree_leaves.into_iter())
+            .expect("Merkle tree construction cannot fail");
+        let double_merkle_root = *merkle_tree.root();
+
+        // Build proofs
+        let tree_size = fec_set_count + 1;
+        let proofs: Vec<Vec<u8>> = (0..tree_size)
+            .map(|leaf_index| {
+                merkle_tree
+                    .make_merkle_proof(leaf_index, tree_size)
+                    .map(|proof_entry| proof_entry.expect("Merkle proof construction cannot fail"))
+                    .flat_map(|proof_entry| proof_entry.as_slice())
+                    .copied()
+                    .collect()
+            })
+            .collect();
+
+        // Create and add DoubleMerkleMeta to write batch
+        let double_merkle_meta = DoubleMerkleMeta {
+            double_merkle_root,
+            fec_set_count,
+            proofs,
+        };
+
+        self.double_merkle_meta_cf
+            .put_in_batch(write_batch, (slot, location), &double_merkle_meta)
+    }
+
+    /// Gets the merkle root from the tracker if available, otherwise from the db.
+    fn get_merkle_root_from_tracker_or_db(
+        &self,
+        location: BlockLocation,
+        erasure_set: ErasureSetId,
+        merkle_root_metas: &HashMap<(BlockLocation, ErasureSetId), WorkingEntry<MerkleRootMeta>>,
+    ) -> Option<Hash> {
+        // First check the tracker
+        if let Some(working_entry) = merkle_root_metas.get(&(location, erasure_set)) {
+            return Some(
+                working_entry
+                    .as_ref()
+                    .merkle_root()
+                    .expect("No more legacy shreds"),
+            );
+        }
+
+        // Fall back to the db
+        self.merkle_root_meta_from_location(erasure_set, location)
+            .expect("Blockstore operations must succeed")
+            .map(|meta| meta.merkle_root().expect("No more legacy shreds"))
+    }
+
+    /// Gets the parent meta from the tracker if available, otherwise from the db.
+    fn get_parent_meta_from_tracker_or_db(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+        parent_metas: &HashMap<(BlockLocation, Slot), ParentMetaWorkingSetEntry>,
+    ) -> Option<ParentMeta> {
+        // First check the tracker
+        if let Some(working_entry) = parent_metas.get(&(location, slot)) {
+            if let Some(parent_meta) = working_entry.parent_meta.as_ref() {
+                return Some(*parent_meta.as_ref());
+            }
+        }
+
+        // Fall back to the db
+        self.get_parent_meta(slot, location)
+            .expect("Blockstore operations must succeed")
+    }
+
     fn commit_updates_to_write_batch(
         &self,
         shred_insertion_tracker: &mut ShredInsertionTracker,
@@ -1687,6 +1717,9 @@ impl Blockstore {
         )?;
 
         self.check_chained_merkle_root_consistency(&mut shred_insertion_tracker);
+
+        // Compute DoubleMerkleMeta for any newly completed slots so it's committed atomically
+        self.compute_double_merkle_meta_for_newly_completed_slots(&mut shred_insertion_tracker)?;
 
         let (should_signal, newly_completed_slots) =
             self.commit_updates_to_write_batch(&mut shred_insertion_tracker, metrics)?;
@@ -6355,7 +6388,9 @@ pub mod tests {
             leader_schedule::{FixedSchedule, IdentityKeyedLeaderSchedule},
             shred::{
                 max_ticks_per_n_shreds,
-                merkle_tree::{get_merkle_root, MerkleProofEntry},
+                merkle_tree::{
+                    get_merkle_root, get_proof_size, MerkleProofEntry, SIZE_OF_MERKLE_PROOF_ENTRY,
+                },
                 MAX_DATA_SHREDS_PER_SLOT,
             },
         },
@@ -6388,7 +6423,7 @@ pub mod tests {
             InnerInstruction, InnerInstructions, Reward, Rewards, TransactionTokenBalance,
         },
         std::{cmp::Ordering, time::Duration},
-        test_case::test_matrix,
+        test_case::{test_case, test_matrix},
     };
 
     // used for tests only
@@ -13056,8 +13091,9 @@ pub mod tests {
         );
     }
 
-    #[test]
-    fn test_get_double_merkle_root() {
+    #[test_case(false ; "original_location")]
+    #[test_case(true ; "alternate_location")]
+    fn test_get_double_merkle_root(use_alternate_location: bool) {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -13066,38 +13102,74 @@ pub mod tests {
         let num_entries = 200;
 
         // Create a set of shreds for a complete block
-        let (data_shreds, coding_shreds, leader_schedule) =
+        let (data_shreds, _, leader_schedule) =
             setup_erasure_shreds(slot, parent_slot, num_entries);
 
-        // Create ParentMeta
+        // Collect FEC set merkle roots for verification
+        let mut fec_set_roots = [Hash::default(); 3];
+        for shred in data_shreds.iter() {
+            if shred.index() % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0 {
+                fec_set_roots[(shred.index() as usize) / DATA_SHREDS_PER_FEC_BLOCK] =
+                    shred.merkle_root().unwrap();
+            }
+        }
+
+        // For alternate location, we need to pre-compute the block_id (double merkle root)
+        // since we need it to construct the BlockLocation before inserting
         let parent_meta = ParentMeta {
             parent_slot,
             parent_block_id: Hash::default(),
             replay_fec_set_index: 0,
         };
+        let parent_info_hash = hashv(&[
+            &parent_slot.to_le_bytes(),
+            parent_meta.parent_block_id.as_ref(),
+        ]);
+        let merkle_tree_leaves: Vec<_> = fec_set_roots
+            .iter()
+            .copied()
+            .chain(std::iter::once(parent_info_hash))
+            .map(Ok)
+            .collect();
+        let merkle_tree = MerkleTree::try_new(merkle_tree_leaves.into_iter()).unwrap();
+        let expected_double_merkle_root = *merkle_tree.root();
+
+        let block_location = if use_alternate_location {
+            BlockLocation::Alternate {
+                block_id: expected_double_merkle_root,
+            }
+        } else {
+            BlockLocation::Original
+        };
+
+        // Store ParentMeta at the appropriate location
         blockstore
             .parent_meta_cf
-            .put((slot, BlockLocation::Original), &parent_meta)
+            .put((slot, block_location), &parent_meta)
             .unwrap();
 
-        // Insert shreds into blockstore
-        let mut fec_set_roots = [Hash::default(); 3];
-        for shred in data_shreds.iter().chain(coding_shreds.iter()) {
-            if shred.is_data() && shred.index() % (DATA_SHREDS_PER_FEC_BLOCK as u32) == 0 {
-                // store fec set merkle roots for later
-                fec_set_roots[(shred.index() as usize) / DATA_SHREDS_PER_FEC_BLOCK] =
-                    shred.merkle_root().unwrap();
-            }
-            let duplicates =
-                blockstore.insert_shred_return_duplicate(shred.clone(), &leader_schedule);
-            assert!(duplicates.is_empty());
-        }
+        // Insert shreds into blockstore at the specified location
+        let shreds = data_shreds
+            .iter()
+            .map(|shred| (Cow::Borrowed(shred), use_alternate_location, block_location));
+        let insert_results = blockstore
+            .do_insert_shreds(
+                shreds,
+                Some(&leader_schedule),
+                false,
+                None,
+                &mut BlockstoreInsertionMetrics::default(),
+            )
+            .unwrap();
+        assert!(insert_results.duplicate_shreds.is_empty());
 
-        let slot_meta = blockstore.meta(slot).unwrap().unwrap();
+        let slot_meta = blockstore
+            .meta_from_location(slot, block_location)
+            .unwrap()
+            .unwrap();
         assert!(slot_meta.is_full());
 
         // Test getting the double merkle root
-        let block_location = BlockLocation::Original;
         let double_merkle_root = blockstore
             .get_double_merkle_root(slot, block_location)
             .unwrap();
@@ -13108,15 +13180,18 @@ pub mod tests {
             .unwrap()
             .unwrap();
 
+        // Verify the double merkle root matches our pre-computed value
+        assert_eq!(double_merkle_root, expected_double_merkle_root);
+
         // Verify meta
         assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
         assert_eq!(double_merkle_meta.fec_set_count, 3); // With 200 entries, we should have 3 FEC sets
-        assert_eq!(double_merkle_meta.proofs.len(), 4); // 3 FEC set, 1 parent info
+        assert_eq!(double_merkle_meta.proofs.len(), 4); // 3 FEC sets + 1 parent info
 
         // Verify the proofs
         let proof_size = get_proof_size(double_merkle_meta.fec_set_count + 1) as usize;
 
-        // Fec sets
+        // FEC sets
         for (fec_set, root) in fec_set_roots.iter().enumerate() {
             let proof = &double_merkle_meta.proofs[fec_set];
             let proof = proof
@@ -13125,15 +13200,11 @@ pub mod tests {
                 .map(std::result::Result::unwrap);
             assert_eq!(proof_size, proof.clone().count());
 
-            let double_merkle_root = get_merkle_root(fec_set, *root, proof).unwrap();
-            assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+            let verified_root = get_merkle_root(fec_set, *root, proof).unwrap();
+            assert_eq!(double_merkle_meta.double_merkle_root, verified_root);
         }
 
         // Parent info - final proof
-        let parent_info_hash = hashv(&[
-            &parent_slot.to_le_bytes(),
-            parent_meta.parent_block_id.as_ref(),
-        ]);
         let parent_info_proof = &double_merkle_meta.proofs[double_merkle_meta.fec_set_count];
         let proof = parent_info_proof
             .chunks(SIZE_OF_MERKLE_PROOF_ENTRY)
@@ -13141,12 +13212,12 @@ pub mod tests {
             .map(std::result::Result::unwrap);
         assert_eq!(proof_size, proof.clone().count());
 
-        let double_merkle_root =
+        let verified_root =
             get_merkle_root(double_merkle_meta.fec_set_count, parent_info_hash, proof).unwrap();
-        assert_eq!(double_merkle_meta.double_merkle_root, double_merkle_root);
+        assert_eq!(double_merkle_meta.double_merkle_root, verified_root);
 
-        // Slot not full should fail
-        let incomplete_slot = 1001; // Make it a child of slot 1000
+        // Slot not full should return None
+        let incomplete_slot = 1001;
         let (partial_shreds, _, leader_schedule) =
             setup_erasure_shreds_with_index_and_chained_merkle_and_last_in_slot(
                 incomplete_slot,
@@ -13157,11 +13228,20 @@ pub mod tests {
                 false, // not last in slot
             );
 
-        for shred in partial_shreds.iter().take(3) {
-            let duplicates =
-                blockstore.insert_shred_return_duplicate(shred.clone(), &leader_schedule);
-            assert!(duplicates.is_empty());
-        }
+        let shreds = partial_shreds
+            .iter()
+            .take(3)
+            .map(|shred| (Cow::Borrowed(shred), use_alternate_location, block_location));
+        let insert_results = blockstore
+            .do_insert_shreds(
+                shreds,
+                Some(&leader_schedule),
+                false,
+                None,
+                &mut BlockstoreInsertionMetrics::default(),
+            )
+            .unwrap();
+        assert!(insert_results.duplicate_shreds.is_empty());
 
         assert!(blockstore
             .get_double_merkle_root(incomplete_slot, block_location)
