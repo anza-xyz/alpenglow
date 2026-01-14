@@ -4790,46 +4790,41 @@ impl ReplayStage {
 
                 debug_assert!(!progress.contains_key(&child_slot));
 
-                // Determine actual parent and replay offset from ParentMeta.
-                let (actual_parent_bank, replay_offset) =
-                    if !migration_status.should_allow_block_markers(child_slot) {
-                        (parent_bank.clone(), None)
-                    } else {
-                        let Some(parent_meta) = blockstore
-                            .get_parent_meta(child_slot, BlockLocation::Original)
-                            .expect("Blockstore should not fail")
-                        else {
-                            continue;
-                        };
-
-                        // No lock is held between get_slots_since and get_parent_meta, so
-                        // ParentMeta could have been updated in between. If so, continue and
-                        // the next iteration of generate_new_bank_forks will have consistent values.
-                        if parent_meta.parent_slot != parent_slot {
-                            continue;
-                        }
-
-                        // UpdateParent: use new parent and calculate replay offset
-                        let Some(new_parent) = frozen_banks.get(&parent_meta.parent_slot) else {
-                            // New parent not frozen yet, skip
-                            continue;
-                        };
-                        let num_shreds = u64::from(parent_meta.replay_fec_set_index);
-                        info!(
-                            "slot {child_slot}: UpdateParent detected, using parent {} with \
-                             replay offset {} shreds",
-                            parent_meta.parent_slot, num_shreds
-                        );
-                        (new_parent.clone(), Some(num_shreds))
+                // Determine replay offset from ParentMeta.
+                let replay_offset = if !migration_status.should_allow_block_markers(child_slot) {
+                    None
+                } else {
+                    let Some(parent_meta) = blockstore
+                        .get_parent_meta(child_slot, BlockLocation::Original)
+                        .expect("Blockstore should not fail")
+                    else {
+                        continue;
                     };
 
+                    // No lock is held between get_slots_since and get_parent_meta, so
+                    // ParentMeta could have been updated in between. If so, continue and
+                    // the next iteration of generate_new_bank_forks will have consistent values.
+                    if parent_meta.parent_slot != parent_slot {
+                        continue;
+                    }
+
+                    let num_shreds = u64::from(parent_meta.replay_fec_set_index);
+                    if num_shreds > 0 {
+                        info!(
+                            "slot {child_slot}: replay offset {} shreds from parent {}",
+                            num_shreds, parent_meta.parent_slot
+                        );
+                    }
+                    Some(num_shreds)
+                };
+
                 let leader = leader_schedule_cache
-                    .slot_leader_at(child_slot, Some(&actual_parent_bank))
+                    .slot_leader_at(child_slot, Some(parent_bank))
                     .unwrap();
                 info!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
-                    actual_parent_bank.slot(),
+                    parent_bank.slot(),
                     forks.root()
                 );
                 // Migration period banks are VoM
@@ -4840,7 +4835,7 @@ impl ReplayStage {
                     info!("Replaying block in slot {child_slot} in VoM");
                 }
                 let child_bank = Self::new_bank_from_parent_with_notify(
-                    actual_parent_bank.clone(),
+                    parent_bank.clone(),
                     child_slot,
                     forks.root(),
                     &leader,
@@ -4853,7 +4848,7 @@ impl ReplayStage {
                 if let Some(num_shreds) = replay_offset {
                     let prev_leader_slot = progress.get_bank_prev_leader_slot(&child_bank);
                     let fork_progress = ForkProgress::new(
-                        actual_parent_bank.last_blockhash(),
+                        parent_bank.last_blockhash(),
                         prev_leader_slot,
                         None,
                         0,
@@ -4868,7 +4863,7 @@ impl ReplayStage {
                     progress,
                     empty,
                     vec![leader],
-                    actual_parent_bank.slot(),
+                    parent_bank.slot(),
                     &forks,
                 );
                 new_banks.insert(child_slot, child_bank);
