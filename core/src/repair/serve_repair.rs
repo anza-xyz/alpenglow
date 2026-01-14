@@ -11,6 +11,7 @@ use {
         cluster_slots_service::cluster_slots::ClusterSlots,
         repair::{
             duplicate_repair_status::get_ancestor_hash_repair_sample_size,
+            outstanding_requests::OutstandingRequests,
             quic_endpoint::RemoteRequest,
             repair_handler::RepairHandler,
             repair_service::{OutstandingShredRepairs, RepairInfo, RepairStats, REPAIR_MS},
@@ -42,7 +43,8 @@ use {
         shred::{
             self,
             merkle_tree::{self, SIZE_OF_MERKLE_PROOF_ENTRY},
-            Nonce, ShredFetchStats, MAX_FEC_SETS_PER_SLOT, SIZE_OF_NONCE,
+            Nonce, ShredFetchStats, DATA_SHREDS_PER_FEC_BLOCK, MAX_FEC_SETS_PER_SLOT,
+            SIZE_OF_NONCE,
         },
     },
     solana_packet::PACKET_DATA_SIZE,
@@ -61,7 +63,7 @@ use {
         streamer::PacketBatchSender,
     },
     solana_time_utils::timestamp,
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{consensus_message::Block, migration::MigrationStatus},
     std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},
@@ -105,6 +107,13 @@ const SIGNED_REPAIR_TIME_WINDOW: Duration = Duration::from_secs(60 * 10); // 10 
 #[cfg(test)]
 static_assertions::const_assert_eq!(MAX_ANCESTOR_RESPONSES, 30);
 
+/// Protocol for sending repair requests, with QUIC requiring a sender channel.
+#[derive(Clone, Copy)]
+pub enum RepairRequestProtocol<'a> {
+    UDP,
+    QUIC(&'a AsyncSender<(SocketAddr, Bytes)>),
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum ShredRepairType {
     /// Requesting `MAX_ORPHAN_REPAIR_RESPONSES ` parent shreds
@@ -117,7 +126,7 @@ pub enum ShredRepairType {
     /// Requesting the missing shred at a particular index for a specific block ID
     ShredForBlockId {
         slot: Slot,
-        index: u64,
+        index: u32,
         fec_set_merkle_root: Hash,
         // Double merkle block id
         block_id: Hash,
@@ -176,7 +185,7 @@ impl RequestResponse for ShredRepairType {
                 ..
             } => {
                 shred_slot == *slot
-                    && get_shred_index(shred) == Some(*index)
+                    && shred::layout::get_index(shred) == Some(*index)
                     && get_merkle_root(shred) == Some(*fec_set_merkle_root)
             }
         }
@@ -210,13 +219,13 @@ impl RequestResponse for AncestorHashesRepairType {
     }
 }
 
-#[derive(Copy, Clone)]
-// TODO(ashwin): plug in the next PR
-pub(crate) enum BlockIdRepairType {
-    #[allow(dead_code)]
-    ParentAndFecSetCount { slot: Slot, block_id: Hash },
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockIdRepairType {
+    ParentAndFecSetCount {
+        slot: Slot,
+        block_id: Hash,
+    },
 
-    #[allow(dead_code)]
     FecSetRoot {
         slot: Slot,
         block_id: Hash,
@@ -224,8 +233,17 @@ pub(crate) enum BlockIdRepairType {
     },
 }
 
+impl BlockIdRepairType {
+    pub(crate) fn block(&self) -> Block {
+        match self {
+            BlockIdRepairType::ParentAndFecSetCount { slot, block_id } => (*slot, *block_id),
+            BlockIdRepairType::FecSetRoot { slot, block_id, .. } => (*slot, *block_id),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) enum BlockIdRepairResponse {
+pub enum BlockIdRepairResponse {
     ParentFecSetCount {
         fec_set_count: usize,
         parent_info: (Slot, Hash),
@@ -292,13 +310,17 @@ impl RequestResponse for BlockIdRepairType {
                     fec_set_root,
                     fec_set_proof,
                 },
-            ) => merkle_tree::verify_merkle_proof(
-                *fec_set_root,
-                *fec_set_index as usize,
-                fec_set_proof,
-                *block_id,
-            )
-            .is_ok(),
+            ) => {
+                // Convert shred index (0, 32, 64, ...) to merkle tree leaf index (0, 1, 2, ...)
+                let leaf_index = *fec_set_index as usize / DATA_SHREDS_PER_FEC_BLOCK;
+                merkle_tree::verify_merkle_proof(
+                    *fec_set_root,
+                    leaf_index,
+                    fec_set_proof,
+                    *block_id,
+                )
+                .is_ok()
+            }
 
             (Self::ParentAndFecSetCount { .. }, _) | (Self::FecSetRoot { .. }, _) => false,
         }
@@ -365,6 +387,11 @@ impl RepairRequestHeader {
             nonce,
         }
     }
+
+    /// Returns the nonce for this repair request.
+    pub fn nonce(&self) -> Nonce {
+        self.nonce
+    }
 }
 
 type Ping = ping_pong::Ping<REPAIR_PING_TOKEN_SIZE>;
@@ -426,7 +453,7 @@ pub enum RepairProtocol {
     WindowIndexForBlockId {
         header: RepairRequestHeader,
         slot: Slot,
-        shred_index: u64,
+        shred_index: u32,
         fec_set_merkle_root: Hash,
         block_id: Hash,
     },
@@ -770,7 +797,7 @@ impl ServeRepair {
                             recycler,
                             from_addr,
                             *slot,
-                            *shred_index,
+                            u64::from(*shred_index),
                             *block_id,
                             *nonce,
                         );
@@ -1373,7 +1400,6 @@ impl ServeRepair {
         Self::repair_proto_to_bytes(&request, keypair)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn repair_request(
         &self,
         repair_info: &RepairInfo,
@@ -1382,8 +1408,7 @@ impl ServeRepair {
         repair_stats: &mut RepairStats,
         outstanding_requests: &mut OutstandingShredRepairs,
         identity_keypair: &Keypair,
-        repair_request_quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
-        repair_protocol: Protocol,
+        repair_protocol: RepairRequestProtocol,
     ) -> Result<Option<(SocketAddr, Vec<u8>)>> {
         // find a peer that appears to be accepting replication and has the desired slot, as indicated
         // by a valid tvu port location
@@ -1426,14 +1451,58 @@ impl ServeRepair {
             repair_request
         );
         match repair_protocol {
-            Protocol::UDP => Ok(Some((peer.serve_repair, out))),
-            Protocol::QUIC => {
-                repair_request_quic_sender
+            RepairRequestProtocol::UDP => Ok(Some((peer.serve_repair, out))),
+            RepairRequestProtocol::QUIC(sender) => {
+                sender
                     .blocking_send((peer.serve_repair_quic, Bytes::from(out)))
                     .map_err(|_| Error::SendError)?;
                 Ok(None)
             }
         }
+    }
+
+    /// Similar to [`Self::repair_request`] but for [`BlockIdRepairType`] requests.
+    /// Uses stake-weighted peer selection rather than cluster_slots weights.
+    pub(crate) fn block_id_repair_request(
+        &self,
+        repair_validators: &Option<HashSet<Pubkey>>,
+        repair_request: BlockIdRepairType,
+        peers_cache: &mut LruCache<Slot, RepairPeers>,
+        outstanding_requests: &mut OutstandingRequests<BlockIdRepairType>,
+        identity_keypair: &Keypair,
+        staked_nodes: &HashMap<Pubkey, u64>,
+    ) -> Result<(Vec<u8>, SocketAddr)> {
+        let slot = repair_request.block().0;
+        let repair_peers = match peers_cache.get(&slot) {
+            Some(entry) if entry.asof.elapsed() < REPAIR_PEERS_CACHE_TTL => entry,
+            _ => {
+                peers_cache.pop(&slot);
+                let repair_peers = self.repair_peers(repair_validators, slot);
+                let weights: Vec<u64> = repair_peers
+                    .iter()
+                    .map(|peer| staked_nodes.get(peer.pubkey()).copied().unwrap_or(0))
+                    .collect();
+                let repair_peers = RepairPeers::new(Instant::now(), &repair_peers, &weights)?;
+                peers_cache.put(slot, repair_peers);
+                peers_cache.get(&slot).unwrap()
+            }
+        };
+        let peer = repair_peers.sample(&mut rand::thread_rng());
+        let nonce = outstanding_requests.add_request(repair_request, timestamp());
+
+        let out = self.map_block_id_repair_request(
+            &repair_request,
+            &peer.pubkey,
+            nonce,
+            identity_keypair,
+        )?;
+        debug!(
+            "Sending block_id repair request from {} to {} for {:#?}",
+            identity_keypair.pubkey(),
+            peer.pubkey,
+            repair_request
+        );
+        Ok((out, peer.serve_repair))
     }
 
     pub(crate) fn repair_request_ancestor_hashes_sample_peers(
@@ -1533,7 +1602,7 @@ impl ServeRepair {
             } => {
                 repair_stats
                     .shred_for_block_id
-                    .update(repair_peer_id, *slot, *index);
+                    .update(repair_peer_id, *slot, u64::from(*index));
                 RepairProtocol::WindowIndexForBlockId {
                     header,
                     slot: *slot,
@@ -1542,6 +1611,43 @@ impl ServeRepair {
                     block_id: *block_id,
                 }
             }
+        };
+        Self::repair_proto_to_bytes(&request_proto, identity_keypair)
+    }
+
+    /// Transforms a [`BlockIdRepairType`] into a signed repair protocol message.
+    pub(crate) fn map_block_id_repair_request(
+        &self,
+        repair_request: &BlockIdRepairType,
+        repair_peer_id: &Pubkey,
+        nonce: Nonce,
+        identity_keypair: &Keypair,
+    ) -> Result<Vec<u8>> {
+        let header = RepairRequestHeader {
+            signature: Signature::default(),
+            sender: self.my_id(),
+            recipient: *repair_peer_id,
+            timestamp: timestamp(),
+            nonce,
+        };
+        let request_proto = match repair_request {
+            BlockIdRepairType::ParentAndFecSetCount { slot, block_id } => {
+                RepairProtocol::ParentAndFecSetCount {
+                    header,
+                    slot: *slot,
+                    block_id: *block_id,
+                }
+            }
+            BlockIdRepairType::FecSetRoot {
+                slot,
+                block_id,
+                fec_set_index,
+            } => RepairProtocol::FecSetRoot {
+                header,
+                slot: *slot,
+                block_id: *block_id,
+                fec_set_index: *fec_set_index,
+            },
         };
         Self::repair_proto_to_bytes(&request_proto, identity_keypair)
     }
@@ -1628,6 +1734,16 @@ impl ServeRepair {
 #[inline]
 pub(crate) fn get_repair_protocol(_: ClusterType) -> Protocol {
     Protocol::UDP
+}
+
+/// Creates a RepairRequestProtocol based on the current cluster configuration.
+/// Currently always returns UDP, but the sender is available for future QUIC support.
+#[inline]
+pub(crate) fn get_repair_request_protocol(
+    _quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
+) -> RepairRequestProtocol {
+    // TODO: Once QUIC repair is enabled, check cluster type and return QUIC variant
+    RepairRequestProtocol::UDP
 }
 
 pub(crate) fn deserialize_request<T>(
@@ -2214,7 +2330,6 @@ mod tests {
         );
         let identity_keypair = cluster_info.keypair().clone();
         let mut outstanding_requests = OutstandingShredRepairs::default();
-        let (repair_request_quic_sender, _) = tokio::sync::mpsc::channel(/*buffer:*/ 128);
         let block_location_lookup = BlockLocationLookup::new_arc();
         let (ancestor_duplicate_slots_sender, _) = unbounded();
         let repair_info = RepairInfo {
@@ -2240,8 +2355,7 @@ mod tests {
             &mut RepairStats::default(),
             &mut outstanding_requests,
             &identity_keypair,
-            &repair_request_quic_sender,
-            Protocol::UDP, // repair_protocol
+            RepairRequestProtocol::UDP,
         );
         assert_matches!(rv, Err(Error::ClusterInfo(ClusterInfoError::NoPeers)));
 
@@ -2271,8 +2385,7 @@ mod tests {
                 &mut RepairStats::default(),
                 &mut outstanding_requests,
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             )
             .unwrap()
             .unwrap();
@@ -2309,8 +2422,7 @@ mod tests {
                     &mut RepairStats::default(),
                     &mut outstanding_requests,
                     &identity_keypair,
-                    &repair_request_quic_sender,
-                    Protocol::UDP, // repair_protocol
+                    RepairRequestProtocol::UDP,
                 )
                 .unwrap()
                 .unwrap();
@@ -2524,7 +2636,6 @@ mod tests {
         let cluster_slots = Arc::new(ClusterSlots::default_for_tests());
         let cluster_info = Arc::new(new_test_cluster_info());
         let me = cluster_info.my_contact_info();
-        let (repair_request_quic_sender, _) = tokio::sync::mpsc::channel(/*buffer:*/ 128);
         // Insert two peers on the network
         let contact_info2 = ContactInfo::new_localhost(&solana_pubkey::new_rand(), timestamp());
         let contact_info3 = ContactInfo::new_localhost(&solana_pubkey::new_rand(), timestamp());
@@ -2573,8 +2684,7 @@ mod tests {
                     &mut RepairStats::default(),
                     &mut OutstandingShredRepairs::default(),
                     &identity_keypair,
-                    &repair_request_quic_sender,
-                    Protocol::UDP, // repair_protocol
+                    RepairRequestProtocol::UDP,
                 ),
                 Err(Error::ClusterInfo(ClusterInfoError::NoPeers))
             );
@@ -2594,8 +2704,7 @@ mod tests {
                 &mut RepairStats::default(),
                 &mut OutstandingShredRepairs::default(),
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             ),
             Ok(Some(_))
         );
@@ -2618,8 +2727,7 @@ mod tests {
                 &mut RepairStats::default(),
                 &mut OutstandingShredRepairs::default(),
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             ),
             Ok(Some(_))
         );

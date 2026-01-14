@@ -13,8 +13,8 @@ use {
             outstanding_requests::OutstandingRequests,
             repair_weight::RepairWeight,
             serve_repair::{
-                self, RepairPeers, RepairProtocol, RepairRequestHeader, ServeRepair,
-                ShredRepairType, REPAIR_PEERS_CACHE_CAPACITY,
+                self, RepairPeers, RepairProtocol, RepairRequestHeader, RepairRequestProtocol,
+                ServeRepair, ShredRepairType, REPAIR_PEERS_CACHE_CAPACITY,
             },
         },
     },
@@ -67,7 +67,7 @@ const DEFER_REPAIR_THRESHOLD_TICKS: u64 = DEFER_REPAIR_THRESHOLD.as_millis() as 
 // This is the amount of time we will wait for a repair request to be fulfilled
 // before making another request. Value is based on reasonable upper bound of
 // expected network delays in requesting repairs and receiving shreds.
-const REPAIR_REQUEST_TIMEOUT_MS: u64 = 150;
+pub(crate) const REPAIR_REQUEST_TIMEOUT_MS: u64 = 150;
 
 // When requesting repair for a specific shred through the admin RPC, we will
 // request up to NUM_PEERS_TO_SAMPLE_FOR_REPAIRS in the event a specific, valid
@@ -637,12 +637,11 @@ impl RepairService {
     fn build_and_send_repair_batch(
         serve_repair: &mut ServeRepair,
         peers_cache: &mut LruCache<u64, RepairPeers>,
-        repair_request_quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
         repairs: Vec<ShredRepairType>,
         repair_info: &RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
         repair_socket: &UdpSocket,
-        repair_protocol: Protocol,
+        repair_protocol: RepairRequestProtocol,
         repair_metrics: &mut RepairMetrics,
     ) {
         let mut build_repairs_batch_elapsed = Measure::start("build_repairs_batch_elapsed");
@@ -659,7 +658,6 @@ impl RepairService {
                             &mut repair_metrics.stats,
                             &mut outstanding_requests,
                             &repair_info.cluster_info.keypair(),
-                            repair_request_quic_sender,
                             repair_protocol,
                         )
                         .ok()??;
@@ -745,15 +743,15 @@ impl RepairService {
             );
         }
 
+        let repair_protocol = serve_repair::get_repair_request_protocol(repair_request_quic_sender);
         Self::build_and_send_repair_batch(
             serve_repair,
             peers_cache,
-            repair_request_quic_sender,
             repairs,
             repair_info,
             outstanding_requests,
             repair_socket,
-            serve_repair::get_repair_protocol(root_bank.cluster_type()),
+            repair_protocol,
             repair_metrics,
         );
     }
