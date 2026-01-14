@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore] // TODO(ksn): Enable when fast leader handover is enabled in MigrationPhase::should_allow_fast_leader_handover
+    #[ignore] // TODO(ksn): Enable when fast leader handover is enabled in MigrationPhase::should_allow_fast_leader_handover
     fn test_workflow_with_update_parent() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
