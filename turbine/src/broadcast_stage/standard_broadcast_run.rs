@@ -10,12 +10,9 @@ use {
     solana_entry::block_component::BlockComponent,
     solana_hash::Hash,
     solana_keypair::Keypair,
-    solana_ledger::{
-        blockstore_meta::BlockLocation,
-        shred::{
-            ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder,
-            MAX_CODE_SHREDS_PER_SLOT, MAX_DATA_SHREDS_PER_SLOT,
-        },
+    solana_ledger::shred::{
+        merkle_tree::MerkleTree, ProcessShredsStats, ReedSolomonCache, Shred, ShredType, Shredder,
+        MAX_CODE_SHREDS_PER_SLOT, MAX_DATA_SHREDS_PER_SLOT,
     },
     solana_runtime::bank::Bank,
     solana_sha256_hasher::hashv,
@@ -424,18 +421,15 @@ impl StandardBroadcastRun {
                 .should_use_double_merkle_block_id(bank.slot())
             {
                 // Block id is the double merkle root
-                let fec_set_count = self.double_merkle_leaves.len();
                 // Add the final leaf (parent info)
                 let parent_info_leaf =
                     hashv(&[&self.parent.to_le_bytes(), self.parent_block_id.as_ref()]);
                 self.double_merkle_leaves.push(parent_info_leaf);
-                // Future perf improvement, the blockstore insert can happen async
-                blockstore.build_and_insert_double_merkle_meta(
-                    bank.slot(),
-                    BlockLocation::Original,
-                    fec_set_count,
-                    self.double_merkle_leaves.drain(..).map(Ok),
-                )
+                // Compute the double merkle root. The full DoubleMerkleMeta (with proofs)
+                // will be computed atomically during shred insertion when the slot becomes full.
+                let merkle_tree = MerkleTree::try_new(self.double_merkle_leaves.drain(..).map(Ok))
+                    .expect("Double merkle tree construction cannot fail");
+                *merkle_tree.root()
             } else {
                 // The block id is the merkle root of the last FEC set which is now the chained merkle root
                 self.chained_merkle_root
