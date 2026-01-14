@@ -92,7 +92,7 @@ impl EventHandler {
     pub(crate) fn new(ctx: EventHandlerContext) -> Self {
         let exit = ctx.exit.clone();
         let t_event_handler = Builder::new()
-            .name("solVotorEventLoop".to_string())
+            .name("solVotorEvLoop".to_string())
             .spawn(move || {
                 if let Err(e) = Self::event_loop(ctx) {
                     info!("Event loop exited: {e:?}. Shutting down");
