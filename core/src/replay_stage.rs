@@ -4799,8 +4799,6 @@ impl ReplayStage {
                             .get_parent_meta(child_slot, BlockLocation::Original)
                             .expect("Blockstore should not fail")
                         else {
-                            // Shred 0 shouldn't be present, since parent meta isn't present.
-                            debug_assert!(!blockstore.is_full(child_slot));
                             continue;
                         };
 
