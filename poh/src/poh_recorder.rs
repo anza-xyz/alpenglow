@@ -66,9 +66,6 @@ pub enum PohRecorderError {
     #[error("channel disconnected")]
     ChannelDisconnected,
 
-    #[error("parent ready not observed")]
-    ParentReadyNotObserved,
-
     #[error("couldn't reset bank during fast leader handover slot {0} -> slot {1}")]
     ResetBankError(Slot, Slot),
 }

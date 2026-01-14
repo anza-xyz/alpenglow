@@ -44,8 +44,6 @@ pub enum BlockComponentProcessorError {
     SpuriousUpdateParent,
     #[error("Abandoned bank")]
     AbandonedBank(VersionedUpdateParent),
-    #[error("Invalid update parent slot: new_parent_slot ({0}) must be < current_slot ({1})")]
-    InvalidUpdateParentSlot(Slot, Slot),
 }
 
 #[derive(Default)]
@@ -140,7 +138,7 @@ impl BlockComponentProcessor {
             BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
 
             BlockMarkerV1::UpdateParent(update_parent) => {
-                self.on_update_parent(update_parent.inner(), slot)
+                self.on_update_parent(update_parent.inner())
             }
 
             // Any other combination means we saw a marker too early
@@ -281,21 +279,9 @@ impl BlockComponentProcessor {
     fn on_update_parent(
         &mut self,
         update_parent: &VersionedUpdateParent,
-        slot: Slot,
     ) -> Result<(), BlockComponentProcessorError> {
         if self.update_parent.is_some() {
             return Err(BlockComponentProcessorError::MultipleUpdateParents);
-        }
-
-        let new_parent_slot = match update_parent {
-            VersionedUpdateParent::V1(x) => x.new_parent_slot,
-        };
-
-        if new_parent_slot >= slot {
-            return Err(BlockComponentProcessorError::InvalidUpdateParentSlot(
-                new_parent_slot,
-                slot,
-            ));
         }
 
         self.update_parent = Some(update_parent.clone());
@@ -968,30 +954,8 @@ mod tests {
             new_parent_block_id: Hash::default(),
         });
 
-        assert!(processor.on_update_parent(&update_parent, 1).is_ok());
+        assert!(processor.on_update_parent(&update_parent).is_ok());
         assert!(processor.update_parent.is_some());
-    }
-
-    #[test]
-    fn test_update_parent_invalid_slot() {
-        let mut processor = BlockComponentProcessor::default();
-
-        let update_parent = VersionedUpdateParent::V1(UpdateParentV1 {
-            new_parent_slot: 5,
-            new_parent_block_id: Hash::default(),
-        });
-
-        assert_eq!(
-            processor.on_update_parent(&update_parent, 5),
-            Err(BlockComponentProcessorError::InvalidUpdateParentSlot(5, 5))
-        );
-
-        assert_eq!(
-            processor.on_update_parent(&update_parent, 3),
-            Err(BlockComponentProcessorError::InvalidUpdateParentSlot(5, 3))
-        );
-
-        assert!(processor.on_update_parent(&update_parent, 6).is_ok());
     }
 
     #[test]
@@ -1010,7 +974,7 @@ mod tests {
         });
 
         assert!(matches!(
-            processor.on_update_parent(&update_parent, 1),
+            processor.on_update_parent(&update_parent),
             Err(BlockComponentProcessorError::AbandonedBank(_))
         ));
     }
@@ -1024,11 +988,11 @@ mod tests {
         });
 
         // First should succeed
-        processor.on_update_parent(&update_parent, 1).unwrap();
+        processor.on_update_parent(&update_parent).unwrap();
 
         // Second should fail
         assert_eq!(
-            processor.on_update_parent(&update_parent, 1),
+            processor.on_update_parent(&update_parent),
             Err(BlockComponentProcessorError::MultipleUpdateParents)
         );
     }
@@ -1037,13 +1001,10 @@ mod tests {
     fn test_header_after_update_parent_error() {
         let mut processor = BlockComponentProcessor::default();
         processor
-            .on_update_parent(
-                &VersionedUpdateParent::V1(UpdateParentV1 {
-                    new_parent_slot: 0,
-                    new_parent_block_id: Hash::default(),
-                }),
-                1,
-            )
+            .on_update_parent(&VersionedUpdateParent::V1(UpdateParentV1 {
+                new_parent_slot: 0,
+                new_parent_block_id: Hash::default(),
+            }))
             .unwrap();
 
         let header = VersionedBlockHeader::V1(BlockHeaderV1 {
@@ -1058,7 +1019,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO(ksn): Enable when fast leader handover is enabled in MigrationPhase::should_allow_fast_leader_handover
     fn test_workflow_with_update_parent() {
         let migration_status = MigrationStatus::post_migration_status();
         let mut processor = BlockComponentProcessor::default();
@@ -1066,13 +1026,10 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         processor
-            .on_update_parent(
-                &VersionedUpdateParent::V1(UpdateParentV1 {
-                    new_parent_slot: 0,
-                    new_parent_block_id: Hash::default(),
-                }),
-                1,
-            )
+            .on_update_parent(&VersionedUpdateParent::V1(UpdateParentV1 {
+                new_parent_slot: 0,
+                new_parent_block_id: Hash::default(),
+            }))
             .unwrap();
 
         assert!(processor.on_entry_batch(&migration_status).is_ok());
