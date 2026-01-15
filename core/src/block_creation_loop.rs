@@ -41,7 +41,7 @@ use {
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_version::version,
-    stats::{LoopMetrics, SlotMetrics},
+    stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
             Arc, Condvar, Mutex, RwLock,
@@ -133,7 +133,7 @@ struct LeaderContext {
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
     // Metrics
-    metrics: LoopMetrics,
+    metrics: BlockCreationLoopMetrics,
     slot_metrics: SlotMetrics,
 
     // Migration information
@@ -246,7 +246,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         replay_highest_frozen,
         build_reward_certs_sender,
         reward_certs_receiver,
-        metrics: LoopMetrics::default(),
+        metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
     };
@@ -350,7 +350,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         }
 
         ctx.metrics.loop_count += 1;
-        ctx.metrics.report(Duration::from_secs(1));
+        ctx.metrics.report(1000);
     }
 
     info!("{my_pubkey}: Block creation loop shutting down");
@@ -410,7 +410,6 @@ fn produce_window(
         }
         assert!(!ctx.poh_recorder.read().unwrap().has_bank());
         bank_completion_measure.stop();
-        ctx.slot_metrics.report();
 
         ctx.metrics.bank_timeout_completion_count += 1;
         let _ = ctx
@@ -729,7 +728,7 @@ fn start_leader_retry_replay(
 
     let mut slot_delay_start = Measure::start("slot_delay");
     while !time_left(block_timer, timeout).is_zero() {
-        ctx.slot_metrics.attempt_start_leader_count += 1;
+        ctx.slot_metrics.attempt_count += 1;
 
         // Check if the entire window is skipped.
         let highest_parent_ready_slot = ctx.highest_parent_ready.read().unwrap().0;
@@ -758,6 +757,7 @@ fn start_leader_retry_replay(
                             ctx.my_pubkey
                         );
                     });
+                ctx.slot_metrics.report(slot);
 
                 return Ok(());
             }
@@ -918,7 +918,6 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
 
     // Wakeup banking stage
     ctx.record_receiver.restart(bank_id);
-    ctx.slot_metrics.reset(slot);
 
     info!(
         "{}: new fork:{} parent:{} (leader) root:{}",
