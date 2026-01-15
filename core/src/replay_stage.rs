@@ -40,7 +40,7 @@ use {
     },
     solana_accounts_db::contains::Contains,
     solana_clock::{BankId, Slot, NUM_CONSECUTIVE_LEADER_SLOTS},
-    solana_entry::entry::VerifyRecyclers,
+    solana_entry::{block_component::VersionedUpdateParent, entry::VerifyRecyclers},
     solana_geyser_plugin_manager::block_metadata_notifier_interface::BlockMetadataNotifierArc,
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -74,6 +74,7 @@ use {
     solana_runtime::{
         bank::{bank_hash_details, Bank, NewBankOptions},
         bank_forks::{BankForks, SetRootError, MAX_ROOT_DISTANCE_FOR_VOTE_ONLY},
+        block_component_processor::BlockComponentProcessorError,
         commitment::BlockCommitmentCache,
         installed_scheduler_pool::BankWithScheduler,
         prioritization_fee_cache::PrioritizationFeeCache,
@@ -3538,7 +3539,7 @@ impl ReplayStage {
             start_slot: next_slot,
             end_slot,
             parent_block: (bank.slot(), block_id),
-            skip_timer: Instant::now(), // ignore for now
+            block_timer: Instant::now(),
         };
 
         optimistic_parent_sender
@@ -3632,6 +3633,40 @@ impl ReplayStage {
             if let Some(replay_result) = &replay_result.replay_result {
                 match replay_result {
                     Ok(replay_tx_count) => tx_count += replay_tx_count,
+                    Err(BlockstoreProcessorError::BlockComponentProcessor(
+                        BlockComponentProcessorError::AbandonedBank(update_parent),
+                    )) => {
+                        // Handle UpdateParent marker during fast leader handover.
+                        // The leader built on an optimistic parent that didn't match the
+                        // finalized parent.
+                        //
+                        // We clear the bank and remove the progress entry. The bank will be
+                        // recreated with the correct parent by generate_new_bank_forks, which
+                        // reads ParentMeta to determine both the new parent and the correct
+                        // replay offset (replay_fec_set_index).
+                        let new_parent_slot = match &update_parent {
+                            VersionedUpdateParent::V1(x) => x.new_parent_slot,
+                        };
+
+                        info!(
+                            "AbandonedBank at slot {bank_slot}: switching parent from {} to \
+                             {new_parent_slot}",
+                            bank.parent_slot()
+                        );
+
+                        // Clear the bank from bank_forks. It will be recreated with the
+                        // correct parent by generate_new_bank_forks on the next iteration.
+                        bank_forks.write().unwrap().clear_bank(bank_slot);
+
+                        // Remove the progress entry. It will be recreated with the correct
+                        // num_shreds offset when generate_new_bank_forks creates the new bank.
+                        progress.remove(&bank_slot);
+
+                        info!(
+                            "AbandonedBank at slot {bank_slot}: cleared bank and progress, will \
+                             recreate with parent {new_parent_slot}"
+                        );
+                    }
                     Err(err) => {
                         let root = bank_forks.read().unwrap().root();
                         Self::mark_dead_slot(
@@ -4752,13 +4787,44 @@ impl ReplayStage {
                     trace!("child already active or frozen {child_slot}");
                     continue;
                 }
+
+                debug_assert!(!progress.contains_key(&child_slot));
+
+                // Determine replay offset from ParentMeta.
+                let replay_offset = if !migration_status.should_allow_block_markers(child_slot) {
+                    None
+                } else {
+                    let Some(parent_meta) = blockstore
+                        .get_parent_meta(child_slot, BlockLocation::Original)
+                        .expect("Blockstore should not fail")
+                    else {
+                        continue;
+                    };
+
+                    // No lock is held between get_slots_since and get_parent_meta, so
+                    // ParentMeta could have been updated in between. If so, continue and
+                    // the next iteration of generate_new_bank_forks will have consistent values.
+                    if parent_meta.parent_slot != parent_slot {
+                        continue;
+                    }
+
+                    let num_shreds = u64::from(parent_meta.replay_fec_set_index);
+                    if num_shreds > 0 {
+                        info!(
+                            "slot {child_slot}: replay offset {} shreds from parent {}",
+                            num_shreds, parent_meta.parent_slot
+                        );
+                    }
+                    Some(num_shreds)
+                };
+
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(parent_bank))
                     .unwrap();
                 info!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
-                    parent_slot,
+                    parent_bank.slot(),
                     forks.root()
                 );
                 // Migration period banks are VoM
@@ -4778,6 +4844,20 @@ impl ReplayStage {
                     options,
                 );
                 blockstore_processor::set_alpenglow_ticks(&child_bank, migration_status);
+
+                if let Some(num_shreds) = replay_offset {
+                    let prev_leader_slot = progress.get_bank_prev_leader_slot(&child_bank);
+                    let fork_progress = ForkProgress::new(
+                        parent_bank.last_blockhash(),
+                        prev_leader_slot,
+                        None,
+                        0,
+                        0,
+                    );
+                    fork_progress.replay_progress.write().unwrap().num_shreds = num_shreds;
+                    progress.insert(child_slot, fork_progress);
+                }
+
                 let empty: Vec<Pubkey> = vec![];
                 Self::update_fork_propagated_threshold_from_votes(
                     progress,

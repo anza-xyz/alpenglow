@@ -9,9 +9,11 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
-    crossbeam_channel::{Receiver, Sender},
+    crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
-    solana_entry::block_component::{BlockFooterV1, GenesisCertificate, VersionedBlockMarker},
+    solana_entry::block_component::{
+        BlockFooterV1, GenesisCertificate, UpdateParentV1, VersionedBlockMarker,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_ledger::{
@@ -37,7 +39,10 @@ use {
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::LeaderWindowInfo,
     },
-    solana_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    solana_votor_messages::{
+        consensus_message::Block,
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
@@ -51,6 +56,11 @@ use {
 };
 
 mod stats;
+
+enum ParentSource {
+    ParentReady(LeaderWindowInfo),
+    OptimisticParent(LeaderWindowInfo),
+}
 
 pub struct BlockCreationLoop {
     thread: JoinHandle<()>,
@@ -252,40 +262,73 @@ fn start_loop(config: BlockCreationLoopConfig) {
             );
         }
 
-        // Wait for the voting loop to notify us, draining all pending messages and keeping the highest slot
+        // Race between parent ready notification and optimistic parent events.
+        // Parent ready is checked first and has priority if both channels are ready.
+        let window_source = select_biased! {
+            recv(ctx.leader_window_info_receiver) -> msg => {
+                msg.ok().map(ParentSource::ParentReady)
+            },
+            recv(optimistic_parent_receiver) -> msg => {
+                msg.ok().map(ParentSource::OptimisticParent)
+            },
+            default(Duration::from_secs(1)) => continue,
+        };
+
+        // Drain any additional pending messages and keep the latest one
+        let (info, fast_leader_handover) = match window_source {
+            Some(ParentSource::ParentReady(first)) => {
+                let info = ctx
+                    .leader_window_info_receiver
+                    .try_iter()
+                    .last()
+                    .unwrap_or(first);
+                trace!(
+                    "{my_pubkey}: window {}-{} finalized parent",
+                    info.start_slot,
+                    info.end_slot
+                );
+                (info, false)
+            }
+            Some(ParentSource::OptimisticParent(first)) => {
+                let info = optimistic_parent_receiver
+                    .try_iter()
+                    .last()
+                    .unwrap_or(first);
+                trace!(
+                    "{my_pubkey}: window {}-{} optimistic parent",
+                    info.start_slot,
+                    info.end_slot
+                );
+                (info, true)
+            }
+            None => {
+                info!("{my_pubkey}: channel disconnected");
+                return;
+            }
+        };
+
         let LeaderWindowInfo {
             start_slot,
             end_slot,
             // TODO: handle duplicate blocks by using the hash here
-            parent_block: (parent_slot, _),
-            skip_timer,
-        } = {
-            // Drain all pending messages and keep the latest one
-            let Some(info) = ctx
-                .leader_window_info_receiver
-                .recv_timeout(Duration::from_secs(1))
-                .ok()
-                .and_then(|window| {
-                    ctx.leader_window_info_receiver
-                        .try_iter()
-                        .last()
-                        .or(Some(window))
-                })
-            else {
-                continue;
-            };
+            parent_block: (parent_slot, parent_hash),
+            block_timer,
+        } = info;
 
-            info
-        };
+        trace!(
+            "{my_pubkey}: window {start_slot}-{end_slot} parent {parent_slot} \
+             flh={fast_leader_handover}"
+        );
 
-        // TODO(ksn): fast leader handover. Once we can stream parent ready events over a channel,
-        // we'll have the two channels race each other to determine what to do.
-        //
-        // For now, just drain the channel and don't do anything with optimistic parents.
-        while let Ok(_optimistic_parent) = optimistic_parent_receiver.try_recv() {}
-
-        trace!("Received window notification for {start_slot} to {end_slot} parent: {parent_slot}");
-        if let Err(e) = produce_window(start_slot, end_slot, parent_slot, skip_timer, &mut ctx) {
+        if let Err(e) = produce_window(
+            fast_leader_handover,
+            start_slot,
+            end_slot,
+            parent_slot,
+            parent_hash,
+            block_timer,
+            &mut ctx,
+        ) {
             // Give up on this leader window
             error!(
                 "{my_pubkey}: Unable to produce window {start_slot}-{end_slot}, skipping window: \
@@ -319,16 +362,18 @@ fn reset_poh_recorder(bank: &Arc<Bank>, ctx: &LeaderContext) {
 }
 
 /// Produces the leader window from `start_slot` -> `end_slot` using parent
-/// `parent_slot` while abiding to the `skip_timer`
+/// `parent_slot` while abiding to the `block_timer`
 fn produce_window(
+    fast_leader_handover: bool,
     start_slot: Slot,
     end_slot: Slot,
     parent_slot: Slot,
-    skip_timer: Instant,
+    parent_hash: Hash,
+    mut block_timer: Instant,
     ctx: &mut LeaderContext,
 ) -> Result<(), StartLeaderError> {
     // Insert the first bank
-    start_leader_retry_replay(start_slot, parent_slot, skip_timer, ctx)?;
+    start_leader_retry_replay(start_slot, parent_slot, block_timer, ctx)?;
 
     let my_pubkey = ctx.my_pubkey;
     let mut window_production_start = Measure::start("window_production");
@@ -337,20 +382,16 @@ fn produce_window(
         let leader_index = leader_slot_index(slot);
         let timeout = block_timeout(leader_index);
         trace!(
-            "{my_pubkey}: waiting for leader bank {slot} to finish, remaining time: {}",
-            timeout.saturating_sub(skip_timer.elapsed()).as_millis(),
+            "{my_pubkey}: waiting for leader bank {slot} to finish, remaining time: {}ms",
+            timeout.saturating_sub(block_timer.elapsed()).as_millis()
         );
 
         let mut bank_completion_measure = Measure::start("bank_completion");
-        if let Err(e) = record_and_complete_block(
-            ctx.poh_recorder.as_ref(),
-            &mut ctx.record_receiver,
-            &ctx.build_reward_certs_sender,
-            &ctx.reward_certs_receiver,
-            skip_timer,
-            timeout,
-            slot,
-        ) {
+        let optimistic_parent =
+            (fast_leader_handover && slot == start_slot).then_some((parent_slot, parent_hash));
+        if let Err(e) =
+            record_and_complete_block(ctx, slot, optimistic_parent, &mut block_timer, timeout)
+        {
             panic!("PohRecorder record failed: {e:?}");
         }
         assert!(!ctx.poh_recorder.read().unwrap().has_bank());
@@ -371,7 +412,7 @@ fn produce_window(
 
         // Although `slot - 1`has been cleared from `poh_recorder`, it might not have finished processing in
         // `replay_stage`, which is why we use `start_leader_retry_replay`
-        start_leader_retry_replay(slot, slot - 1, skip_timer, ctx)?;
+        start_leader_retry_replay(slot, slot - 1, block_timer, ctx)?;
     }
 
     window_production_start.stop();
@@ -439,6 +480,76 @@ fn produce_block_footer(
     }
 }
 
+fn send_update_parent(
+    poh_recorder: &RwLock<PohRecorder>,
+    new_parent_block: Block,
+) -> Result<(), PohRecorderError> {
+    let (new_parent_slot, new_parent_block_id) = new_parent_block;
+    let update_parent = UpdateParentV1 {
+        new_parent_slot,
+        new_parent_block_id,
+    };
+    let marker = VersionedBlockMarker::new_update_parent(update_parent);
+    poh_recorder.write().unwrap().send_marker(marker)?;
+    Ok(())
+}
+
+/// Handles a parent ready notification when building on an optimistic parent.
+///
+/// Happy path:
+/// - finalized parent matches optimistic parent
+/// - this is a no-op, and a win.
+///
+/// Sad path:
+/// - finalized parent does not match optimistic parent
+/// - we send an UpdateParent to switch to the correct parent (i.e., the finalized parent).
+/// - tell PohRecorder to stop sending us transactions
+/// - we clear the bank for the current slot
+///
+/// TODO(ksn):
+/// - Allow transactions on top of the new parent
+/// - Keep track of transactions built on the wrong parent and send them through the scheduler for
+///   potential inclusion on top of the new parent
+fn handle_parent_ready(
+    ctx: &mut LeaderContext,
+    leader_window_info: LeaderWindowInfo,
+    optimistic_parent_block: (Slot, Hash),
+    block_timer: &mut Instant,
+) -> Result<(), PohRecorderError> {
+    if leader_window_info.parent_block == optimistic_parent_block {
+        // Happy path: optimistic parent matches finalized parent
+        return Ok(());
+    }
+
+    // Sad path: need to switch to the correct parent
+    trace!(
+        "{:?}: Sad leader handover slot optimistic parent = {:?} != {:?} = finalized parent",
+        ctx.my_pubkey,
+        optimistic_parent_block,
+        leader_window_info.parent_block
+    );
+
+    // If the optimistic parent doesn't match the finalized parent (specified in ParentReady), then
+    // this resets the block timer to the new parent's timer.
+    *block_timer = leader_window_info.block_timer;
+
+    // Important: We must shutdown and drain the record receiver BEFORE sending the UpdateParent
+    // marker. Otherwise, we could end up sending records for the old bank after the UpdateParent,
+    // which causes a divergence between the leader and replayers.
+    shutdown_and_drain_record_receiver(&ctx.poh_recorder, &mut ctx.record_receiver)?;
+    send_update_parent(&ctx.poh_recorder, leader_window_info.parent_block)?;
+
+    let slot = leader_window_info.start_slot;
+    let (old_parent_slot, _) = optimistic_parent_block;
+    let (new_parent_slot, _) = leader_window_info.parent_block;
+
+    ctx.bank_forks.write().unwrap().clear_bank(slot);
+
+    // Wait for new parent to be frozen
+    start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
+        .map_err(|_| PohRecorderError::ResetBankError(old_parent_slot, new_parent_slot))
+}
+
 /// Shutdowns the record receiver and drains any remaining records.
 fn shutdown_and_drain_record_receiver(
     poh_recorder: &RwLock<PohRecorder>,
@@ -460,6 +571,11 @@ fn shutdown_and_drain_record_receiver(
     Ok(())
 }
 
+/// Returns the time remaining until timeout.
+fn time_left(block_timer: Instant, timeout: Duration) -> Duration {
+    timeout.saturating_sub(block_timer.elapsed())
+}
+
 /// Records incoming transactions until we reach the block timeout.
 /// Afterwards:
 /// - Shutdown the record receiver
@@ -468,39 +584,64 @@ fn shutdown_and_drain_record_receiver(
 /// - Insert the alpentick
 /// - Clear the working bank
 fn record_and_complete_block(
-    poh_recorder: &RwLock<PohRecorder>,
-    record_receiver: &mut RecordReceiver,
-    build_reward_certs_sender: &Sender<BuildRewardCertsRequest>,
-    reward_certs_receiver: &Receiver<BuildRewardCertsResponse>,
-    block_timer: Instant,
-    block_timeout: Duration,
+    ctx: &mut LeaderContext,
     slot: Slot,
+    mut optimistic_parent: Option<(Slot, Hash)>,
+    block_timer: &mut Instant,
+    block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
-    build_reward_certs_sender
+    ctx.build_reward_certs_sender
         .send(BuildRewardCertsRequest { slot })
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
-    loop {
-        let remaining_slot_time = block_timeout.saturating_sub(block_timer.elapsed());
-        if remaining_slot_time.is_zero() {
-            break;
+    let window_has_moved_on = loop {
+        // Don't timeout until we've received ParentReady
+        let timeout = time_left(*block_timer, block_timeout);
+        if timeout.is_zero() && optimistic_parent.is_none() {
+            break false;
         }
 
-        let Ok(record) = record_receiver.recv_timeout(remaining_slot_time) else {
-            continue;
-        };
-        poh_recorder.write().unwrap().record(
-            record.slot,
-            record.mixins,
-            record.transaction_batches,
-        )?;
-    }
+        select_biased! {
+            recv(ctx.leader_window_info_receiver) -> msg => {
+                match msg.ok() {
+                    Some(info) if info.start_slot > slot => {
+                        // Window has moved on; we're behind
+                        break true;
+                    }
+                    Some(info) => {
+                        if let Some(optimistic_parent_block) = optimistic_parent.take() {
+                            handle_parent_ready(ctx, info, optimistic_parent_block, block_timer)?;
+                        }
+                    }
+                    None => continue,
+                }
+            },
+            recv(ctx.record_receiver.inner()) -> msg => {
+                if let Ok(record) = msg {
+                    ctx.record_receiver
+                        .on_received_record(record.transaction_batches.len() as u64);
+                    ctx.poh_recorder.write().unwrap().record(
+                        record.slot,
+                        record.mixins,
+                        record.transaction_batches,
+                    )?;
+                }
+            },
+            default(timeout) => {},
+        }
+    };
 
     // Shutdown and clear any inflight records
-    // TODO: do we need to lower the block timeout from 400ms to account for this / insertion of the block footer
-    shutdown_and_drain_record_receiver(poh_recorder, record_receiver)?;
+    shutdown_and_drain_record_receiver(&ctx.poh_recorder, &mut ctx.record_receiver)?;
+
+    // By now, we should have received ParentReady and called handle_parent_ready(), unless
+    // we're behind and the window has moved on.
+    debug_assert!(
+        window_has_moved_on || optimistic_parent.is_none(),
+        "optimistic_parent should be None after receiving ParentReady"
+    );
 
     // Alpentick and clear bank
-    let mut w_poh_recorder = poh_recorder.write().unwrap();
+    let mut w_poh_recorder = ctx.poh_recorder.write().unwrap();
     let bank = w_poh_recorder
         .bank()
         .expect("Bank cannot have been cleared as BlockCreationLoop is the only modifier");
@@ -522,7 +663,8 @@ fn record_and_complete_block(
         skip,
         notar,
         validators,
-    } = reward_certs_receiver
+    } = ctx
+        .reward_certs_receiver
         .recv()
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
@@ -544,7 +686,7 @@ fn record_and_complete_block(
 fn start_leader_retry_replay(
     slot: Slot,
     parent_slot: Slot,
-    skip_timer: Instant,
+    block_timer: Instant,
     ctx: &mut LeaderContext,
 ) -> Result<(), StartLeaderError> {
     trace!(
@@ -556,7 +698,7 @@ fn start_leader_retry_replay(
     let end_slot = last_of_consecutive_leader_slots(slot);
 
     let mut slot_delay_start = Measure::start("slot_delay");
-    while !timeout.saturating_sub(skip_timer.elapsed()).is_zero() {
+    while !time_left(block_timer, timeout).is_zero() {
         ctx.slot_metrics.attempt_count += 1;
 
         // Check if the entire window is skipped.
@@ -587,9 +729,9 @@ fn start_leader_retry_replay(
             }
             Err(StartLeaderError::ReplayIsBehind(_, _)) => {
                 trace!(
-                    "{my_pubkey}: Attempting to produce slot {slot}, however replay of the the \
-                     parent {parent_slot} is not yet finished, waiting. Skip timer {}",
-                    skip_timer.elapsed().as_millis()
+                    "{my_pubkey}: Attempting to produce slot {slot}, however replay of the parent \
+                     {parent_slot} is not yet finished, waiting. Skip timer {:?}",
+                    block_timer.elapsed().as_millis()
                 );
                 let highest_frozen_slot = ctx
                     .replay_highest_frozen
@@ -597,17 +739,15 @@ fn start_leader_retry_replay(
                     .lock()
                     .unwrap();
 
-                // We wait until either we finish replay of the parent or the skip timer finishes
+                // We wait until either we finish replay of the parent or the block timer finishes
                 let mut wait_start = Measure::start("replay_is_behind");
-                let _unused = ctx
-                    .replay_highest_frozen
-                    .freeze_notification
-                    .wait_timeout_while(
-                        highest_frozen_slot,
-                        timeout.saturating_sub(skip_timer.elapsed()),
-                        |hfs| *hfs < parent_slot,
-                    )
-                    .unwrap();
+                let _unused = {
+                    let timeout = time_left(block_timer, timeout);
+                    ctx.replay_highest_frozen
+                        .freeze_notification
+                        .wait_timeout_while(highest_frozen_slot, timeout, |hfs| *hfs < parent_slot)
+                        .unwrap()
+                };
                 wait_start.stop();
                 ctx.slot_metrics.replay_is_behind_cumulative_wait_elapsed += wait_start.as_us();
                 let _ = ctx
@@ -669,6 +809,14 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
         ctx.my_pubkey
     );
 
+    if ctx.poh_recorder.read().unwrap().start_slot() != parent_slot {
+        // Important to keep Poh somewhat accurate for
+        // parts of the system relying on PohRecorder::would_be_leader()
+        reset_poh_recorder(&parent_bank, ctx);
+    }
+
+    // After potentially resetting, there should be no working bank.
+    // If there still is one, something has gone wrong.
     if let Some(bank) = ctx.poh_recorder.read().unwrap().bank() {
         panic!(
             "{}: Attempting to produce a block for {slot}, however we still are in production of \
@@ -676,12 +824,6 @@ fn create_and_insert_leader_bank(slot: Slot, parent_bank: Arc<Bank>, ctx: &mut L
             ctx.my_pubkey,
             bank.slot(),
         );
-    }
-
-    if ctx.poh_recorder.read().unwrap().start_slot() != parent_slot {
-        // Important to keep Poh somewhat accurate for
-        // parts of the system relying on PohRecorder::would_be_leader()
-        reset_poh_recorder(&parent_bank, ctx);
     }
 
     let tpu_bank = ReplayStage::new_bank_from_parent_with_notify(
