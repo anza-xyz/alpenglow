@@ -109,6 +109,7 @@ pub use {
 
 pub const MAX_REPLAY_WAKE_UP_SIGNALS: usize = 1;
 pub const MAX_COMPLETED_SLOTS_IN_CHANNEL: usize = 100_000;
+pub const MAX_UPDATE_PARENT_SIGNALS: usize = 10_000;
 
 pub type CompletedSlotsSender = Sender<Vec<Slot>>;
 pub type CompletedSlotsReceiver = Receiver<Vec<Slot>>;
@@ -540,8 +541,7 @@ impl Blockstore {
         let (ledger_signal_sender, ledger_signal_receiver) = bounded(MAX_REPLAY_WAKE_UP_SIGNALS);
         let (completed_slots_sender, completed_slots_receiver) =
             bounded(MAX_COMPLETED_SLOTS_IN_CHANNEL);
-        let (update_parent_sender, update_parent_receiver) =
-            bounded(MAX_COMPLETED_SLOTS_IN_CHANNEL);
+        let (update_parent_sender, update_parent_receiver) = bounded(MAX_UPDATE_PARENT_SIGNALS);
 
         blockstore.add_new_shred_signal(ledger_signal_sender);
         blockstore.add_completed_slots_signal(completed_slots_sender);
@@ -5925,7 +5925,17 @@ fn send_signals(
 
     for signal in update_parent_signals {
         for sender in update_parent_senders {
-            let _ = sender.try_send(signal.clone());
+            let res = sender.try_send(signal.clone());
+            if let Err(TrySendError::Full(_)) = res {
+                datapoint_error!(
+                    "blockstore_error",
+                    (
+                        "error",
+                        "Unable to send update parent signal because channel is full",
+                        String
+                    ),
+                );
+            }
         }
     }
 }
