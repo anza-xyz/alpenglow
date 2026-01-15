@@ -30,7 +30,8 @@ use {
     solana_signer::Signer,
     solana_streamer::{
         packet::PacketBatch,
-        quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
+        quic::{spawn_server_with_cancel, QuicStreamerConfig, SpawnServerResult},
+        nonblocking::swqos::SwQosConfig,
         socket::SocketAddrSpace,
         streamer::StakedNodes,
     },
@@ -448,7 +449,8 @@ pub fn start_quic_streamer_to_listen_for_votes_and_certs(
         &Keypair::new(),
         sender,
         staked_nodes,
-        QuicServerParams::default_for_tests(),
+        QuicStreamerConfig::default_for_tests(),
+        SwQosConfig::default(),
         cancel.clone(),
     )
     .unwrap();

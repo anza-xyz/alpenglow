@@ -56,9 +56,10 @@ use {
     },
     solana_streamer::{
         evicting_sender::EvictingSender,
-        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        quic::{spawn_simple_qos_server_with_cancel, SimpleQosQuicStreamerConfig, SpawnServerResult},
         streamer::StakedNodes,
     },
+    tokio_util::sync::CancellationToken,
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
@@ -212,7 +213,7 @@ impl Tvu {
         votor_event_sender: VotorEventSender,
         votor_event_receiver: VotorEventReceiver,
         optimistic_parent_sender: Sender<LeaderWindowInfo>,
-        alpenglow_quic_server_config: QuicServerParams,
+        alpenglow_quic_server_config: SimpleQosQuicStreamerConfig,
         staked_nodes: Arc<RwLock<StakedNodes>>,
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
@@ -260,15 +261,16 @@ impl Tvu {
             endpoints: _,
             thread: alpenglow_quic_t,
             key_updater: alpenglow_stream_key_updater,
-        } = spawn_server(
+        } = spawn_simple_qos_server_with_cancel(
             "solQuicAlpglw",
             "quic_streamer_alpenglow",
             vec![alpenglow_quic_socket],
             &identity_keypair,
             bls_packet_sender.clone(),
-            exit.clone(),
             staked_nodes.clone(),
-            alpenglow_quic_server_config,
+            alpenglow_quic_server_config.quic_streamer_config,
+            alpenglow_quic_server_config.qos_config,
+            CancellationToken::new(),
         )
         .unwrap();
 

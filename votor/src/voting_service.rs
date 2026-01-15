@@ -285,7 +285,8 @@ mod tests {
         },
         solana_signer::Signer,
         solana_streamer::{
-            quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
+            nonblocking::swqos::SwQosConfig,
+            quic::{spawn_server_with_cancel, QuicStreamerConfig, SpawnServerResult},
             socket::SocketAddrSpace,
             streamer::StakedNodes,
         },
@@ -402,7 +403,8 @@ mod tests {
             &Keypair::new(),
             sender,
             staked_nodes,
-            QuicServerParams::default_for_tests(),
+QuicStreamerConfig::default_for_tests(),
+            SwQosConfig::default(),
             cancel.clone(),
         )
         .unwrap();
