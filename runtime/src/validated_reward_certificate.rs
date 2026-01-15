@@ -14,7 +14,10 @@ use {
 /// Different types of errors that can happen when trying to construct a [`ValidatedRewardCert`].
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum Error {
-    #[error("skip or notar certs have invalid slot numbers: cur={current_slot}, notar={notar_slot:?}, skip={skip_slot:?}")]
+    #[error(
+        "skip or notar certs have invalid slot numbers: cur={current_slot}, notar={notar_slot:?}, \
+         skip={skip_slot:?}"
+    )]
     InvalidSlotNumbers {
         current_slot: Slot,
         notar_slot: Option<Slot>,
