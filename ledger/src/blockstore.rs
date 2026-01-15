@@ -2008,14 +2008,8 @@ impl Blockstore {
             }
         }
 
-        let completed_data_sets = self.insert_data_shred(
-            slot_meta,
-            index_meta.data_mut(),
-            &shred,
-            write_batch,
-            shred_source,
-        )?;
-
+        // Validate ParentMeta before persisting shred bytes, so malformed parent-marker
+        // shreds do not make an invalid slot appear complete.
         if shred
             .index()
             .is_multiple_of(DATA_SHREDS_PER_FEC_BLOCK as u32)
@@ -2026,8 +2020,17 @@ impl Blockstore {
                 slot,
                 just_inserted_shreds,
                 parent_meta_working_set,
+                write_batch,
             )?;
         }
+
+        let completed_data_sets = self.insert_data_shred(
+            slot_meta,
+            index_meta.data_mut(),
+            &shred,
+            write_batch,
+            shred_source,
+        )?;
 
         newly_completed_data_sets.extend(completed_data_sets);
         merkle_root_metas
@@ -2102,6 +2105,7 @@ impl Blockstore {
         slot: Slot,
         just_inserted_shreds: &HashMap<ShredId, Cow<'_, Shred>>,
         parent_meta_working_set: &mut HashMap<u64, WorkingEntry<ParentMeta>>,
+        write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let previous_parent_meta = self.get_or_fetch_parent_meta(slot, parent_meta_working_set)?;
 
@@ -2119,8 +2123,15 @@ impl Blockstore {
         };
 
         if let Some(prev) = &previous_parent_meta {
-            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
-                return Ok(());
+            match Self::should_write_parent_meta(slot, &new_parent_meta, prev) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(e) => {
+                    self.dead_slots_cf
+                        .put_in_batch(write_batch, slot, &true)
+                        .unwrap();
+                    return Err(e);
+                }
             }
         }
 
