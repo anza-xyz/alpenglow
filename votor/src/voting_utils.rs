@@ -126,7 +126,7 @@ pub struct VotingContext {
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
 }
 
-fn get_bls_keypair(
+fn get_or_insert_bls_keypair(
     derived_bls_keypairs: &mut HashMap<Pubkey, Arc<BLSKeypair>>,
     authorized_voter_keypair: &Arc<Keypair>,
 ) -> Result<Arc<BLSKeypair>, BlsError> {
@@ -215,7 +215,7 @@ pub fn generate_vote_tx(
         authorized_voter_keypair = keypair.clone();
     }
 
-    let bls_keypair = get_bls_keypair(derived_bls_keypairs, &authorized_voter_keypair)
+    let bls_keypair = get_or_insert_bls_keypair(derived_bls_keypairs, &authorized_voter_keypair)
         .unwrap_or_else(|e| panic!("Failed to derive my own BLS keypair: {e:?}"));
     let my_bls_pubkey: BLSPubkey = bls_keypair.public;
     if my_bls_pubkey != bls_pubkey_in_vote_account {
@@ -225,20 +225,11 @@ pub fn generate_vote_tx(
         );
     }
     let vote_serialized = bincode::serialize(&vote).unwrap();
-
-    let epoch = bank.epoch_schedule().get_epoch(vote.slot());
-
-    let Some(epoch_stakes) = bank.epoch_stakes(epoch) else {
-        panic!(
-            "The bank {} doesn't have its own epoch_stakes for {}",
-            bank.slot(),
-            epoch
-        );
-    };
-    let Some(my_rank) = epoch_stakes
-        .bls_pubkey_to_rank_map()
-        .get_rank(&my_bls_pubkey)
-    else {
+    let rank_map = bank
+        .epoch_stakes_from_slot(vote.slot())
+        .unwrap_or_else(|| panic!("could not find epoch stakes for slot {}", vote.slot()))
+        .bls_pubkey_to_rank_map();
+    let Some(my_rank) = rank_map.get_rank(&my_bls_pubkey) else {
         return GenerateVoteTxResult::NoRankFound;
     };
     GenerateVoteTxResult::ConsensusMessage(ConsensusMessage::Vote(VoteMessage {
@@ -571,9 +562,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "The bank 0 doesn't have its own epoch_stakes for")]
+    #[should_panic(expected = "could not find epoch stakes for slot 1000000000")]
     fn test_panic_on_future_slot() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)
@@ -590,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_zero_staked_validator_fails_voting() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (own_vote_sender, _own_vote_receiver) = crossbeam_channel::unbounded();
         // Create 10 node validatorvotekeypairs vec
         let validator_keypairs = (0..10)

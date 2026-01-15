@@ -184,7 +184,6 @@ impl Rocks {
             new_cf_descriptor::<columns::Index>(options, oldest_slot),
             new_cf_descriptor::<columns::ShredData>(options, oldest_slot),
             new_cf_descriptor::<columns::ShredCode>(options, oldest_slot),
-            new_cf_descriptor::<columns::BlockVersions>(options, oldest_slot),
             new_cf_descriptor::<columns::TransactionStatus>(options, oldest_slot),
             new_cf_descriptor::<columns::AddressSignatures>(options, oldest_slot),
             new_cf_descriptor::<columns::TransactionMemos>(options, oldest_slot),
@@ -250,7 +249,7 @@ impl Rocks {
         cf_descriptors
     }
 
-    const fn columns() -> [&'static str; 28] {
+    const fn columns() -> [&'static str; 27] {
         [
             columns::ErasureMeta::NAME,
             columns::DeadSlots::NAME,
@@ -262,7 +261,6 @@ impl Rocks {
             columns::SlotMeta::NAME,
             columns::ShredData::NAME,
             columns::ShredCode::NAME,
-            columns::BlockVersions::NAME,
             columns::TransactionStatus::NAME,
             columns::AddressSignatures::NAME,
             columns::TransactionMemos::NAME,
@@ -1351,7 +1349,7 @@ pub mod tests {
 
     #[test]
     fn test_open_unknown_columns() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path();
@@ -1391,7 +1389,7 @@ pub mod tests {
 
     #[test]
     fn test_remove_deprecated_progam_costs_column_compat() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         fn is_program_costs_column_present(path: &Path) -> bool {
             DB::list_cf(&Options::default(), path)

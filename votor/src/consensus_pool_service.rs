@@ -188,10 +188,10 @@ impl ConsensusPoolService {
         // Unlike the other votor threads, consensus pool starts even before alpenglow is enabled
         // As it is required to track the Genesis Vote.
         let mut consensus_pool = if ctx.migration_status.is_alpenglow_enabled() {
-            ConsensusPool::new_from_root_bank(my_pubkey, &root_bank)
+            ConsensusPool::new_from_root_bank(ctx.cluster_info.clone(), &root_bank)
         } else {
             ConsensusPool::new_from_root_bank_pre_migration(
-                my_pubkey,
+                ctx.cluster_info.clone(),
                 &root_bank,
                 ctx.migration_status.clone(),
             )
@@ -213,8 +213,7 @@ impl ConsensusPoolService {
             let new_pubkey = ctx.cluster_info.id();
             if my_pubkey != new_pubkey {
                 my_pubkey = new_pubkey;
-                consensus_pool.update_pubkey(my_pubkey);
-                warn!("Certificate pool pubkey updated to {my_pubkey}");
+                info!("Consensus pool pubkey updated to {my_pubkey}");
             }
 
             // Kick off parent ready event, this either happens:
@@ -331,14 +330,8 @@ impl ConsensusPoolService {
         votor_events: &mut Vec<VotorEvent>,
         commitment_sender: &Sender<CommitmentAggregationData>,
     ) -> Result<(Option<Slot>, Vec<Arc<Certificate>>), AddVoteError> {
-        let (new_finalized_slot, new_certificates_to_send) = consensus_pool.add_message(
-            root_bank.epoch_schedule(),
-            root_bank.epoch_stakes_map(),
-            root_bank.slot(),
-            my_vote_pubkey,
-            message,
-            votor_events,
-        )?;
+        let (new_finalized_slot, new_certificates_to_send) =
+            consensus_pool.add_message(root_bank, my_vote_pubkey, message, votor_events)?;
         let Some(new_finalized_slot) = new_finalized_slot else {
             return Ok((None, new_certificates_to_send));
         };
@@ -418,18 +411,14 @@ impl ConsensusPoolService {
             BlockProductionParent::ParentNotReady => {
                 // This can't happen, place holder depending on how we hook up optimistic
                 ctx.exit.store(true, Ordering::Relaxed);
-                panic!(
-                    "Must have a block production parent: {:#?}",
-                    consensus_pool.parent_ready_tracker
-                );
+                panic!("Must have a block production parent");
             }
             BlockProductionParent::Parent(parent_block) => {
                 events.push(VotorEvent::ProduceWindow(LeaderWindowInfo {
                     start_slot,
                     end_slot,
                     parent_block,
-                    // TODO: we can just remove this
-                    skip_timer: Instant::now(),
+                    block_timer: Instant::now(),
                 }));
                 stats.parent_ready_produce_window += 1;
             }
@@ -569,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_receive_and_send_consensus_message() {
-        solana_logger::setup();
+        agave_logger::setup();
         let setup_result = setup();
 
         // validator 0 to 7 send Notarize on slot 2

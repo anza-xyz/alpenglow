@@ -14,7 +14,7 @@ use {
         nonblocking::testing_utilities::check_multiple_streams,
         quic::{
             DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE, DEFAULT_MAX_STAKED_CONNECTIONS,
-            DEFAULT_MAX_STREAMS_PER_MS, DEFAULT_MAX_UNSTAKED_CONNECTIONS, DEFAULT_TPU_COALESCE,
+            DEFAULT_MAX_STREAMS_PER_MS, DEFAULT_MAX_UNSTAKED_CONNECTIONS,
         },
         socket::SocketAddrSpace,
         streamer::StakedNodes,
@@ -33,16 +33,17 @@ use {
         },
         time::Duration,
     },
+    tokio_util::sync::CancellationToken,
     url::Url,
 };
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_vortexor() {
-    solana_logger::setup();
+    agave_logger::setup();
 
     let bind_address = solana_net_utils::parse_host("127.0.0.1").expect("invalid bind_address");
     let keypair = Keypair::new();
-    let exit = Arc::new(AtomicBool::new(false));
+    let cancel = CancellationToken::new();
 
     let (tpu_sender, tpu_receiver) = unbounded();
     let (tpu_fwd_sender, tpu_fwd_receiver) = unbounded();
@@ -75,15 +76,14 @@ async fn test_vortexor() {
         0, // max_fwd_unstaked_connections
         DEFAULT_MAX_STREAMS_PER_MS,
         DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
-        DEFAULT_TPU_COALESCE,
         &keypair,
-        exit.clone(),
+        cancel.clone(),
     );
 
     check_multiple_streams(tpu_receiver, tpu_address, Some(&keypair)).await;
     check_multiple_streams(tpu_fwd_receiver, tpu_fwd_address, Some(&keypair)).await;
 
-    exit.store(true, Ordering::Relaxed);
+    cancel.cancel();
     vortexor.join().unwrap();
 }
 
@@ -97,7 +97,7 @@ fn get_server_urls(validator: &ClusterValidatorInfo) -> (Url, Url) {
 
 #[test]
 fn test_stake_update() {
-    solana_logger::setup();
+    agave_logger::setup();
 
     // Create a local cluster with 3 validators
     let default_node_stake = 10 * LAMPORTS_PER_SOL; // Define a default value for node stake

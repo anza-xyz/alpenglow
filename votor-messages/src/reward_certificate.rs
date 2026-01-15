@@ -14,6 +14,9 @@ use {
     },
 };
 
+/// Number of slots in the past that the the current leader is responsible for producing the reward certificates.
+pub const NUM_SLOTS_FOR_REWARD: u64 = 8;
+
 /// Different types of errors that can be returned when constructing a new reward certificate.
 #[derive(Debug, Error)]
 pub enum RewardCertError {
@@ -80,16 +83,6 @@ impl SkipRewardCertificate {
     pub fn bitmap(&self) -> &[u8] {
         &self.bitmap
     }
-
-    /// Creates a new [`SkipRewardCertificate`] for test purposes.
-    #[cfg(feature = "dev-context-only-utils")]
-    pub fn new_for_tests() -> Self {
-        Self {
-            slot: 1234,
-            signature: BLSSignatureCompressed::default(),
-            bitmap: vec![4, 2],
-        }
-    }
 }
 
 /// Reward certificate for the validators that voted notar.
@@ -130,16 +123,5 @@ impl NotarRewardCertificate {
     /// Returns a reference to the bitmap.
     pub fn bitmap(&self) -> &[u8] {
         &self.bitmap
-    }
-
-    /// Creates a new [`NotarRewardCertificate`] for test purposes.
-    #[cfg(feature = "dev-context-only-utils")]
-    pub fn new_for_tests() -> Self {
-        Self {
-            slot: 1234,
-            block_id: Hash::new_unique(),
-            signature: BLSSignatureCompressed::default(),
-            bitmap: vec![4, 2],
-        }
     }
 }

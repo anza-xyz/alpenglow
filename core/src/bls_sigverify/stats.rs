@@ -147,6 +147,8 @@ pub(crate) struct BLSSigVerifierStats {
     pub(crate) received_verified: AtomicU64,
     pub(crate) received_votes: AtomicU64,
     pub(crate) last_stats_logged: Instant,
+
+    pub(super) consensus_reward_send_failed: u64,
 }
 
 impl BLSSigVerifierStats {
@@ -180,6 +182,8 @@ impl BLSSigVerifierStats {
             received_verified: AtomicU64::new(0),
             received_votes: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
+
+            consensus_reward_send_failed: 0,
         }
     }
 
@@ -310,6 +314,11 @@ impl BLSSigVerifierStats {
             (
                 "received_malformed",
                 self.received_malformed.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "consensus_rewards_send_failed",
+                self.consensus_reward_send_failed as i64,
                 i64
             ),
         );

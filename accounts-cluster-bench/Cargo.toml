@@ -15,6 +15,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 dev-context-only-utils = []
 
 [dependencies]
+agave-logger = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
@@ -29,7 +30,6 @@ solana-gossip = { workspace = true }
 solana-hash = { workspace = true }
 solana-instruction = { workspace = true }
 solana-keypair = { workspace = true }
-solana-logger = { workspace = true }
 solana-measure = { workspace = true }
 solana-message = { workspace = true, features = ["serde", "bincode", "blake3"] }
 solana-net-utils = { workspace = true }

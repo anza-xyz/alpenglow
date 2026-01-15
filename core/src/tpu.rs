@@ -1,9 +1,7 @@
 //! The `tpu` module implements the Transaction Processing Unit, a
 //! multi-stage transaction processing pipeline in software.
 
-pub use {
-    crate::forwarding_stage::ForwardingClientOption, solana_streamer::quic::DEFAULT_TPU_COALESCE,
-};
+pub use crate::forwarding_stage::ForwardingClientOption;
 use {
     crate::{
         admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
@@ -49,7 +47,7 @@ use {
         vote_sender_types::{ReplayVoteReceiver, ReplayVoteSender},
     },
     solana_streamer::{
-        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
         streamer::StakedNodes,
     },
     solana_turbine::{
@@ -67,6 +65,7 @@ use {
         time::Duration,
     },
     tokio::sync::mpsc::Sender as AsyncSender,
+    tokio_util::sync::CancellationToken,
 };
 
 pub struct TpuSockets {
@@ -137,7 +136,6 @@ impl Tpu {
         replay_vote_receiver: ReplayVoteReceiver,
         replay_vote_sender: ReplayVoteSender,
         bank_notification_sender: Option<BankNotificationSenderConfig>,
-        tpu_coalesce: Duration,
         duplicate_confirmed_slot_sender: DuplicateConfirmedSlotsSender,
         client: ForwardingClientOption,
         turbine_quic_endpoint_sender: AsyncSender<(SocketAddr, Bytes)>,
@@ -159,6 +157,7 @@ impl Tpu {
         enable_block_production_forwarding: bool,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
         key_notifiers: Arc<RwLock<KeyUpdaters>>,
+        cancel: CancellationToken,
         migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let TpuSockets {
@@ -186,7 +185,7 @@ impl Tpu {
             &forwarded_packet_sender,
             forwarded_packet_receiver,
             poh_recorder,
-            Some(tpu_coalesce),
+            None, // coalesce
             Some(bank_forks.read().unwrap().get_vote_only_mode_signal()),
             tpu_enable_udp,
         );
@@ -212,15 +211,15 @@ impl Tpu {
             endpoints: _,
             thread: tpu_vote_quic_t,
             key_updater: vote_streamer_key_updater,
-        } = spawn_server(
+        } = spawn_server_with_cancel(
             "solQuicTVo",
             "quic_streamer_tpu_vote",
             tpu_vote_quic_sockets,
             keypair,
             vote_packet_sender.clone(),
-            exit.clone(),
             staked_nodes.clone(),
             vote_quic_server_config,
+            cancel.clone(),
         )
         .unwrap();
 
@@ -230,15 +229,15 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_quic_t,
                 key_updater,
-            } = spawn_server(
+            } = spawn_server_with_cancel(
                 "solQuicTpu",
                 "quic_streamer_tpu",
                 transactions_quic_sockets,
                 keypair,
                 packet_sender,
-                exit.clone(),
                 staked_nodes.clone(),
                 tpu_quic_server_config,
+                cancel.clone(),
             )
             .unwrap();
             (Some(tpu_quic_t), Some(key_updater))
@@ -252,15 +251,15 @@ impl Tpu {
                 endpoints: _,
                 thread: tpu_forwards_quic_t,
                 key_updater: forwards_key_updater,
-            } = spawn_server(
+            } = spawn_server_with_cancel(
                 "solQuicTpuFwd",
                 "quic_streamer_tpu_forwards",
                 transactions_forwards_quic_sockets,
                 keypair,
                 forwarded_packet_sender,
-                exit.clone(),
                 staked_nodes.clone(),
                 tpu_fwd_quic_server_config,
+                cancel,
             )
             .unwrap();
             (Some(tpu_forwards_quic_t), Some(forwards_key_updater))
@@ -275,7 +274,6 @@ impl Tpu {
             let adapter = VortexorReceiverAdapter::new(
                 sockets,
                 Duration::from_millis(5),
-                tpu_coalesce,
                 non_vote_sender,
                 enable_block_production_forwarding.then(|| forward_stage_sender.clone()),
                 exit.clone(),

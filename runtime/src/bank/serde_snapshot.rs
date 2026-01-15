@@ -188,7 +188,7 @@ mod tests {
     #[test_case(StorageAccess::Mmap, true)]
     #[test_case(StorageAccess::File, true)]
     fn test_extra_fields_eof(storage_access: StorageAccess, is_alpenglow: bool) {
-        solana_logger::setup();
+        agave_logger::setup();
         let (genesis_config, keypair) = create_genesis_config(500);
 
         let bank0 = Arc::new(Bank::new_for_tests(&genesis_config));
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_extra_fields_full_snapshot_archive() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let (mut genesis_config, _) = create_genesis_config(500);
         activate_all_features(&mut genesis_config);

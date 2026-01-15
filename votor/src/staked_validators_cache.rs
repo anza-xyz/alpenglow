@@ -126,7 +126,7 @@ impl StakedValidatorsCache {
         nodes.dedup_by_key(|node| node.alpenglow_socket);
         nodes.sort_unstable_by(|a, b| a.stake.cmp(&b.stake));
 
-        let mut alpenglow_sockets = Vec::new();
+        let mut alpenglow_sockets = Vec::with_capacity(nodes.len());
         let override_map = self
             .alpenglow_port_override
             .as_ref()
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_alpenglow_port_override() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (bank_forks, cluster_info, node_pubkeys) = create_bank_forks_and_cluster_info(3, 0, 1);
         let pubkey_b = node_pubkeys[1];
 

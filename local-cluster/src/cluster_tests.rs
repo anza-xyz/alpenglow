@@ -30,7 +30,7 @@ use {
     solana_signer::Signer,
     solana_streamer::{
         packet::PacketBatch,
-        quic::{spawn_server, QuicServerParams, SpawnServerResult},
+        quic::{spawn_server_with_cancel, QuicServerParams, SpawnServerResult},
         socket::SocketAddrSpace,
         streamer::StakedNodes,
     },
@@ -54,6 +54,7 @@ use {
         thread::{sleep, JoinHandle},
         time::{Duration, Instant},
     },
+    tokio_util::sync::CancellationToken,
 };
 #[cfg(feature = "dev-context-only-utils")]
 use {
@@ -422,12 +423,12 @@ pub fn start_quic_streamer_to_listen_for_votes_and_certs(
     validator_keys: &[Arc<Keypair>],
     node_stakes: &[u64],
 ) -> (
-    Arc<AtomicBool>,
+    CancellationToken,
     JoinHandle<()>,
     crossbeam_channel::Receiver<PacketBatch>,
 ) {
     let (sender, receiver) = crossbeam_channel::unbounded();
-    let exit = Arc::new(AtomicBool::new(false));
+    let cancel = CancellationToken::new();
     let stakes = validator_keys
         .iter()
         .zip(node_stakes)
@@ -440,18 +441,18 @@ pub fn start_quic_streamer_to_listen_for_votes_and_certs(
     let SpawnServerResult {
         thread: quic_server_thread,
         ..
-    } = spawn_server(
+    } = spawn_server_with_cancel(
         "AlpenglowLocalClusterTest",
         "quic_streamer_test",
         [vote_listener_socket],
         &Keypair::new(),
         sender,
-        exit.clone(),
         staked_nodes,
         QuicServerParams::default_for_tests(),
+        cancel.clone(),
     )
     .unwrap();
-    (exit, quic_server_thread, receiver)
+    (cancel, quic_server_thread, receiver)
 }
 
 fn check_for_new_commitment_slots(
@@ -592,7 +593,7 @@ pub fn check_for_new_notarized_votes(
     let contact_infos_owned: Vec<ContactInfo> = contact_infos.to_vec();
     let test_name_owned = test_name.to_string();
 
-    let (exit, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
         vote_listener_socket,
         validator_keys,
         node_stakes,
@@ -645,7 +646,7 @@ pub fn check_for_new_notarized_votes(
                              observed: {num_new_notarized_votes:?}"
                         );
                         last_print = Instant::now();
-                        exit.store(true, Ordering::Relaxed);
+                        cancel.cancel();
                     }
                 }
             }

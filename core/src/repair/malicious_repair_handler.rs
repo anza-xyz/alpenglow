@@ -44,10 +44,7 @@ impl RepairHandler for MaliciousRepairHandler {
         let mut shred = match block_id {
             None => self.blockstore.get_data_shred(slot, shred_index),
             Some(block_id) => {
-                let location = self
-                    .blockstore()
-                    .get_block_location(slot, block_id)
-                    .expect("Unable to fetch block location from blockstore")?;
+                let location = self.blockstore().get_block_location(slot, block_id)?;
                 self.blockstore()
                     .get_data_shred_from_location(slot, shred_index, location)
             }

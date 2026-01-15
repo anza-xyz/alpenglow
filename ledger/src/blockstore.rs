@@ -259,7 +259,6 @@ pub struct Blockstore {
     blocktime_cf: LedgerColumn<cf::Blocktime>,
     code_shred_cf: LedgerColumn<cf::ShredCode>,
     data_shred_cf: LedgerColumn<cf::ShredData>,
-    block_versions_cf: LedgerColumn<cf::BlockVersions>,
     dead_slots_cf: LedgerColumn<cf::DeadSlots>,
     duplicate_slots_cf: LedgerColumn<cf::DuplicateSlots>,
     erasure_meta_cf: LedgerColumn<cf::ErasureMeta>,
@@ -443,7 +442,6 @@ impl Blockstore {
         let blocktime_cf = db.column();
         let code_shred_cf = db.column();
         let data_shred_cf = db.column();
-        let block_versions_cf = db.column();
         let dead_slots_cf = db.column();
         let duplicate_slots_cf = db.column();
         let erasure_meta_cf = db.column();
@@ -485,7 +483,6 @@ impl Blockstore {
             blocktime_cf,
             code_shred_cf,
             data_shred_cf,
-            block_versions_cf,
             dead_slots_cf,
             duplicate_slots_cf,
             erasure_meta_cf,
@@ -636,7 +633,7 @@ impl Blockstore {
     /// Checks all available block versions, if we have a *complete* block for
     /// `block_id`, returns the associated slot meta
     pub fn meta_for_block_id(&self, slot: Slot, block_id: Hash) -> Result<Option<SlotMeta>> {
-        let Some(location) = self.get_block_location(slot, block_id)? else {
+        let Some(location) = self.get_block_location(slot, block_id) else {
             return Ok(None);
         };
         self.meta_from_location(slot, location)
@@ -658,19 +655,9 @@ impl Blockstore {
     pub fn get_parent_meta(
         &self,
         slot: Slot,
-        location: Option<BlockLocation>,
+        location: BlockLocation,
     ) -> Result<Option<ParentMeta>> {
-        self.parent_meta_cf
-            .get((slot, location.unwrap_or(BlockLocation::Original)))
-    }
-
-    /// Returns the BlockVersions of the specified slot.
-    pub fn block_versions(&self, slot: Slot) -> Result<Option<BlockVersions>> {
-        self.block_versions_cf.get(slot)
-    }
-
-    pub fn set_block_versions(&self, slot: Slot, block_versions: &BlockVersions) -> Result<()> {
-        self.block_versions_cf.put(slot, block_versions)
+        self.parent_meta_cf.get((slot, location))
     }
 
     /// Returns true if the specified slot is full.
@@ -836,7 +823,7 @@ impl Blockstore {
         self.merkle_root_meta_cf.get(erasure_set.store_key())
     }
 
-    fn merkle_root_meta_from_location(
+    pub fn merkle_root_meta_from_location(
         &self,
         erasure_set: ErasureSetId,
         location: BlockLocation,
@@ -872,6 +859,15 @@ impl Blockstore {
                 merkle_root_meta,
             ),
         }
+    }
+
+    /// Gets the double merkle meta for the given block
+    pub fn get_double_merkle_meta(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Result<Option<DoubleMerkleMeta>> {
+        self.double_merkle_meta_cf.get((slot, block_location))
     }
 
     /// Gets the double merkle root for the given block, computing it if necessary.
@@ -1217,7 +1213,6 @@ impl Blockstore {
         self.index_cf.submit_rocksdb_cf_metrics();
         self.data_shred_cf.submit_rocksdb_cf_metrics();
         self.code_shred_cf.submit_rocksdb_cf_metrics();
-        self.block_versions_cf.submit_rocksdb_cf_metrics();
         self.transaction_status_cf.submit_rocksdb_cf_metrics();
         self.address_signatures_cf.submit_rocksdb_cf_metrics();
         self.transaction_memos_cf.submit_rocksdb_cf_metrics();
@@ -2347,6 +2342,17 @@ impl Blockstore {
             }
         }
 
+        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
+            self.maybe_update_parent_meta(
+                &shred,
+                location,
+                slot,
+                just_inserted_shreds,
+                parent_meta_working_set,
+                write_batch,
+            )?;
+        }
+
         let completed_data_sets = self.insert_data_shred(
             slot_meta,
             index_meta.data_mut(),
@@ -2355,16 +2361,6 @@ impl Blockstore {
             write_batch,
             shred_source,
         )?;
-
-        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
-            self.maybe_update_parent_meta(
-                &shred,
-                location,
-                slot,
-                just_inserted_shreds,
-                parent_meta_working_set,
-            )?;
-        }
 
         if matches!(location, BlockLocation::Original) {
             // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
@@ -2465,6 +2461,7 @@ impl Blockstore {
         slot: u64,
         just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+        write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let key = (location, slot);
         let entry = parent_meta_working_set.entry(key).or_default();
@@ -2496,8 +2493,15 @@ impl Blockstore {
 
         // Validate new ParentMeta against previous (if both exist)
         if let Some(prev) = &previous_parent_meta {
-            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
-                return Ok(());
+            match Self::should_write_parent_meta(slot, &new_parent_meta, prev) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(e) => {
+                    self.dead_slots_cf
+                        .put_in_batch(write_batch, slot, &true)
+                        .unwrap();
+                    return Err(e);
+                }
             }
         }
 
@@ -3138,11 +3142,16 @@ impl Blockstore {
 
     /// Checks all available block versions, if we have a *complete* block for
     /// `block_id`, returns the location where it is stored
-    pub fn get_block_location(&self, slot: Slot, block_id: Hash) -> Result<Option<BlockLocation>> {
-        let Some(block_versions) = self.block_versions(slot)? else {
-            return Ok(None);
-        };
-        Ok(block_versions.get_location(block_id))
+    pub fn get_block_location(&self, slot: Slot, block_id: Hash) -> Option<BlockLocation> {
+        [
+            BlockLocation::Original,
+            BlockLocation::Alternate { block_id },
+        ]
+        .into_iter()
+        .find(|location| {
+            self.get_double_merkle_root(slot, *location)
+                .is_some_and(|dmr| dmr == block_id)
+        })
     }
 
     // Only used by tests
@@ -4535,6 +4544,16 @@ impl Blockstore {
         // `consumed` is the next missing shred index, but shred `i` existing in
         // completed_data_end_indexes implies it's not missing
         assert!(!completed_data_indexes.contains(&consumed));
+
+        // When using UpdateParent's replay_fec_set_index as start_index, the shreds
+        // before that index might not have been received yet. For now, let's do the dumb
+        // thing of waiting for the previous shreds to arrive prior to replay.
+        //
+        // TODO(ksn): replay can get faster here by not having to wait for the shreds prior
+        // to an UpdateParent.
+        if start_index >= consumed {
+            return vec![];
+        }
         completed_data_indexes
             .range(start_index..consumed)
             .scan(start_index, |start, index| {
@@ -5384,22 +5403,33 @@ impl Blockstore {
 
         if should_propagate_is_connected {
             meta.borrow_mut().set_connected();
-            self.traverse_children_mut(
-                meta,
-                working_set,
-                new_chained_slots,
-                SlotMeta::set_parent_connected,
-            )?;
+            self.propagate_parent_connected_to_children(meta, working_set, new_chained_slots)?;
         }
 
         Ok(())
     }
 
+    /// Propagate `parent_connected` to children. Requires `slot_meta` to be connected.
+    fn propagate_parent_connected_to_children(
+        &self,
+        slot_meta: &Rc<RefCell<SlotMeta>>,
+        working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
+        new_chained_slots: &mut HashMap<u64, Rc<RefCell<SlotMeta>>>,
+    ) -> Result<()> {
+        debug_assert!(slot_meta.borrow().is_connected());
+        self.traverse_children_mut(
+            slot_meta,
+            working_set,
+            new_chained_slots,
+            SlotMeta::set_parent_connected,
+        )
+    }
+
     /// Handles chaining updates when an UpdateParent marker overrides a previously
     /// set parent from a BlockHeader.
     ///
-    /// TODO(ashwin, ksn): this chaining only occurs for `SlotMeta`s in the column associated with
-    /// `BlockLocation::Original`
+    /// Note: `working_set` entries must have `did_insert_occur = true`, otherwise
+    /// slot metas may be updated here but skipped when committing to the DB.
     fn update_chaining_for_parent_metas(
         &self,
         working_set: &HashMap<(BlockLocation, u64), SlotMetaWorkingSetEntry>,
@@ -5449,13 +5479,14 @@ impl Blockstore {
             // Propagate or clear connectivity based on new parent's state.
             if new_parent_meta.borrow().is_connected() {
                 if !slot_meta.borrow().is_parent_connected() {
-                    slot_meta.borrow_mut().set_parent_connected();
-                    self.traverse_children_mut(
-                        &slot_meta,
-                        working_set,
-                        new_chained_slots,
-                        SlotMeta::set_parent_connected,
-                    )?;
+                    let became_connected = slot_meta.borrow_mut().set_parent_connected();
+                    if became_connected {
+                        self.propagate_parent_connected_to_children(
+                            &slot_meta,
+                            working_set,
+                            new_chained_slots,
+                        )?;
+                    }
                 }
             } else if slot_meta.borrow_mut().clear_parent_connected() {
                 self.traverse_children_mut(
@@ -6196,13 +6227,6 @@ pub fn test_all_empty_or_min(blockstore: &Blockstore, min_slot: Slot) {
             .map(|((slot, _), _)| slot >= min_slot)
             .unwrap_or(true)
         & blockstore
-            .block_versions_cf
-            .iter(IteratorMode::Start)
-            .unwrap()
-            .next()
-            .map(|(slot, _)| slot >= min_slot)
-            .unwrap_or(true)
-        & blockstore
             .dead_slots_cf
             .iter(IteratorMode::Start)
             .unwrap()
@@ -6345,7 +6369,7 @@ pub mod tests {
         },
         solana_clock::{DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT},
         solana_entry::{
-            block_component::{BlockHeaderV1, UpdateParentV1, VersionedBlockMarker},
+            block_component::{BlockFooterV1, BlockHeaderV1, UpdateParentV1, VersionedBlockMarker},
             entry::{next_entry, next_entry_mut},
         },
         solana_hash::Hash,
@@ -6364,6 +6388,7 @@ pub mod tests {
             InnerInstruction, InnerInstructions, Reward, Rewards, TransactionTokenBalance,
         },
         std::{cmp::Ordering, time::Duration},
+        test_case::test_matrix,
     };
 
     // used for tests only
@@ -6400,7 +6425,7 @@ pub mod tests {
 
     #[test]
     fn test_create_new_ledger() {
-        solana_logger::setup();
+        agave_logger::setup();
         let mint_total = 1_000_000_000_000;
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(mint_total);
         let (ledger_path, _blockhash) = create_new_tmp_ledger_auto_delete!(&genesis_config);
@@ -6460,7 +6485,7 @@ pub mod tests {
 
     #[test]
     fn test_write_entries() {
-        solana_logger::setup();
+        agave_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -7217,7 +7242,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_chaining_missing_slots() {
-        solana_logger::setup();
+        agave_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -7282,7 +7307,7 @@ pub mod tests {
     #[test]
     #[allow(clippy::cognitive_complexity)]
     pub fn test_forward_chaining_is_connected() {
-        solana_logger::setup();
+        agave_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -7369,7 +7394,7 @@ pub mod tests {
                 .collect::<Vec<_>>()
         }
 
-        solana_logger::setup();
+        agave_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -7453,7 +7478,7 @@ pub mod tests {
 
     #[test]
     fn test_set_and_chain_connected_on_root_and_next_slots() {
-        solana_logger::setup();
+        agave_logger::setup();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -8078,7 +8103,7 @@ pub mod tests {
 
     #[test]
     fn test_should_insert_data_shred() {
-        solana_logger::setup();
+        agave_logger::setup();
         let entries = create_ticks(2000, 1, Hash::new_unique());
         let shredder = Shredder::new(0, 0, 1, 0).unwrap();
         let keypair = Keypair::new();
@@ -8728,7 +8753,7 @@ pub mod tests {
 
     #[test]
     fn test_insert_multiple_is_last() {
-        solana_logger::setup();
+        agave_logger::setup();
         let (shreds, _) = make_slot_entries(0, 0, 18);
         let num_shreds = shreds.len() as u64;
         let ledger_path = get_tmp_ledger_path_auto_delete!();
@@ -8888,6 +8913,23 @@ pub mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_get_completed_data_ranges_start_index_beyond_consumed() {
+        let completed_data_end_indexes = [2, 4, 9, 11].iter().copied().collect();
+
+        // start_index > consumed: out-of-order shred delivery during fast leader handover
+        assert_eq!(
+            Blockstore::get_completed_data_ranges(32, &completed_data_end_indexes, 3),
+            vec![]
+        );
+
+        // start_index == consumed
+        assert_eq!(
+            Blockstore::get_completed_data_ranges(5, &completed_data_end_indexes, 5),
+            vec![]
+        );
     }
 
     #[test]
@@ -9778,7 +9820,7 @@ pub mod tests {
     }
 
     fn do_test_lowest_cleanup_slot_and_special_cfs(simulate_blockstore_cleanup_service: bool) {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
@@ -11645,7 +11687,7 @@ pub mod tests {
     /// by producing valid shreds with overlapping fec_set_index ranges
     /// so that we fail the config check and mark the slot duplicate
     fn erasure_multiple_config() {
-        solana_logger::setup();
+        agave_logger::setup();
         let slot = 1;
         let num_txs = 20;
         // primary slot content
@@ -13201,6 +13243,89 @@ pub mod tests {
         }
     }
 
+    fn create_block_footer_shreds(slot: Slot, parent_slot: Slot, shred_index: u32) -> Vec<Shred> {
+        let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
+            block_producer_time_nanos: 0,
+            block_user_agent: vec![],
+            final_cert: None,
+            skip_reward_cert: None,
+            notar_reward_cert: None,
+        };
+        let component = VersionedBlockMarker::new_block_footer(footer);
+        let component = BlockComponent::new_block_marker(component);
+
+        Shredder::new(slot, parent_slot, 0, 0)
+            .unwrap()
+            .make_merkle_shreds_from_component(
+                &Keypair::new(),
+                &component,
+                true,
+                Some(Hash::new_unique()),
+                shred_index,
+                shred_index,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            )
+            .collect()
+    }
+
+    #[test_matrix(
+        [true, false],
+        [
+            // update parent before block header - shouldn't be dead
+            (990u64, 980u64, false, false),
+            // update parent after block header - should be dead
+            (980u64, 990u64, false, true),
+            // update parent = block header, with same block id - should be dead
+            (990u64, 990u64, true, true),
+            // update parent = block header, with different block id - shouldn't be dead
+            (990u64, 990u64, false, false),
+        ]
+    )]
+    fn test_invalid_parent_meta_marks_dead(
+        block_header_first: bool,
+        (bh_parent_slot, up_parent_slot, same_block_id, expect_dead): (u64, u64, bool, bool),
+    ) {
+        let slot = 1000;
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let bh_block_id = Hash::new_unique();
+        let up_block_id = match same_block_id {
+            true => bh_block_id,
+            false => Hash::new_unique(),
+        };
+
+        let block_header_shreds = create_block_header_shreds(slot, bh_parent_slot, bh_block_id);
+        let update_parent_shreds =
+            create_update_parent_shreds(slot, up_parent_slot, up_block_id, 32, false);
+        let block_footer_shreds = create_block_footer_shreds(slot, bh_parent_slot, 64);
+
+        let shreds: Vec<Shred> = if block_header_first {
+            // Block header shreds first, then update parent, then footer
+            let mut s = block_header_shreds;
+            s.extend(update_parent_shreds);
+            s.extend(block_footer_shreds);
+            s
+        } else {
+            // Update parent shreds first, then block header, then footer
+            let mut s = update_parent_shreds;
+            s.extend(block_header_shreds);
+            s.extend(block_footer_shreds);
+            s
+        }
+        .into_iter()
+        .filter(|s| s.is_data())
+        .collect();
+
+        // Insert all shreds in a single batch
+        blockstore.insert_shreds(shreds, None, true).unwrap();
+
+        assert_eq!(blockstore.is_dead(slot), expect_dead);
+        assert_eq!(!blockstore.is_full(slot), expect_dead);
+    }
+
     #[test]
     fn test_block_header_followed_by_update_parent() {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
@@ -13226,7 +13351,7 @@ pub mod tests {
         assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(3));
 
         let parent_meta = blockstore
-            .get_parent_meta(10, Some(BlockLocation::Original))
+            .get_parent_meta(10, BlockLocation::Original)
             .unwrap()
             .unwrap();
         assert_eq!(parent_meta.parent_slot, 3);
@@ -13519,7 +13644,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_connectivity_propagates_through_incomplete_slot() {
+    fn test_connectivity_does_not_propagate_through_incomplete_slot() {
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
@@ -13561,8 +13686,8 @@ pub mod tests {
         assert!(meta_50.is_parent_connected());
         assert!(!meta_50.is_connected());
 
-        // Full children become connected
-        assert!(blockstore.meta(60).unwrap().unwrap().is_connected());
-        assert!(blockstore.meta(70).unwrap().unwrap().is_connected());
+        // Children stay disconnected since parent 50 is incomplete
+        assert!(!blockstore.meta(60).unwrap().unwrap().is_connected());
+        assert!(!blockstore.meta(70).unwrap().unwrap().is_connected());
     }
 }

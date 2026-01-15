@@ -16,6 +16,7 @@ rustdoc-args = ["--cfg=docsrs"]
 
 [dependencies]
 agave-feature-set = { workspace = true }
+agave-logger = { workspace = true }
 bincode = { workspace = true }
 digest = { workspace = true }
 ed25519-dalek = { workspace = true }
@@ -36,7 +37,6 @@ hex = { workspace = true }
 rand0-7 = { workspace = true }
 solana-instruction = { workspace = true }
 solana-keccak-hasher = { workspace = true, features = ["sha3"] }
-solana-logger = { workspace = true }
 solana-secp256k1-program = { workspace = true, features = ["bincode"] }
 
 [lints]

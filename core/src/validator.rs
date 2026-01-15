@@ -28,7 +28,7 @@ use {
         system_monitor_service::{
             verify_net_stats_access, SystemMonitorService, SystemMonitorStatsReportConfig,
         },
-        tpu::{ForwardingClientOption, Tpu, TpuSockets, DEFAULT_TPU_COALESCE},
+        tpu::{ForwardingClientOption, Tpu, TpuSockets},
         tvu::{Tvu, TvuConfig, TvuSockets},
     },
     anyhow::{anyhow, Context, Result},
@@ -315,7 +315,6 @@ pub struct ValidatorConfig {
     pub warp_slot: Option<Slot>,
     pub accounts_db_skip_shrink: bool,
     pub accounts_db_force_initial_clean: bool,
-    pub tpu_coalesce: Duration,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub validator_exit: Arc<RwLock<Exit>>,
     pub validator_exit_backpressure: HashMap<String, Arc<AtomicBool>>,
@@ -397,7 +396,6 @@ impl ValidatorConfig {
             warp_slot: None,
             accounts_db_skip_shrink: false,
             accounts_db_force_initial_clean: false,
-            tpu_coalesce: DEFAULT_TPU_COALESCE,
             staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
             validator_exit: Arc::new(RwLock::new(Exit::default())),
             validator_exit_backpressure: HashMap::default(),
@@ -546,14 +544,14 @@ impl ValidatorTpuConfig {
     pub fn new_for_tests(tpu_enable_udp: bool) -> Self {
         let tpu_quic_server_config = QuicServerParams {
             max_connections_per_ipaddr_per_min: 32,
-            coalesce_channel_size: 100_000, // smaller channel size for faster test
+            accumulator_channel_size: 100_000, // smaller channel size for faster test
             ..Default::default()
         };
 
         let tpu_fwd_quic_server_config = QuicServerParams {
             max_connections_per_ipaddr_per_min: 32,
             max_unstaked_connections: 0,
-            coalesce_channel_size: 100_000, // smaller channel size for faster test
+            accumulator_channel_size: 100_000, // smaller channel size for faster test
             ..Default::default()
         };
 
@@ -759,8 +757,8 @@ impl Validator {
         timer.stop();
         info!("Cleaning orphaned account snapshot directories done. {timer}");
 
-        // token used to cancel tpu-client-next.
-        let cancel_tpu_client_next = CancellationToken::new();
+        // token used to cancel tpu-client-next and streamer.
+        let cancel = CancellationToken::new();
         {
             let exit = exit.clone();
             config
@@ -768,12 +766,12 @@ impl Validator {
                 .write()
                 .unwrap()
                 .register_exit(Box::new(move || exit.store(true, Ordering::Relaxed)));
-            let cancel_tpu_client_next = cancel_tpu_client_next.clone();
+            let cancel = cancel.clone();
             config
                 .validator_exit
                 .write()
                 .unwrap()
-                .register_exit(Box::new(move || cancel_tpu_client_next.cancel()));
+                .register_exit(Box::new(move || cancel.cancel()));
         }
 
         let (
@@ -1223,7 +1221,7 @@ impl Validator {
                     Arc::as_ref(&identity_keypair),
                     node.sockets.rpc_sts_client,
                     runtime_handle.clone(),
-                    cancel_tpu_client_next.clone(),
+                    cancel.clone(),
                 )
             } else {
                 let Some(connection_cache) = &connection_cache else {
@@ -1437,6 +1435,10 @@ impl Validator {
         );
 
         let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsRequest`] to 1 message.
+        let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
+        // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsResponse`] to 1 message.
+        let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
@@ -1453,6 +1455,8 @@ impl Validator {
             replay_highest_frozen: replay_highest_frozen.clone(),
             highest_parent_ready: highest_parent_ready.clone(),
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
+            build_reward_certs_sender,
+            reward_certs_receiver,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1710,6 +1714,8 @@ impl Validator {
             key_notifiers.clone(),
             alpenglow_last_voted.clone(),
             migration_status.clone(),
+            reward_certs_sender,
+            build_reward_certs_receiver,
         )
         .map_err(ValidatorError::Other)?;
 
@@ -1744,7 +1750,7 @@ impl Validator {
                 Arc::as_ref(&identity_keypair),
                 tpu_transactions_forwards_client_sockets.take().unwrap(),
                 runtime_handle.clone(),
-                cancel_tpu_client_next,
+                cancel.clone(),
                 node_multihoming.clone(),
             ))
         };
@@ -1780,7 +1786,6 @@ impl Validator {
             replay_vote_receiver,
             replay_vote_sender,
             bank_notification_sender,
-            config.tpu_coalesce,
             duplicate_confirmed_slot_sender,
             forwarding_tpu_client,
             turbine_quic_endpoint_sender,
@@ -1802,6 +1807,7 @@ impl Validator {
             config.enable_block_production_forwarding,
             config.generator_config.clone(),
             key_notifiers.clone(),
+            cancel,
             migration_status,
         );
 
@@ -3089,7 +3095,7 @@ mod tests {
 
     #[test]
     fn validator_exit() {
-        solana_logger::setup();
+        agave_logger::setup();
         let leader_keypair = Keypair::new();
         let leader_node = Node::new_localhost_with_pubkey(&leader_keypair.pubkey());
 
@@ -3135,7 +3141,7 @@ mod tests {
 
     #[test]
     fn test_should_cleanup_blockstore_incorrect_shred_versions() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let ledger_path = get_tmp_ledger_path_auto_delete!();
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
@@ -3270,7 +3276,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_blockstore_incorrect_shred_versions() {
-        solana_logger::setup();
+        agave_logger::setup();
 
         let validator_config = ValidatorConfig::default_for_test();
         let ledger_path = get_tmp_ledger_path_auto_delete!();
@@ -3366,7 +3372,7 @@ mod tests {
 
     #[test]
     fn test_wait_for_supermajority() {
-        solana_logger::setup();
+        agave_logger::setup();
         let node_keypair = Arc::new(Keypair::new());
         let cluster_info = ClusterInfo::new(
             ContactInfo::new_localhost(&node_keypair.pubkey(), timestamp()),
@@ -3513,7 +3519,7 @@ mod tests {
 
     #[test]
     fn test_poh_speed() {
-        solana_logger::setup();
+        agave_logger::setup();
         let poh_config = PohConfig {
             target_tick_duration: target_tick_duration(),
             // make PoH rate really fast to cause the panic condition
@@ -3530,7 +3536,7 @@ mod tests {
 
     #[test]
     fn test_poh_speed_no_hashes_per_tick() {
-        solana_logger::setup();
+        agave_logger::setup();
         let poh_config = PohConfig {
             target_tick_duration: target_tick_duration(),
             hashes_per_tick: None,

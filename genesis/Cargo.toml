@@ -21,6 +21,7 @@ path = "src/main.rs"
 
 [dependencies]
 agave-feature-set = { workspace = true }
+agave-logger = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 clap = { workspace = true }
@@ -28,7 +29,7 @@ itertools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-solana-account = "=3.0.0"
+solana-account = "=3.1.0"
 solana-accounts-db = { workspace = true }
 solana-bls-signatures = { workspace = true }
 solana-clap-utils = { workspace = true }
@@ -45,7 +46,6 @@ solana-inflation = "=3.0.0"
 solana-keypair = "=3.0.1"
 solana-ledger = { workspace = true }
 solana-loader-v3-interface = "6.1.0"
-solana-logger = "=3.0.0"
 solana-native-token = "=3.0.0"
 solana-poh-config = "=3.0.0"
 solana-pubkey = { version = "=3.0.0", default-features = false }

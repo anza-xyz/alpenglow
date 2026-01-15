@@ -216,6 +216,14 @@ pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
 
+const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
+
+// Minimum balance for an identity account to be considered for Alpenglow VAT.
+#[cfg(not(feature = "dev-context-only-utils"))]
+const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1_600_000_000; // 1.6 SOL
+
+#[cfg(feature = "dev-context-only-utils")]
+const ALPENGLOW_VAT_TO_BURN_PER_EPOCH: u64 = 1; // For tests only require 1 lamport
 /// The off-curve account where we store the Alpenglow clock. The clock sysvar has seconds
 /// resolution while the Alpenglow clock has nanosecond resolution.
 static NANOSECOND_CLOCK_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {
@@ -1168,7 +1176,7 @@ impl Bank {
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
         {
-            let stakes = bank.stakes_cache.stakes().clone();
+            let stakes = bank.get_top_epoch_stakes();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             for epoch in 0..=bank.get_leader_schedule_epoch(bank.slot) {
                 bank.epoch_stakes
@@ -1401,7 +1409,8 @@ impl Bank {
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
 
-            // If Alpenglow is enabled, update the clock from the footer.
+            // If Alpenglow isn't enabled, set the clock here using traditional stake-weighted
+            // timestamp voting.
             if new.get_alpenglow_genesis_certificate().is_none() {
                 new.update_clock(Some(parent.epoch()));
             }
@@ -2239,7 +2248,7 @@ impl Bank {
             self.epoch_stakes.retain(|&epoch, _| {
                 epoch >= leader_schedule_epoch.saturating_sub(MAX_LEADER_SCHEDULE_STAKES)
             });
-            let stakes = self.stakes_cache.stakes().clone();
+            let stakes = self.get_top_epoch_stakes();
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             let new_epoch_stakes = VersionedEpochStakes::new(stakes, leader_schedule_epoch);
             info!(
@@ -2247,6 +2256,16 @@ impl Bank {
                 leader_schedule_epoch,
                 new_epoch_stakes.total_stake(),
             );
+            // Burn VAT only if Alpenglow features are enabled.
+            if self
+                .feature_set
+                .is_active(&agave_feature_set::alpenglow::id())
+                && self
+                    .feature_set
+                    .is_active(&agave_feature_set::alpenglow_vat_and_limit_validators::id())
+            {
+                self.burn_vat_from_staked_accounts(&new_epoch_stakes);
+            }
 
             // It is expensive to log the details of epoch stakes. Only log them at "trace"
             // level for debugging purpose.
@@ -2263,6 +2282,32 @@ impl Bank {
             self.epoch_stakes
                 .insert(leader_schedule_epoch, new_epoch_stakes);
         }
+    }
+
+    fn burn_vat_from_staked_accounts(&mut self, epoch_stakes: &VersionedEpochStakes) {
+        let mut total_vat = 0;
+        let accounts_to_store = epoch_stakes
+            .stakes()
+            .staked_nodes()
+            .iter()
+            .filter_map(|(vote_pubkey, stake)| {
+                if *stake == 0u64 {
+                    None
+                } else {
+                    // burn VAT from each staked vote account
+                    let vat = ALPENGLOW_VAT_TO_BURN_PER_EPOCH;
+                    let mut account = self.get_account(vote_pubkey).unwrap();
+                    total_vat += vat;
+                    // Since we checked that there is enough balance already, subtraction here
+                    // should always succeed.
+                    account.set_lamports(account.lamports().checked_sub(vat).unwrap());
+                    Some((*vote_pubkey, account))
+                }
+            })
+            .collect::<Vec<_>>();
+        self.store_accounts((self.slot, accounts_to_store.as_slice()));
+        info!("BURNED total VAT of {total_vat} lamports from staked accounts");
+        self.capitalization.fetch_sub(total_vat, Relaxed);
     }
 
     #[cfg(feature = "dev-context-only-utils")]
@@ -5018,6 +5063,11 @@ impl Bank {
         self.epoch_stakes.get(&epoch)
     }
 
+    pub fn epoch_stakes_from_slot(&self, slot: Slot) -> Option<&VersionedEpochStakes> {
+        let epoch = self.epoch_schedule().get_epoch(slot);
+        self.epoch_stakes(epoch)
+    }
+
     pub fn epoch_stakes_map(&self) -> &HashMap<Epoch, VersionedEpochStakes> {
         &self.epoch_stakes
     }
@@ -5739,6 +5789,21 @@ impl Bank {
     /// Return total transaction fee collected
     pub fn get_collector_fee_details(&self) -> CollectorFeeDetails {
         self.collector_fee_details.read().unwrap().clone()
+    }
+
+    pub fn get_top_epoch_stakes(&self) -> Stakes<StakeAccount<Delegation>> {
+        let stakes = if self
+            .feature_set
+            .is_active(&feature_set::alpenglow_vat_and_limit_validators::id())
+        {
+            self.stakes_cache.stakes().clone_and_filter_for_alpenglow(
+                MAX_ALPENGLOW_VOTE_ACCOUNTS,
+                ALPENGLOW_VAT_TO_BURN_PER_EPOCH,
+            )
+        } else {
+            self.stakes_cache.stakes().clone()
+        };
+        stakes
     }
 }
 
