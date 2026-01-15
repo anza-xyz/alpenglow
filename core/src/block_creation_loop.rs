@@ -596,13 +596,13 @@ fn shutdown_and_drain_record_receiver(
 /// - Clear the working bank
 fn record_and_complete_block(
     ctx: &mut LeaderContext,
-    slot: Slot,
+    bank_slot: Slot,
     mut optimistic_parent: Option<(Slot, Hash)>,
     block_timer: &mut Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
     ctx.build_reward_certs_sender
-        .send(BuildRewardCertsRequest { bank_slot: slot })
+        .send(BuildRewardCertsRequest { bank_slot })
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let window_has_moved_on = loop {
         // Don't timeout until we've received ParentReady.
@@ -614,8 +614,8 @@ fn record_and_complete_block(
         select_biased! {
             recv(ctx.leader_window_info_receiver) -> msg => {
                 match msg.ok() {
-                    Some(info) if info.start_slot > slot => {
-                        // Window has moved on; we're behind.
+                    Some(info) if info.start_slot > bank_slot => {
+                        // Window has moved on; we're behind
                         break true;
                     }
                     Some(info) => {
@@ -665,7 +665,7 @@ fn record_and_complete_block(
             let skip_reward_cert = resp.skip.and_then(|cert| {
                 serialize(&cert)
                     .inspect_err(|err| {
-                        warn!("failed to serialize skip reward cert for slot {slot}: {err}");
+                        warn!("failed to serialize skip reward cert for slot {bank_slot}: {err}");
                     })
                     .ok()
                     .map(|data| FooterSkipRewardCertificate { data })
@@ -673,7 +673,7 @@ fn record_and_complete_block(
             let notar_reward_cert = resp.notar.and_then(|cert| {
                 serialize(&cert)
                     .inspect_err(|err| {
-                        warn!("failed to serialize notar reward cert for slot {slot}: {err}");
+                        warn!("failed to serialize notar reward cert for slot {bank_slot}: {err}");
                     })
                     .ok()
                     .map(|data| FooterNotarRewardCertificate { data })
@@ -681,7 +681,7 @@ fn record_and_complete_block(
             (skip_reward_cert, notar_reward_cert)
         }
         Err(err) => {
-            warn!("failed to build reward certs for slot {slot}: {err}");
+            warn!("failed to build reward certs for slot {bank_slot}: {err}");
             (None, None)
         }
     };

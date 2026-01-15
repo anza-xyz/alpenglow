@@ -201,7 +201,6 @@ impl ConsensusRewards {
         }
     }
 }
-
 /// Service to run the consensus reward container in a dedicated thread.
 pub struct ConsensusRewardsService {
     handle: JoinHandle<()>,
