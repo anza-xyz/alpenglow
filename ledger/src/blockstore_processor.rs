@@ -1553,7 +1553,10 @@ pub fn confirm_slot(
                     processor
                         .on_entry_batch(migration_status)
                         .inspect_err(|err| {
-                            warn!("Block component processing failed for slot {slot}: {err:?}",);
+                            warn!(
+                                "BlockComponentProcessor::on_entry_batch() for slot {slot} failed \
+                                 with {err}"
+                            );
                         })?;
                 }
 
@@ -1583,7 +1586,10 @@ pub fn confirm_slot(
                             migration_status,
                         )
                         .inspect_err(|err| {
-                            warn!("Block component processing failed for slot {slot}: {err:?}",);
+                            warn!(
+                                "BlockComponentProcessor::on_marker() for slot {slot} failed with \
+                                 {err}"
+                            );
                         })?;
                 }
                 progress.num_shreds += num_shreds as u64;
