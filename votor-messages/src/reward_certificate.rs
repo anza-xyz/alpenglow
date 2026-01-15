@@ -139,8 +139,8 @@ impl NotarRewardCertificate {
             bitmap,
         };
         let bt = std::backtrace::Backtrace::capture().to_string();
-        println!("schemaread: {t:?}\nbt={bt}");
-        warn!("schemaread: {t:?}\nbt={bt}");
+        println!("try_new: {t:?}\nbt={bt}");
+        warn!("try_new: {t:?}\nbt={bt}");
         Ok(t)
     }
 
