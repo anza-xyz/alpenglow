@@ -86,7 +86,7 @@ impl SkipRewardCertificate {
 }
 
 /// Reward certificate for the validators that voted notar.
-#[derive(Clone, PartialEq, Eq, Debug, SchemaRead, SchemaWrite)]
+#[derive(Clone, PartialEq, Eq, Debug, SchemaWrite, SchemaRead)]
 pub struct NotarRewardCertificate {
     /// The slot the certificate is for.
     pub slot: Slot,
