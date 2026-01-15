@@ -4,6 +4,9 @@ use {solana_clock::Slot, solana_metrics::datapoint_info, solana_time_utils::time
 
 pub(super) struct BlockCreationLoopMetrics {
     last_report: u64,
+    /// Counts number of times the block creation loop iterated.
+    //
+    // When stats are reset, this field is not reset.
     pub(super) loop_count: u64,
     pub(super) bank_timeout_completion_count: u64,
     pub(super) skipped_window_behind_parent_ready_count: u64,
@@ -183,5 +186,19 @@ impl SlotMetrics {
 
         // reset metrics
         *self = Self::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_loop_count_not_reset() {
+        let mut metrics = BlockCreationLoopMetrics::default();
+        assert_eq!(metrics.loop_count, 0);
+        metrics.loop_count = 10;
+        metrics.reset();
+        assert_eq!(metrics.loop_count, 10);
     }
 }
