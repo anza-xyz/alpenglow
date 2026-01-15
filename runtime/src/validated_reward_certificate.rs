@@ -14,8 +14,12 @@ use {
 /// Different types of errors that can happen when trying to construct a [`ValidatedRewardCert`].
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum Error {
-    #[error("skip or notar certs have invalid slot numbers")]
-    InvalidSlotNumbers,
+    #[error("skip or notar certs have invalid slot numbers: cur={current_slot}, notar={notar_slot:?}, skip={skip_slot:?}")]
+    InvalidSlotNumbers {
+        current_slot: Slot,
+        notar_slot: Option<Slot>,
+        skip_slot: Option<Slot>,
+    },
     #[error("rank map unavailable")]
     NoRankMap,
     #[error("bls cert verification failed with {0}")]
@@ -39,13 +43,21 @@ fn extract_slot(
         (None, Some(n)) => n.slot,
         (Some(s), Some(n)) => {
             if s.slot != n.slot {
-                return Err(Error::InvalidSlotNumbers);
+                return Err(Error::InvalidSlotNumbers {
+                    current_slot,
+                    notar_slot: Some(n.slot),
+                    skip_slot: Some(s.slot),
+                });
             }
             s.slot
         }
     };
     if slot.saturating_add(NUM_SLOTS_FOR_REWARD) != current_slot {
-        return Err(Error::InvalidSlotNumbers);
+        return Err(Error::InvalidSlotNumbers {
+            current_slot,
+            notar_slot: skip.as_ref().map(|c| c.slot),
+            skip_slot: notar.as_ref().map(|c| c.slot),
+        });
     }
     Ok(Some(slot))
 }
