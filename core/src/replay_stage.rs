@@ -3669,10 +3669,7 @@ impl ReplayStage {
 
                         // Clear the bank from bank_forks. It will be recreated with the
                         // correct parent by generate_new_bank_forks on the next iteration.
-                        bank_forks
-                            .write()
-                            .unwrap()
-                            .clear_bank(bank_slot, false);
+                        bank_forks.write().unwrap().clear_bank(bank_slot, false);
 
                         // Remove the progress entry. It will be recreated with the correct
                         // num_shreds offset when generate_new_bank_forks creates the new bank.
