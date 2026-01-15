@@ -5925,17 +5925,9 @@ fn send_signals(
 
     for signal in update_parent_signals {
         for sender in update_parent_senders {
-            let res = sender.try_send(signal.clone());
-            if let Err(TrySendError::Full(_)) = res {
-                datapoint_error!(
-                    "blockstore_error",
-                    (
-                        "error",
-                        "Unable to send update parent signal because channel is full",
-                        String
-                    ),
-                );
-            }
+            sender
+                .try_send(signal.clone())
+                .expect("update_parent channel full");
         }
     }
 }

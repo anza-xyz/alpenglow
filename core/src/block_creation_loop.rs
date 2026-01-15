@@ -553,7 +553,7 @@ fn handle_parent_ready(
     let (old_parent_slot, _) = optimistic_parent_block;
     let (new_parent_slot, _) = leader_window_info.parent_block;
 
-    ctx.bank_forks.write().unwrap().clear_bank(slot);
+    ctx.bank_forks.write().unwrap().clear_bank(slot, false);
 
     // Wait for new parent to be frozen
     start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
