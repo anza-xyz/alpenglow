@@ -2342,6 +2342,17 @@ impl Blockstore {
             }
         }
 
+        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
+            self.maybe_update_parent_meta(
+                &shred,
+                location,
+                slot,
+                just_inserted_shreds,
+                parent_meta_working_set,
+                write_batch,
+            )?;
+        }
+
         let completed_data_sets = self.insert_data_shred(
             slot_meta,
             index_meta.data_mut(),
@@ -2350,16 +2361,6 @@ impl Blockstore {
             write_batch,
             shred_source,
         )?;
-
-        if shred.index() % DATA_SHREDS_PER_FEC_BLOCK as u32 == 0 || shred.data_complete() {
-            self.maybe_update_parent_meta(
-                &shred,
-                location,
-                slot,
-                just_inserted_shreds,
-                parent_meta_working_set,
-            )?;
-        }
 
         if matches!(location, BlockLocation::Original) {
             // We don't currently notify RPC when we complete data sets in alternate columns. This can be extended in the future
@@ -2460,6 +2461,7 @@ impl Blockstore {
         slot: u64,
         just_inserted_shreds: &mut HashMap<(BlockLocation, ShredId), Cow<'_, Shred>>,
         parent_meta_working_set: &mut HashMap<(BlockLocation, u64), ParentMetaWorkingSetEntry>,
+        write_batch: &mut WriteBatch,
     ) -> Result<()> {
         let key = (location, slot);
         let entry = parent_meta_working_set.entry(key).or_default();
@@ -2491,8 +2493,15 @@ impl Blockstore {
 
         // Validate new ParentMeta against previous (if both exist)
         if let Some(prev) = &previous_parent_meta {
-            if !Self::should_write_parent_meta(slot, &new_parent_meta, prev)? {
-                return Ok(());
+            match Self::should_write_parent_meta(slot, &new_parent_meta, prev) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(e) => {
+                    self.dead_slots_cf
+                        .put_in_batch(write_batch, slot, &true)
+                        .unwrap();
+                    return Err(e);
+                }
             }
         }
 
@@ -6360,7 +6369,7 @@ pub mod tests {
         },
         solana_clock::{DEFAULT_MS_PER_SLOT, DEFAULT_TICKS_PER_SLOT},
         solana_entry::{
-            block_component::{BlockHeaderV1, UpdateParentV1, VersionedBlockMarker},
+            block_component::{BlockFooterV1, BlockHeaderV1, UpdateParentV1, VersionedBlockMarker},
             entry::{next_entry, next_entry_mut},
         },
         solana_hash::Hash,
@@ -6379,6 +6388,7 @@ pub mod tests {
             InnerInstruction, InnerInstructions, Reward, Rewards, TransactionTokenBalance,
         },
         std::{cmp::Ordering, time::Duration},
+        test_case::test_matrix,
     };
 
     // used for tests only
@@ -13231,6 +13241,89 @@ pub mod tests {
             (None, false) => panic!("Slot {parent_slot} meta doesn't exist"),
             (None, true) => {} // OK - no meta and no expected children
         }
+    }
+
+    fn create_block_footer_shreds(slot: Slot, parent_slot: Slot, shred_index: u32) -> Vec<Shred> {
+        let footer = BlockFooterV1 {
+            bank_hash: Hash::new_unique(),
+            block_producer_time_nanos: 0,
+            block_user_agent: vec![],
+            final_cert: None,
+            skip_reward_cert: None,
+            notar_reward_cert: None,
+        };
+        let component = VersionedBlockMarker::new_block_footer(footer);
+        let component = BlockComponent::new_block_marker(component);
+
+        Shredder::new(slot, parent_slot, 0, 0)
+            .unwrap()
+            .make_merkle_shreds_from_component(
+                &Keypair::new(),
+                &component,
+                true,
+                Some(Hash::new_unique()),
+                shred_index,
+                shred_index,
+                &ReedSolomonCache::default(),
+                &mut ProcessShredsStats::default(),
+            )
+            .collect()
+    }
+
+    #[test_matrix(
+        [true, false],
+        [
+            // update parent before block header - shouldn't be dead
+            (990u64, 980u64, false, false),
+            // update parent after block header - should be dead
+            (980u64, 990u64, false, true),
+            // update parent = block header, with same block id - should be dead
+            (990u64, 990u64, true, true),
+            // update parent = block header, with different block id - shouldn't be dead
+            (990u64, 990u64, false, false),
+        ]
+    )]
+    fn test_invalid_parent_meta_marks_dead(
+        block_header_first: bool,
+        (bh_parent_slot, up_parent_slot, same_block_id, expect_dead): (u64, u64, bool, bool),
+    ) {
+        let slot = 1000;
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
+
+        let bh_block_id = Hash::new_unique();
+        let up_block_id = match same_block_id {
+            true => bh_block_id,
+            false => Hash::new_unique(),
+        };
+
+        let block_header_shreds = create_block_header_shreds(slot, bh_parent_slot, bh_block_id);
+        let update_parent_shreds =
+            create_update_parent_shreds(slot, up_parent_slot, up_block_id, 32, false);
+        let block_footer_shreds = create_block_footer_shreds(slot, bh_parent_slot, 64);
+
+        let shreds: Vec<Shred> = if block_header_first {
+            // Block header shreds first, then update parent, then footer
+            let mut s = block_header_shreds;
+            s.extend(update_parent_shreds);
+            s.extend(block_footer_shreds);
+            s
+        } else {
+            // Update parent shreds first, then block header, then footer
+            let mut s = update_parent_shreds;
+            s.extend(block_header_shreds);
+            s.extend(block_footer_shreds);
+            s
+        }
+        .into_iter()
+        .filter(|s| s.is_data())
+        .collect();
+
+        // Insert all shreds in a single batch
+        blockstore.insert_shreds(shreds, None, true).unwrap();
+
+        assert_eq!(blockstore.is_dead(slot), expect_dead);
+        assert_eq!(!blockstore.is_full(slot), expect_dead);
     }
 
     #[test]
