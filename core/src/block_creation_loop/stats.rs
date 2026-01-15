@@ -3,7 +3,7 @@
 use {solana_clock::Slot, solana_metrics::datapoint_info, solana_time_utils::timestamp};
 
 pub(super) struct BlockCreationLoopMetrics {
-    pub(super) last_report: u64,
+    last_report: u64,
     pub(super) loop_count: u64,
     pub(super) bank_timeout_completion_count: u64,
     pub(super) skipped_window_behind_parent_ready_count: u64,
@@ -39,6 +39,12 @@ impl BlockCreationLoopMetrics {
             + *window_production_elapsed
             + *skipped_window_behind_parent_ready_count
             + bank_timeout_completion_elapsed_hist.entries()
+    }
+
+    fn reset(&mut self) {
+        let current_loop_count = self.loop_count;
+        *self = Self::default();
+        self.loop_count = current_loop_count;
     }
 
     pub(super) fn report(&mut self, report_interval_ms: u64) {
@@ -97,8 +103,7 @@ impl BlockCreationLoopMetrics {
                 ),
             );
 
-            // reset metrics
-            *self = Self::default()
+            self.reset();
         }
     }
 }
