@@ -1,11 +1,9 @@
 //! Defines aggregates used for vote rewards.
 
 use {
-    log::warn,
     solana_bls_signatures::SignatureCompressed as BLSSignatureCompressed,
     solana_clock::Slot,
     solana_hash::Hash,
-    std::mem::MaybeUninit,
     thiserror::Error,
     wincode::{
         containers::{Pod, Vec as WincodeVec},
@@ -88,7 +86,7 @@ impl SkipRewardCertificate {
 }
 
 /// Reward certificate for the validators that voted notar.
-#[derive(Clone, PartialEq, Eq, Debug, SchemaWrite)]
+#[derive(Clone, PartialEq, Eq, Debug, SchemaRead, SchemaWrite)]
 pub struct NotarRewardCertificate {
     /// The slot the certificate is for.
     pub slot: Slot,
@@ -103,24 +101,6 @@ pub struct NotarRewardCertificate {
     bitmap: Vec<u8>,
 }
 
-impl<'de> SchemaRead<'de> for NotarRewardCertificate {
-    type Dst = Self;
-
-    fn read(
-        reader: &mut impl wincode::io::Reader<'de>,
-        dst: &mut MaybeUninit<Self::Dst>,
-    ) -> wincode::ReadResult<()> {
-        unsafe {
-            reader.copy_into_t(dst)?;
-            let t = dst.assume_init_ref();
-            let bt = std::backtrace::Backtrace::capture().to_string();
-            println!("schemaread: {t:?}\nbt={bt}");
-            warn!("schemaread: {t:?}\nbt={bt}");
-            Ok(())
-        }
-    }
-}
-
 impl NotarRewardCertificate {
     /// Returns a new instance of [`NotarRewardCertificate`].
     pub fn try_new(
@@ -132,16 +112,12 @@ impl NotarRewardCertificate {
         if bitmap.len() > u16::MAX as usize {
             return Err(RewardCertError::InvalidBitmap);
         }
-        let t = Self {
+        Ok(Self {
             slot,
             block_id,
             signature,
             bitmap,
-        };
-        let bt = std::backtrace::Backtrace::capture().to_string();
-        println!("try_new: {t:?}\nbt={bt}");
-        warn!("try_new: {t:?}\nbt={bt}");
-        Ok(t)
+        })
     }
 
     /// Returns a reference to the bitmap.
