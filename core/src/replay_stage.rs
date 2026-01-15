@@ -829,7 +829,7 @@ impl ReplayStage {
                     break;
                 }
 
-                Self::resurrect_update_parent_slots(
+                Self::interrupt_update_parent_slots(
                     &blockstore,
                     &bank_forks,
                     &mut progress,
@@ -2090,6 +2090,7 @@ impl ReplayStage {
                 slot_descendants
                     .iter()
                     .chain(std::iter::once(&slot_to_purge)),
+                true,
             )
         };
 
@@ -3665,7 +3666,10 @@ impl ReplayStage {
 
                         // Clear the bank from bank_forks. It will be recreated with the
                         // correct parent by generate_new_bank_forks on the next iteration.
-                        bank_forks.write().unwrap().clear_bank(bank_slot);
+                        bank_forks
+                            .write()
+                            .unwrap()
+                            .clear_bank(bank_slot, false);
 
                         // Remove the progress entry. It will be recreated with the correct
                         // num_shreds offset when generate_new_bank_forks creates the new bank.
@@ -4749,7 +4753,7 @@ impl ReplayStage {
         Ok(())
     }
 
-    fn resurrect_update_parent_slots(
+    fn interrupt_update_parent_slots(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
@@ -4757,12 +4761,15 @@ impl ReplayStage {
     ) {
         while let Ok(signal) = update_parent_receiver.try_recv() {
             info!(
-                "resurrecting slot {} via UpdateParent (new parent: {})",
+                "interrupting slot {} via UpdateParent (new parent: {})",
                 signal.slot, signal.parent_slot
             );
             blockstore.remove_dead_slot(signal.slot).expect("Db error");
             progress.remove(&signal.slot);
-            bank_forks.write().unwrap().clear_bank(signal.slot);
+            let mut bank_forks = bank_forks.write().unwrap();
+            if bank_forks.get(signal.slot).is_some() {
+                bank_forks.clear_bank(signal.slot, false);
+            }
         }
     }
 
@@ -7355,7 +7362,7 @@ pub(crate) mod tests {
             .unwrap();
         }
 
-        ReplayStage::resurrect_update_parent_slots(&blockstore, &bank_forks, &mut progress, &rx);
+        ReplayStage::interrupt_update_parent_slots(&blockstore, &bank_forks, &mut progress, &rx);
 
         // resurrected
         assert!(!blockstore.is_dead(1));
