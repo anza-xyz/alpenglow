@@ -3161,9 +3161,8 @@ impl Blockstore {
         ]
         .into_iter()
         .find(|location| {
-            self.get_double_merkle_meta(slot, *location)
-                .unwrap()
-                .is_some_and(|dmr| dmr.double_merkle_root == block_id)
+            self.get_double_merkle_root(slot, *location)
+                .is_some_and(|dmr| dmr == block_id)
         })
     }
 
