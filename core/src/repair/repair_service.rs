@@ -13,8 +13,8 @@ use {
             outstanding_requests::OutstandingRequests,
             repair_weight::RepairWeight,
             serve_repair::{
-                self, REPAIR_PEERS_CACHE_CAPACITY, RepairPeers, RepairProtocol,
-                RepairRequestHeader, ServeRepair, ShredRepairType,
+                self, RepairPeers, RepairProtocol, RepairRequestHeader, RepairRequestProtocol,
+                ServeRepair, ShredRepairType, REPAIR_PEERS_CACHE_CAPACITY,
             },
         },
     },
@@ -615,12 +615,11 @@ impl RepairService {
     fn build_and_send_repair_batch(
         serve_repair: &mut ServeRepair,
         peers_cache: &mut LruCache<u64, RepairPeers>,
-        repair_request_quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
         repairs: Vec<ShredRepairType>,
         repair_info: &RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
         repair_socket: &UdpSocket,
-        repair_protocol: Protocol,
+        repair_protocol: RepairRequestProtocol,
         repair_metrics: &mut RepairMetrics,
     ) {
         let mut build_repairs_batch_elapsed = Measure::start("build_repairs_batch_elapsed");
@@ -639,7 +638,6 @@ impl RepairService {
                             &repair_info.repair_validators,
                             &mut outstanding_requests,
                             &identity_keypair,
-                            repair_request_quic_sender,
                             repair_protocol,
                         )
                         .ok()??;
@@ -727,15 +725,18 @@ impl RepairService {
             );
         }
 
+        let repair_protocol = serve_repair::get_repair_request_protocol(
+            root_bank.cluster_type(),
+            repair_request_quic_sender,
+        );
         Self::build_and_send_repair_batch(
             serve_repair,
             peers_cache,
-            repair_request_quic_sender,
             repairs,
             repair_info,
             outstanding_requests,
             repair_socket,
-            serve_repair::get_repair_protocol(root_bank.cluster_type()),
+            repair_protocol,
             repair_metrics,
         );
     }

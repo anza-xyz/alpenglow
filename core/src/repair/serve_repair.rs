@@ -104,6 +104,13 @@ const SIGNED_REPAIR_TIME_WINDOW: Duration = Duration::from_secs(60 * 10); // 10 
 #[cfg(test)]
 static_assertions::const_assert_eq!(MAX_ANCESTOR_RESPONSES, 30);
 
+/// Protocol for sending repair requests, with QUIC requiring a sender channel.
+#[derive(Clone, Copy)]
+pub enum RepairRequestProtocol<'a> {
+    UDP,
+    QUIC(&'a AsyncSender<(SocketAddr, Bytes)>),
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum ShredRepairType {
     /// Requesting `MAX_ORPHAN_REPAIR_RESPONSES ` parent shreds
@@ -1363,7 +1370,6 @@ impl ServeRepair {
         Self::repair_proto_to_bytes(&request, keypair)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn repair_request(
         &self,
         cluster_slots: &ClusterSlots,
@@ -1373,8 +1379,7 @@ impl ServeRepair {
         repair_validators: &Option<HashSet<Pubkey>>,
         outstanding_requests: &mut OutstandingShredRepairs,
         identity_keypair: &Keypair,
-        repair_request_quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
-        repair_protocol: Protocol,
+        repair_protocol: RepairRequestProtocol,
     ) -> Result<Option<(SocketAddr, Vec<u8>)>> {
         // find a peer that appears to be accepting replication and has the desired slot, as indicated
         // by a valid tvu port location
@@ -1407,9 +1412,9 @@ impl ServeRepair {
             repair_request
         );
         match repair_protocol {
-            Protocol::UDP => Ok(Some((peer.serve_repair, out))),
-            Protocol::QUIC => {
-                repair_request_quic_sender
+            RepairRequestProtocol::UDP => Ok(Some((peer.serve_repair, out))),
+            RepairRequestProtocol::QUIC(sender) => {
+                sender
                     .blocking_send((peer.serve_repair_quic, Bytes::from(out)))
                     .map_err(|_| Error::SendError)?;
                 Ok(None)
@@ -1593,6 +1598,18 @@ impl ServeRepair {
 #[inline]
 pub(crate) fn get_repair_protocol(_: ClusterType) -> Protocol {
     Protocol::UDP
+}
+
+/// Creates a RepairRequestProtocol based on the current cluster configuration.
+#[inline]
+pub(crate) fn get_repair_request_protocol(
+    cluster_type: ClusterType,
+    quic_sender: &AsyncSender<(SocketAddr, Bytes)>,
+) -> RepairRequestProtocol<'_> {
+    match get_repair_protocol(cluster_type) {
+        Protocol::UDP => RepairRequestProtocol::UDP,
+        Protocol::QUIC => RepairRequestProtocol::QUIC(quic_sender),
+    }
 }
 
 pub(crate) fn deserialize_request<T>(
@@ -2187,7 +2204,6 @@ mod tests {
         );
         let identity_keypair = cluster_info.keypair();
         let mut outstanding_requests = OutstandingShredRepairs::default();
-        let (repair_request_quic_sender, _) = tokio::sync::mpsc::channel(/*buffer:*/ 128);
         let rv = serve_repair.repair_request(
             &cluster_slots,
             ShredRepairType::Shred(0, 0),
@@ -2196,8 +2212,7 @@ mod tests {
             &None,
             &mut outstanding_requests,
             &identity_keypair,
-            &repair_request_quic_sender,
-            Protocol::UDP, // repair_protocol
+            RepairRequestProtocol::UDP,
         );
         assert_matches!(rv, Err(Error::ClusterInfo(ClusterInfoError::NoPeers)));
 
@@ -2224,8 +2239,7 @@ mod tests {
                 &None,
                 &mut outstanding_requests,
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             )
             .unwrap()
             .unwrap();
@@ -2260,8 +2274,7 @@ mod tests {
                     &None,
                     &mut outstanding_requests,
                     &identity_keypair,
-                    &repair_request_quic_sender,
-                    Protocol::UDP, // repair_protocol
+                    RepairRequestProtocol::UDP,
                 )
                 .unwrap()
                 .unwrap();
@@ -2473,7 +2486,6 @@ mod tests {
         let cluster_slots = ClusterSlots::default_for_tests();
         let cluster_info = Arc::new(new_test_cluster_info());
         let me = cluster_info.my_contact_info();
-        let (repair_request_quic_sender, _) = tokio::sync::mpsc::channel(/*buffer:*/ 128);
         // Insert two peers on the network
         let contact_info2 = ContactInfo::new_localhost(&solana_pubkey::new_rand(), timestamp());
         let contact_info3 = ContactInfo::new_localhost(&solana_pubkey::new_rand(), timestamp());
@@ -2506,8 +2518,7 @@ mod tests {
                     &known_validators,
                     &mut OutstandingShredRepairs::default(),
                     &identity_keypair,
-                    &repair_request_quic_sender,
-                    Protocol::UDP, // repair_protocol
+                    RepairRequestProtocol::UDP,
                 ),
                 Err(Error::ClusterInfo(ClusterInfoError::NoPeers))
             );
@@ -2528,8 +2539,7 @@ mod tests {
                 &known_validators,
                 &mut OutstandingShredRepairs::default(),
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             ),
             Ok(Some(_))
         );
@@ -2553,8 +2563,7 @@ mod tests {
                 &None,
                 &mut OutstandingShredRepairs::default(),
                 &identity_keypair,
-                &repair_request_quic_sender,
-                Protocol::UDP, // repair_protocol
+                RepairRequestProtocol::UDP,
             ),
             Ok(Some(_))
         );
