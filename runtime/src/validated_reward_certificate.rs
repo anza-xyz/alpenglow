@@ -58,8 +58,8 @@ fn extract_slot(
     if slot.saturating_add(NUM_SLOTS_FOR_REWARD) != current_slot {
         return Err(Error::InvalidSlotNumbers {
             current_slot,
-            notar_slot: skip.as_ref().map(|c| c.slot),
-            skip_slot: notar.as_ref().map(|c| c.slot),
+            notar_slot: notar.as_ref().map(|c| c.slot),
+            skip_slot: skip.as_ref().map(|c| c.slot),
         });
     }
     Ok(Some(slot))

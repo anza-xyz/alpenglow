@@ -585,13 +585,13 @@ fn time_left(block_timer: Instant, timeout: Duration) -> Duration {
 /// - Clear the working bank
 fn record_and_complete_block(
     ctx: &mut LeaderContext,
-    slot: Slot,
+    bank_slot: Slot,
     mut optimistic_parent: Option<(Slot, Hash)>,
     block_timer: &mut Instant,
     block_timeout: Duration,
 ) -> Result<(), PohRecorderError> {
     ctx.build_reward_certs_sender
-        .send(BuildRewardCertsRequest { slot })
+        .send(BuildRewardCertsRequest { bank_slot })
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
     let window_has_moved_on = loop {
         // Don't timeout until we've received ParentReady
@@ -603,7 +603,7 @@ fn record_and_complete_block(
         select_biased! {
             recv(ctx.leader_window_info_receiver) -> msg => {
                 match msg.ok() {
-                    Some(info) if info.start_slot > slot => {
+                    Some(info) if info.start_slot > bank_slot => {
                         // Window has moved on; we're behind
                         break true;
                     }

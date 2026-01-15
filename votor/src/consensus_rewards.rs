@@ -105,7 +105,7 @@ impl ConsensusRewards {
                 recv(self.build_reward_certs_receiver) -> msg => {
                     match msg {
                         Ok(msg) => {
-                            let resp = self.build_certs(msg.slot);
+                            let resp = self.build_certs(msg.bank_slot);
                             if self.reward_certs_sender.send(resp).is_err() {
                                 warn!("cert sender channel is disconnected; exiting.");
                                 break;
@@ -183,12 +183,15 @@ impl ConsensusRewards {
     }
 
     /// Builds reward certificates.
-    fn build_certs(&mut self, slot: Slot) -> BuildRewardCertsResponse {
+    fn build_certs(&mut self, bank_slot: Slot) -> BuildRewardCertsResponse {
+        let Some(reward_slot) = bank_slot.checked_sub(NUM_SLOTS_FOR_REWARD) else {
+            return BuildRewardCertsResponse::empty();
+        };
         // we assume that the block creation loop will only ever request to build reward certs in a strictly increasing order so we can drop older state
-        self.votes = self.votes.split_off(&slot);
-        match self.votes.remove(&slot) {
+        self.votes = self.votes.split_off(&reward_slot);
+        match self.votes.remove(&reward_slot) {
             None => BuildRewardCertsResponse::empty(),
-            Some(entry) => entry.build_certs(slot),
+            Some(entry) => entry.build_certs(reward_slot),
         }
     }
 }
@@ -201,8 +204,8 @@ pub struct AddVoteMessage {
 
 /// Request to build reward certificates.
 pub struct BuildRewardCertsRequest {
-    /// The slot for which the certs should be built for.
-    pub slot: Slot,
+    /// The bank slot which will include the built reward certs.
+    pub bank_slot: Slot,
 }
 
 /// Response of building reward certificates.
