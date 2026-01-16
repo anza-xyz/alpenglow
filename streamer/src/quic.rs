@@ -1030,12 +1030,10 @@ mod test {
                         PacketBatch::Single(packet) => {
                             if *packet.data(0).unwrap() == 0u8 {
                                 debug!("Packet from stream with client 1");
-                                // TODO(alpenglow): Enable when upgrading to solana-packet 4.0.0
-                                // assert_eq!(packet.meta().remote_pubkey(), expected_client_pubkey_1);
+                                assert_eq!(packet.meta().remote_pubkey(), expected_client_pubkey_1);
                             } else if *packet.data(0).unwrap() == 1u8 {
                                 debug!("Packet from stream with client 2");
-                                // TODO(alpenglow): Enable when upgrading to solana-packet 4.0.0
-                                // assert_eq!(packet.meta().remote_pubkey(), expected_client_pubkey_2);
+                                assert_eq!(packet.meta().remote_pubkey(), expected_client_pubkey_2);
                             } else {
                                 panic!("Unexpected data in packet: {:?}", packet.data(0));
                             }
