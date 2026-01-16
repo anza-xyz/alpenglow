@@ -833,6 +833,7 @@ impl ReplayStage {
                 }
 
                 Self::interrupt_update_parent_slots(
+                    &my_pubkey,
                     &blockstore,
                     &bank_forks,
                     &mut progress,
@@ -4803,18 +4804,45 @@ impl ReplayStage {
         Ok(())
     }
 
+    /// Handles UpdateParent signals by clearing slot state so replay restarts from
+    /// the new parent. Skips if we're the leader (block_creation_loop handles it) or
+    /// if replay has already passed the UpdateParent marker.
     fn interrupt_update_parent_slots(
+        my_pubkey: &Pubkey,
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
         update_parent_receiver: &UpdateParentReceiver,
     ) {
         while let Ok(signal) = update_parent_receiver.try_recv() {
+            // Skip if we're the leader
+            let is_leader = bank_forks
+                .read()
+                .unwrap()
+                .get(signal.slot)
+                .is_some_and(|bank| bank.collector_id() == my_pubkey);
+            if is_leader {
+                continue;
+            }
+
+            // Check if we've already replayed past the UpdateParent marker
+            let current_num_shreds = progress
+                .get(&signal.slot)
+                .map(|p| p.replay_progress.read().unwrap().num_shreds)
+                .unwrap_or(0);
+
+            let replay_fec_set_index: u64 = signal.replay_fec_set_index.into();
+
+            if current_num_shreds >= replay_fec_set_index {
+                continue;
+            }
+
+            // Clear and let generate_new_bank_forks restart from replay_fec_set_index
             info!(
-                "interrupting slot {} via UpdateParent (new parent: {})",
-                signal.slot, signal.parent_slot
+                "{my_pubkey}: restarting slot {} from replay_fec_set_index {} (was at {} shreds)",
+                signal.slot, replay_fec_set_index, current_num_shreds
             );
-            blockstore.remove_dead_slot(signal.slot).expect("Db error");
+            let _ = blockstore.remove_dead_slot(signal.slot);
             progress.remove(&signal.slot);
             let mut bank_forks = bank_forks.write().unwrap();
             if bank_forks.get(signal.slot).is_some() {
@@ -7366,43 +7394,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_update_parent_resurrects_slot() {
+    fn test_update_parent_clears_slot_when_not_past_marker() {
         let ReplayBlockstoreComponents {
             blockstore,
             vote_simulator,
             ..
         } = replay_blockstore_components(
-            Some(tr(0) / tr(1) / tr(2) / tr(3) / tr(4)),
+            Some(tr(0) / tr(1) / tr(2) / tr(3)),
             1,
             None::<GenerateVotes>,
         );
-
         let VoteSimulator {
             bank_forks,
             mut progress,
             ..
         } = vote_simulator;
 
-        // 1: dead + signal, 2: dead + no signal, 3: alive + signal, 4: alive + no signal
-        for slot in [1, 2] {
-            blockstore.set_dead_slot(slot).unwrap();
-            progress.insert(
-                slot,
-                ForkProgress::new(Hash::default(), Some(0), None, 0, 0),
-            );
-            progress.get_mut(&slot).unwrap().is_dead = true;
-        }
-
-        for slot in [3, 4] {
-            progress.insert(
-                slot,
-                ForkProgress::new(Hash::default(), Some(0), None, 0, 0),
-            );
+        // Slot 1: 5 shreds, replay_fec_set_index=10; 5 < 10 so cleared
+        // Slot 2: 15 shreds, replay_fec_set_index=10; 15 >= 10 so skipped
+        for (slot, shreds) in [(1, 5), (2, 15)] {
+            let p = ForkProgress::new(Hash::default(), Some(0), None, 0, 0);
+            p.replay_progress.write().unwrap().num_shreds = shreds;
+            progress.insert(slot, p);
         }
 
         let (tx, rx) = crossbeam_channel::unbounded();
-
-        for slot in [1, 3] {
+        for slot in [1, 2] {
             tx.send(UpdateParentSignal {
                 slot,
                 parent_slot: 0,
@@ -7412,23 +7429,16 @@ pub(crate) mod tests {
             .unwrap();
         }
 
-        ReplayStage::interrupt_update_parent_slots(&blockstore, &bank_forks, &mut progress, &rx);
+        ReplayStage::interrupt_update_parent_slots(
+            &Pubkey::new_unique(),
+            &blockstore,
+            &bank_forks,
+            &mut progress,
+            &rx,
+        );
 
-        // resurrected
-        assert!(!blockstore.is_dead(1));
-        assert!(progress.get(&1).is_none());
-
-        // still dead (no signal)
-        assert!(blockstore.is_dead(2));
-        assert!(progress.get(&2).unwrap().is_dead);
-
-        // alive; signal was no-op
-        assert!(!blockstore.is_dead(3));
-        assert!(progress.get(&3).is_none());
-
-        // untouched
-        assert!(!blockstore.is_dead(4));
-        assert!(progress.get(&4).is_some());
+        assert!(progress.get(&1).is_none()); // cleared: 5 < 10
+        assert!(progress.get(&2).is_some()); // skipped: 15 >= 10
     }
 
     #[test]
