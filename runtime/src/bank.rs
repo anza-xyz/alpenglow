@@ -572,6 +572,7 @@ impl PartialEq for Bank {
             cache_for_accounts_lt_hash: _,
             stats_for_accounts_lt_hash: _,
             block_id,
+            expected_bank_hash: _,
             bank_hash_stats: _,
             epoch_rewards_calculation_cache: _,
             block_component_processor: _,
@@ -915,6 +916,10 @@ pub struct Bank {
     /// until bankless leader. Can be computed directly from shreds without needing to execute transactions.
     block_id: RwLock<Option<Hash>>,
 
+    /// Expected bank hash provided by block footer (if any). Set when processing footer; verified
+    /// later when the bank is frozen.
+    expected_bank_hash: RwLock<Option<Hash>>,
+
     /// Accounts stats for computing the bank hash
     bank_hash_stats: AtomicBankHashStats,
 
@@ -1121,6 +1126,7 @@ impl Bank {
             cache_for_accounts_lt_hash: DashMap::default(),
             stats_for_accounts_lt_hash: AccountsLtHashStats::default(),
             block_id: RwLock::new(None),
+            expected_bank_hash: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
             block_component_processor: RwLock::new(BlockComponentProcessor::default()),
@@ -1370,6 +1376,7 @@ impl Bank {
             cache_for_accounts_lt_hash: DashMap::default(),
             stats_for_accounts_lt_hash: AccountsLtHashStats::default(),
             block_id: RwLock::new(None),
+            expected_bank_hash: RwLock::new(None),
             bank_hash_stats: AtomicBankHashStats::default(),
             epoch_rewards_calculation_cache: parent.epoch_rewards_calculation_cache.clone(),
             block_component_processor: RwLock::new(BlockComponentProcessor::default()),
@@ -1848,6 +1855,7 @@ impl Bank {
             bank_hash_stats: AtomicBankHashStats::new(&fields.bank_hash_stats),
             epoch_rewards_calculation_cache: Arc::new(Mutex::new(HashMap::default())),
             block_component_processor: RwLock::new(BlockComponentProcessor::default()),
+            expected_bank_hash: RwLock::new(None),
         };
 
         // Sanity assertions between bank snapshot and genesis config
@@ -2604,8 +2612,49 @@ impl Bank {
             // that rehash() can be called and *not* modify self.accounts_lt_hash.
             self.update_accounts_lt_hash();
             *hash = self.hash_internal_state();
+
+            // Verify footer-provided expected bank hash if present.  Don't fail fast here; instead
+            // mark the bank as dead, emit diagnostics and metrics.
+            let computed_hash = *hash;
+            if let Some(expected) = self.expected_bank_hash.read().unwrap().clone() {
+                if expected != computed_hash {
+                    error!(
+                        "Bank hash mismatch for slot {} expected: {} actual: {}",
+                        self.slot(),
+                        expected,
+                        computed_hash
+                    );
+
+                    // TODO: mark the block as dead for downstream consumers
+
+                    // attempt to write a bank-hash-details file for debugging
+                    if let Err(err) = bank_hash_details::write_bank_hash_details_file(self) {
+                        warn!("Unable to write bank hash_details file: {err}");
+                    }
+
+                    // emit a datapoint for observability
+                    datapoint_error!(
+                        "bank_hash_mismatch",
+                        ("slot", self.slot() as i64, i64),
+                        ("expected", expected.to_string(), String),
+                        ("actual", computed_hash.to_string(), String),
+                    );
+                }
+            }
+
             self.rc.accounts.accounts_db.mark_slot_frozen(self.slot());
         }
+    }
+
+    /// Set the expected bank hash (from an external footer).  This is stored for later verification
+    /// when the bank is frozen.
+    pub fn set_expected_bank_hash(&self, hash: Hash) {
+        *self.expected_bank_hash.write().unwrap() = Some(hash);
+    }
+
+    /// Returns the expected bank hash if any.
+    pub fn expected_bank_hash(&self) -> Option<Hash> {
+        self.expected_bank_hash.read().unwrap().clone()
     }
 
     // dangerous; don't use this; this is only needed for ledger-tool's special command
