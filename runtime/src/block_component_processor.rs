@@ -18,7 +18,7 @@ use {
     },
     std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
-    voting_reward::{calculate_and_pay_voting_reward, Error as PayVoteRewardError},
+    voting_reward::{calculate_and_pay_voting_reward, PayVoteRewardError},
 };
 
 mod voting_reward;

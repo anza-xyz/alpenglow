@@ -7,7 +7,7 @@ use {
 
 /// Different types of errors that can happen when calculating and paying voting reward.
 #[derive(Debug, PartialEq, Eq, Error)]
-pub enum Error {
+pub enum PayVoteRewardError {
     #[error("missing epoch stakes")]
     MissingEpochStakes,
     #[error("missing validator")]
@@ -31,29 +31,29 @@ pub enum Error {
 pub(super) fn calculate_and_pay_voting_reward(
     bank: &Bank,
     reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
-) -> Result<(), Error> {
+) -> Result<(), PayVoteRewardError> {
     let Some((reward_slot, validators)) = reward_slot_and_validators else {
         return Ok(());
     };
     let epoch_stakes = bank
         .epoch_stakes_from_slot(reward_slot)
-        .ok_or(Error::MissingEpochStakes)?;
+        .ok_or(PayVoteRewardError::MissingEpochStakes)?;
     let vote_accounts = epoch_stakes.stakes().vote_accounts().as_ref();
     let mut total_leader_reward_lamports = 0u64;
     for validator in validators {
         let (validator_stake_lamports, _) = vote_accounts
             .get(&validator)
-            .ok_or(Error::MissingValidator)?;
+            .ok_or(PayVoteRewardError::MissingValidator)?;
         let reward_lamports =
             calculate_voting_reward(bank, epoch_stakes, *validator_stake_lamports).map_err(
-                |e| Error::RewardCalculation {
+                |e| PayVoteRewardError::RewardCalculation {
                     validator,
                     validator_stake_lamports: *validator_stake_lamports,
                     error: e,
                 },
             )?;
-        let _validator_reward_lamports = reward_lamports / 2;
-        let leader_reward_lamports = reward_lamports / 2;
+        let validator_reward_lamports = reward_lamports / 2;
+        let leader_reward_lamports = reward_lamports - validator_reward_lamports;
         total_leader_reward_lamports =
             total_leader_reward_lamports.saturating_add(leader_reward_lamports);
     }
@@ -94,14 +94,21 @@ fn calculate_voting_reward(
     let yearly_inflation = bank.inflation().total(bank.slot_in_year_for_inflation());
     let slots_per_epoch = bank.epoch_schedule().slots_per_epoch;
     let slots_per_year = bank.slots_per_year();
+    let epochs_per_year = slots_per_year / slots_per_epoch as f64;
 
     debug_assert!(validator_stake_lamports <= total_stake_lamports);
     debug_assert!(total_stake_lamports <= total_supply_lamports);
     debug_assert!(slots_per_epoch as f64 <= slots_per_year);
 
-    let epoch_inflation = (1f64 + yearly_inflation).powf(slots_per_year) - 1f64;
+    let epoch_inflation = (1f64 + yearly_inflation).powf(1.0 / epochs_per_year) - 1f64;
+    debug_assert!(epoch_inflation < 1.0);
+    debug_assert!(epoch_inflation > 0.0);
+
     let per_slot_inflation =
         total_supply_lamports as f64 * epoch_inflation / slots_per_epoch as f64;
+    debug_assert!(per_slot_inflation < 1.0);
+    debug_assert!(per_slot_inflation > 0.0);
+
     let fractional_stake = validator_stake_lamports as f64 / total_stake_lamports as f64;
     round(fractional_stake * per_slot_inflation)
 }
