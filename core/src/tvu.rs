@@ -59,7 +59,6 @@ use {
         quic::{spawn_simple_qos_server, SimpleQosQuicStreamerConfig, SpawnServerResult},
         streamer::StakedNodes,
     },
-    tokio_util::sync::CancellationToken,
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
         consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
@@ -77,6 +76,7 @@ use {
         thread::{self, JoinHandle},
     },
     tokio::sync::mpsc::Sender as AsyncSender,
+    tokio_util::sync::CancellationToken,
 };
 
 /// Sets the upper bound on the number of batches stored in the retransmit
@@ -609,8 +609,10 @@ pub mod tests {
         solana_rpc::optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         solana_runtime::bank::Bank,
         solana_signer::Signer,
-        solana_streamer::socket::SocketAddrSpace,
-        solana_streamer::{nonblocking::simple_qos::SimpleQosConfig, quic::QuicStreamerConfig},
+        solana_streamer::{
+            nonblocking::simple_qos::SimpleQosConfig, quic::QuicStreamerConfig,
+            socket::SocketAddrSpace,
+        },
         solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_VOTE_USE_QUIC},
         solana_votor::vote_history_storage::FileVoteHistoryStorage,
         std::sync::atomic::{AtomicU64, Ordering},
@@ -771,7 +773,10 @@ pub mod tests {
             votor_event_sender,
             votor_event_receiver,
             optimistic_parent_sender,
-            SimpleQosQuicStreamerConfig { quic_streamer_config: QuicStreamerConfig::default_for_tests(), qos_config: SimpleQosConfig::default() },
+            SimpleQosQuicStreamerConfig {
+                quic_streamer_config: QuicStreamerConfig::default_for_tests(),
+                qos_config: SimpleQosConfig::default(),
+            },
             Arc::new(RwLock::new(StakedNodes::default())),
             Arc::new(RwLock::new(KeyUpdaters::default())),
             Arc::new(AlpenglowLastVoted::default()),

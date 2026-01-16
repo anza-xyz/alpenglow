@@ -403,7 +403,7 @@ mod tests {
             &Keypair::new(),
             sender,
             staked_nodes,
-QuicStreamerConfig::default_for_tests(),
+            QuicStreamerConfig::default_for_tests(),
             SwQosConfig::default(),
             cancel.clone(),
         )

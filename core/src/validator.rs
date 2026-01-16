@@ -538,7 +538,7 @@ pub struct ValidatorTpuConfig {
     /// QUIC server config for TPU forward
     pub tpu_fwd_quic_server_config: SwQosQuicStreamerConfig,
     /// QUIC server config for Vote
-pub vote_quic_server_config: SimpleQosQuicStreamerConfig,
+    pub vote_quic_server_config: SimpleQosQuicStreamerConfig,
     /// QUIC server config for Alpenglow
     pub alpenglow_quic_server_config: SimpleQosQuicStreamerConfig,
 }
@@ -566,7 +566,7 @@ impl ValidatorTpuConfig {
             },
         };
 
-// vote/tpu_fwd/alpenglow share the same characteristics -- disallow non-staked connections:
+        // vote/tpu_fwd/alpenglow share the same characteristics -- disallow non-staked connections:
         let vote_quic_server_config = SimpleQosQuicStreamerConfig {
             quic_streamer_config: QuicStreamerConfig {
                 max_connections_per_ipaddr_per_min: 32,

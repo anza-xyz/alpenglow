@@ -29,9 +29,9 @@ use {
     solana_rpc_client::rpc_client::RpcClient,
     solana_signer::Signer,
     solana_streamer::{
+        nonblocking::swqos::SwQosConfig,
         packet::PacketBatch,
         quic::{spawn_stake_wighted_qos_server, QuicStreamerConfig, SpawnServerResult},
-        nonblocking::swqos::SwQosConfig,
         socket::SocketAddrSpace,
         streamer::StakedNodes,
     },
