@@ -83,13 +83,13 @@ impl Entry {
         let (notar, notar_validators) = self.notar.build_cert(slot).unzip();
         let (skip, skip_validators) = match self.skip.build_sig_bitmap() {
             Err(e) => {
-                warn!("Build skip reward cert failed with {e}");
+                warn!("build_sig_bitmap for skip cert failed with {e}");
                 (None, None)
             }
             Ok((signature, bitmap, skip_validators)) => {
                 match SkipRewardCertificate::try_new(slot, signature, bitmap) {
                     Err(e) => {
-                        warn!("Build skip reward cert failed with {e}");
+                        warn!("SkipRewardCertificate::try_ne() failed with {e}");
                         (None, None)
                     }
                     Ok(c) => (Some(c), Some(skip_validators)),
@@ -98,10 +98,11 @@ impl Entry {
         };
         let mut validators = notar_validators.unwrap_or_default();
         validators.extend(skip_validators.unwrap_or_default());
+        let reward_slot_and_validators = (!validators.is_empty()).then_some((slot, validators));
         BuildRewardCertsResponse {
             skip,
             notar,
-            validators,
+            reward_slot_and_validators,
         }
     }
 }

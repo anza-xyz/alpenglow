@@ -662,7 +662,7 @@ fn record_and_complete_block(
     let BuildRewardCertsResponse {
         skip,
         notar,
-        validators,
+        reward_slot_and_validators,
     } = ctx
         .reward_certs_receiver
         .recv()
@@ -672,8 +672,8 @@ fn record_and_complete_block(
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
         &footer,
-        &validators,
-    );
+        reward_slot_and_validators,
+    )?;
 
     drop(bank);
     w_poh_recorder.tick_alpenglow(max_tick_height, footer);

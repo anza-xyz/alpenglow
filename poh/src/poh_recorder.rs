@@ -32,7 +32,10 @@ use {
     solana_measure::measure_us,
     solana_poh_config::PohConfig,
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, installed_scheduler_pool::BankWithScheduler},
+    solana_runtime::{
+        bank::Bank, block_component_processor::BlockComponentProcessorError,
+        installed_scheduler_pool::BankWithScheduler,
+    },
     solana_transaction::versioned::VersionedTransaction,
     solana_votor_messages::migration::MigrationStatus,
     std::{
@@ -49,7 +52,7 @@ use {
 pub const GRACE_TICKS_FACTOR: u64 = 2;
 pub const MAX_GRACE_SLOTS: u64 = 2;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Debug, Error)]
 pub enum PohRecorderError {
     #[error("max height reached")]
     MaxHeightReached,
@@ -68,6 +71,9 @@ pub enum PohRecorderError {
 
     #[error("couldn't reset bank during fast leader handover slot {0} -> slot {1}")]
     ResetBankError(Slot, Slot),
+
+    #[error("block component processor failed with {0}")]
+    BlockComponentProcessor(#[from] BlockComponentProcessorError),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
