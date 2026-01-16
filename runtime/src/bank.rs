@@ -4541,7 +4541,7 @@ impl Bank {
 
     pub fn get_signature_status_slot(&self, signature: &Signature) -> Option<(Slot, Result<()>)> {
         let rcache = self.status_cache.read().unwrap();
-        rcache.get_status_any_blockhash(signature, &self.ancestors)
+        rcache.get_status_any_hash(signature, &self.ancestors)
     }
 
     pub fn get_signature_status(&self, signature: &Signature) -> Option<Result<()>> {

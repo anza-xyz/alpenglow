@@ -84,13 +84,13 @@ impl<T: Serialize + Clone> StatusCache<T> {
         let slot_deltas = self.slot_deltas.remove(&slot);
         if let Some(slot_deltas) = slot_deltas {
             let slot_deltas = slot_deltas.lock().unwrap();
-            for (blockhash, (_, key_list)) in slot_deltas.iter() {
-                // Any blockhash that exists in self.slot_deltas must also exist
+            for (hash, (_, key_list)) in slot_deltas.iter() {
+                // Any hash that exists in self.slot_deltas must also exist
                 // in self.cache, because in self.purge_roots(), when an entry
                 // (b, (max_slot, _, _)) is removed from self.cache, this implies
                 // all entries in self.slot_deltas < max_slot are also removed
-                if let Entry::Occupied(mut o_blockhash_entries) = self.cache.entry(*blockhash) {
-                    let (_, _, all_hash_maps) = o_blockhash_entries.get_mut();
+                if let Entry::Occupied(mut o_hash_entries) = self.cache.entry(*hash) {
+                    let (_, _, all_hash_maps) = o_hash_entries.get_mut();
 
                     for (key_slice, _) in key_list {
                         if let Entry::Occupied(mut o_key_list) = all_hash_maps.entry(*key_slice) {
@@ -108,24 +108,23 @@ impl<T: Serialize + Clone> StatusCache<T> {
                     }
 
                     if all_hash_maps.is_empty() {
-                        o_blockhash_entries.remove_entry();
+                        o_hash_entries.remove_entry();
                     }
                 } else {
-                    panic!("Blockhash must exist if it exists in self.slot_deltas, slot: {slot}")
+                    panic!("hash must exist if it exists in self.slot_deltas, slot: {slot}")
                 }
             }
         }
     }
 
-    /// Check if the key is in any of the forks in the ancestors set and
-    /// with a certain blockhash.
+    /// Checks if the [`key`] is in any of the forks in the given [`ancestors`] and [`hash`].
     pub fn get_status<K: AsRef<[u8]>>(
         &self,
         key: K,
-        transaction_blockhash: &Hash,
+        hash: &Hash,
         ancestors: &Ancestors,
     ) -> Option<(Slot, T)> {
-        let map = self.cache.get(transaction_blockhash)?;
+        let map = self.cache.get(hash)?;
         let (_, index, keymap) = map;
         let max_key_index = key.as_ref().len().saturating_sub(CACHED_KEY_SIZE + 1);
         let index = (*index).min(max_key_index);
@@ -143,19 +142,17 @@ impl<T: Serialize + Clone> StatusCache<T> {
         None
     }
 
-    /// Search for a key with any blockhash
-    /// Prefer get_status for performance reasons, it doesn't need
-    /// to search all blockhashes.
-    pub fn get_status_any_blockhash<K: AsRef<[u8]>>(
+    /// Searches for the [`key`] with any hash.
+    ///
+    /// Prefer [`get_status`] for performance reasons as it doesn't need to search all hashes.
+    pub fn get_status_any_hash<K: AsRef<[u8]>>(
         &self,
         key: K,
         ancestors: &Ancestors,
     ) -> Option<(Slot, T)> {
-        let keys: Vec<_> = self.cache.keys().copied().collect();
-
-        for blockhash in keys.iter() {
-            trace!("get_status_any_blockhash: trying {blockhash}");
-            let status = self.get_status(&key, blockhash, ancestors);
+        for hash in self.cache.keys() {
+            trace!("get_status_any_hash: trying {hash}");
+            let status = self.get_status(&key, hash, ancestors);
             if status.is_some() {
                 return status;
             }
@@ -174,37 +171,29 @@ impl<T: Serialize + Clone> StatusCache<T> {
         &self.roots
     }
 
-    /// Insert a new key for a specific slot.
-    pub fn insert<K: AsRef<[u8]>>(
-        &mut self,
-        transaction_blockhash: &Hash,
-        key: K,
-        slot: Slot,
-        res: T,
-    ) {
+    /// Inserts a new key for a specific slot.
+    pub fn insert<K: AsRef<[u8]>>(&mut self, hash: &Hash, key: K, slot: Slot, res: T) {
         let max_key_index = key.as_ref().len().saturating_sub(CACHED_KEY_SIZE + 1);
 
-        // Get the cache entry for this blockhash.
-        let (max_slot, key_index, hash_map) =
-            self.cache.entry(*transaction_blockhash).or_insert_with(|| {
-                let key_index = thread_rng().gen_range(0..max_key_index + 1);
-                (slot, key_index, HashMap::new())
-            });
+        // Get the cache entry for the provided hash.
+        let (max_slot, key_index, hash_map) = self.cache.entry(*hash).or_insert_with(|| {
+            let key_index = thread_rng().gen_range(0..max_key_index + 1);
+            (slot, key_index, HashMap::new())
+        });
 
-        // Update the max slot observed to contain txs using this blockhash.
-        *max_slot = std::cmp::max(slot, *max_slot);
+        // Update the max slot observed to contain txs using this hash.
+        *max_slot = (*max_slot).max(slot);
 
         // Grab the key slice.
         let key_index = (*key_index).min(max_key_index);
         let mut key_slice = [0u8; CACHED_KEY_SIZE];
         key_slice.clone_from_slice(&key.as_ref()[key_index..key_index + CACHED_KEY_SIZE]);
 
-        // Insert the slot and tx result into the cache entry associated with
-        // this blockhash and keyslice.
+        // Insert the slot and tx result into the cache entry associated with this hash and keyslice.
         let forks = hash_map.entry(key_slice).or_default();
         forks.push((slot, res.clone()));
 
-        self.add_to_slot_delta(transaction_blockhash, slot, key_index, key_slice, res);
+        self.add_to_slot_delta(hash, slot, key_index, key_slice, res);
     }
 
     pub fn purge_roots(&mut self) {
@@ -269,38 +258,35 @@ impl<T: Serialize + Clone> StatusCache<T> {
 
     fn insert_with_slice(
         &mut self,
-        transaction_blockhash: &Hash,
+        hash: &Hash,
         slot: Slot,
         key_index: usize,
         key_slice: [u8; CACHED_KEY_SIZE],
         res: T,
     ) {
-        let hash_map =
-            self.cache
-                .entry(*transaction_blockhash)
-                .or_insert((slot, key_index, HashMap::new()));
+        let hash_map = self
+            .cache
+            .entry(*hash)
+            .or_insert((slot, key_index, HashMap::new()));
         hash_map.0 = std::cmp::max(slot, hash_map.0);
 
         let forks = hash_map.2.entry(key_slice).or_default();
         forks.push((slot, res.clone()));
 
-        self.add_to_slot_delta(transaction_blockhash, slot, key_index, key_slice, res);
+        self.add_to_slot_delta(hash, slot, key_index, key_slice, res);
     }
 
-    // Add this key slice to the list of key slices for this slot and blockhash
-    // combo.
+    // Adds this key slice to the list of key slices for this slot and hash combo.
     fn add_to_slot_delta(
         &mut self,
-        transaction_blockhash: &Hash,
+        hash: &Hash,
         slot: Slot,
         key_index: usize,
         key_slice: [u8; CACHED_KEY_SIZE],
         res: T,
     ) {
         let mut fork_entry = self.slot_deltas.entry(slot).or_default().lock().unwrap();
-        let (_key_index, hash_entry) = fork_entry
-            .entry(*transaction_blockhash)
-            .or_insert((key_index, vec![]));
+        let (_key_index, hash_entry) = fork_entry.entry(*hash).or_insert((key_index, vec![]));
         hash_entry.push((key_slice, res))
     }
 }
@@ -321,7 +307,7 @@ mod tests {
             None
         );
         assert_eq!(
-            status_cache.get_status_any_blockhash(sig, &Ancestors::default()),
+            status_cache.get_status_any_hash(sig, &Ancestors::default()),
             None
         );
     }
@@ -338,7 +324,7 @@ mod tests {
             Some((0, ()))
         );
         assert_eq!(
-            status_cache.get_status_any_blockhash(sig, &ancestors),
+            status_cache.get_status_any_hash(sig, &ancestors),
             Some((0, ()))
         );
     }
@@ -351,7 +337,7 @@ mod tests {
         let ancestors = Ancestors::default();
         status_cache.insert(&blockhash, sig, 1, ());
         assert_eq!(status_cache.get_status(sig, &blockhash, &ancestors), None);
-        assert_eq!(status_cache.get_status_any_blockhash(sig, &ancestors), None);
+        assert_eq!(status_cache.get_status_any_hash(sig, &ancestors), None);
     }
 
     #[test]
