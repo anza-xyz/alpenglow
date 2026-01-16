@@ -36,6 +36,7 @@ pub(crate) struct RootContext {
 pub(crate) fn set_root(
     my_pubkey: &Pubkey,
     new_root: Slot,
+    block_id: &Hash,
     ctx: &SharedContext,
     vctx: &mut VotingContext,
     rctx: &RootContext,
@@ -52,6 +53,7 @@ pub(crate) fn set_root(
     check_and_handle_new_root(
         new_root,
         new_root,
+        block_id,
         rctx.snapshot_controller.as_deref(),
         Some(new_root),
         &rctx.bank_notification_sender,
@@ -108,6 +110,7 @@ pub(crate) fn set_root(
 pub fn check_and_handle_new_root<CB>(
     parent_slot: Slot,
     new_root: Slot,
+    block_id: &Hash,
     snapshot_controller: Option<&SnapshotController>,
     highest_super_majority_root: Option<Slot>,
     bank_notification_sender: &Option<BankNotificationSenderConfig>,
@@ -128,6 +131,7 @@ where
         .unwrap()
         .get(new_root)
         .expect("Root bank doesn't exist");
+    root_bank.register_recent_blockhash(block_id, &BankWithScheduler::no_scheduler_available());
     let mut rooted_banks = root_bank.parents();
     let oldest_parent = rooted_banks.last().map(|last| last.parent_slot());
     rooted_banks.push(root_bank.clone());
