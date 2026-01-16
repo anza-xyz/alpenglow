@@ -104,11 +104,8 @@ fn calculate_voting_reward(
     debug_assert!(epoch_inflation < 1.0);
     debug_assert!(epoch_inflation > 0.0);
 
-    let per_slot_inflation =
+    let per_slot_inflation_lamports =
         total_supply_lamports as f64 * epoch_inflation / slots_per_epoch as f64;
-    debug_assert!(per_slot_inflation < 1.0);
-    debug_assert!(per_slot_inflation > 0.0);
-
-    let fractional_stake = validator_stake_lamports as f64 / total_stake_lamports as f64;
-    round(fractional_stake * per_slot_inflation)
+    let fractional_stake_lamports = validator_stake_lamports as f64 / total_stake_lamports as f64;
+    round(fractional_stake_lamports * per_slot_inflation_lamports)
 }
