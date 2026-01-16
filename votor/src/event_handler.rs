@@ -754,7 +754,7 @@ impl EventHandler {
     ) -> Result<(), SetRootError> {
         let bank_forks_r = ctx.bank_forks.read().unwrap();
         let old_root = bank_forks_r.root();
-        let Some(new_root) = finalized_blocks
+        let Some((new_root, block_id)) = finalized_blocks
             .iter()
             .filter_map(|&(slot, block_id)| {
                 let bank = bank_forks_r.get(slot)?;
@@ -762,7 +762,7 @@ impl EventHandler {
                     && vctx.vote_history.voted(slot)
                     && bank.is_frozen()
                     && bank.block_id().is_some_and(|bid| bid == block_id))
-                .then_some(slot)
+                .then_some((slot, block_id))
             })
             .max()
         else {
@@ -773,6 +773,7 @@ impl EventHandler {
         root_utils::set_root(
             my_pubkey,
             new_root,
+            &block_id,
             ctx,
             vctx,
             rctx,

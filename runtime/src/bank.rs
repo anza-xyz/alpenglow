@@ -2941,7 +2941,11 @@ impl Bank {
     /// Register a new recent blockhash in the bank's recent blockhash queue. Called when a bank
     /// reaches its max tick height. Can be called by tests to get new blockhashes for transaction
     /// processing without advancing to a new bank slot.
-    fn register_recent_blockhash(&self, blockhash: &Hash, scheduler: &InstalledSchedulerRwLock) {
+    pub fn register_recent_blockhash(
+        &self,
+        blockhash: &Hash,
+        scheduler: &InstalledSchedulerRwLock,
+    ) {
         // This is needed because recent_blockhash updates necessitate synchronizations for
         // consistent tx check_age handling.
         BankWithScheduler::wait_for_paused_scheduler(self, scheduler);

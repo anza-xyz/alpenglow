@@ -2838,10 +2838,13 @@ impl ReplayStage {
                     .unwrap()
                     .highest_super_majority_root(),
             );
+            // XXX
+            let block_id = Hash::new_unique();
             Self::check_and_handle_new_root(
                 &identity_keypair.pubkey(),
                 bank.parent_slot(),
                 new_root,
+                &block_id,
                 bank_forks,
                 progress,
                 blockstore,
@@ -4617,6 +4620,7 @@ impl ReplayStage {
         my_pubkey: &Pubkey,
         parent_slot: Slot,
         new_root: Slot,
+        block_id: &Hash,
         bank_forks: &RwLock<BankForks>,
         progress: &mut ProgressMap,
         blockstore: &Blockstore,
@@ -4633,6 +4637,7 @@ impl ReplayStage {
         root_utils::check_and_handle_new_root(
             parent_slot,
             new_root,
+            block_id,
             snapshot_controller,
             highest_super_majority_root,
             bank_notification_sender,
