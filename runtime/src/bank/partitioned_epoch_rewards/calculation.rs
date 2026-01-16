@@ -8,7 +8,7 @@ use {
     },
     crate::{
         bank::{
-            null_tracer, PrevEpochInflationRewards, RewardCalcTracer, RewardCalculationEvent,
+            null_tracer, EpochInflationRewards, RewardCalcTracer, RewardCalculationEvent,
             RewardsMetrics, VoteReward, VoteRewards,
         },
         inflation_rewards::{
@@ -104,6 +104,7 @@ impl Bank {
         reward_calc_tracer: Option<impl Fn(&RewardCalculationEvent) + Send + Sync>,
         thread_pool: &ThreadPool,
         parent_epoch: Epoch,
+        parent_capitalization: u64,
         parent_slot: Slot,
         parent_block_height: u64,
         rewards_metrics: &mut RewardsMetrics,
@@ -114,6 +115,7 @@ impl Bank {
             stake_rewards,
         } = self.calculate_rewards_and_distribute_vote_rewards(
             parent_epoch,
+            parent_capitalization,
             reward_calc_tracer,
             thread_pool,
             rewards_metrics,
@@ -148,6 +150,7 @@ impl Bank {
     fn calculate_rewards_and_distribute_vote_rewards(
         &self,
         prev_epoch: Epoch,
+        prev_capitalization: u64,
         reward_calc_tracer: Option<impl Fn(&RewardCalculationEvent) + Send + Sync>,
         thread_pool: &ThreadPool,
         metrics: &mut RewardsMetrics,
@@ -178,6 +181,7 @@ impl Bank {
             .or_insert_with(|| {
                 Arc::new(self.calculate_rewards_for_partitioning(
                     prev_epoch,
+                    prev_capitalization,
                     reward_calc_tracer,
                     thread_pool,
                     metrics,
@@ -192,7 +196,6 @@ impl Bank {
             validator_rate,
             foundation_rate,
             prev_epoch_duration_in_years,
-            capitalization,
             point_value,
         } = rewards_calculation.as_ref();
 
@@ -242,7 +245,7 @@ impl Bank {
             ),
             ("validator_rewards", total_vote_rewards, i64),
             ("active_stake", active_stake, i64),
-            ("pre_capitalization", *capitalization, i64),
+            ("pre_capitalization", prev_capitalization, i64),
             ("post_capitalization", self.capitalization(), i64),
             ("num_stake_accounts", num_stake_accounts, i64),
             ("num_vote_accounts", num_vote_accounts, i64),
@@ -277,17 +280,17 @@ impl Bank {
     pub(super) fn calculate_rewards_for_partitioning(
         &self,
         prev_epoch: Epoch,
+        prev_capitalization: u64,
         reward_calc_tracer: Option<impl Fn(&RewardCalculationEvent) + Send + Sync>,
         thread_pool: &ThreadPool,
         metrics: &mut RewardsMetrics,
     ) -> PartitionedRewardsCalculation {
-        let capitalization = self.capitalization();
-        let PrevEpochInflationRewards {
-            validator_rewards,
-            prev_epoch_duration_in_years,
+        let EpochInflationRewards {
+            validator_rewards_lamports,
+            epoch_duration_in_years: prev_epoch_duration_in_years,
             validator_rate,
             foundation_rate,
-        } = self.calculate_previous_epoch_inflation_rewards(capitalization, prev_epoch);
+        } = self.calculate_epoch_inflation_rewards(prev_capitalization, prev_epoch);
 
         let CalculateValidatorRewardsResult {
             vote_rewards_accounts: vote_account_rewards,
@@ -296,7 +299,7 @@ impl Bank {
         } = self
             .calculate_validator_rewards(
                 prev_epoch,
-                validator_rewards,
+                validator_rewards_lamports,
                 reward_calc_tracer,
                 thread_pool,
                 metrics,
@@ -314,7 +317,6 @@ impl Bank {
             validator_rate,
             foundation_rate,
             prev_epoch_duration_in_years,
-            capitalization,
             point_value,
         }
     }
@@ -996,6 +998,7 @@ mod tests {
             SLOTS_PER_EPOCH,
         );
         let rewarded_epoch = bank.epoch();
+        let rewarded_capitalization = bank.capitalization();
 
         let thread_pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
         let mut rewards_metrics = RewardsMetrics::default();
@@ -1008,6 +1011,7 @@ mod tests {
             ..
         } = bank.calculate_rewards_for_partitioning(
             rewarded_epoch,
+            rewarded_capitalization,
             null_tracer(),
             &thread_pool,
             &mut rewards_metrics,
@@ -1091,6 +1095,7 @@ mod tests {
             SLOTS_PER_EPOCH,
         );
         let rewarded_epoch = bank.epoch();
+        let rewarded_capitalization = bank.capitalization();
 
         let thread_pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
         let mut rewards_metrics = RewardsMetrics::default();
@@ -1103,6 +1108,7 @@ mod tests {
             ..
         } = bank.calculate_rewards_for_partitioning(
             rewarded_epoch,
+            rewarded_capitalization,
             null_tracer(),
             &thread_pool,
             &mut rewards_metrics,
@@ -1150,6 +1156,7 @@ mod tests {
             SLOTS_PER_EPOCH - 1,
         );
         let rewarded_epoch = bank.epoch();
+        let rewarded_capitalization = bank.capitalization();
 
         // Advance to next epoch boundary to update EpochStakes Kludgy because
         // mutable Bank methods require the bank not be Arc-wrapped.
@@ -1169,6 +1176,7 @@ mod tests {
             ..
         } = bank.calculate_rewards_for_partitioning(
             rewarded_epoch,
+            rewarded_capitalization,
             null_tracer(),
             &thread_pool,
             &mut rewards_metrics,

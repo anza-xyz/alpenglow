@@ -248,7 +248,6 @@ pub(super) struct PartitionedRewardsCalculation {
     pub(super) validator_rate: f64,
     pub(super) foundation_rate: f64,
     pub(super) prev_epoch_duration_in_years: f64,
-    pub(super) capitalization: u64,
     point_value: PointValue,
 }
 
