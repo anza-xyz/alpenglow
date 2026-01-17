@@ -109,7 +109,7 @@ pub use {
 
 pub const MAX_REPLAY_WAKE_UP_SIGNALS: usize = 1;
 pub const MAX_COMPLETED_SLOTS_IN_CHANNEL: usize = 100_000;
-pub const MAX_UPDATE_PARENT_SIGNALS: usize = 108_000;
+pub const MAX_UPDATE_PARENT_SIGNALS: usize = 216_000;
 
 pub type CompletedSlotsSender = Sender<Vec<Slot>>;
 pub type CompletedSlotsReceiver = Receiver<Vec<Slot>>;
@@ -1613,7 +1613,11 @@ impl Blockstore {
                 continue;
             }
 
-            if parent_meta.as_ref().populated_from_update_parent() {
+            // Only emit UpdateParent signals for Original.
+            // We don't want UpdateParent from a different block in the slot to interrupt replay.
+            if location == BlockLocation::Original
+                && parent_meta.as_ref().populated_from_update_parent()
+            {
                 update_parent_signals.push(UpdateParentSignal {
                     slot,
                     parent_slot: parent_meta.as_ref().parent_slot,
