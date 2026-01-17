@@ -3670,16 +3670,14 @@ impl ReplayStage {
 
                         // Clear the bank from bank_forks. It will be recreated with the
                         // correct parent by generate_new_bank_forks on the next iteration.
-                        bank_forks.write().unwrap().clear_bank(bank_slot, false);
+                        let mut bank_forks = bank_forks.write().unwrap();
+                        if bank_forks.get(bank_slot).is_some() {
+                            bank_forks.clear_bank(bank_slot, false);
+                        }
 
                         // Remove the progress entry. It will be recreated with the correct
                         // num_shreds offset when generate_new_bank_forks creates the new bank.
                         progress.remove(&bank_slot);
-
-                        info!(
-                            "AbandonedBank at slot {bank_slot}: cleared bank and progress, will \
-                             recreate with parent {new_parent_slot}"
-                        );
                     }
                     Err(err) => {
                         let root = bank_forks.read().unwrap().root();
@@ -4805,8 +4803,8 @@ impl ReplayStage {
     }
 
     /// Handles UpdateParent signals by clearing slot state so replay restarts from
-    /// the new parent. Skips if we're the leader (block_creation_loop handles it) or
-    /// if replay has already passed the UpdateParent marker.
+    /// the new parent. Skips if we're the leader (block_creation_loop handles it),
+    /// if replay hasn't started yet, or if replay has already passed the UpdateParent marker.
     fn interrupt_update_parent_slots(
         my_pubkey: &Pubkey,
         blockstore: &Blockstore,
@@ -4815,13 +4813,13 @@ impl ReplayStage {
         update_parent_receiver: &UpdateParentReceiver,
     ) {
         while let Ok(signal) = update_parent_receiver.try_recv() {
-            // Skip if we're the leader
-            let is_leader = bank_forks
+            // Skip if we're the leader or if replay hasn't started yet
+            let should_skip = bank_forks
                 .read()
                 .unwrap()
                 .get(signal.slot)
-                .is_some_and(|bank| bank.collector_id() == my_pubkey);
-            if is_leader {
+                .is_none_or(|bank| bank.collector_id() == my_pubkey);
+            if should_skip {
                 continue;
             }
 

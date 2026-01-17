@@ -37,7 +37,7 @@ use {
     solana_account::ReadableAccount,
     solana_accounts_db::hardened_unpack::unpack_genesis_archive,
     solana_address_lookup_table_interface::state::AddressLookupTable,
-    solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND},
+    solana_clock::{Slot, UnixTimestamp, DEFAULT_TICKS_PER_SECOND, NUM_CONSECUTIVE_LEADER_SLOTS},
     solana_entry::{
         block_component::{
             BlockComponent, VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
@@ -109,7 +109,7 @@ pub use {
 
 pub const MAX_REPLAY_WAKE_UP_SIGNALS: usize = 1;
 pub const MAX_COMPLETED_SLOTS_IN_CHANNEL: usize = 100_000;
-pub const MAX_UPDATE_PARENT_SIGNALS: usize = 10_000;
+pub const MAX_UPDATE_PARENT_SIGNALS: usize = 108_000;
 
 pub type CompletedSlotsSender = Sender<Vec<Slot>>;
 pub type CompletedSlotsReceiver = Receiver<Vec<Slot>>;
@@ -2493,6 +2493,10 @@ impl Blockstore {
                 false => return Err(BlockstoreError::BlockComponentMismatch(slot)),
             },
         };
+
+        if slot % NUM_CONSECUTIVE_LEADER_SLOTS != 0 {
+            return Err(BlockstoreError::UpdateParentOnInvalidSlot(slot));
+        }
 
         // Validate that the UpdateParent is compatible with the BlockHeader
         if update_parent_meta.block() == block_header_meta.block() {
@@ -5925,9 +5929,17 @@ fn send_signals(
 
     for signal in update_parent_signals {
         for sender in update_parent_senders {
-            sender
-                .try_send(signal.clone())
-                .expect("update_parent channel full");
+            if let Err(TrySendError::Full(_)) = sender.try_send(signal.clone()) {
+                error!(
+                    "update_parent channel full, dropping signal for slot {}",
+                    signal.slot
+                );
+                datapoint_error!(
+                    "blockstore_error",
+                    ("error", "update_parent channel full", String),
+                    ("slot", signal.slot, i64),
+                );
+            }
         }
     }
 }
