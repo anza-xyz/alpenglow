@@ -64,5 +64,7 @@ pub enum BlockstoreError {
     UnexpectedBlockComponent,
     #[error("Block component mismatch slot {0}")]
     BlockComponentMismatch(Slot),
+    #[error("Update parent on invalid slot {0}")]
+    UpdateParentOnInvalidSlot(Slot),
 }
 pub type Result<T> = std::result::Result<T, BlockstoreError>;
