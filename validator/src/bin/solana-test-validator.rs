@@ -32,6 +32,7 @@ use {
     solana_streamer::socket::SocketAddrSpace,
     solana_system_interface::program as system_program,
     solana_test_validator::*,
+    solana_votor::vote_history_storage::FileVoteHistoryStorage,
     std::{
         collections::{HashMap, HashSet},
         fs, io,
@@ -408,6 +409,7 @@ fn main() {
         value_t!(matches, "transaction_account_lock_limit", usize).ok();
 
     let tower_storage = Arc::new(FileTowerStorage::new(ledger_path.clone()));
+    let vote_history_storage = Arc::new(FileVoteHistoryStorage::new(ledger_path.clone()));
 
     let admin_service_post_init = Arc::new(RwLock::new(None));
     // If geyser_plugin_config value is invalid, the validator will exit when the values are extracted below
@@ -430,6 +432,7 @@ fn main() {
             staked_nodes_overrides: genesis.staked_nodes_overrides.clone(),
             post_init: admin_service_post_init,
             tower_storage: tower_storage.clone(),
+            vote_history_storage: vote_history_storage.clone(),
             rpc_to_plugin_manager_sender,
         },
     );
