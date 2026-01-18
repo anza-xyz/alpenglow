@@ -13613,24 +13613,24 @@ pub mod tests {
 
         blockstore
             .insert_shreds(
-                create_block_header_shreds(50, 48, Hash::new_unique()),
+                create_block_header_shreds(52, 48, Hash::new_unique()),
                 None,
                 true,
             )
             .unwrap();
-        assert_eq!(blockstore.meta(50).unwrap().unwrap().parent_slot, Some(48));
+        assert_eq!(blockstore.meta(52).unwrap().unwrap().parent_slot, Some(48));
 
         // Split update parent shreds across two batches
-        let mut update_shreds = create_update_parent_shreds(50, 45, Hash::new_unique(), 32, true);
+        let mut update_shreds = create_update_parent_shreds(52, 45, Hash::new_unique(), 32, true);
         let mid = update_shreds.len() / 2;
         let first_half: Vec<_> = update_shreds.drain(..mid).collect();
 
         blockstore.insert_shreds(first_half, None, true).unwrap();
         blockstore.insert_shreds(update_shreds, None, true).unwrap();
 
-        assert_eq!(blockstore.meta(50).unwrap().unwrap().parent_slot, Some(45));
+        assert_eq!(blockstore.meta(52).unwrap().unwrap().parent_slot, Some(45));
         verify_next_slots(&blockstore, 48, &[]);
-        verify_next_slots(&blockstore, 45, &[50]);
+        verify_next_slots(&blockstore, 45, &[52]);
     }
 
     #[test]
@@ -13664,15 +13664,15 @@ pub mod tests {
 
         // Insert both UpdateParent and BlockHeader in the same batch,
         // with UpdateParent shreds first (but BlockHeader is at index 0)
-        let mut shreds = create_update_parent_shreds(70, 65, Hash::new_unique(), 32, true);
-        shreds.extend(create_block_header_shreds(70, 68, Hash::new_unique()));
+        let mut shreds = create_update_parent_shreds(72, 65, Hash::new_unique(), 32, true);
+        shreds.extend(create_block_header_shreds(72, 68, Hash::new_unique()));
 
         blockstore.insert_shreds(shreds, None, true).unwrap();
 
         // UpdateParent should take precedence regardless of insertion order
-        assert_eq!(blockstore.meta(70).unwrap().unwrap().parent_slot, Some(65));
+        assert_eq!(blockstore.meta(72).unwrap().unwrap().parent_slot, Some(65));
         verify_next_slots(&blockstore, 68, &[]);
-        verify_next_slots(&blockstore, 65, &[70]);
+        verify_next_slots(&blockstore, 65, &[72]);
     }
 
     #[test]
@@ -13685,28 +13685,28 @@ pub mod tests {
         blockstore.insert_shreds(shreds, None, true).unwrap();
         assert!(blockstore.meta(0).unwrap().unwrap().is_connected());
 
-        // Slot 10 with BlockHeader pointing to disconnected parent
+        // Slot 8 with BlockHeader pointing to disconnected parent
         blockstore
             .insert_shreds(
-                create_block_header_shreds(10, 5, Hash::new_unique()),
+                create_block_header_shreds(8, 5, Hash::new_unique()),
                 None,
                 true,
             )
             .unwrap();
-        assert!(!blockstore.meta(10).unwrap().unwrap().is_connected());
+        assert!(!blockstore.meta(8).unwrap().unwrap().is_connected());
 
         // UpdateParent switches to connected parent, slot becomes connected
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(10, 0, Hash::new_unique(), 32, true),
+                create_update_parent_shreds(8, 0, Hash::new_unique(), 32, true),
                 None,
                 true,
             )
             .unwrap();
 
-        let meta = blockstore.meta(10).unwrap().unwrap();
+        let meta = blockstore.meta(8).unwrap().unwrap();
         assert_eq!(meta.parent_slot, Some(0));
-        // Slot 10 is incomplete (not full), so only parent_connected, not connected
+        // Slot 8 is incomplete (not full), so only parent_connected, not connected
         assert!(meta.is_parent_connected());
     }
 
