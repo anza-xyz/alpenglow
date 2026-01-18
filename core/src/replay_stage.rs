@@ -3772,12 +3772,57 @@ impl ReplayStage {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
-                bank.freeze();
+                let verify_result = if migration_status.is_alpenglow_enabled() {
+                    bank.freeze_and_verify_bank_hash()
+                } else {
+                    bank.freeze();
+                    Ok(())
+                };
+
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
                     ("hash", bank.hash().to_string(), String),
                 );
+
+                if let Err((expected_hash, computed_hash)) = verify_result {
+                        error!(
+                            "Bank hash mismatch for slot {} expected: {} computed: {}",
+                            bank_slot, expected_hash, computed_hash
+                        );
+
+                        datapoint_error!(
+                            "bank_hash_mismatch",
+                            ("slot", bank_slot, i64),
+                            ("expected", expected_hash.to_string(), String),
+                            ("computed", computed_hash.to_string(), String),
+                        );
+
+                        if let Err(err) = bank_hash_details::write_bank_hash_details_file(bank) {
+                            warn!("Unable to write bank hash details file: {err}");
+                        }
+
+                        let root = bank_forks.read().unwrap().root();
+                        Self::mark_dead_slot(
+                            blockstore,
+                            bank,
+                            root,
+                            &BlockstoreProcessorError::BankHashMismatch(
+                                bank_slot,
+                                expected_hash,
+                                computed_hash,
+                            ),
+                            rpc_subscriptions,
+                            slot_status_notifier,
+                            progress,
+                            duplicate_slots_to_repair,
+                            ancestor_hashes_replay_update_sender,
+                            purge_repair_slot_counter,
+                            &mut tbft_structs,
+                        );
+
+                        continue;
+                }
 
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);

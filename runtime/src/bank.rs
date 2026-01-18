@@ -2613,37 +2613,22 @@ impl Bank {
             self.update_accounts_lt_hash();
             *hash = self.hash_internal_state();
 
-            // Verify footer-provided expected bank hash if present.  Don't fail fast here; instead
-            // mark the bank as dead, emit diagnostics and metrics.
-            let computed_hash = *hash;
-            if let Some(expected) = self.expected_bank_hash.read().unwrap().clone() {
-                if expected != computed_hash {
-                    error!(
-                        "Bank hash mismatch for slot {} expected: {} actual: {}",
-                        self.slot(),
-                        expected,
-                        computed_hash
-                    );
-
-                    // TODO: mark the block as dead for downstream consumers
-
-                    // attempt to write a bank-hash-details file for debugging
-                    if let Err(err) = bank_hash_details::write_bank_hash_details_file(self) {
-                        warn!("Unable to write bank hash_details file: {err}");
-                    }
-
-                    // emit a datapoint for observability
-                    datapoint_error!(
-                        "bank_hash_mismatch",
-                        ("slot", self.slot() as i64, i64),
-                        ("expected", expected.to_string(), String),
-                        ("actual", computed_hash.to_string(), String),
-                    );
-                }
-            }
-
             self.rc.accounts.accounts_db.mark_slot_frozen(self.slot());
         }
+    }
+
+    /// Freeze the bank and verify its computed bank hash against the expected bank hash,
+    /// If hashes do not match, return Err with (expected_hash, computed_hash)
+    pub fn freeze_and_verify_bank_hash(&self) -> std::result::Result<(), (Hash, Hash)> {
+        self.freeze();
+        let computed_hash = self.hash();
+        
+        if let Some(expected_hash) = self.expected_bank_hash() {
+            if expected_hash != computed_hash {
+                return Err((expected_hash, computed_hash));
+            }
+        }
+        Ok(())
     }
 
     /// Set the expected bank hash (from an external footer).  This is stored for later verification
@@ -2654,7 +2639,7 @@ impl Bank {
 
     /// Returns the expected bank hash if any.
     pub fn expected_bank_hash(&self) -> Option<Hash> {
-        self.expected_bank_hash.read().unwrap().clone()
+        *self.expected_bank_hash.read().unwrap()
     }
 
     // dangerous; don't use this; this is only needed for ledger-tool's special command
