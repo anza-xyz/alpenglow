@@ -4805,7 +4805,9 @@ impl ReplayStage {
         let frozen_bank_slots: Vec<_> = frozen_banks
             .keys()
             .cloned()
-            .filter(|slot| *slot >= forks.root())
+            .filter(|slot| {
+                *slot >= forks.root() && !progress.get(slot).unwrap().is_dead
+            })
             .collect();
 
         let mut generate_new_bank_forks_get_slots_since =
