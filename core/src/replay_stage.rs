@@ -3772,7 +3772,7 @@ impl ReplayStage {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
-                let verify_result = if migration_status.is_alpenglow_enabled() {
+                let verify_result = if migration_status.should_allow_block_markers(bank.slot()) {
                     bank.freeze_and_verify_bank_hash()
                 } else {
                     bank.freeze();
