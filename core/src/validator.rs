@@ -1472,6 +1472,8 @@ impl Validator {
             bank_forks.read().unwrap().sharable_banks(),
             config.repair_whitelist.clone(),
             migration_status.clone(),
+            identity_keypair.clone(),
+            leader_schedule_cache.clone(),
         );
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
         let (repair_response_quic_sender, repair_response_quic_receiver) = unbounded();

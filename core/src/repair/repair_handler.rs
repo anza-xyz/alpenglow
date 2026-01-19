@@ -12,9 +12,11 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
+    solana_keypair::Keypair,
     solana_ledger::{
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
+        leader_schedule_cache::LeaderScheduleCache,
         shred::{ErasureSetId, Nonce, DATA_SHREDS_PER_FEC_BLOCK},
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, PinnedPacketBatch},
@@ -213,6 +215,7 @@ pub trait RepairHandler {
                 .expect("Blockstore inconsistency in DoubleMerkleMeta")
                 .clone(),
         };
+
         create_response_packet_batch(
             recycler,
             &response,
@@ -275,12 +278,20 @@ pub enum RepairHandlerType {
 }
 
 impl RepairHandlerType {
-    pub fn to_handler(&self, blockstore: Arc<Blockstore>) -> Box<dyn RepairHandler + Send + Sync> {
+    pub fn to_handler(
+        &self,
+        blockstore: Arc<Blockstore>,
+        keypair: Arc<Keypair>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
+    ) -> Box<dyn RepairHandler + Send + Sync> {
         match self {
             RepairHandlerType::Standard => Box::new(StandardRepairHandler::new(blockstore)),
-            RepairHandlerType::Malicious(config) => {
-                Box::new(MaliciousRepairHandler::new(blockstore, *config))
-            }
+            RepairHandlerType::Malicious(config) => Box::new(MaliciousRepairHandler::new(
+                blockstore,
+                keypair,
+                leader_schedule_cache,
+                config.clone(),
+            )),
         }
     }
 
@@ -291,12 +302,14 @@ impl RepairHandlerType {
         sharable_banks: SharableBanks,
         serve_repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
         migration_status: Arc<MigrationStatus>,
+        keypair: Arc<Keypair>,
+        leader_schedule_cache: Arc<LeaderScheduleCache>,
     ) -> ServeRepair {
         ServeRepair::new(
             cluster_info,
             sharable_banks,
             serve_repair_whitelist,
-            self.to_handler(blockstore),
+            self.to_handler(blockstore, keypair, leader_schedule_cache),
             migration_status,
         )
     }
