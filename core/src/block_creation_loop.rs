@@ -661,11 +661,20 @@ fn record_and_complete_block(
     let BuildRewardCertsRespSucc {
         skip,
         notar,
-        reward_slot_and_validators,
+        validators,
     } = ctx
         .reward_certs_receiver
         .recv()
         .map_err(|_| PohRecorderError::ChannelDisconnected)??;
+    let reward_slot_and_validators = match (&skip, &notar) {
+        (None, None) => None,
+        (Some(skip), None) => Some((skip.slot, validators)),
+        (None, Some(notar)) => Some((notar.slot, validators)),
+        (Some(skip), Some(notar)) => {
+            assert_eq!(skip.slot, notar.slot);
+            Some((skip.slot, validators))
+        }
+    };
     let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
 
     BlockComponentProcessor::update_bank_with_footer(

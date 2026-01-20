@@ -95,31 +95,23 @@ impl Entry {
             }
         };
 
-        let (skip, notar, reward_slot_and_validators) = match (skip, notar) {
-            (None, None) => (None, None, None),
-            (Some((skip_cert, skip_validators)), None) => {
-                (Some(skip_cert), None, Some((reward_slot, skip_validators)))
+        let (skip, notar, validators) = match (skip, notar) {
+            (None, None) => (None, None, vec![]),
+            (Some((skip_cert, skip_validators)), None) => (Some(skip_cert), None, skip_validators),
+            (None, Some((notar_cert, notar_validators))) => {
+                (None, Some(notar_cert), notar_validators)
             }
-            (None, Some((notar_cert, notar_validators))) => (
-                None,
-                Some(notar_cert),
-                Some((reward_slot, notar_validators)),
-            ),
             (Some((skip_cert, skip_validators)), Some((notar_cert, notar_validators))) => {
                 let mut validators = skip_validators;
                 validators.extend(notar_validators);
-                (
-                    Some(skip_cert),
-                    Some(notar_cert),
-                    Some((reward_slot, validators)),
-                )
+                (Some(skip_cert), Some(notar_cert), validators)
             }
         };
 
         Ok(BuildRewardCertsRespSucc {
             skip,
             notar,
-            reward_slot_and_validators,
+            validators,
         })
     }
 }

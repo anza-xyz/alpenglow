@@ -149,7 +149,7 @@ pub struct BuildRewardCertsRespSucc {
     /// Notar reward certificate.  None if no notar votes were registered.
     pub notar: Option<NotarRewardCertificate>,
     /// If at least one of the certs above is present, then this contains the slot for which the reward certs were built and the list of validators in the certs.
-    pub reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
+    pub validators: Vec<Pubkey>,
 }
 
 /// Error returned when build reward certs fails.
