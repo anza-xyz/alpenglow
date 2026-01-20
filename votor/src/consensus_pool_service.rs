@@ -23,14 +23,14 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage},
+        consensus_message::{Certificate, ConsensusMessage, FinalizationCerts},
         migration::MigrationStatus,
     },
     stats::ConsensusPoolServiceStats,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -57,6 +57,8 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
+
+    pub(crate) highest_finalized: Arc<RwLock<Option<FinalizationCerts>>>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -85,12 +87,17 @@ impl ConsensusPoolService {
         new_certificates_to_send: Vec<Arc<Certificate>>,
         standstill_timer: &mut Instant,
         stats: &mut ConsensusPoolServiceStats,
+        highest_finalized: &RwLock<Option<FinalizationCerts>>,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
         if new_finalized_slot.is_some() {
             // Reset standstill timer
             *standstill_timer = Instant::now();
             stats.new_finalized_slot += 1;
+
+            // Update the shared highest finalized state for block footer inclusion
+            let finalization_certs = consensus_pool.get_highest_finalization_certs();
+            *highest_finalized.write().unwrap() = finalization_certs;
         }
         let bank = sharable_banks.root();
         consensus_pool.prune_old_state(bank.slot());
@@ -163,6 +170,7 @@ impl ConsensusPoolService {
             new_certificates_to_send,
             standstill_timer,
             stats,
+            &ctx.highest_finalized,
         )
     }
 
@@ -516,6 +524,7 @@ mod tests {
             bls_sender,
             event_sender,
             commitment_sender,
+            highest_finalized: Arc::new(RwLock::new(None)),
         };
         ConsensusPoolServiceTestComponents {
             consensus_pool_service: ConsensusPoolService::new(ctx),

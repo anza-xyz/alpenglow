@@ -67,6 +67,7 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
     solana_votor_messages::{
+        consensus_message::FinalizationCerts,
         migration::MigrationStatus,
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -221,6 +222,7 @@ impl Tvu {
         migration_status: Arc<MigrationStatus>,
         reward_certs_sender: Sender<BuildRewardCertsResponse>,
         build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
+        highest_finalized: Arc<RwLock<Option<FinalizationCerts>>>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -463,6 +465,7 @@ impl Tvu {
             reward_votes_receiver,
             build_reward_certs_receiver,
             reward_certs_sender,
+            highest_finalized,
         };
 
         let voting_service = VotingService::new(
@@ -777,6 +780,7 @@ pub mod tests {
             Arc::new(MigrationStatus::default()),
             reward_certs_sender,
             build_reward_certs_receiver,
+            Arc::new(RwLock::new(None)),
         )
         .expect("assume success");
         if enable_wen_restart {

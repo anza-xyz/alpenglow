@@ -5,6 +5,7 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    std::sync::Arc,
 };
 
 /// The seed used to derive the BLS keypair
@@ -62,6 +63,16 @@ impl CertificateType {
     /// Is this a finalize / fast finalize certificate?
     pub fn is_finalization(&self) -> bool {
         matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _))
+    }
+
+    /// Is this a slow finalization certificate?
+    pub fn is_slow_finalization(&self) -> bool {
+        matches!(self, Self::Finalize(_))
+    }
+
+    /// Is this a notarization certificate?
+    pub fn is_notarize(&self) -> bool {
+        matches!(self, Self::Notarize(_, _))
     }
 
     /// Is this a notarize fallback certificate?
@@ -158,6 +169,24 @@ pub struct Certificate {
     pub signature: BLSSignature,
     /// The bitmap for validators, see solana-signer-store for encoding format
     pub bitmap: Vec<u8>,
+}
+
+/// Represents the highest finalized slot's certificates for block footer inclusion.
+///
+/// This enum captures the two ways a slot can be finalized:
+/// - `Finalize`: Standard finalization with both a Finalize certificate and a Notarize certificate
+/// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate that combines both
+#[derive(Clone, Debug)]
+pub enum FinalizationCerts {
+    /// Standard finalization: requires both a Finalize cert and a Notarize cert for the same slot
+    Finalize {
+        /// The finalize certificate
+        finalize_cert: Arc<Certificate>,
+        /// The notarize certificate
+        notarize_cert: Arc<Certificate>,
+    },
+    /// Fast finalization: a single FinalizeFast certificate
+    FastFinalize(Arc<Certificate>),
 }
 
 /// Different types of consensus messages.
