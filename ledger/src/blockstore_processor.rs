@@ -848,7 +848,6 @@ pub enum BlockstoreProcessorError {
 
     #[error("bank hash mismatch at slot {0}: expected {1}, got {2}")]
     BankHashMismatch(Slot, Hash, Hash),
-
 }
 
 /// Callback for accessing bank state after each slot is confirmed while

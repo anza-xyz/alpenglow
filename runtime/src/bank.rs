@@ -2622,7 +2622,7 @@ impl Bank {
     pub fn freeze_and_verify_bank_hash(&self) -> std::result::Result<(), (Hash, Hash)> {
         self.freeze();
         let computed_hash = self.hash();
-        
+
         if let Some(expected_hash) = self.expected_bank_hash() {
             if expected_hash != computed_hash {
                 return Err((expected_hash, computed_hash));
