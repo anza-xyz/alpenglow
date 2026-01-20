@@ -16,7 +16,7 @@ use {
     solana_ledger::{
         ancestor_iterator::{AncestorIterator, AncestorIteratorWithHash},
         blockstore::Blockstore,
-        shred::{ErasureSetId, Nonce},
+        shred::{ErasureSetId, Nonce, DATA_SHREDS_PER_FEC_BLOCK},
     },
     solana_perf::packet::{Packet, PacketBatch, PacketBatchRecycler, RecycledPacketBatch},
     solana_poh::poh_recorder::SharedLeaderState,
@@ -218,12 +218,13 @@ pub trait RepairHandler {
             .blockstore()
             .merkle_root_meta_for_fec_set(ErasureSetId::new(slot, fec_set_index))
             .expect("Unable to fetch merkle root meta")
-            .expect("Slot is full, MerkleRootMeta must exist")
+            ?
             .merkle_root()
             .expect("Legacy shreds are gone, merkle root must exist");
+        let proof_index = fec_set_index.checked_div(DATA_SHREDS_PER_FEC_BLOCK as u32)?;
         let fec_set_proof = double_merkle_meta
             .proofs
-            .get(usize::try_from(fec_set_index).ok()?)?
+            .get(usize::try_from(proof_index).ok()?)?
             .clone();
 
         let response = BlockIdRepairResponse::FecSetRoot {
