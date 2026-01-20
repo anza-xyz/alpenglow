@@ -29,11 +29,12 @@ use {
     solana_votor::{
         common::certificate_limits_and_vote_types,
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
-        consensus_rewards::{self, AddVoteMessage},
+        consensus_rewards::{self},
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
         fraction::Fraction,
+        reward_certificate::AddVoteMessage,
         vote::Vote,
     },
     std::{

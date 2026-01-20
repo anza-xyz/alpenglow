@@ -4,11 +4,13 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
-    solana_pubkey::Pubkey,
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_votor_messages::{
         consensus_message::VoteMessage,
-        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, NUM_SLOTS_FOR_REWARD},
+        reward_certificate::{
+            AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsRespError,
+            BuildRewardCertsRespSucc, BuildRewardCertsResponse, NUM_SLOTS_FOR_REWARD,
+        },
         vote::Vote,
     },
     std::{
@@ -183,47 +185,18 @@ impl ConsensusRewards {
     }
 
     /// Builds reward certificates.
-    fn build_certs(&mut self, bank_slot: Slot) -> BuildRewardCertsResponse {
+    fn build_certs(
+        &mut self,
+        bank_slot: Slot,
+    ) -> Result<BuildRewardCertsRespSucc, BuildRewardCertsRespError> {
         let Some(reward_slot) = bank_slot.checked_sub(NUM_SLOTS_FOR_REWARD) else {
-            return BuildRewardCertsResponse::empty();
+            return Ok(BuildRewardCertsRespSucc::default());
         };
         // we assume that the block creation loop will only ever request to build reward certs in a strictly increasing order so we can drop older state
         self.votes = self.votes.split_off(&reward_slot);
         match self.votes.remove(&reward_slot) {
-            None => BuildRewardCertsResponse::empty(),
+            None => Ok(BuildRewardCertsRespSucc::default()),
             Some(entry) => entry.build_certs(reward_slot),
-        }
-    }
-}
-
-/// Message to add votes to the rewards container.
-pub struct AddVoteMessage {
-    /// List of [`VoteMessage`]s.
-    pub votes: Vec<VoteMessage>,
-}
-
-/// Request to build reward certificates.
-pub struct BuildRewardCertsRequest {
-    /// The bank slot which will include the built reward certs.
-    pub bank_slot: Slot,
-}
-
-/// Response of building reward certificates.
-pub struct BuildRewardCertsResponse {
-    /// Skip reward certificate.  None if building failed or no skip votes were registered.
-    pub skip: Option<SkipRewardCertificate>,
-    /// Notar reward certificate.  None if building failed or no notar votes were registered.
-    pub notar: Option<NotarRewardCertificate>,
-    /// List of validators in the above certs.
-    pub validators: Vec<Pubkey>,
-}
-
-impl BuildRewardCertsResponse {
-    fn empty() -> Self {
-        Self {
-            skip: None,
-            notar: None,
-            validators: vec![],
         }
     }
 }

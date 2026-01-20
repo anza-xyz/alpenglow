@@ -47,10 +47,7 @@ use {
             ConsensusMetrics, ConsensusMetricsEventReceiver, ConsensusMetricsEventSender,
         },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
-        consensus_rewards::{
-            AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse,
-            ConsensusRewardsService,
-        },
+        consensus_rewards::ConsensusRewardsService,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
@@ -76,7 +73,11 @@ use {
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
     },
-    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
+    solana_votor_messages::{
+        consensus_message::ConsensusMessage,
+        migration::MigrationStatus,
+        reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
+    },
     std::{
         collections::HashMap,
         sync::{atomic::AtomicBool, Arc, RwLock},
