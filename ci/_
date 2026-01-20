@@ -5,7 +5,7 @@
 # |source| me
 #
 
-base_dir=$(realpath --strip "$(dirname "$0")/..")
+base_dir=$(realpath "$(dirname "$0")/..")
 
 _() {
   if [[ $(pwd) = $base_dir ]]; then
