@@ -63,6 +63,7 @@ use {
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
+        consensus_metrics::MAX_IN_FLIGHT_CONSENSUS_EVENTS,
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
@@ -108,9 +109,6 @@ pub struct Tvu {
     alpenglow_sigverify_service: BLSSigverifyService,
     alpenglow_quic_t: thread::JoinHandle<()>,
 }
-
-// The maximum number of alpenglow packets that can be processed in a single batch
-pub const MAX_ALPENGLOW_PACKET_NUM: usize = 10000;
 
 pub struct TvuSockets {
     pub fetch: Vec<UdpSocket>,
@@ -210,7 +208,7 @@ impl Tvu {
         wen_restart_repair_slots: Option<Arc<RwLock<Vec<Slot>>>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
-        alpenglow_connection_cache: Arc<ConnectionCache>,
+        bls_connection_cache: Arc<ConnectionCache>,
         replay_highest_frozen: Arc<ReplayHighestFrozen>,
         leader_window_info_sender: Sender<LeaderWindowInfo>,
         highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
@@ -228,8 +226,9 @@ impl Tvu {
         highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
-            bounded(MAX_ALPENGLOW_PACKET_NUM);
-        let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
+            bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
+        let (consensus_metrics_sender, consensus_metrics_receiver) =
+            bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
 
         let in_wen_restart = wen_restart_repair_slots.is_some();
 
@@ -242,7 +241,7 @@ impl Tvu {
         } = sockets;
 
         let (fetch_sender, fetch_receiver) = EvictingSender::new_bounded(SHRED_FETCH_CHANNEL_SIZE);
-        let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_ALPENGLOW_PACKET_NUM);
+        let (bls_packet_sender, bls_packet_receiver) = bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
 
         let repair_socket = Arc::new(repair_socket);
         let ancestor_hashes_socket = Arc::new(ancestor_hashes_socket);
@@ -297,7 +296,7 @@ impl Tvu {
         };
 
         let mut key_notifiers = key_notifiers.write().unwrap();
-        key_notifiers.add(KeyUpdaterType::TpuAlpenglow, alpenglow_stream_key_updater);
+        key_notifiers.add(KeyUpdaterType::Bls, alpenglow_stream_key_updater);
 
         let (verified_sender, verified_receiver) = unbounded();
 
@@ -379,7 +378,6 @@ impl Tvu {
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
-                migration_status.clone(),
             )
         };
 
@@ -484,7 +482,7 @@ impl Tvu {
             bls_receiver,
             cluster_info.clone(),
             vote_history_storage,
-            alpenglow_connection_cache,
+            bls_connection_cache,
             bank_forks.clone(),
             voting_service_test_override,
             alpenglow_last_voted,

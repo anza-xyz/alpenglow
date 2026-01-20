@@ -395,6 +395,7 @@ impl ReplayLoopTiming {
         process_duplicate_slots_elapsed_us: u64,
         repair_correct_slots_elapsed_us: u64,
         retransmit_not_propagated_elapsed_us: u64,
+        start_leader_time_us: u64,
     ) {
         self.collect_frozen_banks_elapsed_us += collect_frozen_banks_elapsed_us;
         self.compute_bank_stats_elapsed_us += compute_bank_stats_elapsed_us;
@@ -415,19 +416,18 @@ impl ReplayLoopTiming {
         self.process_duplicate_slots_elapsed_us += process_duplicate_slots_elapsed_us;
         self.repair_correct_slots_elapsed_us += repair_correct_slots_elapsed_us;
         self.retransmit_not_propagated_elapsed_us += retransmit_not_propagated_elapsed_us;
+        self.start_leader_elapsed_us += start_leader_time_us;
     }
 
     fn update_common(
         &mut self,
         generate_new_bank_forks_elapsed_us: u64,
         replay_active_banks_elapsed_us: u64,
-        start_leader_elapsed_us: u64,
         wait_receive_elapsed_us: u64,
     ) {
         self.loop_count += 1;
         self.generate_new_bank_forks_elapsed_us += generate_new_bank_forks_elapsed_us;
         self.replay_active_banks_elapsed_us += replay_active_banks_elapsed_us;
-        self.start_leader_elapsed_us += start_leader_elapsed_us;
         self.wait_receive_elapsed_us += wait_receive_elapsed_us;
 
         self.maybe_submit();
@@ -949,7 +949,7 @@ impl ReplayStage {
                 }
 
                 let forks_root = bank_forks.read().unwrap().root();
-                let start_leader_time = if !migration_status.is_alpenglow_enabled() {
+                if !migration_status.is_alpenglow_enabled() {
                     // Will address this in https://github.com/anza-xyz/alpenglow/issues/619
                     debug_assert!(!votor_event_receiver.is_full());
 
@@ -1324,6 +1324,7 @@ impl ReplayStage {
                     }
                     reset_bank_time.stop();
 
+                    let mut start_leader_time = Measure::start("start_leader_time");
                     let mut dump_then_repair_correct_slots_time =
                         Measure::start("dump_then_repair_correct_slots_time");
                     // Used for correctness check
@@ -1361,26 +1362,6 @@ impl ReplayStage {
                     // may add a bank that will not included in either of these maps.
                     drop(ancestors);
                     drop(descendants);
-                    replay_timing.update_non_alpenglow(
-                        collect_frozen_banks_time.as_us(),
-                        compute_bank_stats_time.as_us(),
-                        select_vote_and_reset_forks_time.as_us(),
-                        reset_bank_time.as_us(),
-                        voting_time.as_us(),
-                        select_forks_time.as_us(),
-                        compute_slot_stats_time.as_us(),
-                        heaviest_fork_failures_time.as_us(),
-                        u64::from(did_complete_bank),
-                        process_ancestor_hashes_duplicate_slots_time.as_us(),
-                        process_duplicate_confirmed_slots_time.as_us(),
-                        process_unfrozen_gossip_verified_vote_hashes_time.as_us(),
-                        process_popular_pruned_forks_time.as_us(),
-                        process_duplicate_slots_time.as_us(),
-                        dump_then_repair_correct_slots_time.as_us(),
-                        retransmit_not_propagated_time.as_us(),
-                    );
-
-                    let mut start_leader_time = Measure::start("start_leader_time");
                     if !tpu_has_bank && !poh_controller.has_pending_message() {
                         if let Some(poh_slot) = Self::maybe_start_leader(
                             &my_pubkey,
@@ -1406,12 +1387,29 @@ impl ReplayStage {
                         }
                     }
                     start_leader_time.stop();
-                    start_leader_time
-                } else {
-                    let mut start_leader_time = Measure::start("start_leader_time");
-                    start_leader_time.stop();
-                    start_leader_time
-                };
+
+                    replay_timing.update_non_alpenglow(
+                        collect_frozen_banks_time.as_us(),
+                        compute_bank_stats_time.as_us(),
+                        select_vote_and_reset_forks_time.as_us(),
+                        reset_bank_time.as_us(),
+                        voting_time.as_us(),
+                        select_forks_time.as_us(),
+                        compute_slot_stats_time.as_us(),
+                        heaviest_fork_failures_time.as_us(),
+                        u64::try_from(new_frozen_slots.len()).expect(
+                            "something is very wrong, froze more than u64::MAX banks at once",
+                        ),
+                        process_ancestor_hashes_duplicate_slots_time.as_us(),
+                        process_duplicate_confirmed_slots_time.as_us(),
+                        process_unfrozen_gossip_verified_vote_hashes_time.as_us(),
+                        process_popular_pruned_forks_time.as_us(),
+                        process_duplicate_slots_time.as_us(),
+                        dump_then_repair_correct_slots_time.as_us(),
+                        retransmit_not_propagated_time.as_us(),
+                        start_leader_time.as_us(),
+                    );
+                }
 
                 let mut wait_receive_time = Measure::start("wait_receive_time");
                 if !did_complete_bank {
@@ -1429,7 +1427,6 @@ impl ReplayStage {
                 replay_timing.update_common(
                     generate_new_bank_forks_time.as_us(),
                     replay_active_banks_time.as_us(),
-                    start_leader_time.as_us(),
                     wait_receive_time.as_us(),
                 );
             }
@@ -1472,9 +1469,9 @@ impl ReplayStage {
         let genesis_block @ (genesis_slot, block_id) = migration_status
             .genesis_block()
             .expect("Must be ready to enable");
-        warn!(
-            "{my_pubkey}: Alpenglow genesis vote has succeeded enabling alpenglow. Genesis block \
-             {genesis_block:?}"
+        info!(
+            "{my_pubkey} Alpenglow migration: Alpenglow genesis vote has succeeded enabling \
+             alpenglow. Genesis block {genesis_block:?}"
         );
 
         let genesis_bank = bank_forks.read().unwrap().get(genesis_slot).expect(
@@ -1513,7 +1510,7 @@ impl ReplayStage {
             .filter_map(|(slot, _)| (*slot > genesis_slot).then_some(*slot))
             .collect();
         for slot in slots_to_purge.into_iter() {
-            warn!("{my_pubkey}: Purging poh block in slot {slot}");
+            info!("{my_pubkey} Alpenglow migration: Purging poh block in slot {slot}");
             Self::purge_unconfirmed_slot(
                 slot,
                 ancestors,
@@ -1525,14 +1522,17 @@ impl ReplayStage {
             );
         }
 
-        // Purge any partial shreds greater than the genesis slot
+        // Purge any partial slots greater than the genesis slot
         let start_slot = genesis_slot + 1;
         let end_slot = blockstore
             .highest_slot()
             .unwrap()
             .expect("Highest slot must be present as blockstore is non-empty");
         if end_slot >= start_slot {
-            warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
+            info!(
+                "{my_pubkey} Alpenglow migration: Purging shreds {start_slot} to {end_slot} from \
+                 blockstore"
+            );
             blockstore.clear_unconfirmed_slots(start_slot, end_slot);
         }
 
@@ -1545,7 +1545,7 @@ impl ReplayStage {
         );
     }
 
-    /// If we have an eligble genesis block, send out a genesis vote
+    /// If we have an eligible genesis block, send out a genesis vote
     /// Returns false if no eligible block was found
     fn maybe_send_genesis_vote(
         migration_status: &MigrationStatus,
@@ -1574,7 +1574,7 @@ impl ReplayStage {
             GenerateVoteTxResult::ConsensusMessage(message) => {
                 // Send vote to ConsensusPool and rest of cluster
                 warn!(
-                    "{}: Casting genesis vote for ({slot}, {block_id})",
+                    "{} Alpenglow migration: Casting genesis vote for ({slot}, {block_id})",
                     identity_keypair.pubkey()
                 );
                 // If sending fails that means the channel is disconnected and we are shutting down
@@ -1590,7 +1590,8 @@ impl ReplayStage {
             }
             e => {
                 warn!(
-                    "{}: Unable to send genesis vote for {slot} {block_id}: {e:?}",
+                    "{} Alpenglow migration: Unable to send genesis vote for {slot} {block_id}: \
+                     {e:?}",
                     identity_keypair.pubkey()
                 );
             }

@@ -27,7 +27,6 @@ use {
     solana_runtime::bank_forks::BankForks,
     solana_streamer::evicting_sender::EvictingSender,
     solana_turbine::cluster_nodes,
-    solana_votor_messages::migration::MigrationStatus,
     std::{
         borrow::Cow,
         net::UdpSocket,
@@ -110,10 +109,10 @@ fn run_check_duplicate(
     shred_receiver: &Receiver<PossibleDuplicateShred>,
     duplicate_slots_sender: &DuplicateSlotSender,
     bank_forks: &RwLock<BankForks>,
-    migration_status: &MigrationStatus,
 ) -> Result<()> {
     let mut root_bank = bank_forks.read().unwrap().root_bank();
     let mut last_updated = Instant::now();
+    let migration_status = bank_forks.read().unwrap().migration_status();
     let check_duplicate = |shred: PossibleDuplicateShred| -> Result<()> {
         if last_updated.elapsed().as_millis() as u64 > DEFAULT_MS_PER_SLOT {
             // Grabs bank forks lock once a slot
@@ -289,7 +288,6 @@ impl WindowService {
         window_service_channels: WindowServiceChannels,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         outstanding_repair_requests: Arc<RwLock<OutstandingShredRepairs>>,
-        migration_status: Arc<MigrationStatus>,
     ) -> WindowService {
         let cluster_info = repair_info.cluster_info.clone();
         let bank_forks = repair_info.bank_forks.clone();
@@ -314,7 +312,6 @@ impl WindowService {
             repair_info,
             outstanding_repair_requests.clone(),
             repair_service_channels,
-            migration_status.clone(),
         );
 
         let (duplicate_sender, duplicate_receiver) = unbounded();
@@ -326,7 +323,6 @@ impl WindowService {
             duplicate_receiver,
             duplicate_slots_sender,
             bank_forks,
-            migration_status,
         );
 
         let t_insert = Self::start_window_insert_thread(
@@ -354,7 +350,6 @@ impl WindowService {
         duplicate_receiver: Receiver<PossibleDuplicateShred>,
         duplicate_slots_sender: DuplicateSlotSender,
         bank_forks: Arc<RwLock<BankForks>>,
-        migration_status: Arc<MigrationStatus>,
     ) -> JoinHandle<()> {
         let handle_error = || {
             inc_new_counter_error!("solana-check-duplicate-error", 1, 1);
@@ -369,7 +364,6 @@ impl WindowService {
                         &duplicate_receiver,
                         &duplicate_slots_sender,
                         &bank_forks,
-                        &migration_status,
                     ) {
                         if Self::should_exit_on_error(e, &handle_error) {
                             break;
@@ -561,7 +555,6 @@ mod test {
             &receiver,
             &duplicate_slot_sender,
             &bank_forks,
-            &MigrationStatus::default(),
         )
         .unwrap();
 
@@ -602,7 +595,6 @@ mod test {
             duplicate_shred_receiver,
             duplicate_slot_sender,
             bank_forks,
-            Arc::new(MigrationStatus::default()),
         );
 
         let handle_duplicate = |shred| {

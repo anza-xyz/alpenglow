@@ -1891,28 +1891,14 @@ impl Blockstore {
         self.update_parent_signals.lock().unwrap().clear();
     }
 
-    /// Clear `slot` from the Blockstore, see ``Blockstore::purge_slot_cleanup_chaining`
-    /// for more details.
+    /// Clear `slot` from the Blockstore
     ///
     /// This function currently requires `insert_shreds_lock`, as both
     /// `clear_unconfirmed_slot()` and `insert_shreds_handle_duplicate()`
     /// try to perform read-modify-write operation on [`cf::SlotMeta`] column
     /// family.
     pub fn clear_unconfirmed_slot(&self, slot: Slot) {
-        let _lock = self.insert_shreds_lock.lock().unwrap();
-        // Purge the slot and insert an empty `SlotMeta` with only the `next_slots` field preserved.
-        // Shreds inherently know their parent slot, and a parent's SlotMeta `next_slots` list
-        // will be updated when the child is inserted (see `Blockstore::handle_chaining()`).
-        // However, we are only purging and repairing the parent slot here. Since the child will not be
-        // reinserted the chaining will be lost. In order for bank forks discovery to ingest the child,
-        // we must retain the chain by preserving `next_slots`.
-        match self.purge_slot_cleanup_chaining(slot) {
-            Ok(_) => {}
-            Err(BlockstoreError::SlotUnavailable) => {
-                error!("clear_unconfirmed_slot() called on slot {slot} with no SlotMeta")
-            }
-            Err(e) => panic!("Purge database operations failed {e}"),
-        }
+        self.clear_unconfirmed_slots(slot, slot);
     }
 
     /// Atomically clear a range of `slot` inclusive, similar to `Blockstore::clear_unconfirmed_slot`
@@ -1920,10 +1906,16 @@ impl Blockstore {
     pub fn clear_unconfirmed_slots(&self, start: Slot, end: Slot) {
         let _lock = self.insert_shreds_lock.lock().unwrap();
         for slot in start..=end {
+            // Purge the slot and insert an empty `SlotMeta` with only the `next_slots` field preserved.
+            // Shreds inherently know their parent slot, and a parent's SlotMeta `next_slots` list
+            // will be updated when the child is inserted (see `Blockstore::handle_chaining()`).
+            // However, we are only purging and repairing the parent slot here. Since the child will not be
+            // reinserted the chaining will be lost. In order for bank forks discovery to ingest the child,
+            // we must retain the chain by preserving `next_slots`.
             match self.purge_slot_cleanup_chaining(slot) {
                 Ok(_) => {}
                 Err(BlockstoreError::SlotUnavailable) => {
-                    error!("clear_unconfirmed_slots() called on slot {slot} with no SlotMeta")
+                    error!("clear_unconfirmed_slot() called on slot {slot} with no SlotMeta")
                 }
                 Err(e) => panic!("Purge database operations failed {e}"),
             }

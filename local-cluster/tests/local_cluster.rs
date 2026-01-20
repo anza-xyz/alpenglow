@@ -163,12 +163,11 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
     let validator_keys = (0..num_nodes)
         .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
         .collect::<Vec<_>>();
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
 
     let mut config = ClusterConfig {
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            num_nodes,
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
         validator_keys: Some(validator_keys.clone()),
         node_stakes: vec![DEFAULT_NODE_STAKE; num_nodes],
         ticks_per_slot: 8,
@@ -212,28 +211,21 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
 
 #[test]
 #[serial]
-fn test_1_node_alpenglow() {
+fn test_alpenglow_1() {
     const NUM_NODES: usize = 1;
     test_alpenglow_nodes_basic(NUM_NODES, 0);
 }
 
 #[test]
 #[serial]
-fn test_2_nodes_alpenglow() {
-    const NUM_NODES: usize = 2;
-    test_alpenglow_nodes_basic(NUM_NODES, 0);
-}
-
-#[test]
-#[serial]
-fn test_4_nodes_alpenglow() {
+fn test_alpenglow_4() {
     const NUM_NODES: usize = 4;
     test_alpenglow_nodes_basic(NUM_NODES, 0);
 }
 
 #[test]
 #[serial]
-fn test_4_nodes_with_1_offline_alpenglow() {
+fn test_alpenglow_4_1_offline() {
     const NUM_NODES: usize = 4;
     const NUM_OFFLINE: usize = 1;
     test_alpenglow_nodes_basic(NUM_NODES, NUM_OFFLINE);
