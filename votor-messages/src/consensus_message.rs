@@ -189,6 +189,25 @@ pub enum HighestFinalizedSlotCert {
     FastFinalize(Arc<Certificate>),
 }
 
+impl HighestFinalizedSlotCert {
+    /// The slot that is finalized
+    pub fn slot(&self) -> Slot {
+        match self {
+            HighestFinalizedSlotCert::Finalize {
+                finalize_cert,
+                notarize_cert,
+            } => {
+                debug_assert_eq!(
+                    finalize_cert.cert_type.slot(),
+                    notarize_cert.cert_type.slot()
+                );
+                finalize_cert.cert_type.slot()
+            }
+            HighestFinalizedSlotCert::FastFinalize(certificate) => certificate.cert_type.slot(),
+        }
+    }
+}
+
 /// Different types of consensus messages.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]

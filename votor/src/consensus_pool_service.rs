@@ -261,7 +261,7 @@ impl ConsensusPoolService {
                 // Genesis cert though.
                 if kick_off_parent_ready {
                     events.push(VotorEvent::Standstill(
-                        consensus_pool.highest_finalized_slot(),
+                        consensus_pool.highest_finalized_slot().unwrap_or(0),
                     ));
                 }
                 stats.standstill = true;
