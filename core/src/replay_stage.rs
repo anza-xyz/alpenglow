@@ -47,7 +47,7 @@ use {
     solana_keypair::Keypair,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::Blockstore,
+        blockstore::{Blockstore, UpdateParentReceiver},
         blockstore_meta::BlockLocation,
         blockstore_processor::{
             self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
@@ -331,6 +331,7 @@ pub struct ReplaySenders {
 
 pub struct ReplayReceivers {
     pub ledger_signal_receiver: Receiver<bool>,
+    pub update_parent_receiver: UpdateParentReceiver,
     pub duplicate_slots_receiver: Receiver<u64>,
     pub ancestor_duplicate_slots_receiver: Receiver<AncestorDuplicateSlotToRepair>,
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
@@ -656,6 +657,7 @@ impl ReplayStage {
 
         let ReplayReceivers {
             ledger_signal_receiver,
+            update_parent_receiver,
             duplicate_slots_receiver,
             ancestor_duplicate_slots_receiver,
             duplicate_confirmed_slots_receiver,
@@ -841,6 +843,7 @@ impl ReplayStage {
                     &mut progress,
                     &mut replay_timing,
                     migration_status.as_ref(),
+                    &update_parent_receiver,
                 );
                 generate_new_bank_forks_time.stop();
 
@@ -4802,7 +4805,23 @@ impl ReplayStage {
         progress: &mut ProgressMap,
         replay_timing: &mut ReplayLoopTiming,
         migration_status: &MigrationStatus,
+        update_parent_receiver: &UpdateParentReceiver,
     ) {
+        // Resurrect dead slots that received an UpdateParent marker
+        while let Ok(signal) = update_parent_receiver.try_recv() {
+            let dominated_by_dead_block = progress.get(&signal.slot).is_some_and(|p| p.is_dead)
+                || blockstore.is_dead(signal.slot);
+            if dominated_by_dead_block {
+                info!(
+                    "resurrecting slot {} via UpdateParent (new parent: {})",
+                    signal.slot, signal.parent_slot
+                );
+                let _ = blockstore.remove_dead_slot(signal.slot);
+                progress.remove(&signal.slot);
+                bank_forks.write().unwrap().clear_bank(signal.slot);
+            }
+        }
+
         // Find the next slot that chains to the old slot
         let mut generate_new_bank_forks_read_lock =
             Measure::start("generate_new_bank_forks_read_lock");
@@ -5068,7 +5087,9 @@ pub(crate) mod tests {
         solana_instruction::error::InstructionError,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore::{entries_to_test_shreds, make_slot_entries, BlockstoreError},
+            blockstore::{
+                entries_to_test_shreds, make_slot_entries, BlockstoreError, UpdateParentSignal,
+            },
             create_new_tmp_ledger,
             genesis_utils::{create_genesis_config, create_genesis_config_with_leader},
             get_tmp_ledger_path, get_tmp_ledger_path_auto_delete,
@@ -5291,6 +5312,7 @@ pub(crate) mod tests {
             .get(NUM_CONSECUTIVE_LEADER_SLOTS)
             .is_none());
         let mut replay_timing = ReplayLoopTiming::default();
+        let (_, update_parent_receiver) = crossbeam_channel::unbounded();
         ReplayStage::generate_new_bank_forks(
             &blockstore,
             &bank_forks,
@@ -5300,6 +5322,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert!(bank_forks
             .read()
@@ -5325,6 +5348,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert!(bank_forks
             .read()
@@ -7163,6 +7187,7 @@ pub(crate) mod tests {
         } = vote_simulator;
 
         let mut replay_timing = ReplayLoopTiming::default();
+        let (_, update_parent_receiver) = crossbeam_channel::unbounded();
 
         // Create bank 7 and insert to blockstore and bank forks
         let root_bank = bank_forks.read().unwrap().root_bank();
@@ -7235,6 +7260,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![3]);
 
@@ -7266,6 +7292,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![5]);
 
@@ -7298,6 +7325,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![6]);
 
@@ -7329,8 +7357,88 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &update_parent_receiver,
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);
+    }
+
+    #[test]
+    fn test_update_parent_resurrects_dead_slot() {
+        let ReplayBlockstoreComponents {
+            blockstore,
+            vote_simulator,
+            leader_schedule_cache,
+            rpc_subscriptions,
+            ..
+        } = replay_blockstore_components(
+            Some(tr(0) / tr(1) / tr(2) / tr(3) / tr(4)),
+            1,
+            None::<GenerateVotes>,
+        );
+
+        let VoteSimulator {
+            bank_forks,
+            mut progress,
+            ..
+        } = vote_simulator;
+
+        // 1: dead + signal, 2: dead + no signal, 3: alive + signal, 4: alive + no signal
+        for slot in [1, 2] {
+            blockstore.set_dead_slot(slot).unwrap();
+            progress.insert(
+                slot,
+                ForkProgress::new(Hash::default(), Some(0), None, 0, 0),
+            );
+            progress.get_mut(&slot).unwrap().is_dead = true;
+        }
+
+        for slot in [3, 4] {
+            progress.insert(
+                slot,
+                ForkProgress::new(Hash::default(), Some(0), None, 0, 0),
+            );
+        }
+
+        let mut replay_timing = ReplayLoopTiming::default();
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        for slot in [1, 3] {
+            tx.send(UpdateParentSignal {
+                slot,
+                parent_slot: 0,
+                parent_block_id: Hash::new_unique(),
+                replay_fec_set_index: 10,
+            })
+            .unwrap();
+        }
+
+        ReplayStage::generate_new_bank_forks(
+            &blockstore,
+            &bank_forks,
+            &leader_schedule_cache,
+            Some(&rpc_subscriptions),
+            &None,
+            &mut progress,
+            &mut replay_timing,
+            &MigrationStatus::default(),
+            &rx,
+        );
+
+        // resurrected
+        assert!(!blockstore.is_dead(1));
+        assert!(progress.get(&1).is_none());
+
+        // still dead
+        assert!(blockstore.is_dead(2));
+        assert!(progress.get(&2).unwrap().is_dead);
+
+        // alive; signal was no-op
+        assert!(!blockstore.is_dead(3));
+        assert!(progress.get(&3).is_some());
+
+        // untouched
+        assert!(!blockstore.is_dead(4));
+        assert!(progress.get(&4).is_some());
     }
 
     #[test]
