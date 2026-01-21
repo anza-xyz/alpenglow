@@ -13487,25 +13487,25 @@ pub mod tests {
 
         let parent_5_id = Hash::new_unique();
         blockstore
-            .insert_shreds(create_block_header_shreds(10, 5, parent_5_id), None, true)
+            .insert_shreds(create_block_header_shreds(8, 5, parent_5_id), None, true)
             .unwrap();
 
-        assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(5));
-        verify_next_slots(&blockstore, 5, &[10]);
+        assert_eq!(blockstore.meta(8).unwrap().unwrap().parent_slot, Some(5));
+        verify_next_slots(&blockstore, 5, &[8]);
 
         let parent_3_id = Hash::new_unique();
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(10, 3, parent_3_id, 32, true),
+                create_update_parent_shreds(8, 3, parent_3_id, 32, true),
                 None,
                 true,
             )
             .unwrap();
 
-        assert_eq!(blockstore.meta(10).unwrap().unwrap().parent_slot, Some(3));
+        assert_eq!(blockstore.meta(8).unwrap().unwrap().parent_slot, Some(3));
 
         let parent_meta = blockstore
-            .get_parent_meta(10, BlockLocation::Original)
+            .get_parent_meta(8, BlockLocation::Original)
             .unwrap()
             .unwrap();
         assert_eq!(parent_meta.parent_slot, 3);
@@ -13513,7 +13513,7 @@ pub mod tests {
         assert!(parent_meta.populated_from_update_parent());
 
         verify_next_slots(&blockstore, 5, &[]);
-        verify_next_slots(&blockstore, 3, &[10]);
+        verify_next_slots(&blockstore, 3, &[8]);
     }
 
     #[test]
