@@ -1081,6 +1081,23 @@ mod tests {
             Vote::Genesis(_genesis_vote) => |_pool: &ConsensusPool| 0,
         };
         let bank = bank_forks.read().unwrap().root_bank();
+
+        // For Finalize votes, we need a corresponding Notarize certificate first
+        // because finalization requires both Finalize and Notarize certificates
+        if vote.is_finalize() {
+            let notarize_cert = Certificate {
+                cert_type: CertificateType::Notarize(vote.slot(), Hash::default()),
+                signature: BLSSignature::default(),
+                bitmap: Vec::new(),
+            };
+            pool.add_message(
+                &bank,
+                &Pubkey::new_unique(),
+                ConsensusMessage::Certificate(notarize_cert),
+                &mut vec![],
+            )
+            .unwrap();
+        }
         assert!(pool
             .add_message(
                 &bank,
@@ -1171,6 +1188,24 @@ mod tests {
             bitmap: Vec::new(),
         };
         let bank = bank_forks.read().unwrap().root_bank();
+
+        // For Finalize certificates, we need a corresponding Notarize certificate first
+        // because finalization requires both certificates to be present
+        if matches!(cert_type, CertificateType::Finalize(slot) if slot == 5) {
+            let notarize_cert = Certificate {
+                cert_type: CertificateType::Notarize(5, Hash::default()),
+                signature: BLSSignature::default(),
+                bitmap: Vec::new(),
+            };
+            pool.add_message(
+                &bank,
+                &Pubkey::new_unique(),
+                ConsensusMessage::Certificate(notarize_cert),
+                &mut vec![],
+            )
+            .unwrap();
+        }
+
         let message = ConsensusMessage::Certificate(cert.clone());
         // Add the certificate to the pool
         let (new_finalized_slot, certs_to_send) = pool
@@ -1185,7 +1220,7 @@ mod tests {
             assert!(new_finalized_slot.is_none());
         }
         assert_eq!(certs_to_send.len(), 1);
-        assert_eq!(*certs_to_send[0], cert);
+        assert!(certs_to_send.iter().any(|c| **c == cert));
 
         // Adding the cert again will not trigger another send
         let (new_finalized_slot, certs_to_send) = pool
