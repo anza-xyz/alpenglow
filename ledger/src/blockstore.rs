@@ -13552,24 +13552,24 @@ pub mod tests {
 
         blockstore
             .insert_shreds(
-                create_block_header_shreds(30, 25, Hash::new_unique()),
+                create_block_header_shreds(32, 25, Hash::new_unique()),
                 None,
                 true,
             )
             .unwrap();
-        verify_next_slots(&blockstore, 25, &[30]);
+        verify_next_slots(&blockstore, 25, &[32]);
 
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(30, 22, Hash::new_unique(), 32, true),
+                create_update_parent_shreds(32, 22, Hash::new_unique(), 32, true),
                 None,
                 true,
             )
             .unwrap();
 
-        assert_eq!(blockstore.meta(30).unwrap().unwrap().parent_slot, Some(22));
+        assert_eq!(blockstore.meta(32).unwrap().unwrap().parent_slot, Some(22));
         verify_next_slots(&blockstore, 25, &[]);
-        verify_next_slots(&blockstore, 22, &[30]);
+        verify_next_slots(&blockstore, 22, &[32]);
     }
 
     #[test]
@@ -13578,22 +13578,22 @@ pub mod tests {
         let blockstore = Blockstore::open(ledger_path.path()).unwrap();
 
         let parent_id = Hash::new_unique();
-        for slot in [41, 40, 42] {
+        for slot in [44, 40, 48] {
             blockstore
                 .insert_shreds(create_block_header_shreds(slot, 35, parent_id), None, true)
                 .unwrap();
         }
-        verify_next_slots(&blockstore, 35, &[40, 41, 42]);
+        verify_next_slots(&blockstore, 35, &[40, 44, 48]);
 
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(41, 32, Hash::new_unique(), 32, true),
+                create_update_parent_shreds(44, 32, Hash::new_unique(), 32, true),
                 None,
                 true,
             )
             .unwrap();
-        verify_next_slots(&blockstore, 35, &[40, 42]);
-        verify_next_slots(&blockstore, 32, &[41]);
+        verify_next_slots(&blockstore, 35, &[40, 48]);
+        verify_next_slots(&blockstore, 32, &[44]);
 
         blockstore
             .insert_shreds(
@@ -13602,7 +13602,7 @@ pub mod tests {
                 true,
             )
             .unwrap();
-        verify_next_slots(&blockstore, 35, &[42]);
+        verify_next_slots(&blockstore, 35, &[48]);
         verify_next_slots(&blockstore, 33, &[40]);
     }
 
@@ -13765,32 +13765,32 @@ pub mod tests {
         blockstore.insert_shreds(shreds, None, true).unwrap();
         assert!(blockstore.meta(5).unwrap().unwrap().is_connected());
 
-        // Slot 10 with BlockHeader pointing to connected parent 5
+        // Slot 8 with BlockHeader pointing to connected parent 5
         blockstore
             .insert_shreds(
-                create_block_header_shreds(10, 5, Hash::new_unique()),
+                create_block_header_shreds(8, 5, Hash::new_unique()),
                 None,
                 true,
             )
             .unwrap();
-        let meta = blockstore.meta(10).unwrap().unwrap();
+        let meta = blockstore.meta(8).unwrap().unwrap();
         assert!(meta.is_parent_connected());
 
-        // Slot 20 chains to slot 10
-        let (shreds, _) = make_slot_entries(20, 10, 5);
+        // Slot 20 chains to slot 8
+        let (shreds, _) = make_slot_entries(20, 8, 5);
         blockstore.insert_shreds(shreds, None, true).unwrap();
 
-        // UpdateParent switches slot 10 to disconnected parent 3 (lower, doesn't exist)
+        // UpdateParent switches slot 8 to disconnected parent 3 (lower, doesn't exist)
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(10, 3, Hash::new_unique(), 32, true),
+                create_update_parent_shreds(8, 3, Hash::new_unique(), 32, true),
                 None,
                 true,
             )
             .unwrap();
 
-        // Slot 10 should have parent_connected cleared
-        let meta = blockstore.meta(10).unwrap().unwrap();
+        // Slot 8 should have parent_connected cleared
+        let meta = blockstore.meta(8).unwrap().unwrap();
         assert_eq!(meta.parent_slot, Some(3));
         assert!(!meta.is_parent_connected());
         // Slot 20 should also have parent_connected cleared
@@ -13807,40 +13807,40 @@ pub mod tests {
         blockstore.insert_shreds(shreds, None, true).unwrap();
         assert!(blockstore.meta(0).unwrap().unwrap().is_connected());
 
-        // Slot 50 incomplete, pointing to disconnected parent 40
+        // Slot 48 incomplete, pointing to disconnected parent 40
         blockstore
             .insert_shreds(
-                create_block_header_shreds(50, 40, Hash::new_unique()),
+                create_block_header_shreds(48, 40, Hash::new_unique()),
                 None,
                 true,
             )
             .unwrap();
 
-        // Full children chain from incomplete slot 50
-        let (shreds, _) = make_slot_entries(60, 50, 5);
+        // Full children chain from incomplete slot 48
+        let (shreds, _) = make_slot_entries(60, 48, 5);
         blockstore.insert_shreds(shreds, None, true).unwrap();
         let (shreds, _) = make_slot_entries(70, 60, 5);
         blockstore.insert_shreds(shreds, None, true).unwrap();
 
-        for slot in [50, 60, 70] {
+        for slot in [48, 60, 70] {
             assert!(!blockstore.meta(slot).unwrap().unwrap().is_connected());
         }
 
-        // Reparent slot 50 to connected slot 0, keeping it incomplete
+        // Reparent slot 48 to connected slot 0, keeping it incomplete
         blockstore
             .insert_shreds(
-                create_update_parent_shreds(50, 0, Hash::new_unique(), 32, false),
+                create_update_parent_shreds(48, 0, Hash::new_unique(), 32, false),
                 None,
                 true,
             )
             .unwrap();
 
-        // Slot 50 incomplete: parent_connected but not connected
-        let meta_50 = blockstore.meta(50).unwrap().unwrap();
-        assert!(meta_50.is_parent_connected());
-        assert!(!meta_50.is_connected());
+        // Slot 48 incomplete: parent_connected but not connected
+        let meta_48 = blockstore.meta(48).unwrap().unwrap();
+        assert!(meta_48.is_parent_connected());
+        assert!(!meta_48.is_connected());
 
-        // Children stay disconnected since parent 50 is incomplete
+        // Children stay disconnected since parent 48 is incomplete
         assert!(!blockstore.meta(60).unwrap().unwrap().is_connected());
         assert!(!blockstore.meta(70).unwrap().unwrap().is_connected());
     }
