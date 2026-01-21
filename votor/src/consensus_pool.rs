@@ -303,22 +303,17 @@ impl ConsensusPool {
                 events.push(VotorEvent::BlockNotarized((slot, block_id)));
                 self.parent_ready_tracker
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
-                if self.is_finalized(slot) {
+
+                if let Some(finalize_cert) = self.get_finalize_cert(slot) {
                     // It's fine to set FastFinalization to false here, because
                     // we will report correctly as long as we have FastFinalization cert.
                     events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self.highest_finalization_slot().is_none_or(|s| s < slot) {
-                        // Get the Finalize cert for this slot
-                        if let Some(finalize_cert) = self
-                            .completed_certificates
-                            .get(&CertificateType::Finalize(slot))
-                        {
-                            self.highest_finalization_certs =
-                                Some(HighestFinalizedSlotCert::Finalize {
-                                    finalize_cert: finalize_cert.clone(),
-                                    notarize_cert: cert.clone(),
-                                });
-                        }
+                        self.highest_finalization_certs =
+                            Some(HighestFinalizedSlotCert::Finalize {
+                                finalize_cert: finalize_cert.clone(),
+                                notarize_cert: cert.clone(),
+                            });
                     }
                 }
             }
@@ -507,6 +502,13 @@ impl ConsensusPool {
                 CertificateType::Notarize(s, _) if slot == *s => Some(cert.clone()),
                 _ => None,
             })
+    }
+
+    /// Get the Finalize certificate for a slot
+    fn get_finalize_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
+        self.completed_certificates
+            .get(&CertificateType::Finalize(slot))
+            .cloned()
     }
 
     /// Get the slot of the highest finalization certificates
