@@ -99,7 +99,7 @@ use {
         votor::{Votor, VotorConfig},
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, FinalizationCerts},
+        consensus_message::{ConsensusMessage, HighestFinalizedSlotCert},
         migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
         reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
         vote::Vote,
@@ -305,7 +305,7 @@ pub struct ReplayStageConfig {
     pub reward_votes_receiver: Receiver<AddVoteMessage>,
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
     pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-    pub highest_finalized: Arc<RwLock<Option<FinalizationCerts>>>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 }
 
 pub struct ReplaySenders {

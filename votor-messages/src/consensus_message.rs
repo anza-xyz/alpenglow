@@ -177,7 +177,7 @@ pub struct Certificate {
 /// - `Finalize`: Standard finalization with both a Finalize certificate and a Notarize certificate
 /// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate that combines both
 #[derive(Clone, Debug)]
-pub enum FinalizationCerts {
+pub enum HighestFinalizedSlotCert {
     /// Standard finalization: requires both a Finalize cert and a Notarize cert for the same slot
     Finalize {
         /// The finalize certificate

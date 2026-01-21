@@ -22,7 +22,8 @@ use {
     solana_runtime::bank::Bank,
     solana_votor_messages::{
         consensus_message::{
-            Block, Certificate, CertificateType, ConsensusMessage, FinalizationCerts, VoteMessage,
+            Block, Certificate, CertificateType, ConsensusMessage, HighestFinalizedSlotCert,
+            VoteMessage,
         },
         fraction::Fraction,
         migration::MigrationStatus,
@@ -108,7 +109,7 @@ pub struct ConsensusPool {
     highest_finalized_slot: Option<Slot>,
     /// Highest finalization certificates (Finalize+Notarize or FinalizeFast)
     /// Used for block footer inclusion and standstill certificate filtering
-    highest_finalization_certs: Option<FinalizationCerts>,
+    highest_finalization_certs: Option<HighestFinalizedSlotCert>,
     /// Stats for the certificate pool
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
@@ -312,10 +313,11 @@ impl ConsensusPool {
                             .completed_certificates
                             .get(&CertificateType::Finalize(slot))
                         {
-                            self.highest_finalization_certs = Some(FinalizationCerts::Finalize {
-                                finalize_cert: finalize_cert.clone(),
-                                notarize_cert: cert.clone(),
-                            });
+                            self.highest_finalization_certs =
+                                Some(HighestFinalizedSlotCert::Finalize {
+                                    finalize_cert: finalize_cert.clone(),
+                                    notarize_cert: cert.clone(),
+                                });
                         }
                     }
                 }
@@ -325,10 +327,11 @@ impl ConsensusPool {
                     let (_, block_id) = notarize_cert.cert_type.to_block().unwrap();
                     events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self.highest_finalization_slot().is_none_or(|s| s < slot) {
-                        self.highest_finalization_certs = Some(FinalizationCerts::Finalize {
-                            finalize_cert: cert.clone(),
-                            notarize_cert,
-                        });
+                        self.highest_finalization_certs =
+                            Some(HighestFinalizedSlotCert::Finalize {
+                                finalize_cert: cert.clone(),
+                                notarize_cert,
+                            });
                     }
                 }
                 if self.highest_finalized_slot.is_none_or(|s| s < slot) {
@@ -345,7 +348,7 @@ impl ConsensusPool {
                 // Use <= for FastFinalize since it supersedes standard finalization at the same slot
                 if self.highest_finalization_slot().is_none_or(|s| s <= slot) {
                     self.highest_finalization_certs =
-                        Some(FinalizationCerts::FastFinalize(cert.clone()));
+                        Some(HighestFinalizedSlotCert::FastFinalize(cert.clone()));
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -511,8 +514,10 @@ impl ConsensusPool {
         self.highest_finalization_certs
             .as_ref()
             .map(|certs| match certs {
-                FinalizationCerts::Finalize { finalize_cert, .. } => finalize_cert.cert_type.slot(),
-                FinalizationCerts::FastFinalize(cert) => cert.cert_type.slot(),
+                HighestFinalizedSlotCert::Finalize { finalize_cert, .. } => {
+                    finalize_cert.cert_type.slot()
+                }
+                HighestFinalizedSlotCert::FastFinalize(cert) => cert.cert_type.slot(),
             })
     }
 
@@ -645,10 +650,10 @@ impl ConsensusPool {
             .highest_finalization_certs
             .as_ref()
             .map(|certs| match certs {
-                FinalizationCerts::Finalize { finalize_cert, .. } => {
+                HighestFinalizedSlotCert::Finalize { finalize_cert, .. } => {
                     (finalize_cert.cert_type.slot(), false)
                 }
-                FinalizationCerts::FastFinalize(cert) => (cert.cert_type.slot(), true),
+                HighestFinalizedSlotCert::FastFinalize(cert) => (cert.cert_type.slot(), true),
             })
             .unwrap_or((0, false));
         self.completed_certificates
@@ -687,7 +692,7 @@ impl ConsensusPool {
 
     /// Returns the highest finalization certificates (slow w/ notarize or fast)
     /// This is used to populate the `final_cert` field in block footers.
-    pub fn get_highest_finalization_certs(&self) -> Option<FinalizationCerts> {
+    pub fn get_highest_finalization_certs(&self) -> Option<HighestFinalizedSlotCert> {
         self.highest_finalization_certs.clone()
     }
 }

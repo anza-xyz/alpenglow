@@ -36,7 +36,7 @@ use {
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     solana_votor_messages::{
-        consensus_message::{Block, FinalizationCerts},
+        consensus_message::{Block, HighestFinalizedSlotCert},
         reward_certificate::{
             BuildRewardCertsRequest, BuildRewardCertsRespSucc, BuildRewardCertsResponse,
             NotarRewardCertificate, SkipRewardCertificate,
@@ -101,7 +101,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub highest_finalized: Arc<RwLock<Option<FinalizationCerts>>>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -130,7 +130,7 @@ struct LeaderContext {
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
-    highest_finalized: Arc<RwLock<Option<FinalizationCerts>>>,
+    highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -449,7 +449,7 @@ fn produce_block_footer(
     bank: Arc<Bank>,
     skip_reward_cert: Option<SkipRewardCertificate>,
     notar_reward_cert: Option<NotarRewardCertificate>,
-    highest_finalized: &RwLock<Option<FinalizationCerts>>,
+    highest_finalized: &RwLock<Option<HighestFinalizedSlotCert>>,
 ) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

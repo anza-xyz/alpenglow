@@ -137,7 +137,7 @@ use {
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, FinalizationCerts},
+        consensus_message::{Certificate, CertificateType, HighestFinalizedSlotCert},
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
     },
     std::mem::MaybeUninit,
@@ -337,9 +337,9 @@ impl FinalCertificate {
     ///
     /// # Panics
     /// Panics if the certs are malformed or have invalid signatures
-    pub fn from_finalization_certs(certs: &FinalizationCerts) -> Self {
+    pub fn from_finalization_certs(certs: &HighestFinalizedSlotCert) -> Self {
         match certs {
-            FinalizationCerts::Finalize {
+            HighestFinalizedSlotCert::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => {
@@ -359,7 +359,7 @@ impl FinalCertificate {
                     notar_aggregate: Some(VotesAggregate::from_certificate(notarize_cert)),
                 }
             }
-            FinalizationCerts::FastFinalize(cert) => {
+            HighestFinalizedSlotCert::FastFinalize(cert) => {
                 debug_assert!(cert.cert_type.is_fast_finalization());
                 let (slot, block_id) = cert
                     .cert_type
