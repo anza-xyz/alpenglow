@@ -496,10 +496,9 @@ impl ConsensusPool {
     }
 
     /// Get the Finalize certificate for a slot
-    fn get_finalize_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
+    fn get_finalize_cert(&self, slot: Slot) -> Option<&Arc<Certificate>> {
         self.completed_certificates
             .get(&CertificateType::Finalize(slot))
-            .cloned()
     }
 
     /// Get the highest finalized slot (slow or fast)
