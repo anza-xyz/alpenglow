@@ -74,7 +74,7 @@ use {
         snapshot_controller::SnapshotController,
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, HighestFinalizedSlotCert},
+        consensus_message::{BlockFinalization, ConsensusMessage},
         migration::MigrationStatus,
         reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -105,7 +105,7 @@ pub struct VotorConfig {
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub migration_status: Arc<MigrationStatus>,
-    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+    pub highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,

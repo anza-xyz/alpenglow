@@ -132,12 +132,13 @@
 use {
     crate::entry::Entry,
     solana_bls_signatures::{
-        Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
+        signature::AsSignature, BlsError, Signature as BLSSignature,
+        SignatureCompressed as BLSSignatureCompressed,
     },
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType, HighestFinalizedSlotCert},
+        consensus_message::{BlockFinalization, Certificate, CertificateType},
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
     },
     std::mem::MaybeUninit,
@@ -337,9 +338,9 @@ impl FinalCertificate {
     ///
     /// # Panics
     /// Panics if the certs are malformed or have invalid signatures
-    pub fn from_finalization_certs(certs: &HighestFinalizedSlotCert) -> Self {
+    pub fn from_finalization_certs(certs: &BlockFinalization) -> Self {
         match certs {
-            HighestFinalizedSlotCert::Finalize {
+            BlockFinalization::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => {
@@ -359,7 +360,7 @@ impl FinalCertificate {
                     notar_aggregate: Some(VotesAggregate::from_certificate(notarize_cert)),
                 }
             }
-            HighestFinalizedSlotCert::FastFinalize(cert) => {
+            BlockFinalization::FastFinalize(cert) => {
                 debug_assert!(cert.cert_type.is_fast_finalization());
                 let (slot, block_id) = cert
                     .cert_type
@@ -385,6 +386,36 @@ impl FinalCertificate {
                 bitmap: vec![42; 64],
             },
             notar_aggregate: None,
+        }
+    }
+
+    /// Converts the block marker representation of a finalization certificate into verification friendly
+    /// representation of Slow or Fast finalization certificates
+    pub fn to_certificates(self) -> Result<BlockFinalization, BlsError> {
+        if let Some(notar_aggregate) = self.notar_aggregate {
+            // Slow finalization
+            let notarize_cert = Certificate {
+                cert_type: CertificateType::Notarize(self.slot, self.block_id),
+                signature: notar_aggregate.signature.try_as_affine()?,
+                bitmap: notar_aggregate.bitmap,
+            };
+            let finalize_cert = Certificate {
+                cert_type: CertificateType::Finalize(self.slot),
+                signature: self.final_aggregate.signature.try_as_affine()?,
+                bitmap: self.final_aggregate.bitmap,
+            };
+            Ok(BlockFinalization::Finalize {
+                finalize_cert,
+                notarize_cert,
+            })
+        } else {
+            // Fast Finalization
+            let fast_finalize_cert = Certificate {
+                cert_type: CertificateType::FinalizeFast(self.slot, self.block_id),
+                signature: self.final_aggregate.signature.try_as_affine()?,
+                bitmap: self.final_aggregate.bitmap,
+            };
+            Ok(BlockFinalization::FastFinalize(fast_finalize_cert))
         }
     }
 }

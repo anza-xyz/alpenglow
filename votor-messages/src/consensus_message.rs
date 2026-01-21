@@ -1,11 +1,14 @@
 //! Put BLS message here so all clients can agree on the format
 use {
-    crate::vote::Vote,
+    crate::{
+        fraction::Fraction,
+        migration::GENESIS_VOTE_THRESHOLD,
+        vote::{Vote, VoteType},
+    },
     serde::{Deserialize, Serialize},
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
-    std::sync::Arc,
 };
 #[cfg(feature = "dev-context-only-utils")]
 use {solana_bls_signatures::keypair::Keypair as BLSKeypair, solana_keypair::Keypair};
@@ -160,6 +163,51 @@ impl CertificateType {
             _ => None,
         }
     }
+
+    /// Returns the stake fraction required for certificate completion and the
+    /// `VoteType`s that contribute to this certificate.
+    ///
+    /// Must be in sync with `Vote::to_cert_types`
+    pub const fn limits_and_vote_types(&self) -> (Fraction, &'static [VoteType]) {
+        match self {
+            CertificateType::Notarize(_, _) => {
+                (Fraction::from_percentage(60), &[VoteType::Notarize])
+            }
+            CertificateType::NotarizeFallback(_, _) => (
+                Fraction::from_percentage(60),
+                &[VoteType::Notarize, VoteType::NotarizeFallback],
+            ),
+            CertificateType::FinalizeFast(_, _) => {
+                (Fraction::from_percentage(80), &[VoteType::Notarize])
+            }
+            CertificateType::Finalize(_) => (Fraction::from_percentage(60), &[VoteType::Finalize]),
+            CertificateType::Skip(_) => (
+                Fraction::from_percentage(60),
+                &[VoteType::Skip, VoteType::SkipFallback],
+            ),
+            CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
+        }
+    }
+}
+
+/// Returns the `CertificateType`s that this vote contributes to.
+///
+/// Must be in sync with `CertificateType::limits_and_vote_types` and `VoteType::get_type`
+pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
+    match vote {
+        Vote::Notarize(v) => vec![
+            CertificateType::Notarize(v.slot, v.block_id),
+            CertificateType::NotarizeFallback(v.slot, v.block_id),
+            CertificateType::FinalizeFast(v.slot, v.block_id),
+        ],
+        Vote::NotarizeFallback(v) => {
+            vec![CertificateType::NotarizeFallback(v.slot, v.block_id)]
+        }
+        Vote::Finalize(v) => vec![CertificateType::Finalize(v.slot)],
+        Vote::Skip(v) => vec![CertificateType::Skip(v.slot)],
+        Vote::SkipFallback(v) => vec![CertificateType::Skip(v.slot)],
+        Vote::Genesis(v) => vec![CertificateType::Genesis(v.slot, v.block_id)],
+    }
 }
 
 /// Definition of a consensus certificate.
@@ -173,29 +221,30 @@ pub struct Certificate {
     pub bitmap: Vec<u8>,
 }
 
-/// Represents the highest finalized slot's certificates for block footer inclusion.
+/// Represents the finalization of a block, containing the certificates that prove it.
 ///
-/// This enum captures the two ways a slot can be finalized:
-/// - `Finalize`: Standard finalization with both a Finalize certificate and a Notarize certificate
+/// This enum captures the two ways a block can be finalized:
+/// - `Finalize`: Slow finalization with both a Finalize certificate and a Notarize certificate
 /// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate that combines both
 #[derive(Clone, Debug)]
-pub enum HighestFinalizedSlotCert {
-    /// Standard finalization: requires both a Finalize cert and a Notarize cert for the same slot
+#[allow(clippy::large_enum_variant)]
+pub enum BlockFinalization {
+    /// Slow finalization: requires both a Finalize cert and a Notarize cert for the same slot
     Finalize {
         /// The finalize certificate
-        finalize_cert: Arc<Certificate>,
+        finalize_cert: Certificate,
         /// The notarize certificate
-        notarize_cert: Arc<Certificate>,
+        notarize_cert: Certificate,
     },
-    /// Fast finalization: a single FinalizeFast certificate
-    FastFinalize(Arc<Certificate>),
+    /// Fast finalization: a single FastFinalize certificate
+    FastFinalize(Certificate),
 }
 
-impl HighestFinalizedSlotCert {
+impl BlockFinalization {
     /// The slot that is finalized
     pub fn slot(&self) -> Slot {
         match self {
-            HighestFinalizedSlotCert::Finalize {
+            BlockFinalization::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => {
@@ -205,7 +254,7 @@ impl HighestFinalizedSlotCert {
                 );
                 finalize_cert.cert_type.slot()
             }
-            HighestFinalizedSlotCert::FastFinalize(certificate) => certificate.cert_type.slot(),
+            BlockFinalization::FastFinalize(certificate) => certificate.cert_type.slot(),
         }
     }
 }
@@ -241,6 +290,12 @@ impl ConsensusMessage {
             signature,
             bitmap,
         })
+    }
+}
+
+impl From<Certificate> for ConsensusMessage {
+    fn from(cert: Certificate) -> Self {
+        Self::Certificate(cert)
     }
 }
 

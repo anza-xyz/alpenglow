@@ -147,7 +147,7 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
-    solana_votor_messages::consensus_message::HighestFinalizedSlotCert,
+    solana_votor_messages::consensus_message::BlockFinalization,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -1443,8 +1443,7 @@ impl Validator {
         let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
         // Shared state for highest finalized certificates (updated by Votor, read by block creation loop)
-        let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
-            Arc::new(RwLock::new(None));
+        let highest_finalized: Arc<RwLock<Option<BlockFinalization>>> = Arc::new(RwLock::new(None));
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
