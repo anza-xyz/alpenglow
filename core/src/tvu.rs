@@ -70,7 +70,7 @@ use {
         votor::{Votor, VotorConfig},
     },
     solana_votor_messages::{
-        consensus_message::HighestFinalizedSlotCert,
+        consensus_message::BlockFinalization,
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
     std::{
@@ -174,7 +174,7 @@ pub struct AlpenglowInitializationState {
     // For rewards
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
     pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+    pub highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
 }
 
 impl Tvu {
