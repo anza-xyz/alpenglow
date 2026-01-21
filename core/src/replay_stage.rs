@@ -3772,7 +3772,12 @@ impl ReplayStage {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
-                let verify_result = if migration_status.should_allow_block_markers(bank.slot()) {
+                // For alpenglow blocks, verify that the bank hash matches the expected bank hash
+                // sent by the leader in the block footer. If we are the leader, skip verification as
+                // the bank hash in the footer is not yet populated.
+                let verify_result = if migration_status.should_allow_block_markers(bank.slot())
+                    && bank.collector_id() != my_pubkey
+                {
                     bank.freeze_and_verify_bank_hash()
                 } else {
                     bank.freeze();
