@@ -37,7 +37,7 @@ use {
     rocksdb::{DBRawIterator, LiveFile},
     solana_account::ReadableAccount,
     solana_address_lookup_table_interface::state::AddressLookupTable,
-    solana_clock::{DEFAULT_TICKS_PER_SECOND, Slot, UnixTimestamp},
+    solana_clock::{DEFAULT_TICKS_PER_SECOND, NUM_CONSECUTIVE_LEADER_SLOTS, Slot, UnixTimestamp},
     solana_entry::{
         block_component::BlockComponent,
         entry::{Entry, MaxDataShredsLen, create_ticks},
@@ -108,9 +108,21 @@ pub use {
 
 pub const MAX_REPLAY_WAKE_UP_SIGNALS: usize = 1;
 pub const MAX_COMPLETED_SLOTS_IN_CHANNEL: usize = 100_000;
+pub const MAX_UPDATE_PARENT_SIGNALS: usize = 216_000;
 
 pub type CompletedSlotsSender = Sender<Vec<Slot>>;
 pub type CompletedSlotsReceiver = Receiver<Vec<Slot>>;
+
+pub type UpdateParentSender = Sender<UpdateParentSignal>;
+pub type UpdateParentReceiver = Receiver<UpdateParentSignal>;
+
+#[derive(Debug, Clone)]
+pub struct UpdateParentSignal {
+    pub slot: Slot,
+    pub parent_slot: Slot,
+    pub parent_block_id: Hash,
+    pub replay_fec_set_index: u32,
+}
 
 // Contiguous, sorted and non-empty ranges of shred indices:
 //     completed_ranges[i].start < completed_ranges[i].end
@@ -243,6 +255,7 @@ pub struct BlockstoreSignals {
     pub blockstore: Blockstore,
     pub ledger_signal_receiver: Receiver<bool>,
     pub completed_slots_receiver: CompletedSlotsReceiver,
+    pub update_parent_receiver: UpdateParentReceiver,
 }
 
 // ledger window
@@ -279,6 +292,7 @@ pub struct Blockstore {
     insert_shreds_lock: Mutex<()>,
     new_shreds_signals: Mutex<Vec<Sender<bool>>>,
     completed_slots_senders: Mutex<Vec<CompletedSlotsSender>>,
+    update_parent_signals: Mutex<Vec<UpdateParentSender>>,
     pub lowest_cleanup_slot: RwLock<Slot>,
     pub slots_stats: SlotsStats,
 }
@@ -464,6 +478,7 @@ impl Blockstore {
             highest_primary_index_slot: RwLock::<Option<Slot>>::default(),
             new_shreds_signals: Mutex::default(),
             completed_slots_senders: Mutex::default(),
+            update_parent_signals: Mutex::default(),
             insert_shreds_lock: Mutex::<()>::default(),
             max_root,
             lowest_cleanup_slot: RwLock::<Slot>::default(),
@@ -483,14 +498,17 @@ impl Blockstore {
         let (ledger_signal_sender, ledger_signal_receiver) = bounded(MAX_REPLAY_WAKE_UP_SIGNALS);
         let (completed_slots_sender, completed_slots_receiver) =
             bounded(MAX_COMPLETED_SLOTS_IN_CHANNEL);
+        let (update_parent_sender, update_parent_receiver) = bounded(MAX_UPDATE_PARENT_SIGNALS);
 
         blockstore.add_new_shred_signal(ledger_signal_sender);
         blockstore.add_completed_slots_signal(completed_slots_sender);
+        blockstore.add_update_parent_signal(update_parent_sender);
 
         Ok(BlockstoreSignals {
             blockstore,
             ledger_signal_receiver,
             completed_slots_receiver,
+            update_parent_receiver,
         })
     }
 
@@ -1272,6 +1290,7 @@ impl Blockstore {
     ) -> Result<(
         /* signal slot updates */ bool,
         /* slots updated */ Vec<u64>,
+        /* update parent signals */ Vec<UpdateParentSignal>,
     )> {
         let mut start = Measure::start("Commit Working Sets");
         let (should_signal, newly_completed_slots) = self.commit_slot_meta_working_set(
@@ -1304,10 +1323,21 @@ impl Blockstore {
             )?;
         }
 
+        let mut update_parent_signals = Vec::new();
         for (&slot, working_parent_meta) in &shred_insertion_tracker.parent_metas {
             if !working_parent_meta.should_write() {
                 // No need to rewrite the column
                 continue;
+            }
+            let parent_meta = working_parent_meta.as_ref();
+
+            if parent_meta.populated_from_update_parent() {
+                update_parent_signals.push(UpdateParentSignal {
+                    slot,
+                    parent_slot: parent_meta.parent_slot,
+                    parent_block_id: parent_meta.parent_block_id,
+                    replay_fec_set_index: parent_meta.replay_fec_set_index,
+                });
             }
 
             self.parent_meta_cf.put_in_batch(
@@ -1329,7 +1359,7 @@ impl Blockstore {
         start.stop();
         metrics.commit_working_sets_elapsed_us += start.as_us();
 
-        Ok((should_signal, newly_completed_slots))
+        Ok((should_signal, newly_completed_slots, update_parent_signals))
     }
 
     /// The main helper function that performs the shred insertion logic
@@ -1444,7 +1474,7 @@ impl Blockstore {
 
         self.check_chained_merkle_root_consistency(&mut shred_insertion_tracker);
 
-        let (should_signal, newly_completed_slots) =
+        let (should_signal, newly_completed_slots, update_parent_signals) =
             self.commit_updates_to_write_batch(&mut shred_insertion_tracker, metrics)?;
 
         // Write out the accumulated batch.
@@ -1456,8 +1486,10 @@ impl Blockstore {
         send_signals(
             &self.new_shreds_signals.lock().unwrap(),
             &self.completed_slots_senders.lock().unwrap(),
+            &self.update_parent_signals.lock().unwrap(),
             should_signal,
             newly_completed_slots,
+            update_parent_signals,
         );
 
         // Roll up metrics
@@ -1516,6 +1548,10 @@ impl Blockstore {
         self.completed_slots_senders.lock().unwrap().push(s);
     }
 
+    pub fn add_update_parent_signal(&self, s: UpdateParentSender) {
+        self.update_parent_signals.lock().unwrap().push(s);
+    }
+
     pub fn get_new_shred_signals_len(&self) -> usize {
         self.new_shreds_signals.lock().unwrap().len()
     }
@@ -1527,6 +1563,7 @@ impl Blockstore {
     pub fn drop_signal(&self) {
         self.new_shreds_signals.lock().unwrap().clear();
         self.completed_slots_senders.lock().unwrap().clear();
+        self.update_parent_signals.lock().unwrap().clear();
     }
 
     /// Clear `slot` from the Blockstore
@@ -2069,6 +2106,11 @@ impl Blockstore {
             },
         };
 
+        if !slot.is_multiple_of(NUM_CONSECUTIVE_LEADER_SLOTS) {
+            return Err(BlockstoreError::UpdateParentOnInvalidSlot(slot));
+        }
+
+        // Validate that the UpdateParent is compatible with the BlockHeader
         if update_parent_meta.block() == block_header_meta.block() {
             return Err(BlockstoreError::UpdateParentMatchesBlockHeader(slot));
         }
@@ -5335,8 +5377,10 @@ fn get_last_hash<'a>(iterator: impl Iterator<Item = &'a Entry> + 'a) -> Option<H
 fn send_signals(
     new_shreds_signals: &[Sender<bool>],
     completed_slots_senders: &[Sender<Vec<u64>>],
+    update_parent_senders: &[UpdateParentSender],
     should_signal: bool,
     newly_completed_slots: Vec<u64>,
+    update_parent_signals: Vec<UpdateParentSignal>,
 ) {
     if should_signal {
         for signal in new_shreds_signals {
@@ -5369,6 +5413,22 @@ fn send_signals(
                         "Unable to send newly completed slot because channel is full",
                         String
                     ),
+                );
+            }
+        }
+    }
+
+    for signal in update_parent_signals {
+        for sender in update_parent_senders {
+            if let Err(TrySendError::Full(_)) = sender.try_send(signal.clone()) {
+                error!(
+                    "update_parent channel full, dropping signal for slot {}",
+                    signal.slot
+                );
+                datapoint_error!(
+                    "blockstore_error",
+                    ("error", "update_parent channel full", String),
+                    ("slot", signal.slot, i64),
                 );
             }
         }

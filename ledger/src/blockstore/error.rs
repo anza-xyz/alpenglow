@@ -65,6 +65,8 @@ pub enum BlockstoreError {
     UnexpectedBlockComponent,
     #[error("Block component mismatch slot {0}")]
     BlockComponentMismatch(Slot),
+    #[error("Update parent on invalid slot {0}")]
+    UpdateParentOnInvalidSlot(Slot),
     #[error("unable to purge slots in range [{from_slot}, {to_slot}] {purge_type:?}: {inner:?}")]
     PurgeFailed {
         from_slot: Slot,

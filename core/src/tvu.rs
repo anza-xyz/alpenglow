@@ -48,8 +48,10 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
-        blockstore::Blockstore, blockstore_cleanup_service::BlockstoreCleanupService,
-        blockstore_processor::TransactionStatusSender, entry_notifier_service::EntryNotifierSender,
+        blockstore::{Blockstore, UpdateParentReceiver},
+        blockstore_cleanup_service::BlockstoreCleanupService,
+        blockstore_processor::TransactionStatusSender,
+        entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
     },
     solana_poh::{poh_controller::PohController, poh_recorder::PohRecorder},
@@ -194,6 +196,7 @@ impl Tvu {
         sockets: TvuSockets,
         blockstore: Arc<Blockstore>,
         ledger_signal_receiver: Receiver<bool>,
+        update_parent_receiver: UpdateParentReceiver,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
         poh_controller: PohController,
@@ -502,6 +505,7 @@ impl Tvu {
 
         let replay_receivers = ReplayReceivers {
             ledger_signal_receiver,
+            update_parent_receiver,
             duplicate_slots_receiver,
             ancestor_duplicate_slots_receiver,
             duplicate_confirmed_slots_receiver,
@@ -719,6 +723,7 @@ pub mod tests {
         let BlockstoreSignals {
             blockstore,
             ledger_signal_receiver,
+            update_parent_receiver,
             ..
         } = Blockstore::open_with_signal(&blockstore_path, BlockstoreOptions::default())
             .expect("Expected to successfully open ledger");
@@ -795,6 +800,7 @@ pub mod tests {
             },
             blockstore,
             ledger_signal_receiver,
+            update_parent_receiver,
             Some(Arc::new(RpcSubscriptions::new_for_tests(
                 exit.clone(),
                 max_complete_transaction_status_slot,

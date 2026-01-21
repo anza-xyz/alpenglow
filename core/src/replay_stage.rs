@@ -58,7 +58,7 @@ use {
     solana_leader_schedule::SlotLeader,
     solana_ledger::{
         block_error::BlockError,
-        blockstore::Blockstore,
+        blockstore::{Blockstore, UpdateParentReceiver},
         blockstore_processor::{
             self, BlockstoreProcessorError, ChainedBlockIdCheck, ConfirmationProgress,
             ExecuteBatchesInternalMetrics, ReplaySlotStats, TransactionStatusSender,
@@ -315,6 +315,7 @@ pub struct ReplaySenders {
 
 pub struct ReplayReceivers {
     pub ledger_signal_receiver: Receiver<bool>,
+    pub update_parent_receiver: UpdateParentReceiver,
     pub duplicate_slots_receiver: Receiver<u64>,
     pub ancestor_duplicate_slots_receiver: Receiver<AncestorDuplicateSlotToRepair>,
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
@@ -627,6 +628,7 @@ impl ReplayStage {
 
         let ReplayReceivers {
             ledger_signal_receiver,
+            update_parent_receiver,
             duplicate_slots_receiver,
             ancestor_duplicate_slots_receiver,
             duplicate_confirmed_slots_receiver,
@@ -756,6 +758,14 @@ impl ReplayStage {
                 if exit.load(Ordering::Relaxed) {
                     break;
                 }
+
+                Self::interrupt_update_parent_slots(
+                    &my_pubkey,
+                    &blockstore,
+                    &bank_forks,
+                    &mut progress,
+                    &update_parent_receiver,
+                );
 
                 let mut generate_new_bank_forks_time =
                     Measure::start("generate_new_bank_forks_time");
@@ -1968,6 +1978,7 @@ impl ReplayStage {
                 slot_descendants
                     .iter()
                     .chain(std::iter::once(&slot_to_purge)),
+                true,
             )
         };
 
@@ -3479,16 +3490,14 @@ impl ReplayStage {
 
                         // Clear the bank from bank_forks. It will be recreated with the
                         // correct parent by generate_new_bank_forks on the next iteration.
-                        bank_forks.write().unwrap().clear_bank(bank_slot);
+                        let mut bank_forks = bank_forks.write().unwrap();
+                        if bank_forks.get(bank_slot).is_some() {
+                            bank_forks.clear_bank(bank_slot, false);
+                        }
 
                         // Remove the progress entry. It will be recreated with the correct
                         // num_shreds offset when generate_new_bank_forks creates the new bank.
                         progress.remove(&bank_slot);
-
-                        info!(
-                            "AbandonedBank at slot {bank_slot}: cleared bank and progress, will \
-                             recreate with parent {new_parent_slot}"
-                        );
                     }
                     Err(err) => {
                         let root = bank_forks.read().unwrap().root();
@@ -4624,6 +4633,53 @@ impl ReplayStage {
         );
     }
 
+    /// Handles UpdateParent signals by clearing slot state so replay restarts from
+    /// the new parent. Skips if we're the leader (block_creation_loop handles it),
+    /// if replay hasn't started yet, or if replay has already passed the UpdateParent marker.
+    fn interrupt_update_parent_slots(
+        my_pubkey: &Pubkey,
+        blockstore: &Blockstore,
+        bank_forks: &RwLock<BankForks>,
+        progress: &mut ProgressMap,
+        update_parent_receiver: &UpdateParentReceiver,
+    ) {
+        while let Ok(signal) = update_parent_receiver.try_recv() {
+            // Skip if we're the leader or if replay hasn't started yet
+            let should_skip = bank_forks
+                .read()
+                .unwrap()
+                .get(signal.slot)
+                .is_none_or(|bank| *bank.leader_id() == *my_pubkey);
+            if should_skip {
+                continue;
+            }
+
+            // Check if we've already replayed past the UpdateParent marker
+            let current_num_shreds = progress
+                .get(&signal.slot)
+                .map(|p| p.replay_progress.read().unwrap().num_shreds)
+                .unwrap_or(0);
+
+            let replay_fec_set_index: u64 = signal.replay_fec_set_index.into();
+
+            if current_num_shreds >= replay_fec_set_index {
+                continue;
+            }
+
+            // Clear and let generate_new_bank_forks restart from replay_fec_set_index
+            info!(
+                "{my_pubkey}: restarting slot {} from replay_fec_set_index {} (was at {} shreds)",
+                signal.slot, replay_fec_set_index, current_num_shreds
+            );
+            let _ = blockstore.remove_dead_slot(signal.slot);
+            progress.remove(&signal.slot);
+            let mut bank_forks = bank_forks.write().unwrap();
+            if bank_forks.get(signal.slot).is_some() {
+                bank_forks.clear_bank(signal.slot, false);
+            }
+        }
+    }
+
     fn generate_new_bank_forks(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
@@ -4900,7 +4956,9 @@ pub(crate) mod tests {
         solana_instruction::error::InstructionError,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore::{BlockstoreError, entries_to_test_shreds, make_slot_entries},
+            blockstore::{
+                entries_to_test_shreds, make_slot_entries, BlockstoreError, UpdateParentSignal,
+            },
             create_new_tmp_ledger,
             genesis_utils::{create_genesis_config, create_genesis_config_with_leader},
             get_tmp_ledger_path, get_tmp_ledger_path_auto_delete,
@@ -7171,6 +7229,54 @@ pub(crate) mod tests {
             &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);
+    }
+
+    #[test]
+    fn test_update_parent_clears_slot_when_not_past_marker() {
+        let ReplayBlockstoreComponents {
+            blockstore,
+            vote_simulator,
+            ..
+        } = replay_blockstore_components(
+            Some(tr(0) / tr(1) / tr(2) / tr(3)),
+            1,
+            None::<GenerateVotes>,
+        );
+        let VoteSimulator {
+            bank_forks,
+            mut progress,
+            ..
+        } = vote_simulator;
+
+        // Slot 1: 5 shreds, replay_fec_set_index=10; 5 < 10 so cleared
+        // Slot 2: 15 shreds, replay_fec_set_index=10; 15 >= 10 so skipped
+        for (slot, shreds) in [(1, 5), (2, 15)] {
+            let p = ForkProgress::new(Hash::default(), Some(0), None, 0, 0);
+            p.replay_progress.write().unwrap().num_shreds = shreds;
+            progress.insert(slot, p);
+        }
+
+        let (tx, rx) = crossbeam_channel::unbounded();
+        for slot in [1, 2] {
+            tx.send(UpdateParentSignal {
+                slot,
+                parent_slot: 0,
+                parent_block_id: Hash::new_unique(),
+                replay_fec_set_index: 10,
+            })
+            .unwrap();
+        }
+
+        ReplayStage::interrupt_update_parent_slots(
+            &Pubkey::new_unique(),
+            &blockstore,
+            &bank_forks,
+            &mut progress,
+            &rx,
+        );
+
+        assert!(progress.get(&1).is_none()); // cleared: 5 < 10
+        assert!(progress.get(&2).is_some()); // skipped: 15 >= 10
     }
 
     #[test]
