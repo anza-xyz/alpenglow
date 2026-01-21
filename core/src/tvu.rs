@@ -61,13 +61,15 @@ use {
     },
     solana_turbine::{retransmit_stage::RetransmitStage, xdp::XdpSender},
     solana_votor::{
-        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{
+        migration::MigrationStatus,
+        reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+    },
     std::{
         collections::HashSet,
         net::{SocketAddr, UdpSocket},

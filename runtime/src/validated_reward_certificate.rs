@@ -29,6 +29,8 @@ pub enum Error {
     BlsCertVerify(#[from] BlsCertVerifyError),
     #[error("verify signature failed with {0:?}")]
     VerifySig(#[from] BlsError),
+    #[error("empty certs were provided")]
+    Empty,
 }
 
 /// Extracts the slot corresponding to the provided reward certs.
@@ -69,6 +71,8 @@ fn extract_slot(
 pub(crate) struct ValidatedRewardCert {
     /// List of validators that were present in the reward certs.
     validators: Vec<Pubkey>,
+    /// The slot the reward certs refer to
+    reward_slot: Slot,
 }
 
 impl ValidatedRewardCert {
@@ -78,11 +82,11 @@ impl ValidatedRewardCert {
         skip: &Option<SkipRewardCertificate>,
         notar: &Option<NotarRewardCertificate>,
     ) -> Result<Self, Error> {
-        let Some(slot) = extract_slot(bank.slot(), skip, notar)? else {
-            return Ok(Self { validators: vec![] });
+        let Some(reward_slot) = extract_slot(bank.slot(), skip, notar)? else {
+            return Err(Error::Empty);
         };
         let rank_map = bank
-            .epoch_stakes_from_slot(slot)
+            .epoch_stakes_from_slot(reward_slot)
             .ok_or(Error::NoRankMap)?
             .bls_pubkey_to_rank_map();
         let max_validators = rank_map.len();
@@ -121,12 +125,18 @@ impl ValidatedRewardCert {
                 rank_map,
             )?
         }
-        Ok(Self { validators })
+        if validators.is_empty() {
+            return Err(Error::Empty);
+        }
+        Ok(Self {
+            validators,
+            reward_slot,
+        })
     }
 
     /// Returns the validators that were extracted from the reward certs.
-    pub(crate) fn validators(&self) -> &[Pubkey] {
-        &self.validators
+    pub(crate) fn into_parts(self) -> (Slot, Vec<Pubkey>) {
+        (self.reward_slot, self.validators)
     }
 }
 

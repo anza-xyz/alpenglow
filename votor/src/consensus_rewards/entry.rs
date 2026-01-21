@@ -1,7 +1,7 @@
 use {
-    super::BuildRewardCertsResponse,
+    super::{BuildRewardCertsRespError, BuildRewardCertsRespSucc},
     notar_entry::NotarEntry,
-    partial_cert::PartialCert,
+    partial_cert::{BuildSigBitmapError, PartialCert},
     solana_bls_signatures::BlsError,
     solana_clock::Slot,
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
@@ -78,31 +78,41 @@ impl Entry {
         }
     }
 
-    /// Builds reward certificates from the observed votes and returns a [`BuildRewardCertsResponse`].
-    pub(super) fn build_certs(self, slot: Slot) -> BuildRewardCertsResponse {
-        let (notar, notar_validators) = self.notar.build_cert(slot).unzip();
-        let (skip, skip_validators) = match self.skip.build_sig_bitmap() {
-            Err(e) => {
-                warn!("Build skip reward cert failed with {e}");
-                (None, None)
-            }
+    /// Builds reward certificates from the observed votes.
+    pub(super) fn build_certs(
+        self,
+        reward_slot: Slot,
+    ) -> Result<BuildRewardCertsRespSucc, BuildRewardCertsRespError> {
+        let notar = self.notar.build_cert(reward_slot)?;
+        let skip = match self.skip.build_sig_bitmap() {
+            Err(e) => match e {
+                BuildSigBitmapError::Empty => None,
+                BuildSigBitmapError::Encode(e) => return Err(BuildRewardCertsRespError::Encode(e)),
+            },
             Ok((signature, bitmap, skip_validators)) => {
-                match SkipRewardCertificate::try_new(slot, signature, bitmap) {
-                    Err(e) => {
-                        warn!("Build skip reward cert failed with {e}");
-                        (None, None)
-                    }
-                    Ok(c) => (Some(c), Some(skip_validators)),
-                }
+                let cert = SkipRewardCertificate::try_new(reward_slot, signature, bitmap)?;
+                Some((cert, skip_validators))
             }
         };
-        let mut validators = notar_validators.unwrap_or_default();
-        validators.extend(skip_validators.unwrap_or_default());
-        BuildRewardCertsResponse {
+
+        let (skip, notar, validators) = match (skip, notar) {
+            (None, None) => (None, None, vec![]),
+            (Some((skip_cert, skip_validators)), None) => (Some(skip_cert), None, skip_validators),
+            (None, Some((notar_cert, notar_validators))) => {
+                (None, Some(notar_cert), notar_validators)
+            }
+            (Some((skip_cert, skip_validators)), Some((notar_cert, notar_validators))) => {
+                let mut validators = skip_validators;
+                validators.extend(notar_validators);
+                (Some(skip_cert), Some(notar_cert), validators)
+            }
+        };
+
+        Ok(BuildRewardCertsRespSucc {
             skip,
             notar,
             validators,
-        }
+        })
     }
 }
 
@@ -184,14 +194,14 @@ mod tests {
         let max_validators = 5;
         let (rank_map, keypairs) = get_rank_map_keypairs(max_validators, slot);
         let mut entry = Entry::new(max_validators);
-        let resp = entry.clone().build_certs(slot);
+        let resp = entry.clone().build_certs(slot).unwrap();
         assert_eq!(resp.skip, None);
         assert_eq!(resp.notar, None);
 
         let skip = Vote::new_skip_vote(7);
         let vote = new_vote(skip, 0, &keypairs);
         entry.add_vote(&rank_map, &vote).unwrap();
-        let resp = entry.build_certs(slot);
+        let resp = entry.build_certs(slot).unwrap();
         assert_eq!(resp.notar, None);
         let skip = resp.skip.unwrap();
         assert_eq!(skip.slot, slot);
@@ -205,7 +215,7 @@ mod tests {
         let (rank_map, keypairs) = get_rank_map_keypairs(max_validators, slot);
 
         let mut entry = Entry::new(max_validators);
-        let resp = entry.clone().build_certs(slot);
+        let resp = entry.clone().build_certs(slot).unwrap();
         assert_eq!(resp.skip, None);
         assert_eq!(resp.notar, None);
 
@@ -222,7 +232,7 @@ mod tests {
             let vote = new_vote(notar, rank, &keypairs);
             entry.add_vote(&rank_map, &vote).unwrap();
         }
-        let resp = entry.build_certs(slot);
+        let resp = entry.build_certs(slot).unwrap();
         assert_eq!(resp.skip, None);
         let notar = resp.notar.unwrap();
         assert_eq!(notar.slot, slot);

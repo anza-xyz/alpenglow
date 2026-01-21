@@ -34,14 +34,13 @@ use {
         block_component_processor::BlockComponentProcessor,
     },
     solana_version::version,
-    solana_votor::{
-        common::block_timeout,
-        consensus_rewards::{BuildRewardCertsRequest, BuildRewardCertsResponse},
-        event::LeaderWindowInfo,
-    },
+    solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     solana_votor_messages::{
         consensus_message::Block,
-        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+        reward_certificate::{
+            BuildRewardCertsRequest, BuildRewardCertsRespSucc, BuildRewardCertsResponse,
+            NotarRewardCertificate, SkipRewardCertificate,
+        },
     },
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -659,20 +658,29 @@ fn record_and_complete_block(
     // Write the single tick for this slot
 
     let working_bank = w_poh_recorder.working_bank().unwrap();
-    let BuildRewardCertsResponse {
+    let BuildRewardCertsRespSucc {
         skip,
         notar,
         validators,
     } = ctx
         .reward_certs_receiver
         .recv()
-        .map_err(|_| PohRecorderError::ChannelDisconnected)?;
+        .map_err(|_| PohRecorderError::ChannelDisconnected)??;
+    let reward_slot_and_validators = match (&skip, &notar) {
+        (None, None) => None,
+        (Some(skip), None) => Some((skip.slot, validators)),
+        (None, Some(notar)) => Some((notar.slot, validators)),
+        (Some(skip), Some(notar)) => {
+            assert_eq!(skip.slot, notar.slot);
+            Some((skip.slot, validators))
+        }
+    };
     let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),
         &footer,
-        &validators,
+        reward_slot_and_validators,
     );
 
     drop(bank);

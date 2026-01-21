@@ -40,6 +40,7 @@ solana-frozen-abi-macro = { workspace = true, optional = true, features = [
 ] }
 solana-hash = { workspace = true }
 solana-program = { workspace = true }
+solana-signer-store = { workspace = true }
 solana-vote-interface = { workspace = true }
 spl-pod = { workspace = true }
 thiserror = { workspace = true }

@@ -88,7 +88,6 @@ use {
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
-        consensus_rewards::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
         event::{
             CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventReceiver, VotorEventSender,
         },
@@ -102,6 +101,7 @@ use {
     solana_votor_messages::{
         consensus_message::ConsensusMessage,
         migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
+        reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
         vote::Vote,
     },
     std::{

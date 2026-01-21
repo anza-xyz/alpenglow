@@ -260,12 +260,17 @@ impl BlockComponentProcessor {
         let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
-        let validated_reward_cert = ValidatedRewardCert::try_new(
+
+        let reward_slot_and_validators = match ValidatedRewardCert::try_new(
             &bank,
             &footer.skip_reward_cert,
             &footer.notar_reward_cert,
-        )?;
-        Self::update_bank_with_footer(bank, footer, validated_reward_cert.validators());
+        ) {
+            Ok(c) => Some(c.into_parts()),
+            Err(ValidatedRewardCertError::Empty) => None,
+            Err(e) => return Err(e.into()),
+        };
+        Self::update_bank_with_footer(bank, footer, reward_slot_and_validators);
 
         self.has_footer = true;
         Ok(())
@@ -359,7 +364,7 @@ impl BlockComponentProcessor {
     pub fn update_bank_with_footer(
         bank: Arc<Bank>,
         footer: &BlockFooterV1,
-        _validators_to_reward: &[Pubkey],
+        _reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
     ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);

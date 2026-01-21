@@ -2,7 +2,8 @@
 //! The struct handles different validators voting for different block ids and ensures that a given validator does not vote for multiple block ids.
 
 use {
-    super::{partial_cert::PartialCert, AddVoteError},
+    super::{partial_cert::PartialCert, AddVoteError, BuildSigBitmapError},
+    crate::consensus_rewards::BuildRewardCertsRespError,
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -63,30 +64,32 @@ impl NotarEntry {
         res
     }
 
-    /// Builds a [`NotarRewardCertificate`] from the observed votes.
-    ///
-    /// On success, returns the built [`NotarRewardCertificate`] and the list of validators in the cert.
-    pub(super) fn build_cert(self, slot: Slot) -> Option<(NotarRewardCertificate, Vec<Pubkey>)> {
+    /// Builds a [`NotarRewardCertificate`] and a list of validators in the certs from the observed votes.
+    pub(super) fn build_cert(
+        self,
+        reward_slot: Slot,
+    ) -> Result<Option<(NotarRewardCertificate, Vec<Pubkey>)>, BuildRewardCertsRespError> {
         // we can only submit one notar rewards certificate but different validators may vote for different blocks and we cannot combine notar votes for different blocks together in one cert.
         // ideally we should pick the block_id with the most stake to maximum leader rewards.
         // we expect this to be rare enough that picking the block_id with the most votes should be fine in most cases.
 
-        let (block_id, partial) = self
+        let res = self
             .partials
             .into_iter()
-            .max_by_key(|(_block_id, partial)| partial.votes_seen())?;
-        let (signature, bitmap, validators) = partial
-            .build_sig_bitmap()
-            .inspect_err(|e| {
-                warn!("Build notar reward cert failed with {e}");
-            })
-            .ok()?;
-        match NotarRewardCertificate::try_new(slot, block_id, signature, bitmap) {
-            Err(e) => {
-                warn!("Build notar reward cert failed with {e}");
-                None
+            .max_by_key(|(_block_id, partial)| partial.votes_seen());
+        let Some((block_id, partial)) = res else {
+            return Ok(None);
+        };
+        match partial.build_sig_bitmap() {
+            Err(e) => match e {
+                BuildSigBitmapError::Empty => Ok(None),
+                BuildSigBitmapError::Encode(e) => Err(BuildRewardCertsRespError::Encode(e)),
+            },
+            Ok((signature, bitmap, validators)) => {
+                let cert =
+                    NotarRewardCertificate::try_new(reward_slot, block_id, signature, bitmap)?;
+                Ok(Some((cert, validators)))
             }
-            Ok(c) => Some((c, validators)),
         }
     }
 }
@@ -156,7 +159,7 @@ mod tests {
         let (rank_map, keypairs) = get_rank_map_keypairs(max_validators, slot);
 
         let mut entry = NotarEntry::new(max_validators);
-        assert_eq!(entry.clone().build_cert(slot), None);
+        assert_eq!(entry.clone().build_cert(slot).unwrap(), None);
 
         let blockid0 = Hash::new_unique();
         let blockid1 = Hash::new_unique();
@@ -187,7 +190,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let (notar_cert, _) = entry.build_cert(slot).unwrap();
+        let (notar_cert, _) = entry.build_cert(slot).unwrap().unwrap();
         assert_eq!(notar_cert.slot, slot);
         assert_eq!(notar_cert.block_id, blockid1);
         validate_bitmap(notar_cert.bitmap(), 3, 5);
