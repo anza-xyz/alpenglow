@@ -15,7 +15,10 @@ use {
         event::VotorEvent,
     },
     agave_votor_messages::{
-        consensus_message::{Block, Certificate, CertificateType, ConsensusMessage, VoteMessage},
+        consensus_message::{
+            Block, Certificate, CertificateType, ConsensusMessage, HighestFinalizedSlotCert,
+            VoteMessage,
+        },
         fraction::Fraction,
         migration::MigrationStatus,
         vote::{Vote, VoteType},
@@ -506,6 +509,30 @@ impl ConsensusPool {
             })
     }
 
+    fn get_notarize_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
+        self.completed_certificates
+            .iter()
+            .find_map(|(cert_type, cert)| match cert_type {
+                CertificateType::Notarize(s, _) if slot == *s => Some(cert.clone()),
+                _ => None,
+            })
+    }
+
+    fn get_finalize_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
+        self.completed_certificates
+            .get(&CertificateType::Finalize(slot))
+            .cloned()
+    }
+
+    fn get_fast_finalize_cert(&self, slot: Slot) -> Option<Arc<Certificate>> {
+        self.completed_certificates
+            .iter()
+            .find_map(|(cert_type, cert)| match cert_type {
+                CertificateType::FinalizeFast(s, _) if slot == *s => Some(cert.clone()),
+                _ => None,
+            })
+    }
+
     #[cfg(test)]
     fn highest_notarized_slot(&self) -> Slot {
         // Return the max of CertificateType::Notarize and CertificateType::NotarizeFallback
@@ -666,6 +693,20 @@ impl ConsensusPool {
                 cert_to_send
             })
             .collect()
+    }
+
+    /// Returns the highest finalization certificates (slow w/ notarize or fast).
+    pub(crate) fn get_highest_finalization_certs(&self) -> Option<HighestFinalizedSlotCert> {
+        let (slot, has_fast_finalize) = self.highest_finalized_with_notarize?;
+        if has_fast_finalize {
+            self.get_fast_finalize_cert(slot)
+                .map(HighestFinalizedSlotCert::FastFinalize)
+        } else {
+            Some(HighestFinalizedSlotCert::Finalize {
+                finalize_cert: self.get_finalize_cert(slot)?,
+                notarize_cert: self.get_notarize_cert(slot)?,
+            })
+        }
     }
 }
 

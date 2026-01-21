@@ -42,6 +42,7 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
+    agave_votor_messages::consensus_message::HighestFinalizedSlotCert,
     anyhow::{Context, Result, anyhow},
     crossbeam_channel::{Receiver, bounded, unbounded},
     quinn::Endpoint,
@@ -1490,6 +1491,8 @@ impl Validator {
         let (optimistic_parent_sender, optimistic_parent_receiver) = unbounded();
         let (build_reward_certs_sender, build_reward_certs_receiver) = bounded(1);
         let (reward_certs_sender, reward_certs_receiver) = bounded(1);
+        let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
+            Arc::new(RwLock::new(None));
 
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
@@ -1504,6 +1507,7 @@ impl Validator {
             leader_window_info_receiver,
             highest_parent_ready: highest_parent_ready.clone(),
             replay_highest_frozen: replay_highest_frozen.clone(),
+            highest_finalized: highest_finalized.clone(),
             record_receiver_receiver,
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
             build_reward_certs_sender,
@@ -1700,6 +1704,7 @@ impl Validator {
                 optimistic_parent_sender,
                 build_reward_certs_receiver,
                 reward_certs_sender,
+                highest_finalized,
                 votor_event_sender: votor_event_sender.clone(),
                 votor_event_receiver,
                 cancel: cancel.clone(),

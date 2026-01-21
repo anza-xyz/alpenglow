@@ -9,6 +9,7 @@ use {
     solana_bls_signatures::Signature as BLSSignature,
     solana_clock::Slot,
     solana_hash::Hash,
+    std::sync::Arc,
     wincode::{SchemaRead, SchemaWrite, containers::Pod},
 };
 
@@ -92,12 +93,12 @@ impl CertificateType {
         matches!(self, Self::Finalize(_) | Self::FinalizeFast(_, _))
     }
 
-    /// Is this a slow finalize certificate?
+    /// Is this a slow finalization certificate?
     pub fn is_slow_finalization(&self) -> bool {
         matches!(self, Self::Finalize(_))
     }
 
-    /// Is this a notarize certificate?
+    /// Is this a notarization certificate?
     pub fn is_notarize(&self) -> bool {
         matches!(self, Self::Notarize(_, _))
     }
@@ -221,7 +222,44 @@ pub struct Certificate {
     pub bitmap: Vec<u8>,
 }
 
-/// A consensus message sent between validators.
+/// Represents the highest finalized slot's certificates for block footer inclusion.
+///
+/// This enum captures the two ways a slot can be finalized:
+/// - `Finalize`: Standard finalization with both a Finalize certificate and a Notarize certificate
+/// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate that combines both
+#[derive(Clone, Debug)]
+pub enum HighestFinalizedSlotCert {
+    /// Standard finalization: requires both a Finalize cert and a Notarize cert for the same slot
+    Finalize {
+        /// The finalize certificate
+        finalize_cert: Arc<Certificate>,
+        /// The notarize certificate
+        notarize_cert: Arc<Certificate>,
+    },
+    /// Fast finalization: a single FinalizeFast certificate
+    FastFinalize(Arc<Certificate>),
+}
+
+impl HighestFinalizedSlotCert {
+    /// The slot that is finalized
+    pub fn slot(&self) -> Slot {
+        match self {
+            HighestFinalizedSlotCert::Finalize {
+                finalize_cert,
+                notarize_cert,
+            } => {
+                debug_assert_eq!(
+                    finalize_cert.cert_type.slot(),
+                    notarize_cert.cert_type.slot()
+                );
+                finalize_cert.cert_type.slot()
+            }
+            HighestFinalizedSlotCert::FastFinalize(certificate) => certificate.cert_type.slot(),
+        }
+    }
+}
+
+/// Different types of consensus messages.
 #[cfg_attr(
     feature = "frozen-abi",
     derive(AbiExample, AbiEnumVisitor),

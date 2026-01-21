@@ -14,13 +14,13 @@ use {
         event::LeaderWindowInfo,
     },
     agave_votor_messages::{
-        consensus_message::Block,
+        consensus_message::{Block, HighestFinalizedSlotCert},
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
     crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
-        BlockFooterV1, GenesisCertificate,
+        BlockFooterV1, FinalCertificate, GenesisCertificate,
         NotarRewardCertificate as FooterNotarRewardCertificate,
         SkipRewardCertificate as FooterSkipRewardCertificate, UpdateParentV1, VersionedBlockMarker,
     },
@@ -103,6 +103,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -129,6 +130,7 @@ struct LeaderContext {
     slot_status_notifier: Option<SlotStatusNotifier>,
     banking_tracer: Arc<BankingTracer>,
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
@@ -166,6 +168,7 @@ enum StartLeaderError {
 
 fn produce_block_footer_with_timestamp(
     block_producer_time_nanos: u64,
+    final_cert: Option<FinalCertificate>,
     skip_reward_cert: Option<FooterSkipRewardCertificate>,
     notar_reward_cert: Option<FooterNotarRewardCertificate>,
 ) -> BlockFooterV1 {
@@ -173,7 +176,7 @@ fn produce_block_footer_with_timestamp(
         bank_hash: Hash::default(),
         block_producer_time_nanos,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
-        final_cert: None,
+        final_cert,
         skip_reward_cert,
         notar_reward_cert,
     }
@@ -198,6 +201,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         leader_window_info_receiver,
         highest_parent_ready,
         replay_highest_frozen,
+        highest_finalized,
         record_receiver_receiver,
         optimistic_parent_receiver,
         build_reward_certs_sender,
@@ -244,6 +248,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         slot_status_notifier,
         banking_tracer,
         replay_highest_frozen,
+        highest_finalized,
         build_reward_certs_sender,
         reward_certs_receiver,
         metrics: BlockCreationLoopMetrics::default(),
@@ -466,6 +471,7 @@ fn produce_block_footer(
     bank: Arc<Bank>,
     skip_reward_cert: Option<FooterSkipRewardCertificate>,
     notar_reward_cert: Option<FooterNotarRewardCertificate>,
+    highest_finalized: &RwLock<Option<HighestFinalizedSlotCert>>,
 ) -> BlockFooterV1 {
     let mut block_producer_time_nanos = i64::try_from(
         SystemTime::now()
@@ -492,9 +498,15 @@ fn produce_block_footer(
         );
     }
 
+    let final_cert = highest_finalized
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(FinalCertificate::from_finalization_certs);
     let block_producer_time_nanos = u64::try_from(block_producer_time_nanos).unwrap_or_default();
     produce_block_footer_with_timestamp(
         block_producer_time_nanos,
+        final_cert,
         skip_reward_cert,
         notar_reward_cert,
     )
@@ -684,7 +696,12 @@ fn record_and_complete_block(
             (None, None)
         }
     };
-    let footer = produce_block_footer(bank.clone(), skip_reward_cert, notar_reward_cert);
+    let footer = produce_block_footer(
+        bank.clone(),
+        skip_reward_cert,
+        notar_reward_cert,
+        &ctx.highest_finalized,
+    );
     w_poh_recorder.send_marker(VersionedBlockMarker::new_block_footer(footer.clone()))?;
 
     // Alpentick and clear bank

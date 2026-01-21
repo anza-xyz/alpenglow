@@ -32,7 +32,10 @@ use {
         voting_service::{VotingService as BLSVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
-    agave_votor_messages::reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+    agave_votor_messages::{
+        consensus_message::HighestFinalizedSlotCert,
+        reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+    },
     bytes::Bytes,
     crossbeam_channel::{Receiver, Sender, bounded, unbounded},
     solana_client::connection_cache::ConnectionCache,
@@ -159,6 +162,7 @@ pub struct AlpenglowInitializationState {
     pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
     pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Main communication channel
     pub votor_event_sender: VotorEventSender,
@@ -255,6 +259,7 @@ impl Tvu {
             optimistic_parent_sender,
             build_reward_certs_receiver,
             reward_certs_sender,
+            highest_finalized,
         } = votor_init;
 
         // streamer and sigverify for A2A BLS messages
@@ -469,6 +474,7 @@ impl Tvu {
             reward_votes_receiver,
             reward_certs_sender,
             build_reward_certs_receiver,
+            highest_finalized,
         };
         let votor = Votor::new(votor_config);
 
@@ -841,6 +847,7 @@ pub mod tests {
                 optimistic_parent_sender,
                 build_reward_certs_receiver,
                 reward_certs_sender,
+                highest_finalized: Arc::new(RwLock::new(None)),
                 votor_event_sender,
                 votor_event_receiver,
                 cancel,

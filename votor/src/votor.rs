@@ -59,7 +59,7 @@ use {
         voting_utils::VotingContext,
     },
     agave_votor_messages::{
-        consensus_message::ConsensusMessage,
+        consensus_message::{ConsensusMessage, HighestFinalizedSlotCert},
         reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
     crossbeam_channel::{Receiver, Sender},
@@ -104,6 +104,7 @@ pub struct VotorConfig {
     pub leader_schedule_cache: Arc<LeaderScheduleCache>,
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -159,6 +160,7 @@ impl Votor {
             cluster_info,
             leader_schedule_cache,
             rpc_subscriptions,
+            highest_finalized,
             snapshot_controller,
             bls_sender,
             commitment_sender,
@@ -246,6 +248,7 @@ impl Votor {
             bls_sender,
             event_sender,
             commitment_sender,
+            highest_finalized,
         };
 
         let metrics = ConsensusMetrics::start_metrics_loop(
