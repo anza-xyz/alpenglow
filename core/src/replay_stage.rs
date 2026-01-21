@@ -3595,12 +3595,62 @@ impl ReplayStage {
                     let _ = cluster_slots_update_sender.send(vec![bank_slot]);
                 }
 
-                bank.freeze();
+                // For alpenglow blocks, verify that the bank hash matches the expected bank hash
+                // sent by the leader in the block footer. If we are the leader, skip verification as
+                // the bank hash in the footer is not yet populated.
+                let verify_result = if migration_status.should_allow_block_markers(bank.slot())
+                    && bank.leader_id() != my_pubkey
+                {
+                    bank.freeze_and_verify_bank_hash()
+                } else {
+                    bank.freeze();
+                    Ok(())
+                };
+
                 datapoint_info!(
                     "bank_frozen",
                     ("slot", bank_slot, i64),
                     ("hash", bank.hash().to_string(), String),
                 );
+
+                if let Err((expected_hash, computed_hash)) = verify_result {
+                    error!(
+                        "Bank hash mismatch for slot {bank_slot} expected: {expected_hash} \
+                         computed: {computed_hash}",
+                    );
+
+                    datapoint_error!(
+                        "bank_hash_mismatch",
+                        ("slot", bank_slot, i64),
+                        ("expected", expected_hash.to_string(), String),
+                        ("computed", computed_hash.to_string(), String),
+                    );
+
+                    if let Err(err) = bank_hash_details::write_bank_hash_details_file(bank) {
+                        warn!("Unable to write bank hash details file: {err}");
+                    }
+
+                    let root = bank_forks.read().unwrap().root();
+                    Self::mark_dead_slot(
+                        blockstore,
+                        bank,
+                        root,
+                        &BlockstoreProcessorError::BankHashMismatch(
+                            bank_slot,
+                            expected_hash,
+                            computed_hash,
+                        ),
+                        rpc_subscriptions,
+                        slot_status_notifier,
+                        progress,
+                        duplicate_slots_to_repair,
+                        ancestor_hashes_replay_update_sender,
+                        purge_repair_slot_counter,
+                        &mut tbft_structs,
+                    );
+
+                    continue;
+                }
 
                 if let Some(transaction_status_sender) = transaction_status_sender {
                     transaction_status_sender.send_transaction_status_freeze_message(bank);
@@ -4594,7 +4644,7 @@ impl ReplayStage {
         let frozen_bank_slots: Vec<_> = frozen_banks
             .keys()
             .cloned()
-            .filter(|slot| *slot >= forks.root())
+            .filter(|slot| *slot >= forks.root() && !progress.get(slot).unwrap().is_dead)
             .collect();
 
         let mut generate_new_bank_forks_get_slots_since =

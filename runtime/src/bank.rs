@@ -2680,6 +2680,7 @@ impl Bank {
             // that rehash() can be called and *not* modify self.accounts_lt_hash.
             self.update_accounts_lt_hash();
             *hash = self.hash_internal_state();
+
             self.rc.accounts.accounts_db.mark_slot_frozen(self.slot());
         }
     }

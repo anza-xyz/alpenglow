@@ -307,6 +307,9 @@ impl BlockComponentProcessor {
         let unix_timestamp_nanos = i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
         bank.update_clock_from_footer(unix_timestamp_nanos);
 
+        // Record expected bank hash from footer for later verification when the bank is frozen.
+        bank.set_expected_bank_hash(footer.bank_hash);
+
         // TODO: rewards
     }
 }
