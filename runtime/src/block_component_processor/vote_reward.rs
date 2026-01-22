@@ -3,9 +3,8 @@ use {
         bank::{Bank, PrevEpochInflationRewards},
         epoch_stakes::VersionedEpochStakes,
     },
-    solana_account::{Account, AccountSharedData},
+    solana_account::AccountSharedData,
     solana_clock::{Epoch, Slot},
-    solana_genesis_config::GenesisConfig,
     solana_pubkey::Pubkey,
     solana_rent::Rent,
     solana_system_interface::program as system_program,
@@ -24,25 +23,13 @@ static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
 
 /// The state stored in the off curve account used to store metadata for calculating and paying voting rewards.
 #[derive(Deserialize, Serialize)]
-pub(crate) enum VoteRewardAccountState {
-    /// This variant should be in use for the epoch in which the migration to Alpenglow happens.
-    FirstEpoch {
-        /// The capitalization of the current epoch after all the voting rewards have been paid i.e. Partitioned Epoch Rewards are over.
-        /// As such, when calculating total_validators_rewards, we do not need to account for PER.
-        current_epoch_capitalization: u64,
-        /// The epoch number of the current epoch.
-        current_epoch: Epoch,
-    },
-
-    /// This variant is used for all epochs after the epoch in which the migration to Alpenglow happened.
-    LaterEpochs {
-        /// The capitalization at the end of the previous epoch.
-        prev_epoch_capitalization: u64,
-        /// The epoch number of the previous epoch.
-        prev_epoch: Epoch,
-        /// The additional validator rewards according to PER.
-        per_validator_rewards: u64,
-    },
+pub(crate) struct VoteRewardAccountState {
+    /// The capitalization at the end of the previous epoch.
+    prev_epoch_capitalization: u64,
+    /// The epoch number of the previous epoch.
+    prev_epoch: Epoch,
+    /// The additional validator rewards according to PER.
+    per_validator_rewards: u64,
 }
 
 impl VoteRewardAccountState {
@@ -60,54 +47,17 @@ impl VoteRewardAccountState {
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
 
-    pub(crate) fn genesis_insert_account(
-        genesis_config: &mut GenesisConfig,
-        current_epoch_capitalization: u64,
-        current_epoch: Epoch,
-    ) {
-        let state = Self::FirstEpoch {
-            current_epoch_capitalization,
-            current_epoch,
-        };
-        let state_size = bincode::serialized_size(&state).unwrap();
-        let lamports = Rent::default().minimum_balance(state_size as usize);
-        let account = Account::new_data(lamports, &state, &system_program::ID).unwrap();
-
-        genesis_config
-            .accounts
-            .insert(*VOTE_REWARD_ACCOUNT_ADDR, account);
-    }
-
     /// Returns the rewards (in lamports) that would be paid to the validator whose stake is equal to the capitalization and it voted in every slot in the epoch.
     fn calculate_total_validator_rewards(bank: &Bank) -> u64 {
-        let state = Self::get_state(bank);
-        match state {
-            Self::FirstEpoch {
-                current_epoch_capitalization,
-                current_epoch,
-            } => {
-                // This assumes that the migration to alpenglow happens after the vote rewards for the previous epoch have been fully paid.
-                // As such, we do not need to account for PER when calculating the rewards.
-                let PrevEpochInflationRewards {
-                    validator_rewards, ..
-                } = bank.calculate_previous_epoch_inflation_rewards(
-                    current_epoch_capitalization,
-                    current_epoch,
-                );
-                validator_rewards
-            }
-            Self::LaterEpochs {
-                prev_epoch_capitalization: prev_capitalization,
-                prev_epoch,
-                per_validator_rewards: per_rewards,
-            } => {
-                let PrevEpochInflationRewards {
-                    validator_rewards, ..
-                } = bank
-                    .calculate_previous_epoch_inflation_rewards(prev_capitalization, prev_epoch);
-                validator_rewards + per_rewards
-            }
-        }
+        let Self {
+            prev_epoch_capitalization,
+            prev_epoch,
+            per_validator_rewards,
+        } = Self::get_state(bank);
+        let PrevEpochInflationRewards {
+            validator_rewards, ..
+        } = bank.calculate_previous_epoch_inflation_rewards(prev_epoch_capitalization, prev_epoch);
+        validator_rewards + per_validator_rewards
     }
 
     /// Updates the state when a new epoch starts.
@@ -117,7 +67,7 @@ impl VoteRewardAccountState {
         prev_epoch_capitalization: u64,
         per_validator_rewards: u64,
     ) {
-        let state = Self::LaterEpochs {
+        let state = Self {
             prev_epoch_capitalization,
             prev_epoch,
             per_validator_rewards,

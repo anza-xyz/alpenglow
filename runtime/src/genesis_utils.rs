@@ -1,5 +1,4 @@
 use {
-    crate::block_component_processor::vote_reward::VoteRewardAccountState,
     agave_feature_set::{FeatureSet, FEATURE_NAMES},
     log::*,
     solana_account::{Account, AccountSharedData},
@@ -324,9 +323,6 @@ pub fn activate_all_features_alpenglow(genesis_config: &mut GenesisConfig) {
     genesis_config
         .accounts
         .insert(*GENESIS_CERTIFICATE_ACCOUNT, certificate_account);
-
-    // XXX: figure out the details below
-    VoteRewardAccountState::genesis_insert_account(genesis_config, 0, 0);
 }
 
 pub fn activate_all_features(genesis_config: &mut GenesisConfig) {

@@ -1694,12 +1694,17 @@ impl Bank {
             .vote_account_rewards
             .total_vote_rewards_lamports;
 
-        VoteRewardAccountState::epoch_update_account(
-            self,
-            parent_epoch,
-            parent_capitalization,
-            per_validator_rewards,
-        );
+        if self
+            .feature_set
+            .is_active(&agave_feature_set::alpenglow::id())
+        {
+            VoteRewardAccountState::epoch_update_account(
+                self,
+                parent_epoch,
+                parent_capitalization,
+                per_validator_rewards,
+            );
+        }
 
         report_new_epoch_metrics(
             epoch,
