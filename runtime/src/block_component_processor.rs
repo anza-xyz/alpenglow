@@ -18,7 +18,10 @@ use {
     },
     std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
+    vote_reward::calculate_and_pay_voting_reward,
 };
+
+pub(crate) mod vote_reward;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
@@ -364,12 +367,12 @@ impl BlockComponentProcessor {
     pub fn update_bank_with_footer(
         bank: Arc<Bank>,
         footer: &BlockFooterV1,
-        _reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
+        reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
     ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
-        // TODO: rewards
+        calculate_and_pay_voting_reward(&bank, reward_slot_and_validators).unwrap()
     }
 }
 
