@@ -99,6 +99,8 @@ impl Add for RewardsAccumulator {
 impl Bank {
     /// Begin the process of calculating and distributing rewards.
     /// This process can take multiple slots.
+    ///
+    /// Returns the epoch validator rewards.
     pub(in crate::bank) fn begin_partitioned_rewards(
         &mut self,
         reward_calc_tracer: Option<impl Fn(&RewardCalculationEvent) + Send + Sync>,
@@ -107,7 +109,7 @@ impl Bank {
         parent_slot: Slot,
         parent_block_height: u64,
         rewards_metrics: &mut RewardsMetrics,
-    ) {
+    ) -> u64 {
         let CalculateRewardsAndDistributeVoteRewardsResult {
             distributed_rewards,
             point_value,
@@ -142,6 +144,7 @@ impl Bank {
             ("parent_slot", parent_slot, i64),
             ("parent_block_height", parent_block_height, i64),
         );
+        distributed_rewards
     }
 
     // Calculate rewards from previous epoch and distribute vote rewards

@@ -1675,7 +1675,7 @@ impl Bank {
 
         let mut rewards_metrics = RewardsMetrics::default();
         // After saving a snapshot of stakes, apply stake rewards and commission
-        let (_, update_rewards_with_thread_pool_time_us) = measure_us!(self
+        let (epoch_validator_rewards, update_rewards_with_thread_pool_time_us) = measure_us!(self
             .begin_partitioned_rewards(
                 reward_calc_tracer,
                 &thread_pool,
@@ -1689,22 +1689,12 @@ impl Bank {
             .feature_set
             .is_active(&agave_feature_set::alpenglow::id())
         {
-            let per_validator_rewards = self
-                .epoch_rewards_calculation_cache
-                .lock()
-                .unwrap()
-                .get(&self.parent_hash)
-                .unwrap()
-                .vote_account_rewards
-                .total_vote_rewards_lamports;
-            if false {
-                VoteRewardAccountState::epoch_update_account(
-                    self,
-                    parent_epoch,
-                    parent_capitalization,
-                    per_validator_rewards,
-                );
-            }
+            VoteRewardAccountState::new_epoch_update_account(
+                self,
+                parent_epoch,
+                parent_capitalization,
+                epoch_validator_rewards,
+            );
         }
 
         report_new_epoch_metrics(

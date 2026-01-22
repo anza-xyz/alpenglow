@@ -134,12 +134,7 @@ pub fn create_genesis_config_with_alpenglow_vote_accounts(
         ClusterType::Development,
         true,
     );
-    VoteRewardAccountState::genesis_insert_account(
-        &mut genesis_config_info.genesis_config,
-        0,
-        0,
-        0,
-    );
+    VoteRewardAccountState::genesis_insert_account(&mut genesis_config_info.genesis_config, 0);
     genesis_config_info
 }
 
@@ -332,6 +327,7 @@ pub fn activate_all_features_alpenglow(genesis_config: &mut GenesisConfig) {
     genesis_config
         .accounts
         .insert(*GENESIS_CERTIFICATE_ACCOUNT, certificate_account);
+    VoteRewardAccountState::genesis_insert_account(genesis_config, 0);
 }
 
 pub fn activate_all_features(genesis_config: &mut GenesisConfig) {
