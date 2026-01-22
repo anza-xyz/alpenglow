@@ -1,3 +1,5 @@
+#[cfg(feature = "dev-context-only-utils")]
+use crate::block_component_processor::vote_reward::VoteRewardAccountState;
 use {
     agave_feature_set::{FeatureSet, FEATURE_NAMES},
     log::*,
@@ -125,13 +127,20 @@ pub fn create_genesis_config_with_alpenglow_vote_accounts(
     voting_keypairs: &[impl Borrow<ValidatorVoteKeypairs>],
     stakes: Vec<u64>,
 ) -> GenesisConfigInfo {
-    create_genesis_config_with_vote_accounts_and_cluster_type(
+    let mut genesis_config_info = create_genesis_config_with_vote_accounts_and_cluster_type(
         mint_lamports,
         voting_keypairs,
         stakes,
         ClusterType::Development,
         true,
-    )
+    );
+    VoteRewardAccountState::genesis_insert_account(
+        &mut genesis_config_info.genesis_config,
+        0,
+        0,
+        0,
+    );
+    genesis_config_info
 }
 
 pub fn create_genesis_config_with_vote_accounts_and_cluster_type(

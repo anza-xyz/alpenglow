@@ -1685,25 +1685,26 @@ impl Bank {
                 &mut rewards_metrics,
             ));
 
-        let per_validator_rewards = self
-            .epoch_rewards_calculation_cache
-            .lock()
-            .unwrap()
-            .get(&self.parent_hash)
-            .unwrap()
-            .vote_account_rewards
-            .total_vote_rewards_lamports;
-
         if self
             .feature_set
             .is_active(&agave_feature_set::alpenglow::id())
         {
-            VoteRewardAccountState::epoch_update_account(
-                self,
-                parent_epoch,
-                parent_capitalization,
-                per_validator_rewards,
-            );
+            let per_validator_rewards = self
+                .epoch_rewards_calculation_cache
+                .lock()
+                .unwrap()
+                .get(&self.parent_hash)
+                .unwrap()
+                .vote_account_rewards
+                .total_vote_rewards_lamports;
+            if false {
+                VoteRewardAccountState::epoch_update_account(
+                    self,
+                    parent_epoch,
+                    parent_capitalization,
+                    per_validator_rewards,
+                );
+            }
         }
 
         report_new_epoch_metrics(

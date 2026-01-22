@@ -11,6 +11,8 @@ use {
     std::sync::LazyLock,
     thiserror::Error,
 };
+#[cfg(feature = "dev-context-only-utils")]
+use {solana_account::Account, solana_genesis_config::GenesisConfig};
 
 /// The account address for the off curve account used to store metadata for calculating and paying voting rewards.
 static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
@@ -43,7 +45,6 @@ impl VoteRewardAccountState {
         let account_size = bincode::serialized_size(&self).unwrap();
         let lamports = Rent::default().minimum_balance(account_size as usize);
         let account = AccountSharedData::new_data(lamports, &self, &system_program::ID).unwrap();
-
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
 
@@ -73,6 +74,27 @@ impl VoteRewardAccountState {
             per_validator_rewards,
         };
         state.set_state(bank);
+    }
+
+    #[cfg(feature = "dev-context-only-utils")]
+    pub(crate) fn genesis_insert_account(
+        genesis_config: &mut GenesisConfig,
+        prev_epoch: Epoch,
+        prev_epoch_capitalization: u64,
+        per_validator_rewards: u64,
+    ) {
+        let state = Self {
+            prev_epoch_capitalization,
+            prev_epoch,
+            per_validator_rewards,
+        };
+        let state_size = bincode::serialized_size(&state).unwrap();
+        let lamports = Rent::default().minimum_balance(state_size as usize);
+        let account = Account::new_data(lamports, &state, &system_program::ID).unwrap();
+
+        genesis_config
+            .accounts
+            .insert(*VOTE_REWARD_ACCOUNT_ADDR, account);
     }
 }
 
