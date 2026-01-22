@@ -45,7 +45,7 @@ use {
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Condvar, Mutex, RwLock,
         },
         thread::{self, Builder, JoinHandle},
@@ -111,6 +111,9 @@ pub struct BlockCreationLoopConfig {
     pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     /// Channel to receive the built reward certs.
     pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
+
+    /// Optional counter for tracking sad leader handover occurrences (for testing).
+    pub sad_leader_handover_counter: Option<Arc<AtomicU64>>,
 }
 
 struct LeaderContext {
@@ -131,6 +134,9 @@ struct LeaderContext {
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
     highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+
+    // Optional counter for tracking sad leader handover occurrences (for testing)
+    sad_leader_handover_counter: Option<Arc<AtomicU64>>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -188,6 +194,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         build_reward_certs_sender,
         reward_certs_receiver,
         highest_finalized,
+        sad_leader_handover_counter,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -233,6 +240,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         banking_tracer,
         replay_highest_frozen,
         highest_finalized,
+        sad_leader_handover_counter,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -538,6 +546,11 @@ fn handle_parent_ready(
         optimistic_parent_block,
         leader_window_info.parent_block
     );
+
+    // Increment counter for testing/metrics
+    if let Some(counter) = &ctx.sad_leader_handover_counter {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
 
     // If the optimistic parent doesn't match the finalized parent (specified in ParentReady), then
     // this resets the block timer to the new parent's timer.

@@ -12,6 +12,7 @@ pub(super) struct BlockCreationLoopMetrics {
     pub(super) skipped_window_behind_parent_ready_count: u64,
     pub(super) window_production_elapsed: u64,
     pub(super) bank_timeout_completion_elapsed_hist: histogram::Histogram,
+    pub(super) sad_leader_handover_count: u64,
 }
 
 impl Default for BlockCreationLoopMetrics {
@@ -22,6 +23,7 @@ impl Default for BlockCreationLoopMetrics {
             skipped_window_behind_parent_ready_count: 0,
             window_production_elapsed: 0,
             bank_timeout_completion_elapsed_hist: histogram::Histogram::default(),
+            sad_leader_handover_count: 0,
             last_report: timestamp(),
         }
     }
@@ -35,12 +37,14 @@ impl BlockCreationLoopMetrics {
             skipped_window_behind_parent_ready_count,
             window_production_elapsed,
             bank_timeout_completion_elapsed_hist,
+            sad_leader_handover_count,
             last_report: _,
         } = self;
         0 == *loop_count
             + *bank_timeout_completion_count
             + *window_production_elapsed
             + *skipped_window_behind_parent_ready_count
+            + *sad_leader_handover_count
             + bank_timeout_completion_elapsed_hist.entries()
     }
 
@@ -61,6 +65,7 @@ impl BlockCreationLoopMetrics {
             skipped_window_behind_parent_ready_count,
             window_production_elapsed,
             bank_timeout_completion_elapsed_hist,
+            sad_leader_handover_count,
             last_report,
         } = self;
 
@@ -82,6 +87,7 @@ impl BlockCreationLoopMetrics {
                     *skipped_window_behind_parent_ready_count,
                     i64
                 ),
+                ("sad_leader_handover_count", *sad_leader_handover_count, i64),
                 (
                     "bank_timeout_completion_elapsed_90pct",
                     bank_timeout_completion_elapsed_hist

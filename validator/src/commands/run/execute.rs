@@ -639,6 +639,7 @@ pub fn execute(
             Arc::new(AtomicBool::new(false)),
         )]
         .into(),
+        sad_leader_handover_counter: None,
     };
 
     let reserved = validator_config

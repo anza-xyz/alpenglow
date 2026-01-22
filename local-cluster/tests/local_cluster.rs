@@ -63,6 +63,7 @@ use {
         local_cluster::{ClusterConfig, LocalCluster, DEFAULT_MINT_LAMPORTS},
         validator_configs::*,
     },
+    solana_native_token::LAMPORTS_PER_SOL,
     solana_poh_config::PohConfig,
     solana_pubkey::Pubkey,
     solana_pubsub_client::pubsub_client::PubsubClient,
@@ -114,7 +115,7 @@ use {
         num::NonZeroU64,
         path::Path,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -8001,4 +8002,262 @@ fn test_alpenglow_add_missing_parent_ready() {
     });
     vote_listener_thread.join().unwrap();
     quic_server_thread.join().unwrap();
+}
+
+#[test]
+#[serial]
+fn test_alpenglow_flh_simple_sad_leader_handover() {
+    agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    // 4 nodes: 0, 1 are leaders (15% each), 2, 3 are exited with majority stake (35% each).
+    // Stakes descending so rank == node index. We control votes for exited nodes 2, 3.
+    const NUM_NODES: usize = 4;
+    const TOTAL_STAKE: u64 = 100 * DEFAULT_NODE_STAKE;
+    const STAGE_2_START_SLOT: u64 = 20;
+    const STAGE_3_START_SLOT: u64 = 100;
+
+    let node_stakes = [
+        TOTAL_STAKE * 15 / 100, // node 0: leader
+        TOTAL_STAKE * 15 / 100, // node 1: leader
+        TOTAL_STAKE * 35 / 100, // node 2: exited, we control
+        TOTAL_STAKE * 35 / 100, // node 3: exited, we control
+    ];
+    assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
+
+    // Leaders alternate every 4 slots: 0-3 = node 0, 4-7 = node 1, etc.
+    let (leader_schedule, validator_keys) =
+        create_custom_leader_schedule_with_random_keys(&[4, 4, 0, 0]);
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
+    let flh_counters: Vec<Arc<AtomicU64>> = (0..NUM_NODES)
+        .map(|_| Arc::new(AtomicU64::new(0)))
+        .collect();
+
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.fixed_leader_schedule = Some(leader_schedule);
+    validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_socket.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
+
+    let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
+    for (i, config) in validator_configs.iter_mut().enumerate() {
+        config.sad_leader_handover_counter = Some(flh_counters[i].clone());
+    }
+
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: TOTAL_STAKE,
+        node_stakes: node_stakes.to_vec(),
+        validator_configs,
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(std::iter::repeat(true))
+                .collect(),
+        ),
+        ..ClusterConfig::default()
+    };
+
+    let mut cluster =
+        LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+    assert_eq!(NUM_NODES, cluster.validators.len());
+
+    let alpenglow_socket_addrs: Vec<_> = validator_keys
+        .iter()
+        .map(|keypair| {
+            cluster
+                .get_contact_info(&keypair.pubkey())
+                .unwrap()
+                .alpenglow()
+                .unwrap()
+        })
+        .collect();
+
+    // Commandeer votes for nodes 2 and 3
+    let node_2_info = cluster.exit_node(&validator_keys[2].pubkey());
+    let node_2_vote_keypair = node_2_info.info.voting_keypair.clone();
+    let node_3_info = cluster.exit_node(&validator_keys[3].pubkey());
+    let node_3_vote_keypair = node_3_info.info.voting_keypair.clone();
+
+    let (cancel, quic_server_thread, receiver) = start_quic_streamer_to_listen_for_votes_and_certs(
+        vote_listener_socket,
+        &validator_keys,
+        &node_stakes,
+    );
+
+    fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
+        let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+        let signature: BLSSignature = bls_keypair
+            .sign(bincode::serialize(&vote).unwrap().as_slice())
+            .into();
+        ConsensusMessage::new_vote(vote, signature, rank)
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Stage {
+        Stability,
+        TriggerSadPath,
+        ObserveLiveness,
+    }
+
+    impl Stage {
+        fn timeout(&self) -> Duration {
+            match self {
+                Stage::Stability => Duration::from_secs(120),
+                Stage::TriggerSadPath => Duration::from_secs(180),
+                Stage::ObserveLiveness => Duration::from_secs(240),
+            }
+        }
+    }
+
+    let vote_listener_thread = std::thread::spawn({
+        let flh_counters = flh_counters.clone();
+        let connection_cache = cluster.connection_cache.clone();
+
+        move || {
+            let mut stage = Stage::Stability;
+            let mut stage_3_finalized_slots: HashSet<Slot> = HashSet::new();
+            let timer = Instant::now();
+
+            // Delay skip injection so the next leader starts with OptimisticParent first
+            const SKIP_INJECTION_DELAY: Duration = Duration::from_millis(600);
+            let mut pending_skips: Vec<(Slot, Instant)> = Vec::new();
+
+            loop {
+                if timer.elapsed() > stage.timeout() {
+                    let total_flh: u64 =
+                        flh_counters.iter().map(|c| c.load(Ordering::Acquire)).sum();
+                    panic!(
+                        "Timeout during {:?}. FLH count: {}, stage_3_finalized: {}",
+                        stage,
+                        total_flh,
+                        stage_3_finalized_slots.len()
+                    );
+                }
+
+                // Inject any pending skips that are ready
+                let now = Instant::now();
+                pending_skips.retain(|&(slot, inject_at)| {
+                    if now >= inject_at {
+                        broadcast_vote(
+                            sign_and_construct_vote(
+                                Vote::new_skip_vote(slot),
+                                &node_2_vote_keypair,
+                                0,
+                            ),
+                            &alpenglow_socket_addrs,
+                            None,
+                            connection_cache.clone(),
+                        );
+                        broadcast_vote(
+                            sign_and_construct_vote(
+                                Vote::new_skip_vote(slot),
+                                &node_3_vote_keypair,
+                                1,
+                            ),
+                            &alpenglow_socket_addrs,
+                            None,
+                            connection_cache.clone(),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                let Ok(packet_batch) = receiver.recv_timeout(Duration::from_millis(50)) else {
+                    continue;
+                };
+
+                for packet in packet_batch.iter() {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+
+                    let Ok(message) = packet.deserialize_slice(..) else {
+                        continue;
+                    };
+
+                    match message {
+                        ConsensusMessage::Vote(vote_message) => {
+                            let vote = &vote_message.vote;
+                            let slot = vote.slot();
+
+                            // Only process votes from running leaders (ranks 2 and 3)
+                            if vote_message.rank != 2 && vote_message.rank != 3 {
+                                continue;
+                            }
+
+                            if stage == Stage::Stability && slot >= STAGE_2_START_SLOT {
+                                info!("Transitioning to TriggerSadPath at slot {}", slot);
+                                stage = Stage::TriggerSadPath;
+                            }
+                            if stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
+                                let total_flh: u64 =
+                                    flh_counters.iter().map(|c| c.load(Ordering::Acquire)).sum();
+                                info!(
+                                    "Transitioning to ObserveLiveness at slot {}. FLH count: {}",
+                                    slot, total_flh
+                                );
+                                stage = Stage::ObserveLiveness;
+                            }
+
+                            let should_inject_skip =
+                                stage == Stage::TriggerSadPath && slot % 4 == 3;
+                            if should_inject_skip {
+                                // Queue skip votes with delay so next leader uses OptimisticParent
+                                if !pending_skips.iter().any(|(s, _)| *s == slot) {
+                                    pending_skips
+                                        .push((slot, Instant::now() + SKIP_INJECTION_DELAY));
+                                }
+                            } else {
+                                // Copy leader's vote to exited nodes
+                                broadcast_vote(
+                                    sign_and_construct_vote(*vote, &node_2_vote_keypair, 0),
+                                    &alpenglow_socket_addrs,
+                                    None,
+                                    connection_cache.clone(),
+                                );
+                                broadcast_vote(
+                                    sign_and_construct_vote(*vote, &node_3_vote_keypair, 1),
+                                    &alpenglow_socket_addrs,
+                                    None,
+                                    connection_cache.clone(),
+                                );
+                            }
+                        }
+                        ConsensusMessage::Certificate(certificate) => {
+                            let cert_type = &certificate.cert_type;
+                            let is_finalize = matches!(cert_type, CertificateType::Finalize(_))
+                                || matches!(cert_type, CertificateType::FinalizeFast(_, _));
+
+                            if is_finalize && stage == Stage::ObserveLiveness {
+                                stage_3_finalized_slots.insert(cert_type.slot());
+                                if stage_3_finalized_slots.len() >= 10 {
+                                    let total_flh: u64 = flh_counters
+                                        .iter()
+                                        .map(|c| c.load(Ordering::Acquire))
+                                        .sum();
+                                    info!(
+                                        "Test complete: {} FLH sad paths, {} finalized in stage 3",
+                                        total_flh,
+                                        stage_3_finalized_slots.len()
+                                    );
+                                    cancel.cancel();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    vote_listener_thread.join().expect("vote listener panicked");
+    quic_server_thread.join().expect("quic server panicked");
 }
