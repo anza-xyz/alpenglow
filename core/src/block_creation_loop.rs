@@ -12,7 +12,7 @@ use {
     crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
-        BlockFooterV1, GenesisCertificate, UpdateParentV1, VersionedBlockMarker,
+        BlockFooterV1, FinalCertificate, GenesisCertificate, UpdateParentV1, VersionedBlockMarker,
     },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -36,7 +36,7 @@ use {
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     solana_votor_messages::{
-        consensus_message::Block,
+        consensus_message::{Block, HighestFinalizedSlotCert},
         reward_certificate::{
             BuildRewardCertsRequest, BuildRewardCertsRespSucc, BuildRewardCertsResponse,
             NotarRewardCertificate, SkipRewardCertificate,
@@ -101,6 +101,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -129,6 +130,7 @@ struct LeaderContext {
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
+    highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -185,6 +187,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         optimistic_parent_receiver,
         build_reward_certs_sender,
         reward_certs_receiver,
+        highest_finalized,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -229,6 +232,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         slot_status_notifier,
         banking_tracer,
         replay_highest_frozen,
+        highest_finalized,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -439,12 +443,13 @@ fn skew_block_producer_time_nanos(
         .min(max_working_bank_time)
 }
 
-/// Produces a block footer with the current timestamp; version; and reward certs.
+/// Produces a block footer with the current timestamp; version; reward certs; and finalization cert.
 /// The bank_hash field is left as default and will be filled in after the bank freezes.
 fn produce_block_footer(
     bank: Arc<Bank>,
     skip_reward_cert: Option<SkipRewardCertificate>,
     notar_reward_cert: Option<NotarRewardCertificate>,
+    highest_finalized: &RwLock<Option<HighestFinalizedSlotCert>>,
 ) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -468,12 +473,18 @@ fn produce_block_footer(
         );
     }
 
+    // Convert finalization certs into block marker
+    let final_cert = highest_finalized
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(FinalCertificate::from_finalization_certs);
+
     BlockFooterV1 {
         bank_hash: Hash::default(),
         block_producer_time_nanos: block_producer_time_nanos as u64,
         block_user_agent: format!("agave/{}", version!()).into_bytes(),
-        // TODO(ksn, wen): fill this field
-        final_cert: None,
+        final_cert,
         skip_reward_cert,
         notar_reward_cert,
     }
@@ -542,7 +553,7 @@ fn handle_parent_ready(
     let (old_parent_slot, _) = optimistic_parent_block;
     let (new_parent_slot, _) = leader_window_info.parent_block;
 
-    ctx.bank_forks.write().unwrap().clear_bank(slot);
+    ctx.bank_forks.write().unwrap().clear_bank(slot, false);
 
     // Wait for new parent to be frozen
     start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
@@ -675,7 +686,12 @@ fn record_and_complete_block(
             Some((skip.slot, validators))
         }
     };
-    let footer = produce_block_footer(working_bank.bank.clone_without_scheduler(), skip, notar);
+    let footer = produce_block_footer(
+        working_bank.bank.clone_without_scheduler(),
+        skip,
+        notar,
+        &ctx.highest_finalized,
+    );
 
     BlockComponentProcessor::update_bank_with_footer(
         working_bank.bank.clone_without_scheduler(),

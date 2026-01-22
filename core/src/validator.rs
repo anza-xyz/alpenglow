@@ -70,8 +70,8 @@ use {
     solana_ledger::{
         bank_forks_utils,
         blockstore::{
-            Blockstore, BlockstoreError, PurgeType, MAX_COMPLETED_SLOTS_IN_CHANNEL,
-            MAX_REPLAY_WAKE_UP_SIGNALS,
+            Blockstore, BlockstoreError, PurgeType, UpdateParentReceiver,
+            MAX_COMPLETED_SLOTS_IN_CHANNEL, MAX_REPLAY_WAKE_UP_SIGNALS,
         },
         blockstore_metric_report_service::BlockstoreMetricReportService,
         blockstore_options::{BlockstoreOptions, BLOCKSTORE_DIRECTORY_ROCKS_LEVEL},
@@ -147,6 +147,7 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
+    solana_votor_messages::consensus_message::HighestFinalizedSlotCert,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -817,6 +818,7 @@ impl Validator {
             blockstore,
             original_blockstore_root,
             ledger_signal_receiver,
+            update_parent_receiver,
             leader_schedule_cache,
             starting_snapshot_hashes,
             TransactionHistoryServices {
@@ -1440,6 +1442,10 @@ impl Validator {
         // There will only ever be a single msg in flight so bound channel for [`BuildRewardCertsResponse`] to 1 message.
         let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
+        // Shared state for highest finalized certificates (updated by Votor, read by block creation loop)
+        let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
+            Arc::new(RwLock::new(None));
+
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
             bank_forks: bank_forks.clone(),
@@ -1457,6 +1463,7 @@ impl Validator {
             optimistic_parent_receiver: optimistic_parent_receiver.clone(),
             build_reward_certs_sender,
             reward_certs_receiver,
+            highest_finalized: highest_finalized.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1649,6 +1656,7 @@ impl Validator {
             },
             blockstore.clone(),
             ledger_signal_receiver,
+            update_parent_receiver,
             rpc_subscriptions.clone(),
             &poh_recorder,
             poh_controller,
@@ -1716,6 +1724,7 @@ impl Validator {
             migration_status.clone(),
             reward_certs_sender,
             build_reward_certs_receiver,
+            highest_finalized,
         )
         .map_err(ValidatorError::Other)?;
 
@@ -2289,6 +2298,7 @@ fn load_blockstore(
         Arc<Blockstore>,
         Slot,
         Receiver<bool>,
+        UpdateParentReceiver,
         LeaderScheduleCache,
         Option<StartingSnapshotHashes>,
         TransactionHistoryServices,
@@ -2307,6 +2317,9 @@ fn load_blockstore(
 
     let (ledger_signal_sender, ledger_signal_receiver) = bounded(MAX_REPLAY_WAKE_UP_SIGNALS);
     blockstore.add_new_shred_signal(ledger_signal_sender);
+
+    let (update_parent_sender, update_parent_receiver) = bounded(MAX_COMPLETED_SLOTS_IN_CHANNEL);
+    blockstore.add_update_parent_signal(update_parent_sender);
 
     // following boot sequence (esp BankForks) could set root. so stash the original value
     // of blockstore root away here as soon as possible.
@@ -2384,6 +2397,7 @@ fn load_blockstore(
         blockstore,
         original_blockstore_root,
         ledger_signal_receiver,
+        update_parent_receiver,
         leader_schedule_cache,
         starting_snapshot_hashes,
         transaction_history_services,

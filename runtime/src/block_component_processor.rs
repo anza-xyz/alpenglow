@@ -372,7 +372,9 @@ impl BlockComponentProcessor {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
-        calculate_and_pay_voting_reward(&bank, reward_slot_and_validators).unwrap()
+        calculate_and_pay_voting_reward(&bank, reward_slot_and_validators).unwrap();
+        // Record expected bank hash from footer for later verification when the bank is frozen.
+        bank.set_expected_bank_hash(footer.bank_hash);
     }
 }
 

@@ -403,7 +403,11 @@ impl BankForks {
     }
 
     /// Clears associated banks from BankForks and notifies subscribers that a dump has occured.
-    pub fn dump_slots<'a, I>(&mut self, slots: I) -> (Vec<(Slot, BankId)>, Vec<BankWithScheduler>)
+    pub fn dump_slots<'a, I>(
+        &mut self,
+        slots: I,
+        write_bank_hash_details: bool,
+    ) -> (Vec<(Slot, BankId)>, Vec<BankWithScheduler>)
     where
         I: Iterator<Item = &'a Slot>,
     {
@@ -421,19 +425,22 @@ impl BankForks {
                 let bank = self
                     .remove(*slot)
                     .expect("BankForks should not have been purged yet");
-                bank_hash_details::write_bank_hash_details_file(&bank)
-                    .map_err(|err| {
-                        warn!("Unable to write bank hash details file: {err}");
-                    })
-                    .ok();
+                if write_bank_hash_details {
+                    bank_hash_details::write_bank_hash_details_file(&bank)
+                        .map_err(|err| {
+                            warn!("Unable to write bank hash details file: {err}");
+                        })
+                        .ok();
+                }
                 ((*slot, bank.bank_id()), bank)
             })
             .unzip()
     }
 
     /// Clears a bank from bank forks.
-    pub fn clear_bank(&mut self, slot: Slot) {
-        let (slots_to_purge, removed_banks) = self.dump_slots(std::iter::once(&slot));
+    pub fn clear_bank(&mut self, slot: Slot, write_bank_hash_details: bool) {
+        let (slots_to_purge, removed_banks) =
+            self.dump_slots(std::iter::once(&slot), write_bank_hash_details);
 
         let root_bank = self.root_bank();
         root_bank.remove_unrooted_slots(&slots_to_purge);

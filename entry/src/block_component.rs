@@ -137,7 +137,7 @@ use {
     solana_clock::Slot,
     solana_hash::Hash,
     solana_votor_messages::{
-        consensus_message::{Certificate, CertificateType},
+        consensus_message::{Certificate, CertificateType, HighestFinalizedSlotCert},
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate, U16Len},
     },
     std::mem::MaybeUninit,
@@ -333,6 +333,48 @@ pub struct FinalCertificate {
 }
 
 impl FinalCertificate {
+    /// Creates a FinalCertificate from FinalizationCerts.
+    ///
+    /// # Panics
+    /// Panics if the certs are malformed or have invalid signatures
+    pub fn from_finalization_certs(certs: &HighestFinalizedSlotCert) -> Self {
+        match certs {
+            HighestFinalizedSlotCert::Finalize {
+                finalize_cert,
+                notarize_cert,
+            } => {
+                debug_assert!(finalize_cert.cert_type.is_slow_finalization());
+                debug_assert!(notarize_cert.cert_type.is_notarize());
+                let slot = finalize_cert.cert_type.slot();
+                // Get block_id from the notarize certificate
+                let block_id = notarize_cert
+                    .cert_type
+                    .to_block()
+                    .expect("notarize certificates correspond to blocks")
+                    .1;
+                Self {
+                    slot,
+                    block_id,
+                    final_aggregate: VotesAggregate::from_certificate(finalize_cert),
+                    notar_aggregate: Some(VotesAggregate::from_certificate(notarize_cert)),
+                }
+            }
+            HighestFinalizedSlotCert::FastFinalize(cert) => {
+                debug_assert!(cert.cert_type.is_fast_finalization());
+                let (slot, block_id) = cert
+                    .cert_type
+                    .to_block()
+                    .expect("fast finalizations correspond to blocks");
+                Self {
+                    slot,
+                    block_id,
+                    final_aggregate: VotesAggregate::from_certificate(cert),
+                    notar_aggregate: None,
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_for_tests() -> FinalCertificate {
         FinalCertificate {
@@ -353,6 +395,21 @@ pub struct VotesAggregate {
     signature: BLSSignatureCompressed,
     #[wincode(with = "WincodeVec<u8, U16Len>")]
     bitmap: Vec<u8>,
+}
+
+impl VotesAggregate {
+    /// Creates a VotesAggregate from a Certificate's signature and bitmap.
+    ///
+    /// # Panics
+    /// Panics if the signature cannot be converted to compressed format.
+    /// This should never happen for valid certificates from the consensus pool.
+    pub fn from_certificate(cert: &Certificate) -> Self {
+        Self {
+            signature: BLSSignatureCompressed::try_from(&cert.signature)
+                .expect("valid certificate signature should convert to compressed format"),
+            bitmap: cert.bitmap.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaWrite, SchemaRead)]

@@ -37,9 +37,11 @@ use {
     solana_hash::Hash,
     solana_keypair::Keypair,
     solana_ledger::{
-        block_location_lookup::BlockLocationLookup, blockstore::Blockstore,
+        block_location_lookup::BlockLocationLookup,
+        blockstore::{Blockstore, UpdateParentReceiver},
         blockstore_cleanup_service::BlockstoreCleanupService,
-        blockstore_processor::TransactionStatusSender, entry_notifier_service::EntryNotifierSender,
+        blockstore_processor::TransactionStatusSender,
+        entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
     },
     solana_poh::{poh_controller::PohController, poh_recorder::PohRecorder},
@@ -67,6 +69,7 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
     solana_votor_messages::{
+        consensus_message::HighestFinalizedSlotCert,
         migration::MigrationStatus,
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -164,6 +167,7 @@ impl Tvu {
         sockets: TvuSockets,
         blockstore: Arc<Blockstore>,
         ledger_signal_receiver: Receiver<bool>,
+        update_parent_receiver: UpdateParentReceiver,
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
         poh_controller: PohController,
@@ -221,6 +225,7 @@ impl Tvu {
         migration_status: Arc<MigrationStatus>,
         reward_certs_sender: Sender<BuildRewardCertsResponse>,
         build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
+        highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);
@@ -420,6 +425,7 @@ impl Tvu {
 
         let replay_receivers = ReplayReceivers {
             ledger_signal_receiver,
+            update_parent_receiver,
             duplicate_slots_receiver,
             ancestor_duplicate_slots_receiver,
             duplicate_confirmed_slots_receiver,
@@ -463,6 +469,7 @@ impl Tvu {
             reward_votes_receiver,
             build_reward_certs_receiver,
             reward_certs_sender,
+            highest_finalized,
         };
 
         let voting_service = VotingService::new(
@@ -645,6 +652,7 @@ pub mod tests {
         let BlockstoreSignals {
             blockstore,
             ledger_signal_receiver,
+            update_parent_receiver,
             ..
         } = Blockstore::open_with_signal(&blockstore_path, BlockstoreOptions::default())
             .expect("Expected to successfully open ledger");
@@ -714,6 +722,7 @@ pub mod tests {
             },
             blockstore,
             ledger_signal_receiver,
+            update_parent_receiver,
             Some(Arc::new(RpcSubscriptions::new_for_tests(
                 exit.clone(),
                 max_complete_transaction_status_slot,
@@ -777,6 +786,7 @@ pub mod tests {
             Arc::new(MigrationStatus::default()),
             reward_certs_sender,
             build_reward_certs_receiver,
+            Arc::new(RwLock::new(None)),
         )
         .expect("assume success");
         if enable_wen_restart {
