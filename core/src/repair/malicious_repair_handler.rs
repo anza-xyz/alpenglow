@@ -12,7 +12,7 @@ use {
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct MaliciousRepairConfig {
-    bad_shred_slot_frequency: Option<Slot>,
+    pub bad_shred_slot_frequency: Option<Slot>,
 }
 
 pub struct MaliciousRepairHandler {
@@ -51,10 +51,11 @@ impl RepairHandler for MaliciousRepairHandler {
         }
         .expect("Blockstore could not get data shred")?;
 
-        if self
-            .config
-            .bad_shred_slot_frequency
-            .is_some_and(|freq| slot % freq == 0)
+        if block_id.is_none()
+            && self
+                .config
+                .bad_shred_slot_frequency
+                .is_some_and(|freq| slot % freq == 0)
         {
             // Change some random piece of data
             shred[Self::BAD_DATA_INDEX] = shred[Self::BAD_DATA_INDEX].wrapping_add(1);

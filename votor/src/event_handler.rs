@@ -5,7 +5,7 @@ use {
     crate::{
         commitment::{update_commitment_cache, CommitmentType},
         consensus_metrics::ConsensusMetricsEvent,
-        event::{CompletedBlock, VotorEvent, VotorEventReceiver},
+        event::{CompletedBlock, RepairEvent, SwitchBlockEvent, VotorEvent, VotorEventReceiver},
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
@@ -308,6 +308,26 @@ impl EventHandler {
                 info!("{my_pubkey}: Block Notarized {block:?}");
                 vctx.vote_history.add_block_notarized(block);
                 Self::try_final(my_pubkey, block, vctx, &mut votes)?;
+                let _ = ctx.repair_event_sender.send(RepairEvent::FetchBlock {
+                    slot: block.0,
+                    block_id: block.1,
+                });
+                let _ = ctx.switch_block_sender.send(SwitchBlockEvent::Canonical {
+                    slot: block.0,
+                    block_id: block.1,
+                });
+            }
+
+            VotorEvent::BlockNotarizeFallback(block) => {
+                info!("{my_pubkey}: Block Notarize Fallback {block:?}");
+                let _ = ctx.repair_event_sender.send(RepairEvent::FetchBlock {
+                    slot: block.0,
+                    block_id: block.1,
+                });
+                let _ = ctx.switch_block_sender.send(SwitchBlockEvent::Canonical {
+                    slot: block.0,
+                    block_id: block.1,
+                });
             }
 
             VotorEvent::FirstShred(slot) => {
@@ -429,6 +449,14 @@ impl EventHandler {
                         &mut votes,
                     )?;
                 }
+                let _ = ctx.repair_event_sender.send(RepairEvent::FetchBlock {
+                    slot: block.0,
+                    block_id: block.1,
+                });
+                let _ = ctx.switch_block_sender.send(SwitchBlockEvent::Canonical {
+                    slot: block.0,
+                    block_id: block.1,
+                });
             }
 
             // We have not observed a finalization certificate in a while, refresh our votes
@@ -864,6 +892,8 @@ mod tests {
         let (event_sender, _event_receiver) = unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
         let (leader_window_info_sender, leader_window_info_receiver) = unbounded();
+        let (repair_event_sender, _) = unbounded();
+        let (switch_block_sender, _) = unbounded();
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
@@ -913,6 +943,8 @@ mod tests {
             blockstore,
             rpc_subscriptions: None,
             highest_parent_ready: highest_parent_ready.clone(),
+            repair_event_sender,
+            switch_block_sender,
         };
 
         let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);

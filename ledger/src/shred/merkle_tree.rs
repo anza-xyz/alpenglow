@@ -66,7 +66,7 @@ impl MerkleTree {
         self.nodes.last().unwrap()
     }
 
-    pub(crate) fn make_merkle_proof(
+    pub fn make_merkle_proof(
         &self,
         mut index: usize, // leaf index ~ shred's erasure shard index.
         mut size: usize,  // number of leaves ~ erasure batch size.

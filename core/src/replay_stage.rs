@@ -89,7 +89,9 @@ use {
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
         event::{
-            CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventReceiver, VotorEventSender,
+            CompletedBlock, LeaderWindowInfo, RepairEvent, RepairEventSender, SwitchBlockEvent,
+            SwitchBlockEventReceiver, SwitchBlockEventSender, VotorEvent, VotorEventReceiver,
+            VotorEventSender,
         },
         root_utils,
         vote_history::VoteHistory,
@@ -327,6 +329,8 @@ pub struct ReplaySenders {
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
+    pub repair_event_sender: RepairEventSender,
+    pub switch_block_sender: SwitchBlockEventSender,
 }
 
 pub struct ReplayReceivers {
@@ -339,6 +343,7 @@ pub struct ReplayReceivers {
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
     pub consensus_message_receiver: Receiver<ConsensusMessage>,
     pub votor_event_receiver: VotorEventReceiver,
+    pub switch_block_receiver: SwitchBlockEventReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -653,6 +658,8 @@ impl ReplayStage {
             votor_event_sender,
             own_vote_sender,
             optimistic_parent_sender,
+            repair_event_sender,
+            switch_block_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -665,6 +672,7 @@ impl ReplayStage {
             popular_pruned_forks_receiver,
             consensus_message_receiver,
             votor_event_receiver,
+            switch_block_receiver,
         } = receivers;
 
         trace!("replay stage");
@@ -703,6 +711,8 @@ impl ReplayStage {
             event_sender: votor_event_sender.clone(),
             event_receiver: votor_event_receiver.clone(),
             own_vote_sender: own_vote_sender.clone(),
+            repair_event_sender: repair_event_sender.clone(),
+            switch_block_sender: switch_block_sender.clone(),
             consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
@@ -850,6 +860,9 @@ impl ReplayStage {
                     &slot_status_notifier,
                     &mut progress,
                     &mut replay_timing,
+                    &my_pubkey,
+                    &repair_event_sender,
+                    &switch_block_sender,
                     migration_status.as_ref(),
                 );
                 generate_new_bank_forks_time.stop();
@@ -1408,6 +1421,16 @@ impl ReplayStage {
                     start_leader_time.stop();
                     start_leader_time
                 } else {
+                    // Alpenglow mode: process canonical block events from votor
+                    Self::process_canonical_block_events(
+                        &switch_block_receiver,
+                        &blockstore,
+                        &bank_forks,
+                        &mut ancestors,
+                        &mut descendants,
+                        &mut progress,
+                    );
+
                     let mut start_leader_time = Measure::start("start_leader_time");
                     start_leader_time.stop();
                     start_leader_time
@@ -2191,6 +2214,80 @@ impl ReplayStage {
         descendants
             .remove(&slot)
             .expect("must exist based on earlier check");
+    }
+
+    /// Process canonical block events from votor.
+    /// When a block becomes canonical (Notarized or Finalized), we need to:
+    /// 1. Copy shreds from the Alternate column to the Original column if needed
+    /// 2. Purge any existing bank for this slot that has a different block_id
+    /// 3. Allow replay to restart with the correct block
+    #[allow(clippy::too_many_arguments)]
+    fn process_canonical_block_events(
+        switch_block_receiver: &SwitchBlockEventReceiver,
+        blockstore: &Blockstore,
+        bank_forks: &RwLock<BankForks>,
+        ancestors: &mut HashMap<Slot, HashSet<Slot>>,
+        descendants: &mut HashMap<Slot, HashSet<Slot>>,
+        progress: &mut ProgressMap,
+    ) {
+        let root = bank_forks.read().unwrap().root();
+        let root_bank = bank_forks.read().unwrap().root_bank();
+
+        let events: Vec<_> = switch_block_receiver.try_iter().collect();
+        if !events.is_empty() {
+            info!(
+                "Processing {} canonical block events, root={}",
+                events.len(),
+                root
+            );
+        }
+
+        for event in events {
+            let (slot, block_id) = match event {
+                SwitchBlockEvent::Canonical { slot, block_id } => (slot, block_id),
+                SwitchBlockEvent::Switch { slot, block_id } => (slot, block_id),
+            };
+            if slot <= root {
+                trace!(
+                    "Skipping switch block event for slot {slot} (already rooted, \
+                     root={root})",
+                );
+                continue;
+            }
+
+            // Check if we need to purge the bank (bank exists with wrong block_id)
+            let current_block_id = bank_forks
+                .read()
+                .unwrap()
+                .get(slot)
+                .and_then(|b| b.block_id());
+            let needs_purge = current_block_id.is_some() && current_block_id != Some(block_id);
+
+            if needs_purge {
+                info!(
+                    "Purging bank for slot {slot} - wrong block_id \
+                     {current_block_id:?}, canonical is {block_id:?}",
+                );
+                Self::purge_unconfirmed_slot(
+                    slot,
+                    ancestors,
+                    descendants,
+                    progress,
+                    &root_bank,
+                    bank_forks,
+                    blockstore,
+                );
+            } else {
+                trace!(
+                    "Canonical event for slot {slot}: no bank or correct block_id",
+                );
+            }
+        }
+
+        // Propagate connectivity from root to newly added slots
+        if let Err(e) = blockstore.set_and_chain_connected_on_root_and_next_slots(root) {
+            warn!("Failed to propagate connectivity from root {root}: {e:?}",);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4849,6 +4946,7 @@ impl ReplayStage {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_new_bank_forks(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
@@ -4857,6 +4955,9 @@ impl ReplayStage {
         slot_status_notifier: &Option<SlotStatusNotifier>,
         progress: &mut ProgressMap,
         replay_timing: &mut ReplayLoopTiming,
+        my_pubkey: &Pubkey,
+        repair_event_sender: &RepairEventSender,
+        switch_block_sender: &SwitchBlockEventSender,
         migration_status: &MigrationStatus,
     ) {
         // Find the next slot that chains to the old slot
@@ -4914,6 +5015,21 @@ impl ReplayStage {
                     // ParentMeta could have been updated in between. If so, continue and
                     // the next iteration of generate_new_bank_forks will have consistent values.
                     if parent_meta.parent_slot != parent_slot {
+                        continue;
+                    }
+
+                    if Some(parent_meta.parent_block_id) != parent_bank.block_id()
+                        && parent_bank.collector_id() != my_pubkey
+                    {
+                        // There were duplicate blocks in this slot and we have the wrong one replayed
+                        let _ = repair_event_sender.send(RepairEvent::FetchBlock {
+                            slot: parent_meta.parent_slot,
+                            block_id: parent_meta.parent_block_id,
+                        });
+                        let _ = switch_block_sender.send(SwitchBlockEvent::Switch {
+                            slot: parent_meta.parent_slot,
+                            block_id: parent_meta.parent_block_id,
+                        });
                         continue;
                     }
 
@@ -5334,6 +5450,8 @@ pub(crate) mod tests {
         bank_forks.write().unwrap().insert(bank1);
 
         let rpc_subscriptions = Some(rpc_subscriptions);
+        let (repair_event_sender, _repair_event_receiver) = crossbeam_channel::bounded(100);
+        let (switch_block_sender, _switch_block_receiver) = crossbeam_channel::bounded(100);
 
         // Insert shreds for slot NUM_CONSECUTIVE_LEADER_SLOTS,
         // chaining to slot 1
@@ -5357,6 +5475,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert!(bank_forks
@@ -5382,6 +5503,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert!(bank_forks
@@ -7282,6 +7406,8 @@ pub(crate) mod tests {
         blockstore.insert_shreds(shreds, None, false).unwrap();
 
         let rpc_subscriptions = Some(rpc_subscriptions);
+        let (repair_event_sender, _repair_event_receiver) = crossbeam_channel::bounded(100);
+        let (switch_block_sender, _switch_block_receiver) = crossbeam_channel::bounded(100);
 
         // 3 should now be an active bank
         ReplayStage::generate_new_bank_forks(
@@ -7292,6 +7418,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![3]);
@@ -7323,6 +7452,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![5]);
@@ -7355,6 +7487,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![6]);
@@ -7386,6 +7521,9 @@ pub(crate) mod tests {
             &None,
             &mut progress,
             &mut replay_timing,
+            &Pubkey::default(),
+            &repair_event_sender,
+            &switch_block_sender,
             &MigrationStatus::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);

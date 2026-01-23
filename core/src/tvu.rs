@@ -18,7 +18,10 @@ use {
         consensus::{tower_storage::TowerStorage, Tower},
         cost_update_service::CostUpdateService,
         drop_bank_service::DropBankService,
-        repair::repair_service::{OutstandingShredRepairs, RepairInfo, RepairServiceChannels},
+        repair::{
+            block_id_repair_service::BlockIdRepairChannels,
+            repair_service::{OutstandingShredRepairs, RepairInfo, RepairServiceChannels},
+        },
         replay_stage::{ReplayReceivers, ReplaySenders, ReplayStage, ReplayStageConfig},
         shred_fetch_stage::{ShredFetchStage, SHRED_FETCH_CHANNEL_SIZE},
         voting_service::VotingService,
@@ -118,6 +121,7 @@ pub struct TvuSockets {
     pub retransmit: Vec<UdpSocket>,
     pub ancestor_hashes_requests: UdpSocket,
     pub alpenglow_quic: UdpSocket,
+    pub block_id_repair: UdpSocket,
 }
 
 pub struct TvuConfig {
@@ -239,6 +243,7 @@ impl Tvu {
             retransmit: retransmit_sockets,
             ancestor_hashes_requests: ancestor_hashes_socket,
             alpenglow_quic: alpenglow_quic_socket,
+            block_id_repair,
         } = sockets;
 
         let (fetch_sender, fetch_receiver) = EvictingSender::new_bounded(SHRED_FETCH_CHANNEL_SIZE);
@@ -246,6 +251,7 @@ impl Tvu {
 
         let repair_socket = Arc::new(repair_socket);
         let ancestor_hashes_socket = Arc::new(ancestor_hashes_socket);
+        let block_id_repair_socket = Arc::new(block_id_repair);
         let fetch_sockets: Vec<Arc<UdpSocket>> = fetch_sockets.into_iter().map(Arc::new).collect();
         let block_location_lookup = BlockLocationLookup::new_arc();
         let fetch_stage = ShredFetchStage::new(
@@ -336,24 +342,35 @@ impl Tvu {
             unbounded();
         let (dumped_slots_sender, dumped_slots_receiver) = unbounded();
         let (popular_pruned_forks_sender, popular_pruned_forks_receiver) = unbounded();
+
+        let epoch_schedule = bank_forks
+            .read()
+            .unwrap()
+            .working_bank()
+            .epoch_schedule()
+            .clone();
+        let repair_info = RepairInfo {
+            bank_forks: bank_forks.clone(),
+            epoch_schedule,
+            ancestor_duplicate_slots_sender,
+            repair_validators: tvu_config.repair_validators,
+            repair_whitelist: tvu_config.repair_whitelist,
+            cluster_info: cluster_info.clone(),
+            cluster_slots: cluster_slots.clone(),
+            wen_restart_repair_slots,
+            block_location_lookup: block_location_lookup.clone(),
+        };
+
+        // Create repair event channel for BlockIdRepairService
+        let (repair_event_sender, repair_event_receiver) = bounded(100);
+        let block_id_repair_channels = BlockIdRepairChannels {
+            repair_event_receiver,
+        };
+
+        // Create switch block event channel for ReplayStage
+        let (switch_block_sender, switch_block_receiver) = bounded(100);
+
         let window_service = {
-            let epoch_schedule = bank_forks
-                .read()
-                .unwrap()
-                .working_bank()
-                .epoch_schedule()
-                .clone();
-            let repair_info = RepairInfo {
-                bank_forks: bank_forks.clone(),
-                epoch_schedule,
-                ancestor_duplicate_slots_sender,
-                repair_validators: tvu_config.repair_validators,
-                repair_whitelist: tvu_config.repair_whitelist,
-                cluster_info: cluster_info.clone(),
-                cluster_slots: cluster_slots.clone(),
-                wen_restart_repair_slots,
-                block_location_lookup: block_location_lookup.clone(),
-            };
             let repair_service_channels = RepairServiceChannels::new(
                 repair_request_quic_sender,
                 verified_vote_receiver,
@@ -369,13 +386,15 @@ impl Tvu {
                 completed_data_sets_sender,
                 duplicate_slots_sender.clone(),
                 repair_service_channels,
+                block_id_repair_channels,
             );
             WindowService::new(
                 blockstore.clone(),
-                repair_socket,
+                repair_socket.clone(),
                 ancestor_hashes_socket,
+                block_id_repair_socket,
                 exit.clone(),
-                repair_info,
+                repair_info.clone(),
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
@@ -421,6 +440,8 @@ impl Tvu {
             votor_event_sender,
             own_vote_sender: consensus_message_sender,
             optimistic_parent_sender,
+            repair_event_sender: repair_event_sender.clone(),
+            switch_block_sender: switch_block_sender.clone(),
         };
 
         let replay_receivers = ReplayReceivers {
@@ -433,6 +454,7 @@ impl Tvu {
             popular_pruned_forks_receiver,
             consensus_message_receiver,
             votor_event_receiver,
+            switch_block_receiver,
         };
 
         let replay_stage_config = ReplayStageConfig {
@@ -465,7 +487,7 @@ impl Tvu {
             highest_parent_ready,
             consensus_metrics_sender: consensus_metrics_sender.clone(),
             consensus_metrics_receiver,
-            migration_status,
+            migration_status: migration_status.clone(),
             reward_votes_receiver,
             build_reward_certs_receiver,
             reward_certs_sender,
@@ -518,10 +540,10 @@ impl Tvu {
         });
 
         let duplicate_shred_listener = DuplicateShredListener::new(
-            exit,
+            exit.clone(),
             cluster_info.clone(),
             DuplicateShredHandler::new(
-                blockstore,
+                blockstore.clone(),
                 leader_schedule_cache.clone(),
                 bank_forks.clone(),
                 duplicate_slots_sender,
@@ -718,6 +740,7 @@ pub mod tests {
                     fetch: target1.sockets.tvu,
                     ancestor_hashes_requests: target1.sockets.ancestor_hashes_requests,
                     alpenglow_quic: target1.sockets.alpenglow,
+                    block_id_repair: target1.sockets.block_id_repair,
                 }
             },
             blockstore,
