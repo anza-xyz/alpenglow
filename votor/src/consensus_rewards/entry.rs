@@ -120,7 +120,7 @@ impl Entry {
 mod tests {
     use {
         super::*,
-        solana_bls_signatures::Keypair as BlsKeypair,
+        solana_bls_signatures::{Keypair as BlsKeypair, Pubkey as BlsPubkey},
         solana_epoch_schedule::EpochSchedule,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
@@ -161,7 +161,7 @@ mod tests {
             .collect::<Vec<_>>();
         let keypair_map = validator_keypairs
             .iter()
-            .map(|k| (k.bls_keypair.public, k.bls_keypair.clone()))
+            .map(|k| (BlsPubkey::from(k.bls_keypair.public), k.bls_keypair.clone()))
             .collect::<HashMap<_, _>>();
         let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
             1_000_000_000,

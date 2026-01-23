@@ -1337,7 +1337,7 @@ mod tests {
 
         let mut genesis_config = GenesisConfig::default();
 
-        let bls_pubkey: BLSPubkey = BLSKeypair::new().public;
+        let bls_pubkey: BLSPubkey = BLSKeypair::new().public.into();
         let validator_accounts = vec![
             StakedValidatorAccountInfo {
                 identity_account: solana_pubkey::new_rand().to_string(),

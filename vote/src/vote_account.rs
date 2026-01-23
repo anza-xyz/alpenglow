@@ -212,8 +212,7 @@ impl VoteAccount {
 
     #[cfg(feature = "dev-context-only-utils")]
     pub fn new_random_alpenglow() -> VoteAccount {
-        let bls_pubkey_compressed: BLSPubkeyCompressed =
-            BLSKeypair::new().public.try_into().unwrap();
+        let bls_pubkey_compressed: BLSPubkeyCompressed = BLSKeypair::new().public.into();
         let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
         let vote_state = VoteStateV4 {
             node_pubkey: Pubkey::new_unique(),
@@ -587,8 +586,7 @@ mod tests {
             commission: rng.gen(),
         };
         let vote_state_versions = if is_alpenglow {
-            let bls_pubkey_compressed: BLSPubkeyCompressed =
-                BLSKeypair::new().public.try_into().unwrap();
+            let bls_pubkey_compressed: BLSPubkeyCompressed = BLSKeypair::new().public.into();
             let bls_pubkey_compressed_buffer = bincode::serialize(&bls_pubkey_compressed).unwrap();
             VoteStateVersions::new_v4(VoteStateV4 {
                 node_pubkey: vote_init.node_pubkey,
