@@ -12,7 +12,7 @@ use {
     crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
-        BlockFooterV1, FinalCertificate, GenesisCertificate, UpdateParentV1, VersionedBlockMarker,
+        BlockFooterV1, GenesisCertificate, UpdateParentV1, VersionedBlockMarker,
     },
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
@@ -33,12 +33,13 @@ use {
         bank::{Bank, NewBankOptions},
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
     },
     solana_transaction::versioned::VersionedTransaction,
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     solana_votor_messages::{
-        consensus_message::{Block, BlockFinalization},
+        consensus_message::Block,
         reward_certificate::{
             BuildRewardCertsRequest, BuildRewardCertsRespSucc, BuildRewardCertsResponse,
             NotarRewardCertificate, SkipRewardCertificate,
@@ -103,7 +104,7 @@ pub struct BlockCreationLoopConfig {
     pub leader_window_info_receiver: Receiver<LeaderWindowInfo>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+    pub highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 
     // Channel to receive RecordReceiver from PohService
     pub record_receiver_receiver: Receiver<RecordReceiver>,
@@ -135,7 +136,7 @@ struct LeaderContext {
     replay_highest_frozen: Arc<ReplayHighestFrozen>,
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
-    highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+    highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
     banking_stage_sender: BankingPacketSender,
 
     // Metrics
@@ -457,7 +458,7 @@ fn produce_block_footer(
     bank: Arc<Bank>,
     skip_reward_cert: Option<SkipRewardCertificate>,
     notar_reward_cert: Option<NotarRewardCertificate>,
-    highest_finalized: &RwLock<Option<BlockFinalization>>,
+    highest_finalized: &RwLock<Option<ValidatedBlockFinalizationCert>>,
 ) -> BlockFooterV1 {
     let mut block_producer_time_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -486,7 +487,7 @@ fn produce_block_footer(
         .read()
         .unwrap()
         .as_ref()
-        .map(FinalCertificate::from_finalization_certs);
+        .map(ValidatedBlockFinalizationCert::to_final_certificate);
 
     BlockFooterV1 {
         bank_hash: Hash::default(),

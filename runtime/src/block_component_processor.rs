@@ -1,19 +1,19 @@
 use {
     crate::{
         bank::Bank,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
-    agave_bls_cert_verify::cert_verify::{self, verify_cert_get_total_stake},
     crossbeam_channel::Sender,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
-        BlockFooterV1, BlockMarkerV1, FinalCertificate, GenesisCertificate, VersionedBlockFooter,
+        BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
         VersionedBlockHeader, VersionedBlockMarker, VersionedUpdateParent,
     },
     solana_pubkey::Pubkey,
     solana_votor_messages::{
-        consensus_message::{BlockFinalization, Certificate, ConsensusMessage},
+        consensus_message::{Certificate, ConsensusMessage},
         fraction::Fraction,
         migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
     },
@@ -215,28 +215,6 @@ impl BlockComponentProcessor {
         Ok(())
     }
 
-    /// Verify a certificate using the validator set information in `bank` and returns
-    /// (total stake present in the certificate, total stake in validator set)
-    fn verify_certificate(
-        bank: &Bank,
-        cert: &Certificate,
-    ) -> Result<(u64, u64), cert_verify::Error> {
-        let slot = cert.cert_type.slot();
-        let epoch_stakes = bank
-            .epoch_stakes_from_slot(slot)
-            .ok_or(cert_verify::Error::MissingRankMap)?;
-        let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
-        let total_stake = epoch_stakes.total_stake();
-
-        let stake = verify_cert_get_total_stake(cert, key_to_rank_map.len(), |rank| {
-            key_to_rank_map
-                .get_pubkey_and_stake(rank)
-                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
-        })?;
-
-        Ok((stake, total_stake))
-    }
-
     fn verify_genesis_certificate(
         bank: &Bank,
         cert: &Certificate,
@@ -244,7 +222,7 @@ impl BlockComponentProcessor {
         debug_assert!(cert.cert_type.is_genesis());
 
         let cert_slot = cert.cert_type.slot();
-        let (genesis_stake, total_stake) = Self::verify_certificate(bank, cert).map_err(|_| {
+        let (genesis_stake, total_stake) = bank.verify_certificate(cert).map_err(|_| {
             warn!(
                 "Failed to verify genesis certificate for slot {cert_slot} in bank slot {}",
                 bank.slot()
@@ -263,74 +241,6 @@ impl BlockComponentProcessor {
         }
 
         Ok(())
-    }
-
-    fn verify_final_cert(
-        bank: &Bank,
-        final_cert: FinalCertificate,
-    ) -> Result<BlockFinalization, BlockComponentProcessorError> {
-        let (slot, block_id) = (final_cert.slot, final_cert.block_id);
-
-        let final_certs = final_cert
-            .to_certificates()
-            .map_err(|_| BlockComponentProcessorError::InvalidFinalizationCertificate)?;
-
-        match &final_certs {
-            BlockFinalization::Finalize {
-                finalize_cert,
-                notarize_cert,
-            } => {
-                debug_assert!(notarize_cert.cert_type.is_notarize());
-                debug_assert!(finalize_cert.cert_type.is_slow_finalization());
-
-                let (notarize_stake, total_stake) = Self::verify_certificate(bank, notarize_cert)
-                    .map_err(|_| {
-                    BlockComponentProcessorError::InvalidFinalizationCertificate
-                })?;
-                let (finalize_stake, _) = Self::verify_certificate(bank, finalize_cert)
-                    .map_err(|_| BlockComponentProcessorError::InvalidFinalizationCertificate)?;
-
-                let notarize_percent =
-                    Fraction::new(notarize_stake, NonZeroU64::new(total_stake).unwrap());
-                let finalize_percent =
-                    Fraction::new(finalize_stake, NonZeroU64::new(total_stake).unwrap());
-                let notarize_threshold = notarize_cert.cert_type.limits_and_vote_types().0;
-                let finalize_threshold = finalize_cert.cert_type.limits_and_vote_types().0;
-
-                if notarize_percent < notarize_threshold || finalize_percent < finalize_threshold {
-                    warn!(
-                        "Received a slow finalization in the footer for slot {slot} block_id \
-                         {block_id:?} in bank slot {} with notarize {notarize_percent} stake \
-                         expecting at least {notarize_threshold} and finalize {finalize_percent} \
-                         stake expecting at least {finalize_threshold}",
-                        bank.slot()
-                    );
-                    return Err(BlockComponentProcessorError::InvalidFinalizationCertificate);
-                }
-            }
-            BlockFinalization::FastFinalize(certificate) => {
-                debug_assert!(certificate.cert_type.is_fast_finalization());
-
-                let (finalize_stake, total_stake) = Self::verify_certificate(bank, certificate)
-                    .map_err(|_| BlockComponentProcessorError::InvalidFinalizationCertificate)?;
-
-                let finalize_percent =
-                    Fraction::new(finalize_stake, NonZeroU64::new(total_stake).unwrap());
-                let finalize_threshold = certificate.cert_type.limits_and_vote_types().0;
-
-                if finalize_percent < finalize_threshold {
-                    warn!(
-                        "Received a fast finalization in the footer for slot {slot} block_id \
-                         {block_id:?} in bank slot {} with {finalize_percent} stake expecting at \
-                         least {finalize_threshold}",
-                        bank.slot()
-                    );
-                    return Err(BlockComponentProcessorError::InvalidFinalizationCertificate);
-                }
-            }
-        }
-
-        Ok(final_certs)
     }
 
     fn on_footer(
@@ -365,20 +275,22 @@ impl BlockComponentProcessor {
 
         // Verify finalization certificate and send to consensus pool
         if let Some(final_cert) = footer.final_cert {
-            let verified_certs = Self::verify_final_cert(&bank, final_cert)?;
+            let validated = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank)
+                .map_err(|e| {
+                    warn!("Failed to validate finalization certificate: {e}");
+                    BlockComponentProcessorError::InvalidFinalizationCertificate
+                })?;
+
             if let Some(sender) = finalization_cert_sender {
-                match verified_certs {
-                    BlockFinalization::Finalize {
-                        finalize_cert,
-                        notarize_cert,
-                    } => {
-                        let _ = sender.send(ConsensusMessage::from(notarize_cert));
-                        let _ = sender.send(ConsensusMessage::from(finalize_cert));
-                    }
-                    BlockFinalization::FastFinalize(finalize_cert) => {
-                        let _ = sender.send(ConsensusMessage::from(finalize_cert));
-                    }
+                let (finalize_cert, notarize_cert) = validated.into_certificates();
+                if let Some(notarize_cert) = notarize_cert {
+                    let _ = sender
+                        .send(ConsensusMessage::from(notarize_cert))
+                        .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
                 }
+                let _ = sender
+                    .send(ConsensusMessage::from(finalize_cert))
+                    .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
             }
         }
 
@@ -496,11 +408,13 @@ mod tests {
                 create_genesis_config, create_genesis_config_with_alpenglow_vote_accounts,
                 ValidatorVoteKeypairs,
             },
+            validated_block_finalization::BlockFinalizationCertError,
         },
         bitvec::prelude::*,
         solana_bls_signatures::SignatureProjective,
         solana_entry::block_component::{
             BlockFooterV1, BlockHeaderV1, FinalCertificate, UpdateParentV1, VersionedUpdateParent,
+            VotesAggregate,
         },
         solana_program::{hash::Hash, pubkey::Pubkey},
         solana_signer_store::encode_base2,
@@ -1270,10 +1184,14 @@ mod tests {
             let fast_finalize_cert =
                 build_certificate_manual(cert_type, vote, &signing_ranks, &validator_keypairs);
 
-            let final_certs = BlockFinalization::FastFinalize(fast_finalize_cert);
-            let final_cert = FinalCertificate::from_finalization_certs(&final_certs);
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&fast_finalize_cert),
+                notar_aggregate: None,
+            };
 
-            let result = BlockComponentProcessor::verify_final_cert(&bank, final_cert);
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
             assert!(
                 result.is_ok(),
                 "Valid fast finalize certificate should pass verification: {result:?}"
@@ -1303,13 +1221,14 @@ mod tests {
                 &validator_keypairs,
             );
 
-            let final_certs = BlockFinalization::Finalize {
-                finalize_cert,
-                notarize_cert,
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
             };
-            let final_cert = FinalCertificate::from_finalization_certs(&final_certs);
 
-            let result = BlockComponentProcessor::verify_final_cert(&bank, final_cert);
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
             assert!(
                 result.is_ok(),
                 "Valid slow finalize certificate should pass verification: {result:?}"
@@ -1339,14 +1258,18 @@ mod tests {
             let fast_finalize_cert =
                 build_certificate_manual(cert_type, vote, &signing_ranks, &validator_keypairs);
 
-            let final_certs = BlockFinalization::FastFinalize(fast_finalize_cert);
-            let final_cert = FinalCertificate::from_finalization_certs(&final_certs);
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&fast_finalize_cert),
+                notar_aggregate: None,
+            };
 
-            let result = BlockComponentProcessor::verify_final_cert(&bank, final_cert);
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
             assert!(
                 matches!(
                     result,
-                    Err(BlockComponentProcessorError::InvalidFinalizationCertificate)
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
                 ),
                 "Fast finalize with insufficient stake should fail verification"
             );
@@ -1376,17 +1299,18 @@ mod tests {
                 &validator_keypairs,
             );
 
-            let final_certs = BlockFinalization::Finalize {
-                finalize_cert,
-                notarize_cert,
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
             };
-            let final_cert = FinalCertificate::from_finalization_certs(&final_certs);
 
-            let result = BlockComponentProcessor::verify_final_cert(&bank, final_cert);
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
             assert!(
                 matches!(
                     result,
-                    Err(BlockComponentProcessorError::InvalidFinalizationCertificate)
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
                 ),
                 "Slow finalize with insufficient notarize stake should fail verification"
             );
@@ -1418,17 +1342,18 @@ mod tests {
                 &validator_keypairs,
             );
 
-            let final_certs = BlockFinalization::Finalize {
-                finalize_cert,
-                notarize_cert,
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
             };
-            let final_cert = FinalCertificate::from_finalization_certs(&final_certs);
 
-            let result = BlockComponentProcessor::verify_final_cert(&bank, final_cert);
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
             assert!(
                 matches!(
                     result,
-                    Err(BlockComponentProcessorError::InvalidFinalizationCertificate)
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
                 ),
                 "Slow finalize with insufficient finalize stake should fail verification"
             );

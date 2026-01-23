@@ -94,7 +94,7 @@ use {
         voting_utils::{self, GenerateVoteTxResult},
     },
     solana_votor_messages::{
-        consensus_message::{BlockFinalization, ConsensusMessage},
+        consensus_message::ConsensusMessage,
         migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
         vote::Vote,
     },

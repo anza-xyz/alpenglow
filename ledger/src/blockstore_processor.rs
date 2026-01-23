@@ -65,7 +65,7 @@ use {
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,
     solana_vote::{vote_account::VoteAccountsHashMap, vote_parser::is_valid_vote_only_transaction},
-    solana_votor_messages::{consensus_message::ConsensuMessage, migration::MigrationStatus},
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         borrow::Cow,
         collections::{HashMap, HashSet},

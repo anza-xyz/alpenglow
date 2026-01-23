@@ -53,6 +53,7 @@ use {
     solana_runtime::{
         bank_forks::BankForks, commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache, snapshot_controller::SnapshotController,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
         vote_sender_types::ReplayVoteSender,
     },
     solana_streamer::{
@@ -69,9 +70,8 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
         votor::{Votor, VotorConfig},
     },
-    solana_votor_messages::{
-        consensus_message::BlockFinalization,
-        reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
+    solana_votor_messages::reward_certificate::{
+        BuildRewardCertsRequest, BuildRewardCertsResponse,
     },
     std::{
         collections::HashSet,
@@ -174,7 +174,7 @@ pub struct AlpenglowInitializationState {
     // For rewards
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
     pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-    pub highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+    pub highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 }
 
 impl Tvu {
