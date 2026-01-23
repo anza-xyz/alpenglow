@@ -21,9 +21,12 @@ use {
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
-    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
+    solana_runtime::{
+        bank::Bank, bank_forks::SharableBanks,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
+    },
     solana_votor_messages::{
-        consensus_message::{BlockFinalization, Certificate, ConsensusMessage},
+        consensus_message::{Certificate, ConsensusMessage},
         migration::MigrationStatus,
     },
     stats::ConsensusPoolServiceStats,
@@ -58,7 +61,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
 
-    pub(crate) highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+    pub(crate) highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 }
 
 pub(crate) struct ConsensusPoolService {
@@ -87,7 +90,7 @@ impl ConsensusPoolService {
         new_certificates_to_send: Vec<Arc<Certificate>>,
         standstill_timer: &mut Instant,
         stats: &mut ConsensusPoolServiceStats,
-        highest_finalized: &RwLock<Option<BlockFinalization>>,
+        highest_finalized: &RwLock<Option<ValidatedBlockFinalizationCert>>,
     ) -> Result<(), AddVoteError> {
         // If we have a new finalized slot, update the root and send new certificates
         if new_finalized_slot.is_some() {

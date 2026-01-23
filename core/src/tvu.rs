@@ -54,6 +54,7 @@ use {
     solana_runtime::{
         bank_forks::BankForks, commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache, snapshot_controller::SnapshotController,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
         vote_sender_types::ReplayVoteSender,
     },
     solana_streamer::{
@@ -69,7 +70,6 @@ use {
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
     },
     solana_votor_messages::{
-        consensus_message::BlockFinalization,
         migration::MigrationStatus,
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -225,7 +225,7 @@ impl Tvu {
         migration_status: Arc<MigrationStatus>,
         reward_certs_sender: Sender<BuildRewardCertsResponse>,
         build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-        highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+        highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
     ) -> Result<Self, String> {
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_ALPENGLOW_PACKET_NUM);

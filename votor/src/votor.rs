@@ -72,9 +72,10 @@ use {
     solana_runtime::{
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
     },
     solana_votor_messages::{
-        consensus_message::{BlockFinalization, ConsensusMessage},
+        consensus_message::ConsensusMessage,
         migration::MigrationStatus,
         reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -105,7 +106,7 @@ pub struct VotorConfig {
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub migration_status: Arc<MigrationStatus>,
-    pub highest_finalized: Arc<RwLock<Option<BlockFinalization>>>,
+    pub highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,

@@ -221,44 +221,6 @@ pub struct Certificate {
     pub bitmap: Vec<u8>,
 }
 
-/// Represents the finalization of a block, containing the certificates that prove it.
-///
-/// This enum captures the two ways a block can be finalized:
-/// - `Finalize`: Slow finalization with both a Finalize certificate and a Notarize certificate
-/// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate that combines both
-#[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum BlockFinalization {
-    /// Slow finalization: requires both a Finalize cert and a Notarize cert for the same slot
-    Finalize {
-        /// The finalize certificate
-        finalize_cert: Certificate,
-        /// The notarize certificate
-        notarize_cert: Certificate,
-    },
-    /// Fast finalization: a single FastFinalize certificate
-    FastFinalize(Certificate),
-}
-
-impl BlockFinalization {
-    /// The slot that is finalized
-    pub fn slot(&self) -> Slot {
-        match self {
-            BlockFinalization::Finalize {
-                finalize_cert,
-                notarize_cert,
-            } => {
-                debug_assert_eq!(
-                    finalize_cert.cert_type.slot(),
-                    notarize_cert.cert_type.slot()
-                );
-                finalize_cert.cert_type.slot()
-            }
-            BlockFinalization::FastFinalize(certificate) => certificate.cert_type.slot(),
-        }
-    }
-}
-
 /// Different types of consensus messages.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
