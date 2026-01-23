@@ -41,7 +41,7 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
-        block_component_processor::BlockComponentProcessor,
+        block_component_processor::{vote_reward::VoteRewardAccountState, BlockComponentProcessor},
         epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
@@ -964,11 +964,11 @@ impl Default for BankTestConfig {
 }
 
 #[derive(Debug)]
-struct PrevEpochInflationRewards {
-    validator_rewards: u64,
-    prev_epoch_duration_in_years: f64,
-    validator_rate: f64,
-    foundation_rate: f64,
+pub(crate) struct PrevEpochInflationRewards {
+    pub(crate) validator_rewards: u64,
+    pub(crate) prev_epoch_duration_in_years: f64,
+    pub(crate) validator_rate: f64,
+    pub(crate) foundation_rate: f64,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1397,6 +1397,7 @@ impl Bank {
                 new.process_new_epoch(
                     parent.epoch(),
                     parent.slot(),
+                    parent.capitalization.load(Relaxed),
                     parent.block_height(),
                     reward_calc_tracer,
                 );
@@ -1643,6 +1644,7 @@ impl Bank {
         &mut self,
         parent_epoch: Epoch,
         parent_slot: Slot,
+        parent_capitalization: u64,
         parent_height: u64,
         reward_calc_tracer: Option<impl RewardCalcTracer>,
     ) {
@@ -1673,7 +1675,7 @@ impl Bank {
 
         let mut rewards_metrics = RewardsMetrics::default();
         // After saving a snapshot of stakes, apply stake rewards and commission
-        let (_, update_rewards_with_thread_pool_time_us) = measure_us!(self
+        let (epoch_validator_rewards, update_rewards_with_thread_pool_time_us) = measure_us!(self
             .begin_partitioned_rewards(
                 reward_calc_tracer,
                 &thread_pool,
@@ -1682,6 +1684,18 @@ impl Bank {
                 parent_height,
                 &mut rewards_metrics,
             ));
+
+        if self
+            .feature_set
+            .is_active(&agave_feature_set::alpenglow::id())
+        {
+            VoteRewardAccountState::new_epoch_update_account(
+                self,
+                parent_epoch,
+                parent_capitalization,
+                epoch_validator_rewards,
+            );
+        }
 
         report_new_epoch_metrics(
             epoch,
@@ -2399,7 +2413,7 @@ impl Bank {
         num_slots as f64 / self.slots_per_year
     }
 
-    fn calculate_previous_epoch_inflation_rewards(
+    pub(crate) fn calculate_previous_epoch_inflation_rewards(
         &self,
         prev_epoch_capitalization: u64,
         prev_epoch: Epoch,
@@ -4152,7 +4166,7 @@ impl Bank {
 
     /// Technically this issues (or even burns!) new lamports,
     /// so be extra careful for its usage
-    fn store_account_and_update_capitalization(
+    pub(crate) fn store_account_and_update_capitalization(
         &self,
         pubkey: &Pubkey,
         new_account: &AccountSharedData,
