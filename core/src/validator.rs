@@ -343,7 +343,6 @@ pub struct ValidatorConfig {
     pub retransmit_xdp: Option<XdpConfig>,
     pub voting_service_test_override: Option<VotingServiceOverride>,
     pub repair_handler_type: RepairHandlerType,
-    pub sad_leader_handover_counter: Option<Arc<AtomicU64>>,
 }
 
 impl ValidatorConfig {
@@ -428,7 +427,6 @@ impl ValidatorConfig {
             retransmit_xdp: None,
             repair_handler_type: RepairHandlerType::default(),
             voting_service_test_override: None,
-            sad_leader_handover_counter: None,
         }
     }
 
@@ -1466,7 +1464,6 @@ impl Validator {
             build_reward_certs_sender,
             reward_certs_receiver,
             highest_finalized: highest_finalized.clone(),
-            sad_leader_handover_counter: config.sad_leader_handover_counter.clone(),
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 

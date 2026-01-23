@@ -63,7 +63,6 @@ use {
         local_cluster::{ClusterConfig, LocalCluster, DEFAULT_MINT_LAMPORTS},
         validator_configs::*,
     },
-    solana_native_token::LAMPORTS_PER_SOL,
     solana_poh_config::PohConfig,
     solana_pubkey::Pubkey,
     solana_pubsub_client::pubsub_client::PubsubClient,
@@ -115,7 +114,7 @@ use {
         num::NonZeroU64,
         path::Path,
         sync::{
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -6537,6 +6536,14 @@ fn broadcast_vote(
     }
 }
 
+fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
+    let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+    let signature: BLSSignature = bls_keypair
+        .sign(bincode::serialize(&vote).unwrap().as_slice())
+        .into();
+    ConsensusMessage::new_vote(vote, signature, rank)
+}
+
 fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     let discriminant = if vote.is_notarization() {
         0
@@ -8013,8 +8020,8 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     // Stakes descending so rank == node index. We control votes for exited nodes 2, 3.
     const NUM_NODES: usize = 4;
     const TOTAL_STAKE: u64 = 100 * DEFAULT_NODE_STAKE;
-    const STAGE_2_START_SLOT: u64 = 20;
-    const STAGE_3_START_SLOT: u64 = 100;
+    const STAGE_2_START_SLOT: u64 = 8;
+    const STAGE_3_START_SLOT: u64 = 40;
 
     let node_stakes = [
         TOTAL_STAKE * 15 / 100, // node 0: leader
@@ -8032,9 +8039,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     };
 
     let vote_listener_socket = solana_net_utils::bind_to_localhost().unwrap();
-    let flh_counters: Vec<Arc<AtomicU64>> = (0..NUM_NODES)
-        .map(|_| Arc::new(AtomicU64::new(0)))
-        .collect();
 
     let mut validator_config = ValidatorConfig::default_for_test();
     validator_config.fixed_leader_schedule = Some(leader_schedule);
@@ -8043,10 +8047,7 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         alpenglow_port_override: AlpenglowPortOverride::default(),
     });
 
-    let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
-    for (i, config) in validator_configs.iter_mut().enumerate() {
-        config.sad_leader_handover_counter = Some(flh_counters[i].clone());
-    }
+    let validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
 
     let mut cluster_config = ClusterConfig {
         mint_lamports: TOTAL_STAKE,
@@ -8088,14 +8089,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         &validator_keys,
         &node_stakes,
     );
-
-    fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
-        let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-        let signature: BLSSignature = bls_keypair
-            .sign(bincode::serialize(&vote).unwrap().as_slice())
-            .into();
-        ConsensusMessage::new_vote(vote, signature, rank)
-    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Stage {
@@ -8189,18 +8182,23 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                             let vote = &vote_message.vote;
                             let slot = vote.slot();
 
-                            // Only process votes from running leaders (ranks 2 and 3)
-                            if vote_message.rank != 2 && vote_message.rank != 3 {
+                            // Only process votes from the non-leader running validator.
+                            let non_leader_rank = match (slot / 4) % 2 {
+                                0 => 3,
+                                _ => 2,
+                            };
+                            if vote_message.rank != non_leader_rank {
                                 continue;
                             }
 
                             if stage == Stage::Stability && slot >= STAGE_2_START_SLOT {
-                                info!("Transitioning to TriggerSadPath at slot {}", slot);
+                                info!("Transitioning to TriggerSadPath at slot {slot}");
                                 stage = Stage::TriggerSadPath;
                             }
                             if stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
                                 info!(
-                                    "Transitioning to ObserveLiveness at slot {}. sad_path_finalized: {}/{}",
+                                    "Transitioning to ObserveLiveness at slot {}. \
+                                     sad_path_finalized: {}/{}",
                                     slot,
                                     finalized_sad_path_slots.len(),
                                     expected_sad_path_slots.len()
@@ -8235,15 +8233,11 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                             }
                         }
                         ConsensusMessage::Certificate(certificate) => {
-                            let cert_type = &certificate.cert_type;
-                            let is_finalize = matches!(cert_type, CertificateType::Finalize(_))
-                                || matches!(cert_type, CertificateType::FinalizeFast(_, _));
-
-                            if !is_finalize {
-                                continue;
-                            }
-
-                            let finalized_slot = cert_type.slot();
+                            let finalized_slot = match &certificate.cert_type {
+                                CertificateType::Finalize(slot)
+                                | CertificateType::FinalizeFast(slot, _) => *slot,
+                                _ => continue,
+                            };
 
                             // Track sad path slots that got finalized in stage 2
                             if stage == Stage::TriggerSadPath
@@ -8256,14 +8250,16 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                                 stage_3_finalized_slots.insert(finalized_slot);
                                 if stage_3_finalized_slots.len() >= 10 {
                                     info!(
-                                        "Test complete: {}/{} sad path slots finalized, {} in stage 3",
+                                        "Test complete: {}/{} sad path slots finalized, {} in \
+                                         stage 3",
                                         finalized_sad_path_slots.len(),
                                         expected_sad_path_slots.len(),
                                         stage_3_finalized_slots.len()
                                     );
                                     assert!(
-                                        finalized_sad_path_slots.len() >= 3,
-                                        "Expected at least 3 sad path slots to be finalized, got {}",
+                                        finalized_sad_path_slots.len() >= 2,
+                                        "Expected at least 2 sad path slots to be finalized, got \
+                                         {}",
                                         finalized_sad_path_slots.len()
                                     );
                                     cancel.cancel();

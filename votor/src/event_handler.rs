@@ -255,14 +255,9 @@ impl EventHandler {
                         slot,
                     });
                 }
-                let bank_epoch = bank.epoch();
                 consensus_metrics_events.push(ConsensusMetricsEvent::MaybeNewEpoch {
-                    epoch: bank_epoch,
+                    epoch: bank.epoch(),
                 });
-                info!(
-                    "{my_pubkey}: MaybeNewEpoch sent: slot={slot} epoch={bank_epoch} parent={:?}",
-                    bank.parent_slot()
-                );
                 vctx.consensus_metrics_sender
                     .send((now, consensus_metrics_events))
                     .map_err(|_| SendError(()))?;
