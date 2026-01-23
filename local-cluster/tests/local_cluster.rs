@@ -8115,7 +8115,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     }
 
     let vote_listener_thread = std::thread::spawn({
-        let flh_counters = flh_counters.clone();
         let connection_cache = cluster.connection_cache.clone();
 
         move || {
@@ -8127,14 +8126,17 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
             const SKIP_INJECTION_DELAY: Duration = Duration::from_millis(600);
             let mut pending_skips: Vec<(Slot, Instant)> = Vec::new();
 
+            // Track slots expected to have sad path (slot S where S-1 was skipped)
+            let mut expected_sad_path_slots: HashSet<Slot> = HashSet::new();
+            let mut finalized_sad_path_slots: HashSet<Slot> = HashSet::new();
+
             loop {
                 if timer.elapsed() > stage.timeout() {
-                    let total_flh: u64 =
-                        flh_counters.iter().map(|c| c.load(Ordering::Acquire)).sum();
                     panic!(
-                        "Timeout during {:?}. FLH count: {}, stage_3_finalized: {}",
+                        "Timeout during {:?}. sad_path_finalized: {}/{}, stage_3_finalized: {}",
                         stage,
-                        total_flh,
+                        finalized_sad_path_slots.len(),
+                        expected_sad_path_slots.len(),
                         stage_3_finalized_slots.len()
                     );
                 }
@@ -8197,11 +8199,11 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                                 stage = Stage::TriggerSadPath;
                             }
                             if stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
-                                let total_flh: u64 =
-                                    flh_counters.iter().map(|c| c.load(Ordering::Acquire)).sum();
                                 info!(
-                                    "Transitioning to ObserveLiveness at slot {}. FLH count: {}",
-                                    slot, total_flh
+                                    "Transitioning to ObserveLiveness at slot {}. sad_path_finalized: {}/{}",
+                                    slot,
+                                    finalized_sad_path_slots.len(),
+                                    expected_sad_path_slots.len()
                                 );
                                 stage = Stage::ObserveLiveness;
                             }
@@ -8213,6 +8215,8 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                                 if !pending_skips.iter().any(|(s, _)| *s == slot) {
                                     pending_skips
                                         .push((slot, Instant::now() + SKIP_INJECTION_DELAY));
+                                    // Slot S will have sad path since we're skipping S-1
+                                    expected_sad_path_slots.insert(slot + 1);
                                 }
                             } else {
                                 // Copy leader's vote to exited nodes
@@ -8235,17 +8239,32 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                             let is_finalize = matches!(cert_type, CertificateType::Finalize(_))
                                 || matches!(cert_type, CertificateType::FinalizeFast(_, _));
 
-                            if is_finalize && stage == Stage::ObserveLiveness {
-                                stage_3_finalized_slots.insert(cert_type.slot());
+                            if !is_finalize {
+                                continue;
+                            }
+
+                            let finalized_slot = cert_type.slot();
+
+                            // Track sad path slots that got finalized in stage 2
+                            if stage == Stage::TriggerSadPath
+                                && expected_sad_path_slots.contains(&finalized_slot)
+                            {
+                                finalized_sad_path_slots.insert(finalized_slot);
+                            }
+
+                            if stage == Stage::ObserveLiveness {
+                                stage_3_finalized_slots.insert(finalized_slot);
                                 if stage_3_finalized_slots.len() >= 10 {
-                                    let total_flh: u64 = flh_counters
-                                        .iter()
-                                        .map(|c| c.load(Ordering::Acquire))
-                                        .sum();
                                     info!(
-                                        "Test complete: {} FLH sad paths, {} finalized in stage 3",
-                                        total_flh,
+                                        "Test complete: {}/{} sad path slots finalized, {} in stage 3",
+                                        finalized_sad_path_slots.len(),
+                                        expected_sad_path_slots.len(),
                                         stage_3_finalized_slots.len()
+                                    );
+                                    assert!(
+                                        finalized_sad_path_slots.len() >= 3,
+                                        "Expected at least 3 sad path slots to be finalized, got {}",
+                                        finalized_sad_path_slots.len()
                                     );
                                     cancel.cancel();
                                     return;
