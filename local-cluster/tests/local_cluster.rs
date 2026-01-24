@@ -8011,13 +8011,50 @@ fn test_alpenglow_add_missing_parent_ready() {
     quic_server_thread.join().unwrap();
 }
 
+/// Test to validate Fast Leader Handover (FLH) "sad path" behavior when the optimistic parent
+/// does not match the finalized parent. This test does not investigate anything
+/// scheduler-related (e.g., the reinclusion of transactions prior to an UpdateParent), but
+/// rather only investigates basic FLH "sad path" functionality.
+///
+/// This test simulates a scenario with four nodes having the following stake distribution:
+/// - Node 0 (Leader): 15%
+/// - Node 1 (Leader): 15%
+/// - Node 2 (Exited): 35% - controlled by test
+/// - Node 3 (Exited): 35% - controlled by test
+///
+/// Leaders alternate every 4 slots (0-3 = Node 0, 4-7 = Node 1, etc). The test controls
+/// votes for the exited nodes 2 and 3, which hold majority stake.
+///
+/// ## Phase 1: Stability (slots 0-7)
+/// - Cluster runs normally to establish baseline operation
+/// - Test copies votes from running validators to exited nodes to maintain consensus
+///
+/// ## Phase 2: Trigger Sad Path (slots 8-39)
+/// - At the last slot of each leader's rotation (slot % 4 == 3), test injects delayed
+///   skip votes from nodes 2 and 3
+/// - The delay ensures the next leader initially starts with OptimisticParent pointing
+///   to the current slot's block
+/// - When skip votes arrive, slot S gets skipped, causing the next leader at slot S+1
+///   to (hopefully) enter the "sad path" - their optimistic parent doesn't match
+///   finalized parent
+/// - Leader must wait for finalization before producing blocks
+///
+/// ## Phase 3: Observe Liveness (slots 40+)
+/// - Test verifies cluster continues making progress after sad path scenarios
+/// - Requires 10+ finalized slots in this phase
+/// - Asserts at least 2 sad path slots were successfully finalized in Phase 2
+///
+/// ## Key Validation Points
+/// - FLH sad path triggers correctly when optimistic parent mismatches finalized parent
+/// - Leaders recover and produce blocks after sad path detection
+/// - Network maintains liveness through repeated sad path scenarios
 #[test]
 #[serial]
 fn test_alpenglow_flh_simple_sad_leader_handover() {
     agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 
     // 4 nodes: 0, 1 are leaders (15% each), 2, 3 are exited with majority stake (35% each).
-    // Stakes descending so rank == node index. We control votes for exited nodes 2, 3.
+    // Ranks by stake: nodes 2,3 are ranks 0,1; nodes 0,1 are ranks 2,3.
     const NUM_NODES: usize = 4;
     const TOTAL_STAKE: u64 = 100 * DEFAULT_NODE_STAKE;
     const STAGE_2_START_SLOT: u64 = 8;
@@ -8026,8 +8063,8 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     let node_stakes = [
         TOTAL_STAKE * 15 / 100, // node 0: leader
         TOTAL_STAKE * 15 / 100, // node 1: leader
-        TOTAL_STAKE * 35 / 100, // node 2: exited, we control
-        TOTAL_STAKE * 35 / 100, // node 3: exited, we control
+        TOTAL_STAKE * 35 / 100, // node 2: exited; we control
+        TOTAL_STAKE * 35 / 100, // node 3: exited; we control
     ];
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
@@ -8107,62 +8144,180 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         }
     }
 
+    struct SadPathState {
+        stage: Stage,
+        timer: Instant,
+        pending_skips: Vec<(Slot, Instant)>,
+        expected_sad_path_slots: HashSet<Slot>,
+        finalized_sad_path_slots: HashSet<Slot>,
+        stage_3_finalized_slots: HashSet<Slot>,
+    }
+
+    // Delay skip injection so next leader starts with OptimisticParent first
+    const SKIP_INJECTION_DELAY: Duration = Duration::from_millis(600);
+
+    impl SadPathState {
+        fn new() -> Self {
+            Self {
+                stage: Stage::Stability,
+                timer: Instant::now(),
+                pending_skips: vec![],
+                expected_sad_path_slots: HashSet::new(),
+                finalized_sad_path_slots: HashSet::new(),
+                stage_3_finalized_slots: HashSet::new(),
+            }
+        }
+
+        fn check_timeout(&self) {
+            if self.timer.elapsed() > self.stage.timeout() {
+                panic!(
+                    "Timeout during {:?}. sad_path_finalized: {}/{}, stage_3_finalized: {}",
+                    self.stage,
+                    self.finalized_sad_path_slots.len(),
+                    self.expected_sad_path_slots.len(),
+                    self.stage_3_finalized_slots.len()
+                );
+            }
+        }
+
+        fn process_pending_skips(
+            &mut self,
+            node_2_vote_keypair: &Keypair,
+            node_3_vote_keypair: &Keypair,
+            alpenglow_socket_addrs: &[SocketAddr],
+            connection_cache: Arc<ConnectionCache>,
+        ) {
+            let now = Instant::now();
+            self.pending_skips.retain(|&(slot, inject_at)| {
+                if now < inject_at {
+                    return true;
+                }
+
+                broadcast_vote(
+                    sign_and_construct_vote(Vote::new_skip_vote(slot), node_2_vote_keypair, 0),
+                    alpenglow_socket_addrs,
+                    None,
+                    connection_cache.clone(),
+                );
+                broadcast_vote(
+                    sign_and_construct_vote(Vote::new_skip_vote(slot), node_3_vote_keypair, 1),
+                    alpenglow_socket_addrs,
+                    None,
+                    connection_cache.clone(),
+                );
+                false
+            });
+        }
+
+        fn handle_vote(
+            &mut self,
+            vote_message: &VoteMessage,
+            node_2_vote_keypair: &Keypair,
+            node_3_vote_keypair: &Keypair,
+            alpenglow_socket_addrs: &[SocketAddr],
+            connection_cache: Arc<ConnectionCache>,
+        ) {
+            let vote = &vote_message.vote;
+            let slot = vote.slot();
+
+            // Only process votes from the non-leader running validator.
+            let non_leader_rank = match (slot / 4) % 2 {
+                0 => 3,
+                _ => 2,
+            };
+
+            if vote_message.rank != non_leader_rank {
+                return;
+            }
+
+            if self.stage == Stage::Stability && slot >= STAGE_2_START_SLOT {
+                info!("Transitioning to TriggerSadPath at slot {slot}");
+                self.stage = Stage::TriggerSadPath;
+            }
+
+            if self.stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
+                info!(
+                    "Transitioning to ObserveLiveness at slot {}. sad_path_finalized: {}/{}",
+                    slot,
+                    self.finalized_sad_path_slots.len(),
+                    self.expected_sad_path_slots.len()
+                );
+                self.stage = Stage::ObserveLiveness;
+            }
+
+            if self.stage == Stage::TriggerSadPath && slot % 4 == 3 {
+                // Queue skip votes with delay so next leader uses OptimisticParent
+                if !self.pending_skips.iter().any(|(s, _)| *s == slot) {
+                    self.pending_skips
+                        .push((slot, Instant::now() + SKIP_INJECTION_DELAY));
+                    // Slot S will have sad path since we're skipping S-1
+                    self.expected_sad_path_slots.insert(slot + 1);
+                }
+            } else {
+                // Copy non-leader's vote to exited nodes
+                broadcast_vote(
+                    sign_and_construct_vote(*vote, node_2_vote_keypair, 0),
+                    alpenglow_socket_addrs,
+                    None,
+                    connection_cache.clone(),
+                );
+                broadcast_vote(
+                    sign_and_construct_vote(*vote, node_3_vote_keypair, 1),
+                    alpenglow_socket_addrs,
+                    None,
+                    connection_cache,
+                );
+            }
+        }
+
+        fn handle_cert(&mut self, certificate: &Certificate) -> bool {
+            let finalized_slot = match &certificate.cert_type {
+                CertificateType::Finalize(slot) | CertificateType::FinalizeFast(slot, _) => *slot,
+                _ => return false,
+            };
+
+            // Track sad path slots that got finalized in stage 2
+            if self.stage == Stage::TriggerSadPath
+                && self.expected_sad_path_slots.contains(&finalized_slot)
+            {
+                self.finalized_sad_path_slots.insert(finalized_slot);
+            }
+
+            if self.stage == Stage::ObserveLiveness {
+                self.stage_3_finalized_slots.insert(finalized_slot);
+                if self.stage_3_finalized_slots.len() >= 10 {
+                    info!(
+                        "Test complete: {}/{} sad path slots finalized, {} in stage 3",
+                        self.finalized_sad_path_slots.len(),
+                        self.expected_sad_path_slots.len(),
+                        self.stage_3_finalized_slots.len()
+                    );
+                    assert!(
+                        self.finalized_sad_path_slots.len() >= 2,
+                        "Expected at least 2 sad path slots to be finalized, got {}",
+                        self.finalized_sad_path_slots.len()
+                    );
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
     let vote_listener_thread = std::thread::spawn({
         let connection_cache = cluster.connection_cache.clone();
 
         move || {
-            let mut stage = Stage::Stability;
-            let mut stage_3_finalized_slots: HashSet<Slot> = HashSet::new();
-            let timer = Instant::now();
-
-            // Delay skip injection so the next leader starts with OptimisticParent first
-            const SKIP_INJECTION_DELAY: Duration = Duration::from_millis(600);
-            let mut pending_skips: Vec<(Slot, Instant)> = Vec::new();
-
-            // Track slots expected to have sad path (slot S where S-1 was skipped)
-            let mut expected_sad_path_slots: HashSet<Slot> = HashSet::new();
-            let mut finalized_sad_path_slots: HashSet<Slot> = HashSet::new();
+            let mut state = SadPathState::new();
 
             loop {
-                if timer.elapsed() > stage.timeout() {
-                    panic!(
-                        "Timeout during {:?}. sad_path_finalized: {}/{}, stage_3_finalized: {}",
-                        stage,
-                        finalized_sad_path_slots.len(),
-                        expected_sad_path_slots.len(),
-                        stage_3_finalized_slots.len()
-                    );
-                }
-
-                // Inject any pending skips that are ready
-                let now = Instant::now();
-                pending_skips.retain(|&(slot, inject_at)| {
-                    if now >= inject_at {
-                        broadcast_vote(
-                            sign_and_construct_vote(
-                                Vote::new_skip_vote(slot),
-                                &node_2_vote_keypair,
-                                0,
-                            ),
-                            &alpenglow_socket_addrs,
-                            None,
-                            connection_cache.clone(),
-                        );
-                        broadcast_vote(
-                            sign_and_construct_vote(
-                                Vote::new_skip_vote(slot),
-                                &node_3_vote_keypair,
-                                1,
-                            ),
-                            &alpenglow_socket_addrs,
-                            None,
-                            connection_cache.clone(),
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                });
+                state.check_timeout();
+                state.process_pending_skips(
+                    &node_2_vote_keypair,
+                    &node_3_vote_keypair,
+                    &alpenglow_socket_addrs,
+                    connection_cache.clone(),
+                );
 
                 let Ok(packet_batch) = receiver.recv_timeout(Duration::from_millis(50)) else {
                     continue;
@@ -8179,92 +8334,18 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
 
                     match message {
                         ConsensusMessage::Vote(vote_message) => {
-                            let vote = &vote_message.vote;
-                            let slot = vote.slot();
-
-                            // Only process votes from the non-leader running validator.
-                            let non_leader_rank = match (slot / 4) % 2 {
-                                0 => 3,
-                                _ => 2,
-                            };
-                            if vote_message.rank != non_leader_rank {
-                                continue;
-                            }
-
-                            if stage == Stage::Stability && slot >= STAGE_2_START_SLOT {
-                                info!("Transitioning to TriggerSadPath at slot {slot}");
-                                stage = Stage::TriggerSadPath;
-                            }
-                            if stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
-                                info!(
-                                    "Transitioning to ObserveLiveness at slot {}. \
-                                     sad_path_finalized: {}/{}",
-                                    slot,
-                                    finalized_sad_path_slots.len(),
-                                    expected_sad_path_slots.len()
-                                );
-                                stage = Stage::ObserveLiveness;
-                            }
-
-                            let should_inject_skip =
-                                stage == Stage::TriggerSadPath && slot % 4 == 3;
-                            if should_inject_skip {
-                                // Queue skip votes with delay so next leader uses OptimisticParent
-                                if !pending_skips.iter().any(|(s, _)| *s == slot) {
-                                    pending_skips
-                                        .push((slot, Instant::now() + SKIP_INJECTION_DELAY));
-                                    // Slot S will have sad path since we're skipping S-1
-                                    expected_sad_path_slots.insert(slot + 1);
-                                }
-                            } else {
-                                // Copy leader's vote to exited nodes
-                                broadcast_vote(
-                                    sign_and_construct_vote(*vote, &node_2_vote_keypair, 0),
-                                    &alpenglow_socket_addrs,
-                                    None,
-                                    connection_cache.clone(),
-                                );
-                                broadcast_vote(
-                                    sign_and_construct_vote(*vote, &node_3_vote_keypair, 1),
-                                    &alpenglow_socket_addrs,
-                                    None,
-                                    connection_cache.clone(),
-                                );
-                            }
+                            state.handle_vote(
+                                &vote_message,
+                                &node_2_vote_keypair,
+                                &node_3_vote_keypair,
+                                &alpenglow_socket_addrs,
+                                connection_cache.clone(),
+                            );
                         }
                         ConsensusMessage::Certificate(certificate) => {
-                            let finalized_slot = match &certificate.cert_type {
-                                CertificateType::Finalize(slot)
-                                | CertificateType::FinalizeFast(slot, _) => *slot,
-                                _ => continue,
-                            };
-
-                            // Track sad path slots that got finalized in stage 2
-                            if stage == Stage::TriggerSadPath
-                                && expected_sad_path_slots.contains(&finalized_slot)
-                            {
-                                finalized_sad_path_slots.insert(finalized_slot);
-                            }
-
-                            if stage == Stage::ObserveLiveness {
-                                stage_3_finalized_slots.insert(finalized_slot);
-                                if stage_3_finalized_slots.len() >= 10 {
-                                    info!(
-                                        "Test complete: {}/{} sad path slots finalized, {} in \
-                                         stage 3",
-                                        finalized_sad_path_slots.len(),
-                                        expected_sad_path_slots.len(),
-                                        stage_3_finalized_slots.len()
-                                    );
-                                    assert!(
-                                        finalized_sad_path_slots.len() >= 2,
-                                        "Expected at least 2 sad path slots to be finalized, got \
-                                         {}",
-                                        finalized_sad_path_slots.len()
-                                    );
-                                    cancel.cancel();
-                                    return;
-                                }
+                            if state.handle_cert(&certificate) {
+                                cancel.cancel();
+                                return;
                             }
                         }
                     }
