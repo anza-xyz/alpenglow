@@ -1,13 +1,13 @@
 use {
-    crate::welford_stats::WelfordStats,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    histogram::Histogram,
     solana_clock::{Epoch, Slot},
     solana_epoch_schedule::EpochSchedule,
     solana_metrics::datapoint_info,
     solana_pubkey::Pubkey,
     solana_votor_messages::vote::Vote,
     std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::{BTreeMap, HashSet},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -28,6 +28,9 @@ use {
 /// We overprovision this channel at 15k total events.
 pub const MAX_IN_FLIGHT_CONSENSUS_EVENTS: usize = 15_000;
 
+/// Number of epochs to retain metrics for (current + previous).
+const EPOCHS_TO_RETAIN: u64 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusMetricsEvent {
     /// A vote was received from the node with `id`.
@@ -43,21 +46,44 @@ pub enum ConsensusMetricsEvent {
 pub type ConsensusMetricsEventSender = Sender<(Instant, Vec<ConsensusMetricsEvent>)>;
 pub type ConsensusMetricsEventReceiver = Receiver<(Instant, Vec<ConsensusMetricsEvent>)>;
 
+/// Returns a [`Histogram`] configured for the use cases for this module.
+///
+/// Keeps the default precision and reduces the max value to 10s to get finer grained resolution.
+fn build_histogram() -> Histogram {
+    Histogram::configure()
+        .max_value(10_000_000)
+        .build()
+        .unwrap()
+}
+
 /// Tracks all [`Vote`] metrics for a given node.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 struct NodeVoteMetrics {
-    notar: WelfordStats,
-    notar_fallback: WelfordStats,
-    skip: WelfordStats,
-    skip_fallback: WelfordStats,
-    final_: WelfordStats,
+    notar: Histogram,
+    notar_fallback: Histogram,
+    skip: Histogram,
+    skip_fallback: Histogram,
+    final_: Histogram,
+}
+
+impl Default for NodeVoteMetrics {
+    fn default() -> Self {
+        let histogram = build_histogram();
+        Self {
+            notar: histogram.clone(),
+            notar_fallback: histogram.clone(),
+            skip: histogram.clone(),
+            skip_fallback: histogram.clone(),
+            final_: histogram,
+        }
+    }
 }
 
 impl NodeVoteMetrics {
     /// Records metrics for when `vote` was received after `elapsed` time has passed since the start of the slot.
     fn record_vote(&mut self, vote: &Vote, elapsed: Duration) {
         let elapsed = elapsed.as_micros();
-        let elapsed: u64 = match elapsed.try_into() {
+        let elapsed = match elapsed.try_into() {
             Ok(e) => e,
             Err(err) => {
                 warn!(
@@ -67,14 +93,22 @@ impl NodeVoteMetrics {
                 return;
             }
         };
-        match vote {
-            Vote::Notarize(_) => self.notar.add_sample(elapsed),
-            Vote::NotarizeFallback(_) => self.notar_fallback.add_sample(elapsed),
-            Vote::Skip(_) => self.skip.add_sample(elapsed),
-            Vote::SkipFallback(_) => self.skip_fallback.add_sample(elapsed),
-            Vote::Finalize(_) => self.final_.add_sample(elapsed),
-            Vote::Genesis(_) => (), // Only for migration, tracked elsewhere
+        let res = match vote {
+            Vote::Notarize(_) => self.notar.increment(elapsed),
+            Vote::NotarizeFallback(_) => self.notar_fallback.increment(elapsed),
+            Vote::Skip(_) => self.skip.increment(elapsed),
+            Vote::SkipFallback(_) => self.skip_fallback.increment(elapsed),
+            Vote::Finalize(_) => self.final_.increment(elapsed),
+            Vote::Genesis(_) => Ok(()), // Only for migration, tracked elsewhere
         };
+        match res {
+            Ok(()) => (),
+            Err(err) => {
+                warn!(
+                    "recording duration {elapsed} for vote {vote:?}: recording failed with {err}"
+                );
+            }
+        }
     }
 }
 
@@ -99,16 +133,16 @@ struct EpochMetrics {
     node_metrics: BTreeMap<Pubkey, NodeVoteMetrics>,
 
     /// Used to track when this node received blocks from different leaders in the network.
-    leader_metrics: BTreeMap<Pubkey, WelfordStats>,
+    leader_metrics: BTreeMap<Pubkey, Histogram>,
+
+    /// Counts number of times metrics recording failed.
+    metrics_recording_failed: usize,
 
     /// Tracks when individual slots began.
     ///
     /// Relies on [`TimerManager`] to notify of start of slots.
     /// The manager uses parent ready event and timeouts as per the Alpenglow protocol to determine start of slots.
     start_of_slot: BTreeMap<Slot, Instant>,
-
-    /// Counts number of times metrics recording failed.
-    metrics_recording_failed: usize,
 }
 
 /// Tracks various Consensus related metrics.
@@ -117,7 +151,7 @@ pub struct ConsensusMetrics {
     epoch_metrics: BTreeMap<Epoch, EpochMetrics>,
 
     /// Epochs that have already been emitted (to prevent duplicate emissions).
-    emitted_epochs: BTreeSet<Epoch>,
+    emitted_epochs: HashSet<Epoch>,
 
     /// The highest finalized slot we've seen.
     highest_finalized_slot: Option<Slot>,
@@ -133,7 +167,7 @@ impl ConsensusMetrics {
     fn new(epoch_schedule: EpochSchedule, receiver: ConsensusMetricsEventReceiver) -> Self {
         Self {
             epoch_metrics: BTreeMap::default(),
-            emitted_epochs: BTreeSet::default(),
+            emitted_epochs: HashSet::default(),
             highest_finalized_slot: None,
             epoch_schedule,
             receiver,
@@ -186,17 +220,19 @@ impl ConsensusMetrics {
         }
     }
 
+    fn epoch_metrics_for_slot(&mut self, slot: Slot) -> &mut EpochMetrics {
+        let epoch = self.epoch_schedule.get_epoch(slot);
+        self.epoch_metrics.entry(epoch).or_default()
+    }
+
     /// Records a `vote` from the node with `id`.
     fn record_vote(&mut self, id: Pubkey, vote: &Vote, received: Instant) {
         let slot = vote.slot();
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let epoch_metrics = self.epoch_metrics.entry(epoch).or_default();
+        let epoch_metrics = self.epoch_metrics_for_slot(slot);
 
         let Some(start) = epoch_metrics.start_of_slot.get(&slot) else {
-            epoch_metrics.metrics_recording_failed = epoch_metrics
-                .metrics_recording_failed
-                .checked_add(1)
-                .unwrap();
+            epoch_metrics.metrics_recording_failed =
+                epoch_metrics.metrics_recording_failed.saturating_add(1);
             return;
         };
         let node = epoch_metrics.node_metrics.entry(id).or_default();
@@ -206,18 +242,15 @@ impl ConsensusMetrics {
 
     /// Records when a block for `slot` was seen and the `leader` is responsible for producing it.
     fn record_block_hash_seen(&mut self, leader: Pubkey, slot: Slot, received: Instant) {
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let epoch_metrics = self.epoch_metrics.entry(epoch).or_default();
+        let epoch_metrics = self.epoch_metrics_for_slot(slot);
 
         let Some(start) = epoch_metrics.start_of_slot.get(&slot) else {
-            epoch_metrics.metrics_recording_failed = epoch_metrics
-                .metrics_recording_failed
-                .checked_add(1)
-                .unwrap();
+            epoch_metrics.metrics_recording_failed =
+                epoch_metrics.metrics_recording_failed.saturating_add(1);
             return;
         };
         let elapsed = received.duration_since(*start).as_micros();
-        let elapsed: u64 = match elapsed.try_into() {
+        let elapsed = match elapsed.try_into() {
             Ok(e) => e,
             Err(err) => {
                 warn!(
@@ -227,27 +260,53 @@ impl ConsensusMetrics {
                 return;
             }
         };
-        epoch_metrics
+        let histogram = epoch_metrics
             .leader_metrics
             .entry(leader)
-            .or_default()
-            .add_sample(elapsed);
+            .or_insert_with(build_histogram);
+        match histogram.increment(elapsed) {
+            Ok(()) => (),
+            Err(err) => {
+                warn!(
+                    "recording duration {elapsed} for block hash for slot {slot}: recording \
+                     failed with {err}"
+                );
+            }
+        }
     }
 
     /// Records when a given slot started.
     fn record_start_of_slot(&mut self, slot: Slot, received: Instant) {
-        let epoch = self.epoch_schedule.get_epoch(slot);
-        let epoch_metrics = self.epoch_metrics.entry(epoch).or_default();
-        epoch_metrics.start_of_slot.entry(slot).or_insert(received);
+        self.epoch_metrics_for_slot(slot)
+            .start_of_slot
+            .entry(slot)
+            .or_insert(received);
     }
 
     /// Handles a slot finalization event.
     fn handle_slot_finalized(&mut self, finalized_slot: Slot) {
-        self.highest_finalized_slot = Some(
-            self.highest_finalized_slot
-                .map_or(finalized_slot, |s| s.max(finalized_slot)),
-        );
+        let current = self.highest_finalized_slot.unwrap_or(0);
+        self.highest_finalized_slot = Some(current.max(finalized_slot));
         self.maybe_emit_completed_epochs();
+    }
+
+    /// Returns true if metrics for `epoch` should be emitted.
+    fn should_emit_epoch(
+        &self,
+        epoch: Epoch,
+        finalized_epoch: Epoch,
+        highest_finalized: Slot,
+    ) -> bool {
+        if self.emitted_epochs.contains(&epoch) {
+            return false;
+        }
+        // Emit if finalized slot is in a later epoch
+        if finalized_epoch > epoch {
+            return true;
+        }
+        // Emit if the last slot in epoch is finalized
+        let last_slot = self.epoch_schedule.get_last_slot_in_epoch(epoch);
+        highest_finalized >= last_slot
     }
 
     /// Checks if any epochs are ready to be emitted and emits them.
@@ -260,18 +319,7 @@ impl ConsensusMetrics {
         let epochs_to_emit: Vec<Epoch> = self
             .epoch_metrics
             .keys()
-            .filter(|&&epoch| {
-                if self.emitted_epochs.contains(&epoch) {
-                    return false;
-                }
-                // Condition 1: finalized slot is in a later epoch
-                if finalized_epoch > epoch {
-                    return true;
-                }
-                // Condition 2: last slot in epoch is finalized
-                let last_slot = self.epoch_schedule.get_last_slot_in_epoch(epoch);
-                highest_finalized >= last_slot
-            })
+            .filter(|&&epoch| self.should_emit_epoch(epoch, finalized_epoch, highest_finalized))
             .copied()
             .collect();
 
@@ -294,42 +342,42 @@ impl ConsensusMetrics {
             datapoint_info!("consensus_vote_metrics",
                 "address" => addr,
                 ("epoch", epoch, i64),
-                ("notar_vote_count", metrics.notar.count(), i64),
-                ("notar_vote_us_mean", metrics.notar.mean::<i64>(), Option<i64>),
-                ("notar_vote_us_stddev", metrics.notar.stddev::<i64>(), Option<i64>),
-                ("notar_vote_us_maximum", metrics.notar.maximum::<i64>(), Option<i64>),
+                ("notar_vote_count", metrics.notar.entries(), i64),
+                ("notar_vote_us_mean", metrics.notar.mean().ok(), Option<i64>),
+                ("notar_vote_us_stddev", metrics.notar.stddev(), Option<i64>),
+                ("notar_vote_us_maximum", metrics.notar.maximum().ok(), Option<i64>),
 
-                ("notar_fallback_vote_count", metrics.notar_fallback.count(), i64),
-                ("notar_fallback_vote_us_mean", metrics.notar_fallback.mean::<i64>(), Option<i64>),
-                ("notar_fallback_vote_us_stddev", metrics.notar_fallback.stddev::<i64>(), Option<i64>),
-                ("notar_fallback_vote_us_maximum", metrics.notar_fallback.maximum::<i64>(), Option<i64>),
+                ("notar_fallback_vote_count", metrics.notar_fallback.entries(), i64),
+                ("notar_fallback_vote_us_mean", metrics.notar_fallback.mean().ok(), Option<i64>),
+                ("notar_fallback_vote_us_stddev", metrics.notar_fallback.stddev(), Option<i64>),
+                ("notar_fallback_vote_us_maximum", metrics.notar_fallback.maximum().ok(), Option<i64>),
 
-                ("skip_vote_count", metrics.skip.count(), i64),
-                ("skip_vote_us_mean", metrics.skip.mean::<i64>(), Option<i64>),
-                ("skip_vote_us_stddev", metrics.skip.stddev::<i64>(), Option<i64>),
-                ("skip_vote_us_maximum", metrics.skip.maximum::<i64>(), Option<i64>),
+                ("skip_vote_count", metrics.skip.entries(), i64),
+                ("skip_vote_us_mean", metrics.skip.mean().ok(), Option<i64>),
+                ("skip_vote_us_stddev", metrics.skip.stddev(), Option<i64>),
+                ("skip_vote_us_maximum", metrics.skip.maximum().ok(), Option<i64>),
 
-                ("skip_fallback_vote_count", metrics.skip_fallback.count(), i64),
-                ("skip_fallback_vote_us_mean", metrics.skip_fallback.mean::<i64>(), Option<i64>),
-                ("skip_fallback_vote_us_stddev", metrics.skip_fallback.stddev::<i64>(), Option<i64>),
-                ("skip_fallback_vote_us_maximum", metrics.skip_fallback.maximum::<i64>(), Option<i64>),
+                ("skip_fallback_vote_count", metrics.skip_fallback.entries(), i64),
+                ("skip_fallback_vote_us_mean", metrics.skip_fallback.mean().ok(), Option<i64>),
+                ("skip_fallback_vote_us_stddev", metrics.skip_fallback.stddev(), Option<i64>),
+                ("skip_fallback_vote_us_maximum", metrics.skip_fallback.maximum().ok(), Option<i64>),
 
-                ("finalize_vote_count", metrics.final_.count(), i64),
-                ("finalize_vote_us_mean", metrics.final_.mean::<i64>(), Option<i64>),
-                ("finalize_vote_us_stddev", metrics.final_.stddev::<i64>(), Option<i64>),
-                ("finalize_vote_us_maximum", metrics.final_.maximum::<i64>(), Option<i64>),
+                ("finalize_vote_count", metrics.final_.entries(), i64),
+                ("finalize_vote_us_mean", metrics.final_.mean().ok(), Option<i64>),
+                ("finalize_vote_us_stddev", metrics.final_.stddev(), Option<i64>),
+                ("finalize_vote_us_maximum", metrics.final_.maximum().ok(), Option<i64>),
             );
         }
 
-        for (addr, stats) in &epoch_metrics.leader_metrics {
+        for (addr, histogram) in &epoch_metrics.leader_metrics {
             let addr = addr.to_string();
             datapoint_info!("consensus_block_hash_seen_metrics",
                 "address" => addr,
                 ("epoch", epoch, i64),
-                ("block_hash_seen_count", stats.count(), i64),
-                ("block_hash_seen_us_mean", stats.mean::<i64>(), Option<i64>),
-                ("block_hash_seen_us_stddev", stats.stddev::<i64>(), Option<i64>),
-                ("block_hash_seen_us_maximum", stats.maximum::<i64>(), Option<i64>),
+                ("block_hash_seen_count", histogram.entries(), i64),
+                ("block_hash_seen_us_mean", histogram.mean().ok(), Option<i64>),
+                ("block_hash_seen_us_stddev", histogram.stddev(), Option<i64>),
+                ("block_hash_seen_us_maximum", histogram.maximum().ok(), Option<i64>),
             );
         }
 
@@ -351,9 +399,139 @@ impl ConsensusMetrics {
 
     /// Cleans up old epoch data to prevent unbounded memory growth.
     fn cleanup_old_epochs(&mut self, finalized_epoch: Epoch) {
-        // Keep data for at most 2 epochs
-        let cutoff_epoch = finalized_epoch.saturating_sub(2);
+        let cutoff_epoch = finalized_epoch.saturating_sub(EPOCHS_TO_RETAIN);
         self.epoch_metrics.retain(|&epoch, _| epoch >= cutoff_epoch);
         self.emitted_epochs.retain(|&epoch| epoch >= cutoff_epoch);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crossbeam_channel::unbounded,
+        solana_keypair::Keypair,
+        solana_signer::Signer,
+        solana_votor_messages::vote::{SkipVote, Vote},
+        std::thread::sleep,
+    };
+
+    fn new_metrics() -> ConsensusMetrics {
+        let (_, rx) = unbounded();
+        ConsensusMetrics::new(EpochSchedule::custom(100, 100, false), rx) // 100 slots/epoch
+    }
+
+    #[test]
+    fn test_vote_before_slot_start() {
+        let mut metrics = new_metrics();
+
+        metrics.record_vote(
+            Keypair::new().pubkey(),
+            &Vote::Skip(SkipVote { slot: 42 }),
+            Instant::now(),
+        );
+
+        assert_eq!(metrics.epoch_metrics[&0].metrics_recording_failed, 1);
+    }
+
+    #[test]
+    fn test_vote_after_slot_start() {
+        let mut metrics = new_metrics();
+        let pubkey = Keypair::new().pubkey();
+
+        metrics.record_start_of_slot(42, Instant::now());
+        sleep(Duration::from_millis(1));
+        metrics.record_vote(pubkey, &Vote::Skip(SkipVote { slot: 42 }), Instant::now());
+
+        let node = &metrics.epoch_metrics[&0].node_metrics[&pubkey];
+        assert_eq!(node.skip.entries(), 1);
+        assert!(node.skip.mean().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_out_of_order_epoch_replay() {
+        let mut metrics = new_metrics();
+        let t = Instant::now();
+
+        metrics.record_start_of_slot(200, t);
+        metrics.record_start_of_slot(100, t);
+
+        assert!(metrics.epoch_metrics.contains_key(&1));
+        assert!(metrics.epoch_metrics.contains_key(&2));
+    }
+
+    #[test]
+    fn test_emit_on_next_epoch() {
+        let mut metrics = new_metrics();
+
+        metrics.record_start_of_slot(50, Instant::now());
+        metrics.handle_slot_finalized(100);
+
+        assert!(metrics.emitted_epochs.contains(&0));
+    }
+
+    #[test]
+    fn test_emit_on_last_slot() {
+        let mut metrics = new_metrics();
+
+        metrics.record_start_of_slot(50, Instant::now());
+        metrics.handle_slot_finalized(99);
+
+        assert!(metrics.emitted_epochs.contains(&0));
+    }
+
+    #[test]
+    fn test_no_double_emit() {
+        let mut metrics = new_metrics();
+
+        metrics.record_start_of_slot(50, Instant::now());
+        metrics.handle_slot_finalized(100);
+        let count_before = metrics.emitted_epochs.iter().filter(|&&e| e == 0).count();
+
+        metrics.handle_slot_finalized(101);
+        metrics.handle_slot_finalized(102);
+
+        assert_eq!(
+            metrics.emitted_epochs.iter().filter(|&&e| e == 0).count(),
+            count_before
+        );
+    }
+
+    #[test]
+    fn test_cleanup_old_epochs() {
+        let mut metrics = new_metrics();
+
+        for ix in 0u64..5 {
+            metrics.record_start_of_slot(ix * 100, Instant::now());
+        }
+        metrics.handle_slot_finalized(400);
+
+        assert!(!metrics.epoch_metrics.contains_key(&0));
+        assert!(!metrics.epoch_metrics.contains_key(&1));
+        assert!(metrics.epoch_metrics.contains_key(&2));
+    }
+
+    #[test]
+    fn test_finalize_keeps_max() {
+        let mut metrics = new_metrics();
+
+        metrics.handle_slot_finalized(200);
+        metrics.handle_slot_finalized(50);
+
+        assert_eq!(metrics.highest_finalized_slot, Some(200));
+    }
+
+    #[test]
+    fn test_block_hash_seen() {
+        let mut metrics = new_metrics();
+        let leader = Keypair::new().pubkey();
+
+        metrics.record_start_of_slot(42, Instant::now());
+        metrics.record_block_hash_seen(leader, 42, Instant::now());
+
+        assert_eq!(
+            metrics.epoch_metrics[&0].leader_metrics[&leader].entries(),
+            1
+        );
     }
 }
