@@ -244,6 +244,7 @@ impl ConsensusMessage {
     }
 }
 
+/// Test helper to sign and construct a vote message.
 #[cfg(feature = "dev-context-only-utils")]
 pub fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
     let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
