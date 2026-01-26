@@ -16,10 +16,7 @@ frozen-abi = [
     "dep:solana-frozen-abi-macro",
     "solana-hash/frozen-abi",
 ]
-dev-context-only-utils = [
-    "dep:bincode",
-    "dep:solana-keypair",
-]
+dev-context-only-utils = ["dep:bincode", "dep:solana-keypair"]
 
 [dependencies]
 agave-feature-set = { workspace = true }
