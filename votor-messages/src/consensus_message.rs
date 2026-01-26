@@ -7,6 +7,8 @@ use {
     solana_hash::Hash,
     std::sync::Arc,
 };
+#[cfg(feature = "dev-context-only-utils")]
+use {solana_bls_signatures::keypair::Keypair as BLSKeypair, solana_keypair::Keypair};
 
 /// The seed used to derive the BLS keypair
 pub const BLS_KEYPAIR_DERIVE_SEED: &[u8; 9] = b"alpenglow";
@@ -240,4 +242,13 @@ impl ConsensusMessage {
             bitmap,
         })
     }
+}
+
+#[cfg(feature = "dev-context-only-utils")]
+pub fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
+    let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
+    let signature: BLSSignature = bls_keypair
+        .sign(bincode::serialize(&vote).unwrap().as_slice())
+        .into();
+    ConsensusMessage::new_vote(vote, signature, rank)
 }

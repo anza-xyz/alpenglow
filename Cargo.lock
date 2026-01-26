@@ -11987,6 +11987,7 @@ version = "3.1.0"
 dependencies = [
  "agave-feature-set",
  "agave-logger",
+ "bincode",
  "bitvec",
  "bytemuck",
  "log",
@@ -11999,6 +12000,7 @@ dependencies = [
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
  "solana-hash",
+ "solana-keypair",
  "solana-program",
  "solana-signer-store",
  "solana-vote-interface",

@@ -100,7 +100,8 @@ use {
     solana_votor::voting_service::{AlpenglowPortOverride, VotingServiceOverride},
     solana_votor_messages::{
         consensus_message::{
-            Certificate, CertificateType, ConsensusMessage, VoteMessage, BLS_KEYPAIR_DERIVE_SEED,
+            sign_and_construct_vote, Certificate, CertificateType, ConsensusMessage, VoteMessage,
+            BLS_KEYPAIR_DERIVE_SEED,
         },
         migration::{GENESIS_CERTIFICATE_ACCOUNT, MIGRATION_SLOT_OFFSET},
         vote::Vote,
@@ -6536,14 +6537,6 @@ fn broadcast_vote(
     }
 }
 
-fn sign_and_construct_vote(vote: Vote, keypair: &Keypair, rank: u16) -> ConsensusMessage {
-    let bls_keypair = BLSKeypair::derive_from_signer(keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-    let signature: BLSSignature = bls_keypair
-        .sign(bincode::serialize(&vote).unwrap().as_slice())
-        .into();
-    ConsensusMessage::new_vote(vote, signature, rank)
-}
-
 fn _vote_to_tuple(vote: &Vote) -> (u64, u8) {
     let discriminant = if vote.is_notarization() {
         0
@@ -8040,8 +8033,8 @@ fn test_alpenglow_add_missing_parent_ready() {
 /// - Leader must wait for finalization before producing blocks
 ///
 /// ## Phase 3: Observe Liveness (slots 40+)
-/// - Test verifies cluster continues making progress after sad path scenarios
-/// - Requires 10+ finalized slots in this phase
+/// - Vote forwarding continues (without skip injection) to maintain consensus
+/// - Uses `check_for_new_roots` to verify cluster continues making progress
 /// - Asserts at least 2 sad path slots were successfully finalized in Phase 2
 ///
 /// ## Key Validation Points
@@ -8131,7 +8124,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     enum Stage {
         Stability,
         TriggerSadPath,
-        ObserveLiveness,
     }
 
     impl Stage {
@@ -8139,7 +8131,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
             match self {
                 Stage::Stability => Duration::from_secs(120),
                 Stage::TriggerSadPath => Duration::from_secs(180),
-                Stage::ObserveLiveness => Duration::from_secs(240),
             }
         }
     }
@@ -8150,7 +8141,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         pending_skips: Vec<(Slot, Instant)>,
         expected_sad_path_slots: HashSet<Slot>,
         finalized_sad_path_slots: HashSet<Slot>,
-        stage_3_finalized_slots: HashSet<Slot>,
     }
 
     // Delay skip injection so next leader starts with OptimisticParent first
@@ -8164,18 +8154,16 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                 pending_skips: vec![],
                 expected_sad_path_slots: HashSet::new(),
                 finalized_sad_path_slots: HashSet::new(),
-                stage_3_finalized_slots: HashSet::new(),
             }
         }
 
         fn check_timeout(&self) {
             if self.timer.elapsed() > self.stage.timeout() {
                 panic!(
-                    "Timeout during {:?}. sad_path_finalized: {}/{}, stage_3_finalized: {}",
+                    "Timeout during {:?}. sad_path_finalized: {}/{}",
                     self.stage,
                     self.finalized_sad_path_slots.len(),
                     self.expected_sad_path_slots.len(),
-                    self.stage_3_finalized_slots.len()
                 );
             }
         }
@@ -8235,17 +8223,11 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                 self.stage = Stage::TriggerSadPath;
             }
 
-            if self.stage == Stage::TriggerSadPath && slot >= STAGE_3_START_SLOT {
-                info!(
-                    "Transitioning to ObserveLiveness at slot {}. sad_path_finalized: {}/{}",
-                    slot,
-                    self.finalized_sad_path_slots.len(),
-                    self.expected_sad_path_slots.len()
-                );
-                self.stage = Stage::ObserveLiveness;
-            }
+            // After stage 2, just forward votes normally (no more skip injection)
+            let should_inject_skip =
+                self.stage == Stage::TriggerSadPath && slot < STAGE_3_START_SLOT && slot % 4 == 3;
 
-            if self.stage == Stage::TriggerSadPath && slot % 4 == 3 {
+            if should_inject_skip {
                 // Queue skip votes with delay so next leader uses OptimisticParent
                 if !self.pending_skips.iter().any(|(s, _)| *s == slot) {
                     self.pending_skips
@@ -8270,10 +8252,10 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
             }
         }
 
-        fn handle_cert(&mut self, certificate: &Certificate) -> bool {
+        fn handle_cert(&mut self, certificate: &Certificate) {
             let finalized_slot = match &certificate.cert_type {
                 CertificateType::Finalize(slot) | CertificateType::FinalizeFast(slot, _) => *slot,
-                _ => return false,
+                _ => return,
             };
 
             // Track sad path slots that got finalized in stage 2
@@ -8282,35 +8264,34 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
             {
                 self.finalized_sad_path_slots.insert(finalized_slot);
             }
-
-            if self.stage == Stage::ObserveLiveness {
-                self.stage_3_finalized_slots.insert(finalized_slot);
-                if self.stage_3_finalized_slots.len() >= 10 {
-                    info!(
-                        "Test complete: {}/{} sad path slots finalized, {} in stage 3",
-                        self.finalized_sad_path_slots.len(),
-                        self.expected_sad_path_slots.len(),
-                        self.stage_3_finalized_slots.len()
-                    );
-                    assert!(
-                        self.finalized_sad_path_slots.len() >= 2,
-                        "Expected at least 2 sad path slots to be finalized, got {}",
-                        self.finalized_sad_path_slots.len()
-                    );
-                    return true;
-                }
-            }
-            false
         }
     }
 
+    // Get contact info for the alive validators (nodes 0 and 1)
+    let alive_contact_infos: Vec<_> = validator_keys
+        .iter()
+        .take(2)
+        .map(|keypair| cluster.get_contact_info(&keypair.pubkey()).unwrap().clone())
+        .collect();
+
+    let finalized_sad_path_slots = Arc::new(Mutex::new(HashSet::new()));
+
     let vote_listener_thread = std::thread::spawn({
         let connection_cache = cluster.connection_cache.clone();
+        let cancel = cancel.clone();
+        let finalized_sad_path_slots = finalized_sad_path_slots.clone();
 
         move || {
             let mut state = SadPathState::new();
 
             loop {
+                if cancel.is_cancelled() {
+                    // Copy finalized slots to shared state before exiting
+                    *finalized_sad_path_slots.lock().unwrap() =
+                        state.finalized_sad_path_slots.clone();
+                    return;
+                }
+
                 state.check_timeout();
                 state.process_pending_skips(
                     &node_2_vote_keypair,
@@ -8324,10 +8305,6 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                 };
 
                 for packet in packet_batch.iter() {
-                    if cancel.is_cancelled() {
-                        return;
-                    }
-
                     let Ok(message) = packet.deserialize_slice(..) else {
                         continue;
                     };
@@ -8343,10 +8320,7 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
                             );
                         }
                         ConsensusMessage::Certificate(certificate) => {
-                            if state.handle_cert(&certificate) {
-                                cancel.cancel();
-                                return;
-                            }
+                            state.handle_cert(&certificate);
                         }
                     }
                 }
@@ -8354,6 +8328,29 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         }
     });
 
+    cluster_tests::check_for_new_roots(
+        16,
+        &alive_contact_infos,
+        &cluster.connection_cache,
+        "test_alpenglow_flh_simple_sad_leader_handover",
+    );
+
+    // Stop the vote listener and get the finalized sad path slots
+    cancel.cancel();
     vote_listener_thread.join().expect("vote listener panicked");
+
+    let finalized_sad_path_slots = finalized_sad_path_slots.lock().unwrap();
+
+    assert!(
+        finalized_sad_path_slots.len() >= 2,
+        "Expected at least 2 sad path slots to be finalized, got {}",
+        finalized_sad_path_slots.len()
+    );
+
+    info!(
+        "{} sad path slots finalized",
+        finalized_sad_path_slots.len()
+    );
+
     quic_server_thread.join().expect("quic server panicked");
 }
