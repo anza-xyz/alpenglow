@@ -11,7 +11,7 @@ edition = { workspace = true }
 
 [features]
 agave-unstable-api = []
-dev-context-only-utils = []
+dev-context-only-utils = ["dep:bincode", "dep:solana-keypair"]
 frozen-abi = [
     "dep:solana-frozen-abi",
     "dep:solana-frozen-abi-macro",
@@ -22,6 +22,7 @@ frozen-abi = [
 [dependencies]
 agave-feature-set = { workspace = true }
 agave-logger = { workspace = true }
+bincode = { workspace = true, optional = true }
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
 log = { workspace = true }
@@ -40,6 +41,7 @@ solana-frozen-abi-macro = { workspace = true, optional = true, features = [
     "frozen-abi",
 ] }
 solana-hash = { workspace = true, features = ["serde", "copy", "decode", "wincode"] }
+solana-keypair = { workspace = true, optional = true }
 solana-pubkey = { workspace = true }
 solana-signer-store = { workspace = true }
 thiserror = { workspace = true }
