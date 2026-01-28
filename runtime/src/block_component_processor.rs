@@ -1,9 +1,10 @@
 use {
     crate::{
         bank::Bank,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
-    agave_bls_cert_verify::cert_verify::verify_cert_get_total_stake,
+    crossbeam_channel::Sender,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
@@ -12,7 +13,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_votor_messages::{
-        consensus_message::Certificate,
+        consensus_message::{Certificate, ConsensusMessage},
         fraction::Fraction,
         migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
     },
@@ -32,6 +33,8 @@ pub enum BlockComponentProcessorError {
     GenesisCertificateOnNonChild,
     #[error("GenesisCertificate was invalid and failed to verify")]
     GenesisCertificateFailedVerification,
+    #[error("FinalizationCertificate was invalid or failed to verify")]
+    InvalidFinalizationCertificate,
     #[error("Missing block footer")]
     MissingBlockFooter,
     #[error("Missing parent marker (neither a header nor an update parent was present)")]
@@ -119,6 +122,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: VersionedBlockMarker,
+        finalization_cert_sender: Option<&Sender<ConsensusMessage>>,
         migration_status: &MigrationStatus,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
@@ -141,7 +145,12 @@ impl BlockComponentProcessor {
             }
 
             // Everything else is only valid once migration is complete
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(
+                bank,
+                parent_bank,
+                footer.into_inner(),
+                finalization_cert_sender,
+            ),
 
             BlockMarkerV1::UpdateParent(update_parent) => {
                 self.on_update_parent(update_parent.inner())
@@ -210,21 +219,12 @@ impl BlockComponentProcessor {
         bank: &Bank,
         cert: &Certificate,
     ) -> Result<(), BlockComponentProcessorError> {
-        let slot = cert.cert_type.slot();
-        let epoch_stakes = bank
-            .epoch_stakes_from_slot(slot)
-            .ok_or(BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
-        let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
-        let total_stake = epoch_stakes.total_stake();
+        debug_assert!(cert.cert_type.is_genesis());
 
-        let genesis_stake = verify_cert_get_total_stake(cert, key_to_rank_map.len(), |rank| {
-            key_to_rank_map
-                .get_pubkey_and_stake(rank)
-                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
-        })
-        .map_err(|_| {
+        let cert_slot = cert.cert_type.slot();
+        let (genesis_stake, total_stake) = bank.verify_certificate(cert).map_err(|_| {
             warn!(
-                "Failed to verify genesis certificate for {slot} in bank slot {}",
+                "Failed to verify genesis certificate for slot {cert_slot} in bank slot {}",
                 bank.slot()
             );
             BlockComponentProcessorError::GenesisCertificateFailedVerification
@@ -233,7 +233,7 @@ impl BlockComponentProcessor {
         let genesis_percent = Fraction::new(genesis_stake, NonZeroU64::new(total_stake).unwrap());
         if genesis_percent < GENESIS_VOTE_THRESHOLD {
             warn!(
-                "Recieived a genesis certificate for {slot} in bank slot {} with \
+                "Received a genesis certificate for slot {cert_slot} in bank slot {} with \
                  {genesis_percent} stake < {GENESIS_VOTE_THRESHOLD}",
                 bank.slot()
             );
@@ -247,7 +247,8 @@ impl BlockComponentProcessor {
         &mut self,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
-        footer: &VersionedBlockFooter,
+        footer: VersionedBlockFooter,
+        finalization_cert_sender: Option<&Sender<ConsensusMessage>>,
     ) -> Result<(), BlockComponentProcessorError> {
         if !self.has_header && self.update_parent.is_none() {
             return Err(BlockComponentProcessorError::MissingParentMarker);
@@ -259,7 +260,7 @@ impl BlockComponentProcessor {
 
         let VersionedBlockFooter::V1(footer) = footer;
 
-        Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
+        Self::enforce_nanosecond_clock_bounds(&bank, &parent_bank, &footer)?;
 
         let reward_slot_and_validators = match ValidatedRewardCert::try_new(
             &bank,
@@ -270,7 +271,28 @@ impl BlockComponentProcessor {
             Err(ValidatedRewardCertError::Empty) => None,
             Err(e) => return Err(e.into()),
         };
-        Self::update_bank_with_footer(bank, footer, reward_slot_and_validators);
+        Self::update_bank_with_footer(&bank, &footer, reward_slot_and_validators);
+
+        // Verify finalization certificate and send to consensus pool
+        if let Some(final_cert) = footer.final_cert {
+            let validated = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank)
+                .map_err(|e| {
+                    warn!("Failed to validate finalization certificate: {e}");
+                    BlockComponentProcessorError::InvalidFinalizationCertificate
+                })?;
+
+            if let Some(sender) = finalization_cert_sender {
+                let (finalize_cert, notarize_cert) = validated.into_certificates();
+                if let Some(notarize_cert) = notarize_cert {
+                    let _ = sender
+                        .send(ConsensusMessage::from(notarize_cert))
+                        .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
+                }
+                let _ = sender
+                    .send(ConsensusMessage::from(finalize_cert))
+                    .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
+            }
+        }
 
         self.has_footer = true;
         Ok(())
@@ -312,8 +334,8 @@ impl BlockComponentProcessor {
     }
 
     fn enforce_nanosecond_clock_bounds(
-        bank: Arc<Bank>,
-        parent_bank: Arc<Bank>,
+        bank: &Bank,
+        parent_bank: &Bank,
         footer: &BlockFooterV1,
     ) -> Result<(), BlockComponentProcessorError> {
         // Get parent time from nanosecond clock account
@@ -362,7 +384,7 @@ impl BlockComponentProcessor {
     }
 
     pub fn update_bank_with_footer(
-        bank: Arc<Bank>,
+        bank: &Bank,
         footer: &BlockFooterV1,
         _reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
     ) {
@@ -380,11 +402,23 @@ impl BlockComponentProcessor {
 mod tests {
     use {
         super::*,
-        crate::{bank::Bank, genesis_utils::create_genesis_config},
+        crate::{
+            bank::Bank,
+            genesis_utils::{
+                create_genesis_config, create_genesis_config_with_alpenglow_vote_accounts,
+                ValidatorVoteKeypairs,
+            },
+            validated_block_finalization::BlockFinalizationCertError,
+        },
+        bitvec::prelude::*,
+        solana_bls_signatures::SignatureProjective,
         solana_entry::block_component::{
             BlockFooterV1, BlockHeaderV1, FinalCertificate, UpdateParentV1, VersionedUpdateParent,
+            VotesAggregate,
         },
         solana_program::{hash::Hash, pubkey::Pubkey},
+        solana_signer_store::encode_base2,
+        solana_votor_messages::{consensus_message::CertificateType, vote::Vote},
         std::sync::Arc,
     };
 
@@ -467,18 +501,18 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         // First footer should succeed
         assert!(processor
-            .on_footer(bank.clone(), parent.clone(), &footer)
+            .on_footer(bank.clone(), parent.clone(), footer.clone(), None)
             .is_ok());
 
         // Second footer should fail
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MultipleBlockFooters)
@@ -504,12 +538,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        processor.on_footer(bank.clone(), parent, &footer).unwrap();
+        processor
+            .on_footer(bank.clone(), parent, footer, None)
+            .unwrap();
 
         assert!(processor.has_footer);
 
@@ -542,7 +578,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         processor
-            .on_marker(bank, parent, marker, &migration_status)
+            .on_marker(bank, parent, marker, None, &migration_status)
             .unwrap();
         assert!(processor.has_header);
     }
@@ -567,13 +603,13 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         processor
-            .on_marker(bank.clone(), parent, marker, &migration_status)
+            .on_marker(bank.clone(), parent, marker, None, &migration_status)
             .unwrap();
         assert!(processor.has_footer);
 
@@ -608,12 +644,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
         processor
-            .on_footer(bank.clone(), parent.clone(), &footer)
+            .on_footer(bank.clone(), parent.clone(), footer, None)
             .unwrap();
 
         // Verify clock sysvar was updated
@@ -637,7 +673,7 @@ mod tests {
             parent_block_id: Hash::default(),
         });
 
-        let result = processor.on_marker(bank, parent, marker, &migration_status);
+        let result = processor.on_marker(bank, parent, marker, None, &migration_status);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -675,6 +711,7 @@ mod tests {
                 bank.clone(),
                 parent.clone(),
                 header_marker,
+                None,
                 &migration_status,
             )
             .unwrap();
@@ -692,12 +729,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
         processor
-            .on_marker(bank.clone(), parent, footer_marker, &migration_status)
+            .on_marker(bank.clone(), parent, footer_marker, None, &migration_status)
             .unwrap();
 
         // Verify clock sysvar was updated
@@ -724,7 +761,7 @@ mod tests {
         });
 
         // Try to process footer without header - should fail
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MissingParentMarker)
@@ -751,13 +788,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         // Should succeed - footer is processed
-        let result = processor.on_marker(bank.clone(), parent, footer_marker, &migration_status);
+        let result =
+            processor.on_marker(bank.clone(), parent, footer_marker, None, &migration_status);
         assert!(result.is_ok());
         assert!(processor.has_footer);
 
@@ -823,12 +861,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        processor.on_footer(bank.clone(), parent, &footer).unwrap();
+        processor
+            .on_footer(bank.clone(), parent, footer, None)
+            .unwrap();
 
         // Verify clock sysvar was updated
         assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
@@ -865,12 +905,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         if should_pass {
             assert!(result.is_ok());
         } else {
@@ -1060,12 +1100,263 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: (parent_time_nanos + 100_000_000) as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-        processor.on_footer(bank, parent, &footer).unwrap();
+        processor.on_footer(bank, parent, footer, None).unwrap();
 
         assert!(processor.on_final(&migration_status, 1).is_ok());
+    }
+
+    /// Creates a bank with BLS-enabled validators for testing certificate verification.
+    /// Returns (bank, validator_keypairs) where bank has validators with BLS keys.
+    fn create_bank_with_bls_validators(
+        num_validators: usize,
+        stakes: Vec<u64>,
+    ) -> (Arc<Bank>, Vec<ValidatorVoteKeypairs>) {
+        assert_eq!(num_validators, stakes.len());
+        let validator_keypairs: Vec<ValidatorVoteKeypairs> = (0..num_validators)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect();
+
+        let genesis_config_info = create_genesis_config_with_alpenglow_vote_accounts(
+            10_000_000,
+            &validator_keypairs,
+            stakes,
+        );
+
+        let bank = Arc::new(Bank::new_for_tests(&genesis_config_info.genesis_config));
+        (bank, validator_keypairs)
+    }
+
+    /// Build a certificate by manually aggregating BLS signatures and encoding bitmap.
+    /// `signing_ranks` specifies which validator ranks are signing.
+    fn build_certificate_manual(
+        cert_type: CertificateType,
+        vote: Vote,
+        signing_ranks: &[usize],
+        validator_keypairs: &[ValidatorVoteKeypairs],
+    ) -> Certificate {
+        let serialized_vote = bincode::serialize(&vote).unwrap();
+
+        // Aggregate signatures
+        let mut signature = SignatureProjective::identity();
+        for &rank in signing_ranks {
+            let sig = validator_keypairs[rank].bls_keypair.sign(&serialized_vote);
+            signature.aggregate_with(std::iter::once(&sig)).unwrap();
+        }
+
+        // Build bitmap
+        let max_rank = signing_ranks.iter().copied().max().unwrap_or(0);
+        let mut bitvec = BitVec::<u8, Lsb0>::repeat(false, max_rank.saturating_add(1));
+        for &rank in signing_ranks {
+            bitvec.set(rank, true);
+        }
+        let bitmap = encode_base2(&bitvec).expect("Failed to encode bitmap");
+
+        Certificate {
+            cert_type,
+            signature: signature.into(),
+            bitmap,
+        }
+    }
+
+    #[test]
+    fn test_verify_final_cert_valid() {
+        // Create 10 validators with descending stakes (1000, 900, 800, ...)
+        // Total stake = 5500
+        let num_validators = 10;
+        let stakes: Vec<u64> = (0..num_validators)
+            .map(|i| (1000u64).saturating_sub((i as u64).saturating_mul(100)))
+            .collect();
+        let (bank, validator_keypairs) = create_bank_with_bls_validators(num_validators, stakes);
+
+        let slot = bank.slot();
+        let block_id = Hash::new_unique();
+
+        // Test 1: Fast finalize (requires 80% stake = 4400)
+        // Top 6 validators = 1000+900+800+700+600+500 = 4500 (>= 80%)
+        {
+            let cert_type = CertificateType::FinalizeFast(slot, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
+            let signing_ranks: Vec<usize> = (0..6).collect();
+            let fast_finalize_cert =
+                build_certificate_manual(cert_type, vote, &signing_ranks, &validator_keypairs);
+
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&fast_finalize_cert),
+                notar_aggregate: None,
+            };
+
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
+            assert!(
+                result.is_ok(),
+                "Valid fast finalize certificate should pass verification: {result:?}"
+            );
+        }
+
+        // Test 2: Slow finalize (requires 60% stake = 3300 for both certs)
+        // Top 4 validators = 1000+900+800+700 = 3400 (>= 60%)
+        {
+            let notarize_cert_type = CertificateType::Notarize(slot, block_id);
+            let notarize_vote = Vote::new_notarization_vote(slot, block_id);
+            let notarize_signing_ranks: Vec<usize> = (0..4).collect();
+            let notarize_cert = build_certificate_manual(
+                notarize_cert_type,
+                notarize_vote,
+                &notarize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            let finalize_cert_type = CertificateType::Finalize(slot);
+            let finalize_vote = Vote::new_finalization_vote(slot);
+            let finalize_signing_ranks: Vec<usize> = (0..4).collect();
+            let finalize_cert = build_certificate_manual(
+                finalize_cert_type,
+                finalize_vote,
+                &finalize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
+            };
+
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
+            assert!(
+                result.is_ok(),
+                "Valid slow finalize certificate should pass verification: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_verify_final_cert_insufficient_stake() {
+        // Create 10 validators with descending stakes (1000, 900, 800, ...)
+        // Total stake = 5500
+        let num_validators = 10;
+        let stakes: Vec<u64> = (0..num_validators)
+            .map(|i| (1000u64).saturating_sub((i as u64).saturating_mul(100)))
+            .collect();
+        let (bank, validator_keypairs) = create_bank_with_bls_validators(num_validators, stakes);
+
+        let slot = bank.slot();
+        let block_id = Hash::new_unique();
+
+        // Fast finalize with insufficient stake (requires 80% = 4400)
+        // Top 5 validators = 1000+900+800+700+600 = 4000 (< 80%)
+        {
+            let cert_type = CertificateType::FinalizeFast(slot, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
+            let signing_ranks: Vec<usize> = (0..5).collect();
+            let fast_finalize_cert =
+                build_certificate_manual(cert_type, vote, &signing_ranks, &validator_keypairs);
+
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&fast_finalize_cert),
+                notar_aggregate: None,
+            };
+
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
+            assert!(
+                matches!(
+                    result,
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
+                ),
+                "Fast finalize with insufficient stake should fail verification"
+            );
+        }
+
+        // Slow finalize with insufficient notarize stake (requires 60% = 3300)
+        // Top 3 validators = 1000+900+800 = 2700 (< 60%)
+        {
+            let notarize_cert_type = CertificateType::Notarize(slot, block_id);
+            let notarize_vote = Vote::new_notarization_vote(slot, block_id);
+            let notarize_signing_ranks: Vec<usize> = (0..3).collect();
+            let notarize_cert = build_certificate_manual(
+                notarize_cert_type,
+                notarize_vote,
+                &notarize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            // Finalize cert has enough stake
+            let finalize_cert_type = CertificateType::Finalize(slot);
+            let finalize_vote = Vote::new_finalization_vote(slot);
+            let finalize_signing_ranks: Vec<usize> = (0..4).collect();
+            let finalize_cert = build_certificate_manual(
+                finalize_cert_type,
+                finalize_vote,
+                &finalize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
+            };
+
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
+            assert!(
+                matches!(
+                    result,
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
+                ),
+                "Slow finalize with insufficient notarize stake should fail verification"
+            );
+        }
+
+        // Slow finalize with insufficient finalize stake (requires 60% = 3300)
+        // Notarize has enough stake, but finalize doesn't
+        {
+            // Notarize cert has enough stake
+            let notarize_cert_type = CertificateType::Notarize(slot, block_id);
+            let notarize_vote = Vote::new_notarization_vote(slot, block_id);
+            let notarize_signing_ranks: Vec<usize> = (0..4).collect();
+            let notarize_cert = build_certificate_manual(
+                notarize_cert_type,
+                notarize_vote,
+                &notarize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            // Finalize cert has insufficient stake
+            // Top 3 validators = 1000+900+800 = 2700 (< 60%)
+            let finalize_cert_type = CertificateType::Finalize(slot);
+            let finalize_vote = Vote::new_finalization_vote(slot);
+            let finalize_signing_ranks: Vec<usize> = (0..3).collect();
+            let finalize_cert = build_certificate_manual(
+                finalize_cert_type,
+                finalize_vote,
+                &finalize_signing_ranks,
+                &validator_keypairs,
+            );
+
+            let final_cert = FinalCertificate {
+                slot,
+                block_id,
+                final_aggregate: VotesAggregate::from_certificate(&finalize_cert),
+                notar_aggregate: Some(VotesAggregate::from_certificate(&notarize_cert)),
+            };
+
+            let result = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank);
+            assert!(
+                matches!(
+                    result,
+                    Err(BlockFinalizationCertError::InsufficientStake { .. })
+                ),
+                "Slow finalize with insufficient finalize stake should fail verification"
+            );
+        }
     }
 }

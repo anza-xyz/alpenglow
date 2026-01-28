@@ -27,7 +27,6 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
-        common::certificate_limits_and_vote_types,
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
         consensus_rewards::{self},
     },
@@ -554,8 +553,7 @@ impl BLSSigVerifier {
             return Err(CertVerifyError::KeyToRankMapNotFound(slot));
         };
 
-        let (required_stake_fraction, _) =
-            certificate_limits_and_vote_types(&cert_to_verify.cert_type);
+        let (required_stake_fraction, _) = cert_to_verify.cert_type.limits_and_vote_types();
         let aggregate_stake =
             verify_cert_get_total_stake(cert_to_verify, key_to_rank_map.len(), |rank| {
                 key_to_rank_map
