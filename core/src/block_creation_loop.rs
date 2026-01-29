@@ -571,8 +571,10 @@ fn handle_parent_ready(
         .filter_map(|tx| {
             let serialized = bincode::serialize(tx).ok()?;
             let buffer = Bytes::from(serialized);
-            let mut meta = Meta::default();
-            meta.size = buffer.len();
+            let meta = Meta {
+                size: buffer.len(),
+                ..Meta::default()
+            };
             Some(BytesPacket::new(buffer, meta))
         })
         .collect();
@@ -580,7 +582,9 @@ fn handle_parent_ready(
     if !packets.is_empty() {
         let batch: PacketBatch = packets.into();
         let banking_packet_batch = Arc::new(vec![batch]);
-        let _ = ctx.non_vote_sender.send(banking_packet_batch);
+        ctx.non_vote_sender
+            .send(banking_packet_batch)
+            .map_err(|_| PohRecorderError::RescheduleTransactionsError(slot))?;
     }
 
     // Wait for new parent to be frozen
@@ -661,7 +665,7 @@ fn record_and_complete_block(
                         .on_received_record(record.transaction_batches.len() as u64);
 
                     record.transaction_batches.iter().for_each(|batch| {
-                        accumulated_txs.extend(batch.into_iter());
+                        accumulated_txs.extend(batch.iter());
                     });
 
                     ctx.poh_recorder.write().unwrap().record(
