@@ -465,6 +465,10 @@ impl TracedSender {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn sender(&self) -> &Sender<BankingPacketBatch> {
+        &self.sender
+    }
 }
 
 #[cfg(any(test, feature = "dev-context-only-utils"))]

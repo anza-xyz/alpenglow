@@ -1452,6 +1452,9 @@ impl Validator {
         let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
             Arc::new(RwLock::new(None));
 
+        // Clone the non-vote sender for block creation loop (used for re-injecting transactions after sad leader handover)
+        let non_vote_sender_for_bcl = banking_tracer_channels.non_vote_sender.sender().clone();
+
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
             bank_forks: bank_forks.clone(),
@@ -1470,6 +1473,7 @@ impl Validator {
             build_reward_certs_sender,
             reward_certs_receiver,
             highest_finalized: highest_finalized.clone(),
+            non_vote_sender: non_vote_sender_for_bcl,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 

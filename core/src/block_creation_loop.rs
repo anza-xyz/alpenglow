@@ -9,6 +9,7 @@ use {
         banking_trace::BankingTracer,
         replay_stage::{Finalizer, ReplayStage},
     },
+    agave_banking_stage_ingress_types::BankingPacketBatch,
     crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
@@ -22,6 +23,7 @@ use {
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
     solana_measure::measure::Measure,
+    solana_perf::packet::{bytes::Bytes, BytesPacket, Meta, PacketBatch},
     solana_poh::{
         poh_recorder::{PohRecorder, PohRecorderError, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
         record_channels::RecordReceiver,
@@ -33,6 +35,7 @@ use {
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
     },
+    solana_transaction::versioned::VersionedTransaction,
     solana_version::version,
     solana_votor::{common::block_timeout, event::LeaderWindowInfo},
     solana_votor_messages::{
@@ -111,6 +114,9 @@ pub struct BlockCreationLoopConfig {
     pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     /// Channel to receive the built reward certs.
     pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
+
+    /// Sender for packets to banking stage (used to re-inject transactions after sad leader handover).
+    pub non_vote_sender: Sender<BankingPacketBatch>,
 }
 
 struct LeaderContext {
@@ -131,6 +137,7 @@ struct LeaderContext {
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
     highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+    non_vote_sender: Sender<BankingPacketBatch>,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -188,6 +195,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         build_reward_certs_sender,
         reward_certs_receiver,
         highest_finalized,
+        non_vote_sender,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -233,6 +241,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         banking_tracer,
         replay_highest_frozen,
         highest_finalized,
+        non_vote_sender,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -524,6 +533,7 @@ fn handle_parent_ready(
     ctx: &mut LeaderContext,
     leader_window_info: LeaderWindowInfo,
     optimistic_parent_block: (Slot, Hash),
+    accumulated_txs: Vec<&VersionedTransaction>,
     block_timer: &mut Instant,
 ) -> Result<(), PohRecorderError> {
     if leader_window_info.parent_block == optimistic_parent_block {
@@ -554,6 +564,24 @@ fn handle_parent_ready(
     let (new_parent_slot, _) = leader_window_info.parent_block;
 
     ctx.bank_forks.write().unwrap().clear_bank(slot, false);
+
+    // Re-inject accumulated transactions back to banking stage for rescheduling
+    let packets: Vec<BytesPacket> = accumulated_txs
+        .into_iter()
+        .filter_map(|tx| {
+            let serialized = bincode::serialize(tx).ok()?;
+            let buffer = Bytes::from(serialized);
+            let mut meta = Meta::default();
+            meta.size = buffer.len();
+            Some(BytesPacket::new(buffer, meta))
+        })
+        .collect();
+
+    if !packets.is_empty() {
+        let batch: PacketBatch = packets.into();
+        let banking_packet_batch = Arc::new(vec![batch]);
+        let _ = ctx.non_vote_sender.send(banking_packet_batch);
+    }
 
     // Wait for new parent to be frozen
     start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
@@ -610,6 +638,8 @@ fn record_and_complete_block(
             break false;
         }
 
+        let mut accumulated_txs = vec![];
+
         select_biased! {
             recv(ctx.leader_window_info_receiver) -> msg => {
                 match msg.ok() {
@@ -619,7 +649,7 @@ fn record_and_complete_block(
                     }
                     Some(info) => {
                         if let Some(optimistic_parent_block) = optimistic_parent.take() {
-                            handle_parent_ready(ctx, info, optimistic_parent_block, block_timer)?;
+                            handle_parent_ready(ctx, info, optimistic_parent_block, accumulated_txs, block_timer)?;
                         }
                     }
                     None => continue,
@@ -629,6 +659,11 @@ fn record_and_complete_block(
                 if let Ok(record) = msg {
                     ctx.record_receiver
                         .on_received_record(record.transaction_batches.len() as u64);
+
+                    record.transaction_batches.iter().for_each(|batch| {
+                        accumulated_txs.extend(batch.into_iter());
+                    });
+
                     ctx.poh_recorder.write().unwrap().record(
                         record.slot,
                         record.mixins,
