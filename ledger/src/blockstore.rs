@@ -1590,7 +1590,7 @@ impl Blockstore {
             match self.purge_slot_cleanup_chaining(slot) {
                 Ok(_) => {}
                 Err(BlockstoreError::SlotUnavailable) => {
-                    error!("clear_unconfirmed_slots() called on slot {slot} with no SlotMeta")
+                    error!("clear_unconfirmed_slot() called on slot {slot} with no SlotMeta")
                 }
                 Err(e) => panic!("Purge database operations failed {e}"),
             }
