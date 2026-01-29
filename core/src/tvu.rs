@@ -14,6 +14,7 @@ use {
             VerifiedVoteSender, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsService},
+        commitment_service::AggregateCommitmentService,
         completed_data_sets_service::CompletedDataSetsSender,
         consensus::{tower_storage::TowerStorage, Tower},
         cost_update_service::CostUpdateService,
@@ -68,10 +69,10 @@ use {
         vote_history::VoteHistory,
         vote_history_storage::VoteHistoryStorage,
         voting_service::{VotingService as AlpenglowVotingService, VotingServiceOverride},
+        votor::{Votor, VotorConfig},
     },
     solana_votor_messages::{
         consensus_message::HighestFinalizedSlotCert,
-        migration::MigrationStatus,
         reward_certificate::{BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
     std::{
@@ -108,6 +109,8 @@ pub struct Tvu {
     duplicate_shred_listener: DuplicateShredListener,
     alpenglow_sigverify_service: BLSSigverifyService,
     alpenglow_quic_t: thread::JoinHandle<()>,
+    votor: Votor,
+    commitment_service: AggregateCommitmentService,
 }
 
 pub struct TvuSockets {
@@ -146,6 +149,34 @@ impl Default for TvuConfig {
             xdp_sender: None,
         }
     }
+}
+
+/// Shared state from validator necessary to instantiate votor and related services
+pub struct AlpenglowInitializationState {
+    // Shared with block creation loop
+    pub leader_window_info_sender: Sender<LeaderWindowInfo>,
+    pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
+    pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
+    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
+
+    // Main communication channel
+    pub votor_event_sender: VotorEventSender,
+    pub votor_event_receiver: VotorEventReceiver,
+
+    // For BLS streamer setup
+    pub staked_nodes: Arc<RwLock<StakedNodes>>,
+    pub key_notifiers: Arc<RwLock<KeyUpdaters>>,
+    pub alpenglow_quic_server_config: QuicServerParams,
+
+    // For BLS voting service
+    pub bls_connection_cache: Arc<ConnectionCache>,
+    pub voting_service_test_override: Option<VotingServiceOverride>,
+    pub alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+
+    // For rewards
+    pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
+    pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
+    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 }
 
 impl Tvu {
@@ -208,29 +239,33 @@ impl Tvu {
         wen_restart_repair_slots: Option<Arc<RwLock<Vec<Slot>>>>,
         slot_status_notifier: Option<SlotStatusNotifier>,
         vote_connection_cache: Arc<ConnectionCache>,
-        bls_connection_cache: Arc<ConnectionCache>,
-        replay_highest_frozen: Arc<ReplayHighestFrozen>,
-        leader_window_info_sender: Sender<LeaderWindowInfo>,
-        highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-        voting_service_test_override: Option<VotingServiceOverride>,
-        votor_event_sender: VotorEventSender,
-        votor_event_receiver: VotorEventReceiver,
-        optimistic_parent_sender: Sender<LeaderWindowInfo>,
-        alpenglow_quic_server_config: QuicServerParams,
-        staked_nodes: Arc<RwLock<StakedNodes>>,
-        key_notifiers: Arc<RwLock<KeyUpdaters>>,
-        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
-        migration_status: Arc<MigrationStatus>,
-        reward_certs_sender: Sender<BuildRewardCertsResponse>,
-        build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-        highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+        alpenglow_init: AlpenglowInitializationState,
     ) -> Result<Self, String> {
+        let AlpenglowInitializationState {
+            leader_window_info_sender,
+            replay_highest_frozen,
+            highest_parent_ready,
+            votor_event_sender,
+            votor_event_receiver,
+            staked_nodes,
+            key_notifiers,
+            alpenglow_quic_server_config,
+            bls_connection_cache,
+            voting_service_test_override,
+            alpenglow_last_voted,
+            reward_certs_sender,
+            build_reward_certs_receiver,
+            highest_finalized,
+            optimistic_parent_sender,
+        } = alpenglow_init;
+
         let (consensus_message_sender, consensus_message_receiver) =
             bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
         let (consensus_metrics_sender, consensus_metrics_receiver) =
             bounded(MAX_IN_FLIGHT_CONSENSUS_EVENTS);
 
         let in_wen_restart = wen_restart_repair_slots.is_some();
+        let migration_status = bank_forks.read().unwrap().migration_status();
 
         let TvuSockets {
             repair: repair_socket,
@@ -400,6 +435,47 @@ impl Tvu {
         // we cap the channel at 512 to give some headroom.
         let (bls_sender, bls_receiver) = bounded(512);
 
+        let (lockouts_sender, votor_commitment_sender, commitment_service) =
+            AggregateCommitmentService::new(
+                exit.clone(),
+                block_commitment_cache.clone(),
+                rpc_subscriptions.clone(),
+            );
+
+        let votor_config = VotorConfig {
+            exit: exit.clone(),
+            vote_account: *vote_account,
+            wait_to_vote_slot,
+            wait_for_vote_to_start_leader: tvu_config.wait_for_vote_to_start_leader,
+            vote_history,
+            vote_history_storage: vote_history_storage.clone(),
+            authorized_voter_keypairs: authorized_voter_keypairs.clone(),
+            blockstore: blockstore.clone(),
+            bank_forks: bank_forks.clone(),
+            cluster_info: cluster_info.clone(),
+            leader_schedule_cache: leader_schedule_cache.clone(),
+            rpc_subscriptions: rpc_subscriptions.clone(),
+            snapshot_controller: snapshot_controller.clone(),
+            bls_sender: bls_sender.clone(),
+            commitment_sender: votor_commitment_sender,
+            drop_bank_sender: drop_bank_sender.clone(),
+            bank_notification_sender: bank_notification_sender.clone(),
+            leader_window_info_sender,
+            highest_parent_ready,
+            event_sender: votor_event_sender.clone(),
+            event_receiver: votor_event_receiver,
+            own_vote_sender: consensus_message_sender.clone(),
+            consensus_message_receiver,
+            consensus_metrics_sender,
+            consensus_metrics_receiver,
+            migration_status: migration_status.clone(),
+            highest_finalized,
+            reward_certs_sender,
+            reward_votes_receiver,
+            build_reward_certs_receiver,
+        };
+        let votor = Votor::new(votor_config);
+
         let replay_senders = ReplaySenders {
             rpc_subscriptions,
             slot_status_notifier,
@@ -419,6 +495,7 @@ impl Tvu {
             votor_event_sender,
             own_vote_sender: consensus_message_sender,
             optimistic_parent_sender,
+            lockouts_sender,
         };
 
         let replay_receivers = ReplayReceivers {
@@ -429,8 +506,6 @@ impl Tvu {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            consensus_message_receiver,
-            votor_event_receiver,
         };
 
         let replay_stage_config = ReplayStageConfig {
@@ -450,8 +525,6 @@ impl Tvu {
             poh_recorder: poh_recorder.clone(),
             poh_controller,
             tower,
-            vote_history,
-            vote_history_storage: vote_history_storage.clone(),
             vote_tracker,
             cluster_slots,
             log_messages_bytes_limit,
@@ -459,15 +532,7 @@ impl Tvu {
             banking_tracer,
             snapshot_controller,
             replay_highest_frozen,
-            leader_window_info_sender,
-            highest_parent_ready,
-            consensus_metrics_sender: consensus_metrics_sender.clone(),
-            consensus_metrics_receiver,
-            migration_status,
-            reward_votes_receiver,
-            build_reward_certs_receiver,
-            reward_certs_sender,
-            highest_finalized,
+            migration_status: migration_status.clone(),
         };
 
         let voting_service = VotingService::new(
@@ -543,6 +608,8 @@ impl Tvu {
             duplicate_shred_listener,
             alpenglow_sigverify_service,
             alpenglow_quic_t,
+            votor,
+            commitment_service,
         })
     }
 
@@ -568,6 +635,8 @@ impl Tvu {
         self.duplicate_shred_listener.join()?;
         self.alpenglow_sigverify_service.join()?;
         self.alpenglow_quic_t.join()?;
+        self.votor.join()?;
+        self.commitment_service.join()?;
         Ok(())
     }
 }
@@ -769,22 +838,23 @@ pub mod tests {
             wen_restart_repair_slots,
             None,
             Arc::new(connection_cache),
-            Arc::new(alpenglow_connection_cache),
-            Arc::new(ReplayHighestFrozen::default()),
-            leader_window_info_sender,
-            highest_parent_ready,
-            None,
-            votor_event_sender,
-            votor_event_receiver,
-            optimistic_parent_sender,
-            QuicServerParams::default_for_tests(),
-            Arc::new(RwLock::new(StakedNodes::default())),
-            Arc::new(RwLock::new(KeyUpdaters::default())),
-            Arc::new(AlpenglowLastVoted::default()),
-            Arc::new(MigrationStatus::default()),
-            reward_certs_sender,
-            build_reward_certs_receiver,
-            Arc::new(RwLock::new(None)),
+            AlpenglowInitializationState {
+                leader_window_info_sender,
+                replay_highest_frozen: Arc::new(ReplayHighestFrozen::default()),
+                highest_parent_ready,
+                votor_event_sender,
+                votor_event_receiver,
+                staked_nodes: Arc::new(RwLock::new(StakedNodes::default())),
+                key_notifiers: Arc::new(RwLock::new(KeyUpdaters::default())),
+                alpenglow_quic_server_config: QuicServerParams::default_for_tests(),
+                bls_connection_cache: Arc::new(alpenglow_connection_cache),
+                voting_service_test_override: None,
+                alpenglow_last_voted: Arc::new(AlpenglowLastVoted::default()),
+                reward_certs_sender,
+                build_reward_certs_receiver,
+                highest_finalized: Arc::new(RwLock::new(None)),
+                optimistic_parent_sender,
+            },
         )
         .expect("assume success");
         if enable_wen_restart {
