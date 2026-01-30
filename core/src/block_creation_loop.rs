@@ -6,10 +6,9 @@
 //! Once alpenglow is active, this is the only thread that will touch the [`PohRecorder`].
 use {
     crate::{
-        banking_trace::BankingTracer,
+        banking_trace::{BankingPacketSender, BankingTracer},
         replay_stage::{Finalizer, ReplayStage},
     },
-    agave_banking_stage_ingress_types::BankingPacketBatch,
     crossbeam_channel::{select_biased, Receiver, Sender},
     solana_clock::Slot,
     solana_entry::block_component::{
@@ -116,7 +115,7 @@ pub struct BlockCreationLoopConfig {
     pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
 
     /// Sender for packets to banking stage (used to re-inject transactions after sad leader handover).
-    pub non_vote_sender: Sender<BankingPacketBatch>,
+    pub banking_stage_sender: BankingPacketSender,
 }
 
 struct LeaderContext {
@@ -137,7 +136,7 @@ struct LeaderContext {
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
     highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
-    non_vote_sender: Sender<BankingPacketBatch>,
+    banking_stage_sender: BankingPacketSender,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -195,7 +194,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         build_reward_certs_sender,
         reward_certs_receiver,
         highest_finalized,
-        non_vote_sender,
+        banking_stage_sender,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -241,7 +240,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         banking_tracer,
         replay_highest_frozen,
         highest_finalized,
-        non_vote_sender,
+        banking_stage_sender,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -569,7 +568,15 @@ fn handle_parent_ready(
     let packets: Vec<BytesPacket> = accumulated_txs
         .into_iter()
         .filter_map(|tx| {
-            let serialized = bincode::serialize(tx).ok()?;
+            // TODO(ksn): use wincode once we upstream to Agave
+            let serialized = bincode::serialize(tx)
+                .inspect_err(|e| {
+                    error!(
+                        "failed to serialize transaction for rescheduling - this should never \
+                         happen: {e:?}"
+                    )
+                })
+                .ok()?;
             let buffer = Bytes::from(serialized);
             let meta = Meta {
                 size: buffer.len(),
@@ -582,7 +589,7 @@ fn handle_parent_ready(
     if !packets.is_empty() {
         let batch: PacketBatch = packets.into();
         let banking_packet_batch = Arc::new(vec![batch]);
-        ctx.non_vote_sender
+        ctx.banking_stage_sender
             .send(banking_packet_batch)
             .map_err(|_| PohRecorderError::RescheduleTransactionsError(slot))?;
     }
@@ -664,9 +671,11 @@ fn record_and_complete_block(
                     ctx.record_receiver
                         .on_received_record(record.transaction_batches.len() as u64);
 
-                    record.transaction_batches.iter().for_each(|batch| {
-                        accumulated_txs.extend(batch.iter());
-                    });
+                    if optimistic_parent.is_some() {
+                        record.transaction_batches.iter().for_each(|batch| {
+                            accumulated_txs.extend(batch.iter());
+                        });
+                    }
 
                     ctx.poh_recorder.write().unwrap().record(
                         record.slot,

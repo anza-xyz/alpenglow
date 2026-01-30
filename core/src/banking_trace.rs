@@ -422,6 +422,7 @@ impl BankingTracer {
     }
 }
 
+#[derive(Clone)]
 pub struct TracedSender {
     label: ChannelLabel,
     sender: Sender<BankingPacketBatch>,
@@ -464,10 +465,6 @@ impl TracedSender {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    pub fn sender(&self) -> &Sender<BankingPacketBatch> {
-        &self.sender
     }
 }
 
