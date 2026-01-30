@@ -1,30 +1,101 @@
 use {
-    crate::bls_sigverify::{
-        bls_sigverifier::BLSSigVerifier, error::BLSSigVerifyError, stats::BLSPacketStats,
+    crate::{
+        bls_sigverify::{
+            bls_sigverifier::BLSSigVerifier, error::BLSSigVerifyError, stats::BLSPacketStats,
+        },
+        cluster_info_vote_listener::VerifiedVoteSender,
     },
     core::time::Duration,
-    crossbeam_channel::{Receiver, RecvTimeoutError},
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
+    solana_gossip::cluster_info::ClusterInfo,
+    solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_perf::{
         deduper::{self, Deduper},
         packet::PacketBatch,
     },
+    solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
+    solana_runtime::bank_forks::SharableBanks,
     solana_streamer::streamer::{self, StreamerError},
     solana_time_utils as timing,
+    solana_votor::consensus_metrics::ConsensusMetricsEventSender,
+    solana_votor_messages::{
+        consensus_message::ConsensusMessage, reward_certificate::AddVoteMessage,
+    },
     std::{
+        sync::Arc,
         thread::{self, Builder, JoinHandle},
         time::Instant,
     },
 };
 
-pub struct BLSSigverifyService {
+pub struct BLSSigVerifyService {
     thread_hdl: JoinHandle<()>,
 }
 
-impl BLSSigverifyService {
-    pub fn new(packet_receiver: Receiver<PacketBatch>, verifier: BLSSigVerifier) -> Self {
-        let thread_hdl = Self::verifier_service(packet_receiver, verifier);
+impl BLSSigVerifyService {
+    pub fn new(
+        packet_receiver: Receiver<PacketBatch>,
+        sharable_banks: SharableBanks,
+        verified_votes_sender: VerifiedVoteSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
+        message_sender: Sender<ConsensusMessage>,
+        consensus_metrics_sender: ConsensusMetricsEventSender,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        cluster_info: Arc<ClusterInfo>,
+        leader_schedule: Arc<LeaderScheduleCache>,
+    ) -> Self {
+        let verifier = BLSSigVerifier::new(
+            sharable_banks,
+            verified_votes_sender,
+            reward_votes_sender,
+            message_sender,
+            consensus_metrics_sender,
+            alpenglow_last_voted,
+            cluster_info,
+            leader_schedule,
+        );
+
+        let thread_hdl = Builder::new()
+            .name("solSigVerBLS".to_string())
+            .spawn(move || Self::run(packet_receiver, verifier))
+            .unwrap();
+
         Self { thread_hdl }
+    }
+
+    fn run(packet_receiver: Receiver<PacketBatch>, mut verifier: BLSSigVerifier) {
+        let mut stats = BLSPacketStats::default();
+        let mut last_print = Instant::now();
+        const MAX_DEDUPER_AGE: Duration = Duration::from_secs(2);
+        const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
+        const DEDUPER_NUM_BITS: u64 = 63_999_979;
+
+        let mut rng = rand::thread_rng();
+        let mut deduper = Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS);
+
+        loop {
+            if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, MAX_DEDUPER_AGE) {
+                stats.num_deduper_saturations += 1;
+            }
+            if let Err(e) = Self::verifier(&deduper, &packet_receiver, &mut verifier, &mut stats) {
+                match e {
+                    BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
+                        RecvTimeoutError::Disconnected,
+                    )) => break,
+                    BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
+                        RecvTimeoutError::Timeout,
+                    )) => (),
+                    BLSSigVerifyError::Send(_) | BLSSigVerifyError::TrySend(_) => break,
+                    _ => error!("{e:?}"),
+                }
+            }
+            if last_print.elapsed().as_secs() > 2 {
+                stats.maybe_report();
+                stats = BLSPacketStats::default();
+                last_print = Instant::now();
+            }
+        }
     }
 
     fn verifier<const K: usize>(
@@ -81,48 +152,6 @@ impl BLSSigverifyService {
         stats.total_verify_time_us += verify_time.as_us() as usize;
 
         Ok(())
-    }
-
-    fn verifier_service(
-        packet_receiver: Receiver<PacketBatch>,
-        mut verifier: BLSSigVerifier,
-    ) -> JoinHandle<()> {
-        let mut stats = BLSPacketStats::default();
-        let mut last_print = Instant::now();
-        const MAX_DEDUPER_AGE: Duration = Duration::from_secs(2);
-        const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
-        const DEDUPER_NUM_BITS: u64 = 63_999_979;
-        Builder::new()
-            .name("solSigVerAlpenglow".to_string())
-            .spawn(move || {
-                let mut rng = rand::thread_rng();
-                let mut deduper = Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS);
-                loop {
-                    if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, MAX_DEDUPER_AGE) {
-                        stats.num_deduper_saturations += 1;
-                    }
-                    if let Err(e) =
-                        Self::verifier(&deduper, &packet_receiver, &mut verifier, &mut stats)
-                    {
-                        match e {
-                            BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
-                                RecvTimeoutError::Disconnected,
-                            )) => break,
-                            BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
-                                RecvTimeoutError::Timeout,
-                            )) => (),
-                            BLSSigVerifyError::Send(_) | BLSSigVerifyError::TrySend(_) => break,
-                            _ => error!("{e:?}"),
-                        }
-                    }
-                    if last_print.elapsed().as_secs() > 2 {
-                        stats.maybe_report();
-                        stats = BLSPacketStats::default();
-                        last_print = Instant::now();
-                    }
-                }
-            })
-            .unwrap()
     }
 
     pub fn join(self) -> thread::Result<()> {
