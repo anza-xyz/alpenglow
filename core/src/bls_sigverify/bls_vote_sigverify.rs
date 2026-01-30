@@ -1,8 +1,6 @@
 use {
     crate::{
-        bls_sigverify::{
-            bls_sigverify_service::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
-        },
+        bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
         cluster_info_vote_listener::VerifiedVoteSender,
     },
     crossbeam_channel::{Sender, TrySendError},
@@ -49,7 +47,7 @@ pub(crate) fn verify_and_send_votes(
     leader_schedule: &LeaderScheduleCache,
     message_sender: &Sender<ConsensusMessage>,
     verified_votes_sender: &VerifiedVoteSender,
-) -> Result<AddVoteMessage, BLSSigVerifyServiceError<ConsensusMessage>> {
+) -> Result<AddVoteMessage, BLSSigVerifyError> {
     let verified_votes = verify_votes(votes_to_verify, vote_payload_cache, stats);
 
     let votes = verified_votes

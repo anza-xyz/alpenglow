@@ -4,8 +4,8 @@ use {
     crate::{
         bls_sigverify::{
             bls_cert_sigverify::{get_key_to_rank_map, verify_and_send_certificates},
-            bls_sigverify_service::BLSSigVerifyServiceError,
             bls_vote_sigverify::{verify_and_send_votes, VoteToVerify},
+            error::BLSSigVerifyError,
             stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
@@ -94,7 +94,7 @@ impl BLSSigVerifier {
     pub fn verify_and_send_batches(
         &mut self,
         mut batches: Vec<PacketBatch>,
-    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
+    ) -> Result<(), BLSSigVerifyError> {
         let mut preprocess_time = Measure::start("preprocess");
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
         let root_bank = self.sharable_banks.root();

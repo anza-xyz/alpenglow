@@ -1,7 +1,5 @@
 use {
-    crate::bls_sigverify::{
-        bls_sigverify_service::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
-    },
+    crate::bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
     agave_bls_cert_verify::cert_verify::{
         verify_cert_get_total_stake, Error as BlsCertVerifyError,
     },
@@ -49,7 +47,7 @@ pub(crate) fn verify_and_send_certificates(
     verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
     message_sender: &Sender<ConsensusMessage>,
-) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
+) -> Result<(), BLSSigVerifyError> {
     let results = verify_certificates(certs_buffer, bank, verified_certs, stats);
 
     let valid_count = results.iter().filter(|&&valid| valid).count();

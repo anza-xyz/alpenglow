@@ -1,7 +1,9 @@
 use {
-    crate::bls_sigverify::{bls_sigverifier::BLSSigVerifier, stats::BLSPacketStats},
+    crate::bls_sigverify::{
+        bls_sigverifier::BLSSigVerifier, error::BLSSigVerifyError, stats::BLSPacketStats,
+    },
     core::time::Duration,
-    crossbeam_channel::{Receiver, RecvTimeoutError, SendError, TrySendError},
+    crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_measure::measure::Measure,
     solana_perf::{
         deduper::{self, Deduper},
@@ -9,45 +11,11 @@ use {
     },
     solana_streamer::streamer::{self, StreamerError},
     solana_time_utils as timing,
-    solana_votor_messages::consensus_message::ConsensusMessage,
     std::{
         thread::{self, Builder, JoinHandle},
         time::Instant,
     },
-    thiserror::Error,
 };
-
-#[derive(Error, Debug)]
-pub enum BLSSigVerifyServiceError<SendType> {
-    #[error("send packets batch error")]
-    Send(Box<SendError<SendType>>),
-
-    #[error("try_send packet errror")]
-    TrySend(Box<TrySendError<SendType>>),
-
-    #[error("streamer error")]
-    Streamer(Box<StreamerError>),
-}
-
-impl<SendType> From<SendError<SendType>> for BLSSigVerifyServiceError<SendType> {
-    fn from(e: SendError<SendType>) -> Self {
-        Self::Send(Box::new(e))
-    }
-}
-
-impl<SendType> From<TrySendError<SendType>> for BLSSigVerifyServiceError<SendType> {
-    fn from(e: TrySendError<SendType>) -> Self {
-        Self::TrySend(Box::new(e))
-    }
-}
-
-impl<SendType> From<StreamerError> for BLSSigVerifyServiceError<SendType> {
-    fn from(e: StreamerError) -> Self {
-        Self::Streamer(Box::new(e))
-    }
-}
-
-type Result<T, SendType> = std::result::Result<T, BLSSigVerifyServiceError<SendType>>;
 
 pub struct BLSSigverifyService {
     thread_hdl: JoinHandle<()>,
@@ -64,7 +32,7 @@ impl BLSSigverifyService {
         recvr: &Receiver<PacketBatch>,
         verifier: &mut BLSSigVerifier,
         stats: &mut BLSPacketStats,
-    ) -> Result<(), ConsensusMessage> {
+    ) -> Result<(), BLSSigVerifyError> {
         let (mut batches, num_packets, recv_duration) = streamer::recv_packet_batches(recvr)?;
 
         let batches_len = batches.len();
@@ -137,19 +105,14 @@ impl BLSSigverifyService {
                         Self::verifier(&deduper, &packet_receiver, &mut verifier, &mut stats)
                     {
                         match e {
-                            BLSSigVerifyServiceError::Streamer(streamer_error_box) => {
-                                match *streamer_error_box {
-                                    StreamerError::RecvTimeout(RecvTimeoutError::Disconnected) => {
-                                        break
-                                    }
-                                    StreamerError::RecvTimeout(RecvTimeoutError::Timeout) => (),
-                                    _ => error!("{streamer_error_box}"),
-                                }
-                            }
-                            BLSSigVerifyServiceError::Send(_)
-                            | BLSSigVerifyServiceError::TrySend(_) => {
-                                break;
-                            }
+                            BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
+                                RecvTimeoutError::Disconnected,
+                            )) => break,
+                            BLSSigVerifyError::Streamer(StreamerError::RecvTimeout(
+                                RecvTimeoutError::Timeout,
+                            )) => (),
+                            BLSSigVerifyError::Send(_) | BLSSigVerifyError::TrySend(_) => break,
+                            _ => error!("{e:?}"),
                         }
                     }
                     if last_print.elapsed().as_secs() > 2 {
