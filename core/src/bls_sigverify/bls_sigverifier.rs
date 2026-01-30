@@ -36,10 +36,6 @@ use {
     },
 };
 
-// TODO(sam): This logic of extracting the message payload for signature verification
-//            is brittle, but another bincode serialization would be wasteful.
-//            Revisit this to figure out the best way to handle this.
-
 pub struct BLSSigVerifier {
     verified_votes_sender: VerifiedVoteSender,
     reward_votes_sender: Sender<AddVoteMessage>,
@@ -354,7 +350,6 @@ impl BLSSigVerifier {
     }
 }
 
-// Add tests for the BLS signature verifier
 #[cfg(test)]
 mod tests {
     use {
