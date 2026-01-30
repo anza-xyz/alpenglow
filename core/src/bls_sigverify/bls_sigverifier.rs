@@ -120,7 +120,7 @@ impl BLSSigVerifier {
         self.prune_caches(&root_bank);
 
         let (votes_to_verify, certs_to_verify, consensus_metrics_to_send) =
-            self.preprocess_batches(&mut batches, &mut last_voted_slots, &root_bank);
+            self.extract_and_filter_messages(&mut batches, &mut last_voted_slots, &root_bank);
 
         preprocess_time.stop();
         self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
@@ -164,7 +164,7 @@ impl BLSSigVerifier {
         }
     }
 
-    fn preprocess_batches(
+    fn extract_and_filter_messages(
         &mut self,
         batches: &mut [PacketBatch],
         last_voted_slots: &mut HashMap<Pubkey, Slot>,
@@ -191,70 +191,38 @@ impl BLSSigVerifier {
                 continue;
             }
 
-            let message: ConsensusMessage = match packet.deserialize_slice(..) {
-                Ok(msg) => msg,
-                Err(_) => {
-                    self.stats
-                        .received_malformed
-                        .fetch_add(1, Ordering::Relaxed);
-                    packet.meta_mut().set_discard(true);
-                    continue;
-                }
+            let Ok(message) = packet.deserialize_slice::<ConsensusMessage, _>(..) else {
+                packet.meta_mut().set_discard(true);
+                self.stats
+                    .received_malformed
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
             };
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
-                    // Missing epoch stakes
-                    let Some((key_to_rank_map, _)) =
-                        get_key_to_rank_map(&root_bank, vote_message.vote.slot())
+                    let Some((pubkey, bls_pubkey)) = self.resolve_voter(&vote_message, root_bank)
                     else {
-                        self.stats
-                            .received_no_epoch_stakes
-                            .fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
                         continue;
                     };
 
-                    // Invalid rank
-                    let Some((solana_pubkey, bls_pubkey, _stake)) =
-                        key_to_rank_map.get_pubkey_and_stake(vote_message.rank.into())
-                    else {
-                        self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    };
+                    Self::record_vote_metrics(
+                        pubkey,
+                        vote_message.vote,
+                        last_voted_slots,
+                        &mut consensus_metrics_to_send,
+                    );
 
-                    // Capture votes received metrics before old messages are potentially
-                    // discarded below.
-                    let slot = vote_message.vote.slot();
-                    if vote_message.vote.is_notarization_or_finalization() {
-                        let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
-                        *existing_slot = (*existing_slot).max(slot);
-                    }
-                    consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
-                        id: *solana_pubkey,
-                        vote: vote_message.vote,
-                    });
-
-                    // consensus pool does not need votes for slots older than root slot however
-                    // the rewards container may still need them.
-                    if vote_message.vote.slot() <= root_bank.slot()
-                        && !consensus_rewards::wants_vote(
-                            &self.cluster_info,
-                            &self.leader_schedule,
-                            root_bank.slot(),
-                            &vote_message,
-                        )
-                    {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                    if self.check_stale_vote(&vote_message, root_bank) {
                         packet.meta_mut().set_discard(true);
                         continue;
                     }
 
                     votes_to_verify.push(VoteToVerify {
                         vote_message,
-                        bls_pubkey: *bls_pubkey,
-                        pubkey: *solana_pubkey,
+                        bls_pubkey,
+                        pubkey,
                     });
                 }
 
@@ -266,6 +234,7 @@ impl BLSSigVerifier {
                         continue;
                     }
 
+                    // Skip if certificatae already verified
                     if verified_certs.contains(&cert.cert_type) {
                         self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
                         packet.meta_mut().set_discard(true);
@@ -307,6 +276,66 @@ impl BLSSigVerifier {
                 );
             }
         }
+    }
+
+    fn resolve_voter(
+        &self,
+        vote_message: &VoteMessage,
+        root_bank: &Bank,
+    ) -> Option<(Pubkey, BlsPubkey)> {
+        // Missing epoch stakes
+        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
+            .or_else(|| {
+                self.stats
+                    .received_no_epoch_stakes
+                    .fetch_add(1, Ordering::Relaxed);
+                None
+            })?;
+
+        // Invalid rank
+        let (pubkey, bls_pubkey, _) = key_to_rank_map
+            .get_pubkey_and_stake(vote_message.rank.into())
+            .or_else(|| {
+                self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
+                None
+            })?;
+
+        Some((*pubkey, *bls_pubkey))
+    }
+
+    fn record_vote_metrics(
+        pubkey: Pubkey,
+        vote: Vote,
+        last_voted_slots: &mut HashMap<Pubkey, Slot>,
+        consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
+    ) {
+        if vote.is_notarization_or_finalization() {
+            let existing = last_voted_slots.entry(pubkey).or_insert(vote.slot());
+            *existing = (*existing).max(vote.slot());
+        }
+
+        consensus_metrics.push(ConsensusMetricsEvent::Vote { id: pubkey, vote });
+    }
+
+    fn check_stale_vote(&self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {
+        // if newer than root, we should keep
+        if vote_message.vote.slot() > root_bank.slot() {
+            return false;
+        }
+
+        // even if old, we might still want it for the rewards container
+        if consensus_rewards::wants_vote(
+            &self.cluster_info,
+            &self.leader_schedule,
+            root_bank.slot(),
+            vote_message,
+        ) {
+            return false;
+        }
+
+        // otherwise, record stats and discard
+        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+        true
     }
 }
 
