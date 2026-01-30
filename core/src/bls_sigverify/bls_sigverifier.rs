@@ -83,175 +83,6 @@ pub struct BLSSigVerifier {
 }
 
 impl BLSSigVerifier {
-    pub fn verify_and_send_batches(
-        &mut self,
-        mut batches: Vec<PacketBatch>,
-    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
-        let mut preprocess_time = Measure::start("preprocess");
-        // TODO(sam): ideally we want to avoid heap allocation, but let's use
-        //            `Vec` for now for clarity and then optimize for the final version
-        let mut votes_to_verify = Vec::new();
-        let mut certs_to_verify = Vec::new();
-        let mut consensus_metrics_to_send = Vec::new();
-        let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
-
-        let root_bank = self.sharable_banks.root();
-        if self.last_checked_root_slot < root_bank.slot() {
-            self.last_checked_root_slot = root_bank.slot();
-            self.verified_certs
-                .write()
-                .unwrap()
-                .retain(|cert| cert.slot() > root_bank.slot());
-            self.vote_payload_cache
-                .write()
-                .unwrap()
-                .retain(|vote, _| vote.slot() > root_bank.slot());
-        }
-
-        for mut packet in batches.iter_mut().flatten() {
-            self.stats.received.fetch_add(1, Ordering::Relaxed);
-            if packet.meta().discard() {
-                self.stats
-                    .received_discarded
-                    .fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-
-            let message: ConsensusMessage = match packet.deserialize_slice(..) {
-                Ok(msg) => msg,
-                Err(_) => {
-                    self.stats
-                        .received_malformed
-                        .fetch_add(1, Ordering::Relaxed);
-                    packet.meta_mut().set_discard(true);
-                    continue;
-                }
-            };
-
-            match message {
-                ConsensusMessage::Vote(vote_message) => {
-                    // Missing epoch states
-                    let Some((key_to_rank_map, _)) =
-                        get_key_to_rank_map(&root_bank, vote_message.vote.slot())
-                    else {
-                        self.stats
-                            .received_no_epoch_stakes
-                            .fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    };
-
-                    // Invalid rank
-                    let Some((solana_pubkey, bls_pubkey, _stake)) =
-                        key_to_rank_map.get_pubkey_and_stake(vote_message.rank.into())
-                    else {
-                        self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    };
-
-                    // Capture votes received metrics before old messages are potentially discarded below.
-                    let slot = vote_message.vote.slot();
-                    if vote_message.vote.is_notarization_or_finalization() {
-                        let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
-                        *existing_slot = (*existing_slot).max(slot);
-                    }
-                    consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
-                        id: *solana_pubkey,
-                        vote: vote_message.vote,
-                    });
-
-                    // consensus pool does not need votes for slots older than root slot however the rewards container may still need them.
-                    if vote_message.vote.slot() <= root_bank.slot()
-                        && !consensus_rewards::wants_vote(
-                            &self.cluster_info,
-                            &self.leader_schedule,
-                            root_bank.slot(),
-                            &vote_message,
-                        )
-                    {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    }
-
-                    votes_to_verify.push(VoteToVerify {
-                        vote_message,
-                        bls_pubkey: *bls_pubkey,
-                        pubkey: *solana_pubkey,
-                    });
-                }
-                ConsensusMessage::Certificate(cert) => {
-                    // Only need certs newer than root slot
-                    if cert.cert_type.slot() <= root_bank.slot() {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    }
-
-                    if self
-                        .verified_certs
-                        .read()
-                        .unwrap()
-                        .contains(&cert.cert_type)
-                    {
-                        self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    }
-
-                    certs_to_verify.push(cert);
-                }
-            }
-        }
-        preprocess_time.stop();
-        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .preprocess_elapsed_us
-            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
-
-        let (votes_result, certs_result) = rayon::join(
-            || self.verify_and_send_votes(votes_to_verify, &root_bank),
-            || self.verify_and_send_certificates(certs_to_verify, &root_bank),
-        );
-
-        let add_vote_msg = votes_result?;
-        let () = certs_result?;
-
-        // Send to RPC service for last voted tracking
-        self.alpenglow_last_voted
-            .update_last_voted(&last_voted_slots);
-
-        // Send to metrics service for metrics aggregation
-        if self
-            .consensus_metrics_sender
-            .send((Instant::now(), consensus_metrics_to_send))
-            .is_err()
-        {
-            warn!("could not send consensus metrics, receive side of channel is closed");
-        }
-
-        let res = self.reward_votes_sender.try_send(add_vote_msg);
-        match res {
-            Ok(()) => (),
-            Err(TrySendError::Full(_)) => {
-                self.stats.consensus_reward_send_failed =
-                    self.stats.consensus_reward_send_failed.saturating_add(1);
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                warn!(
-                    "could not send votes to reward container, receive side of channel is closed"
-                );
-            }
-        }
-
-        self.stats.maybe_report_stats();
-
-        Ok(())
-    }
-}
-
-impl BLSSigVerifier {
     pub fn new(
         sharable_banks: SharableBanks,
         verified_votes_sender: VerifiedVoteSender,
@@ -278,6 +109,208 @@ impl BLSSigVerifier {
         }
     }
 
+    pub fn verify_and_send_batches(
+        &mut self,
+        mut batches: Vec<PacketBatch>,
+    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
+        let mut preprocess_time = Measure::start("preprocess");
+        let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
+        let root_bank = self.sharable_banks.root();
+
+        self.prune_caches(&root_bank);
+
+        let (votes_to_verify, certs_to_verify, consensus_metrics_to_send) =
+            self.preprocess_batches(&mut batches, &mut last_voted_slots, &root_bank);
+
+        preprocess_time.stop();
+        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .preprocess_elapsed_us
+            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
+
+        // Perform signature verification
+        let (votes_result, certs_result) = rayon::join(
+            || self.verify_and_send_votes(votes_to_verify, &root_bank),
+            || self.verify_and_send_certificates(certs_to_verify, &root_bank),
+        );
+        let (add_vote_msg, ()) = (votes_result?, certs_result?);
+
+        // Send to RPC service for last voted tracking
+        self.alpenglow_last_voted
+            .update_last_voted(&last_voted_slots);
+
+        // Send to metrics service for metrics aggregation
+        self.send_consensus_metrics(consensus_metrics_to_send);
+
+        // Send verified votes to the rewards container
+        self.send_reward_votes(add_vote_msg);
+
+        self.stats.maybe_report_stats();
+        Ok(())
+    }
+
+    fn prune_caches(&mut self, root_bank: &Bank) {
+        // Prune entries <= the new root slot
+        if self.last_checked_root_slot < root_bank.slot() {
+            self.last_checked_root_slot = root_bank.slot();
+            self.verified_certs
+                .write()
+                .unwrap()
+                .retain(|cert| cert.slot() > root_bank.slot());
+            self.vote_payload_cache
+                .write()
+                .unwrap()
+                .retain(|vote, _| vote.slot() > root_bank.slot());
+        }
+    }
+
+    fn preprocess_batches(
+        &mut self,
+        batches: &mut [PacketBatch],
+        last_voted_slots: &mut HashMap<Pubkey, Slot>,
+        root_bank: &Bank,
+    ) -> (
+        Vec<VoteToVerify>,
+        Vec<Certificate>,
+        Vec<ConsensusMetricsEvent>,
+    ) {
+        let mut votes_to_verify = Vec::new();
+        let mut certs_to_verify = Vec::new();
+        let mut consensus_metrics_to_send = Vec::new();
+
+        // Acquire a read lock for the whole batch to check duplicates
+        let verified_certs = self.verified_certs.read().unwrap();
+
+        for mut packet in batches.iter_mut().flatten() {
+            self.stats.received.fetch_add(1, Ordering::Relaxed);
+
+            if packet.meta().discard() {
+                self.stats
+                    .received_discarded
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
+            let message: ConsensusMessage = match packet.deserialize_slice(..) {
+                Ok(msg) => msg,
+                Err(_) => {
+                    self.stats
+                        .received_malformed
+                        .fetch_add(1, Ordering::Relaxed);
+                    packet.meta_mut().set_discard(true);
+                    continue;
+                }
+            };
+
+            match message {
+                ConsensusMessage::Vote(vote_message) => {
+                    // Missing epoch stakes
+                    let Some((key_to_rank_map, _)) =
+                        get_key_to_rank_map(&root_bank, vote_message.vote.slot())
+                    else {
+                        self.stats
+                            .received_no_epoch_stakes
+                            .fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    };
+
+                    // Invalid rank
+                    let Some((solana_pubkey, bls_pubkey, _stake)) =
+                        key_to_rank_map.get_pubkey_and_stake(vote_message.rank.into())
+                    else {
+                        self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    };
+
+                    // Capture votes received metrics before old messages are potentially
+                    // discarded below.
+                    let slot = vote_message.vote.slot();
+                    if vote_message.vote.is_notarization_or_finalization() {
+                        let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
+                        *existing_slot = (*existing_slot).max(slot);
+                    }
+                    consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
+                        id: *solana_pubkey,
+                        vote: vote_message.vote,
+                    });
+
+                    // consensus pool does not need votes for slots older than root slot however
+                    // the rewards container may still need them.
+                    if vote_message.vote.slot() <= root_bank.slot()
+                        && !consensus_rewards::wants_vote(
+                            &self.cluster_info,
+                            &self.leader_schedule,
+                            root_bank.slot(),
+                            &vote_message,
+                        )
+                    {
+                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
+                    votes_to_verify.push(VoteToVerify {
+                        vote_message,
+                        bls_pubkey: *bls_pubkey,
+                        pubkey: *solana_pubkey,
+                    });
+                }
+
+                ConsensusMessage::Certificate(cert) => {
+                    // Only need certs newer than root slot
+                    if cert.cert_type.slot() <= root_bank.slot() {
+                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
+                    if verified_certs.contains(&cert.cert_type) {
+                        self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
+                        packet.meta_mut().set_discard(true);
+                        continue;
+                    }
+
+                    certs_to_verify.push(cert);
+                }
+            }
+        }
+
+        (votes_to_verify, certs_to_verify, consensus_metrics_to_send)
+    }
+
+    fn send_consensus_metrics(&self, metrics: Vec<ConsensusMetricsEvent>) {
+        if metrics.is_empty() {
+            return;
+        }
+
+        if self
+            .consensus_metrics_sender
+            .send((Instant::now(), metrics))
+            .is_err()
+        {
+            warn!("could not send consensus metrics, receive side of channel is closed");
+        }
+    }
+
+    fn send_reward_votes(&mut self, add_vote_msg: AddVoteMessage) {
+        match self.reward_votes_sender.try_send(add_vote_msg) {
+            Ok(()) => (),
+            Err(TrySendError::Full(_)) => {
+                self.stats.consensus_reward_send_failed =
+                    self.stats.consensus_reward_send_failed.saturating_add(1);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                warn!(
+                    "could not send votes to reward container, receive side of channel is closed"
+                );
+            }
+        }
+    }
+}
+
+impl BLSSigVerifier {
     /// Verifies votes and sends verified votes to the consensus pool.
     /// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
     fn verify_and_send_votes(
