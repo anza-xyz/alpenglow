@@ -267,6 +267,10 @@ impl BLSSigVerifier {
 
         // Drain the buffer to create the Vec expected by the channel,
         // leaving `metrics` empty but with capacity preserved.
+        //
+        // clippy suggests `mem::take` which would steal the buffer's capacity,
+        // defeating the buffer recycling optimization.
+        #[allow(clippy::drain_collect)]
         let metrics_vec: Vec<_> = metrics.drain(..).collect();
 
         if sender.send((Instant::now(), metrics_vec)).is_err() {
