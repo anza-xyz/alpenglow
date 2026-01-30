@@ -6,7 +6,7 @@
 //! Once alpenglow is active, this is the only thread that will touch the [`PohRecorder`].
 use {
     crate::{
-        banking_trace::BankingTracer,
+        banking_trace::{BankingPacketSender, BankingTracer},
         replay_stage::{Finalizer, ReplayStage},
     },
     agave_votor::{
@@ -28,6 +28,7 @@ use {
     solana_hash::Hash,
     solana_ledger::{blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache},
     solana_measure::measure::Measure,
+    solana_perf::packet::{bytes::Bytes, BytesPacket, Meta, PacketBatch},
     solana_poh::{
         poh_recorder::{GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS, PohRecorder, PohRecorderError},
         record_channels::RecordReceiver,
@@ -40,6 +41,7 @@ use {
         block_component_processor::BlockComponentProcessor,
         leader_schedule_utils::{last_of_consecutive_leader_slots, leader_slot_index},
     },
+    solana_transaction::versioned::VersionedTransaction,
     solana_version::version,
     stats::{BlockCreationLoopMetrics, SlotMetrics},
     std::{
@@ -113,6 +115,9 @@ pub struct BlockCreationLoopConfig {
     pub build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     /// Channel to receive built reward certificates.
     pub reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
+
+    /// Sender for packets to banking stage (used to re-inject transactions after sad leader handover).
+    pub banking_stage_sender: BankingPacketSender,
 }
 
 struct LeaderContext {
@@ -133,6 +138,7 @@ struct LeaderContext {
     highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
     build_reward_certs_sender: Sender<BuildRewardCertsRequest>,
     reward_certs_receiver: Receiver<BuildRewardCertsResponse>,
+    banking_stage_sender: BankingPacketSender,
 
     // Metrics
     metrics: BlockCreationLoopMetrics,
@@ -206,6 +212,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         optimistic_parent_receiver,
         build_reward_certs_sender,
         reward_certs_receiver,
+        banking_stage_sender,
     } = config;
 
     // Similar to Votor, if this loop dies kill the validator
@@ -251,6 +258,7 @@ fn start_loop(config: BlockCreationLoopConfig) {
         highest_finalized,
         build_reward_certs_sender,
         reward_certs_receiver,
+        banking_stage_sender,
         metrics: BlockCreationLoopMetrics::default(),
         slot_metrics: SlotMetrics::default(),
         genesis_cert,
@@ -541,6 +549,7 @@ fn handle_parent_ready(
     ctx: &mut LeaderContext,
     leader_window_info: LeaderWindowInfo,
     optimistic_parent_block: (Slot, Hash),
+    accumulated_txs: Vec<VersionedTransaction>,
     block_timer: &mut Instant,
 ) -> Result<(), PohRecorderError> {
     if leader_window_info.parent_block == optimistic_parent_block {
@@ -567,6 +576,33 @@ fn handle_parent_ready(
     let (new_parent_slot, _) = leader_window_info.parent_block;
 
     ctx.bank_forks.write().unwrap().clear_bank(slot, false);
+
+    // Re-inject accumulated transactions back to banking stage for rescheduling
+    let packets: Vec<BytesPacket> = accumulated_txs
+        .iter()
+        .filter_map(|tx| {
+            let serialized = bincode::serialize(&tx)
+                .inspect_err(|e| {
+                    error!(
+                        "failed to serialize transaction for rescheduling - this should never \
+                         happen: {e:?}"
+                    )
+                })
+                .ok()?;
+            let buffer = Bytes::from(serialized);
+            let mut meta = Meta::default();
+            meta.size = buffer.len();
+            Some(BytesPacket::new(buffer, meta))
+        })
+        .collect();
+
+    if !packets.is_empty() {
+        let batch: PacketBatch = packets.into();
+        let banking_packet_batch = Arc::new(vec![batch]);
+        ctx.banking_stage_sender
+            .send(banking_packet_batch)
+            .map_err(|_| PohRecorderError::RescheduleTransactionsError(slot))?;
+    }
 
     // Wait for new parent to be frozen, then recreate the leader bank.
     start_leader_retry_replay(slot, new_parent_slot, *block_timer, ctx)
@@ -615,6 +651,7 @@ fn record_and_complete_block(
     ctx.build_reward_certs_sender
         .send(BuildRewardCertsRequest { bank_slot })
         .map_err(|_| PohRecorderError::ChannelDisconnected)?;
+    let mut accumulated_txs: Vec<VersionedTransaction> = vec![];
     let window_has_moved_on = loop {
         // Don't timeout until we've received ParentReady.
         let timeout = time_left(*block_timer, block_timeout);
@@ -631,7 +668,13 @@ fn record_and_complete_block(
                     }
                     Some(info) => {
                         if let Some(optimistic_parent_block) = optimistic_parent.take() {
-                            handle_parent_ready(ctx, info, optimistic_parent_block, block_timer)?;
+                            handle_parent_ready(
+                                ctx,
+                                info,
+                                optimistic_parent_block,
+                                std::mem::take(&mut accumulated_txs),
+                                block_timer,
+                            )?;
                         }
                     }
                     None => continue,
@@ -641,6 +684,16 @@ fn record_and_complete_block(
                 if let Ok(record) = msg {
                     ctx.record_receiver
                         .on_received_record(record.transaction_batches.len() as u64);
+
+                    if optimistic_parent.is_some() {
+                        accumulated_txs.extend(
+                            record
+                                .transaction_batches
+                                .iter()
+                                .flat_map(|batch| batch.iter().cloned()),
+                        );
+                    }
+
                     ctx.poh_recorder.write().unwrap().record(
                         record.bank_id,
                         record.mixins,

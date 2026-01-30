@@ -67,6 +67,9 @@ pub enum PohRecorderError {
 
     #[error("couldn't reset bank during fast leader handover slot {0} -> slot {1}")]
     ResetBankError(Slot, Slot),
+
+    #[error("couldn't reschedule pre-UpdateParent transactions")]
+    RescheduleTransactionsError(Slot),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;
