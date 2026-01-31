@@ -12,13 +12,13 @@ use {
     },
     crossbeam_channel::{Sender, TrySendError},
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
-    solana_clock::Slot,
+    solana_clock::{Epoch, Slot},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
-    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
@@ -49,6 +49,7 @@ pub struct BLSSigVerifier {
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
+    epoch_rank_map_cache: [Option<(Epoch, Arc<BLSPubkeyToRankMap>)>; 2],
 
     // Recycled buffers implementing the Buffer Recycling pattern.
     //
@@ -85,6 +86,7 @@ impl BLSSigVerifier {
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
+            epoch_rank_map_cache: [None, None],
             vote_buffer: Vec::new(),
             cert_buffer: Vec::new(),
             metric_buffer: Vec::new(),
@@ -177,9 +179,6 @@ impl BLSSigVerifier {
         last_voted_slots: &mut HashMap<Pubkey, Slot>,
         root_bank: &Bank,
     ) {
-        // Acquire a read lock for the whole batch to check duplicates
-        let verified_certs = self.verified_certs.read().unwrap();
-
         for packet in batches.iter().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
 
@@ -239,14 +238,25 @@ impl BLSSigVerifier {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
-
-                    // Skip if certificatae already verified
-                    if verified_certs.contains(&cert.cert_type) {
-                        self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-
                     self.cert_buffer.push(cert);
+                }
+            }
+
+            // Filter already verified certifies
+            if !self.cert_buffer.is_empty() {
+                let verified_certs = self.verified_certs.read().unwrap();
+                let len_before = self.cert_buffer.len();
+
+                // apply in-place filtering
+                self.cert_buffer
+                    .retain(|cert| !verified_certs.contains(&cert.cert_type));
+
+                let len_after = self.cert_buffer.len();
+                let duplicates = len_before - len_after;
+                if duplicates > 0 {
+                    self.stats
+                        .received_verified
+                        .fetch_add(duplicates as u64, Ordering::Relaxed);
                 }
             }
         }
@@ -288,12 +298,22 @@ impl BLSSigVerifier {
         }
     }
 
-    fn resolve_voter(
-        &self,
-        vote_message: &VoteMessage,
+    fn key_to_rank_map_from_cache(
+        &mut self,
         root_bank: &Bank,
-    ) -> Option<(Pubkey, BlsPubkey)> {
-        // Missing epoch stakes
+        vote_message: &VoteMessage,
+    ) -> Option<Arc<BLSPubkeyToRankMap>> {
+        let slot = vote_message.vote.slot();
+        let vote_epoch = root_bank.epoch_schedule().get_epoch(slot);
+        let cache_index = (vote_epoch % 2) as usize;
+
+        if let Some((epoch, map)) = &self.epoch_rank_map_cache[cache_index] {
+            if *epoch == vote_epoch {
+                return Some(map.clone());
+            }
+        }
+
+        // cache miss
         let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
             .or_else(|| {
                 self.stats
@@ -301,6 +321,16 @@ impl BLSSigVerifier {
                     .fetch_add(1, Ordering::Relaxed);
                 None
             })?;
+        self.epoch_rank_map_cache[cache_index] = Some((vote_epoch, key_to_rank_map.clone()));
+        Some(key_to_rank_map.clone())
+    }
+
+    fn resolve_voter(
+        &mut self,
+        vote_message: &VoteMessage,
+        root_bank: &Bank,
+    ) -> Option<(Pubkey, BlsPubkey)> {
+        let key_to_rank_map = self.key_to_rank_map_from_cache(root_bank, vote_message)?;
 
         // Invalid rank
         let (pubkey, bls_pubkey, _) = key_to_rank_map
