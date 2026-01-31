@@ -37,7 +37,7 @@ use {
 };
 
 pub struct BLSSigVerifier {
-    verified_votes_sender: VerifiedVoteSender,
+    votes_for_repair_sender: VerifiedVoteSender,
     reward_votes_sender: Sender<AddVoteMessage>,
     message_sender: Sender<ConsensusMessage>,
     sharable_banks: SharableBanks,
@@ -64,7 +64,7 @@ pub struct BLSSigVerifier {
 impl BLSSigVerifier {
     pub fn new(
         sharable_banks: SharableBanks,
-        verified_votes_sender: VerifiedVoteSender,
+        votes_for_repair_sender: VerifiedVoteSender,
         reward_votes_sender: Sender<AddVoteMessage>,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
@@ -74,7 +74,7 @@ impl BLSSigVerifier {
     ) -> Self {
         Self {
             sharable_banks,
-            verified_votes_sender,
+            votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
             stats: BLSSigVerifierStats::new(),
@@ -127,7 +127,7 @@ impl BLSSigVerifier {
                     &self.cluster_info,
                     &self.leader_schedule,
                     &self.message_sender,
-                    &self.verified_votes_sender,
+                    &self.votes_for_repair_sender,
                 )
             },
             || {
@@ -383,7 +383,7 @@ mod tests {
     };
 
     fn create_keypairs_and_bls_sig_verifier_with_channels(
-        verified_votes_sender: VerifiedVoteSender,
+        votes_for_repair_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         reward_votes_sender: Sender<AddVoteMessage>,
@@ -416,7 +416,7 @@ mod tests {
             validator_keypairs,
             BLSSigVerifier::new(
                 sharable_banks,
-                verified_votes_sender,
+                votes_for_repair_sender,
                 reward_votes_sender,
                 message_sender,
                 consensus_metrics_sender,
@@ -433,7 +433,7 @@ mod tests {
         VerifiedVoteReceiver,
         Receiver<ConsensusMessage>,
     ) {
-        let (verified_votes_sender, verified_votes_receiver) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, votes_for_repair_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = crossbeam_channel::unbounded();
         let (reward_votes_sender, reward_votes_receiver) = crossbeam_channel::unbounded();
@@ -445,7 +445,7 @@ mod tests {
             while reward_votes_receiver.recv().is_ok() {}
         });
         let (keypairs, verifier) = create_keypairs_and_bls_sig_verifier_with_channels(
-            verified_votes_sender,
+            votes_for_repair_sender,
             message_sender,
             consensus_metrics_sender,
             reward_votes_sender,
@@ -453,7 +453,7 @@ mod tests {
         (
             keypairs,
             verifier,
-            verified_votes_receiver,
+            votes_for_repair_receiver,
             message_receiver,
         )
     }
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_blssigverifier_send_packets() {
-        let (validator_keypairs, mut verifier, verified_votes_receiver, receiver) =
+        let (validator_keypairs, mut verifier, votes_for_repair_receiver, receiver) =
             create_keypairs_and_bls_sig_verifier();
 
         let vote_rank1 = 2;
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 2);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
-        let received_verified_votes1 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes1 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes1,
             (
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 3); // 2 + 1 = 3
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3); // 2 + 1 = 3
-        let received_verified_votes2 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes2 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes2,
             (
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
-        let received_verified_votes3 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes3 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes3,
             (
@@ -635,13 +635,13 @@ mod tests {
     #[test]
     fn test_blssigverifier_send_packets_channel_full() {
         agave_logger::setup();
-        let (verified_votes_sender, _verified_votes_receiver) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, _votes_for_repair_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::bounded(1);
         let (consensus_metrics_sender, _consensus_metrics_receiver) =
             crossbeam_channel::unbounded();
         let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier_with_channels(
-            verified_votes_sender,
+            votes_for_repair_sender,
             message_sender,
             consensus_metrics_sender,
             reward_votes_sender,
@@ -1280,7 +1280,7 @@ mod tests {
     #[test]
     fn test_verify_old_vote_and_cert() {
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
         let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let validator_keypairs = (0..10)
@@ -1311,7 +1311,7 @@ mod tests {
         let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
         let mut sig_verifier = BLSSigVerifier::new(
             sharable_banks,
-            verified_vote_sender,
+            votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
             consensus_metrics_sender,

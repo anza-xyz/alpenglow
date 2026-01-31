@@ -106,8 +106,8 @@ pub(crate) struct BLSSigVerifierStats {
 
     pub(crate) sent: AtomicU64,
     pub(crate) sent_failed: AtomicU64,
-    pub(crate) verified_votes_sent: AtomicU64,
-    pub(crate) verified_votes_sent_failed: AtomicU64,
+    pub(crate) votes_for_repair_sent: AtomicU64,
+    pub(crate) votes_for_repair_sent_failed: AtomicU64,
     pub(crate) received: AtomicU64,
     pub(crate) received_bad_rank: AtomicU64,
     pub(crate) received_bad_signature_certs: AtomicU64,
@@ -141,8 +141,8 @@ impl BLSSigVerifierStats {
 
             sent: AtomicU64::new(0),
             sent_failed: AtomicU64::new(0),
-            verified_votes_sent: AtomicU64::new(0),
-            verified_votes_sent_failed: AtomicU64::new(0),
+            votes_for_repair_sent: AtomicU64::new(0),
+            votes_for_repair_sent_failed: AtomicU64::new(0),
             received: AtomicU64::new(0),
             received_bad_rank: AtomicU64::new(0),
             received_bad_signature_certs: AtomicU64::new(0),
@@ -226,12 +226,12 @@ impl BLSSigVerifierStats {
             ),
             (
                 "verified_votes_sent",
-                self.verified_votes_sent.load(Ordering::Relaxed) as i64,
+                self.votes_for_repair_sent.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
                 "verified_votes_sent_failed",
-                self.verified_votes_sent_failed.load(Ordering::Relaxed) as i64,
+                self.votes_for_repair_sent_failed.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

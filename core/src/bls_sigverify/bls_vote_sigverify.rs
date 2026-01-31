@@ -46,7 +46,7 @@ pub(crate) fn verify_and_send_votes(
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
     message_sender: &Sender<ConsensusMessage>,
-    verified_votes_sender: &VerifiedVoteSender,
+    votes_for_repair_sender: &VerifiedVoteSender,
 ) -> Result<AddVoteMessage, BLSSigVerifyError> {
     let verified_votes = verify_votes(votes_to_verify, vote_payload_cache, stats);
 
@@ -92,16 +92,16 @@ pub(crate) fn verify_and_send_votes(
         }
     }
 
-    // Send votes
+    // Send votes for repair
     for (pubkey, slots) in verified_votes_by_pubkey {
-        match verified_votes_sender.try_send((pubkey, slots)) {
+        match votes_for_repair_sender.try_send((pubkey, slots)) {
             Ok(()) => {
-                stats.verified_votes_sent.fetch_add(1, Ordering::Relaxed);
+                stats.votes_for_repair_sent.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 trace!("Failed to send verified vote: {e}");
                 stats
-                    .verified_votes_sent_failed
+                    .votes_for_repair_sent_failed
                     .fetch_add(1, Ordering::Relaxed);
             }
         }

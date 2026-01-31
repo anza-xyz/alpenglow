@@ -33,7 +33,7 @@ impl BLSSigVerifyService {
     pub fn new(
         packet_receiver: Receiver<PacketBatch>,
         sharable_banks: SharableBanks,
-        verified_votes_sender: VerifiedVoteSender,
+        votes_for_repair_sender: VerifiedVoteSender,
         reward_votes_sender: Sender<AddVoteMessage>,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
@@ -43,7 +43,7 @@ impl BLSSigVerifyService {
     ) -> Self {
         let verifier = BLSSigVerifier::new(
             sharable_banks,
-            verified_votes_sender,
+            votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
             consensus_metrics_sender,
