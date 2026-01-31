@@ -83,13 +83,6 @@ impl BLSSigVerifyService {
                     ReceiveAction::Break => break,
                 };
 
-            let batches_len = batches.len();
-            debug!(
-                "@{:?} bls_verifier: verifying: {}",
-                timing::timestamp(),
-                num_packets,
-            );
-
             // Dedupe Packet Step
             if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, MAX_DEDUPER_AGE) {
                 stats.num_deduper_saturations += 1;
@@ -106,16 +99,6 @@ impl BLSSigVerifyService {
 
             match verify_time_us {
                 Ok(verify_time_us) => {
-                    debug!(
-                        "@{:?} verifier: done. batches: {} total verify time: {:?} verified: {} \
-                         v/s {}",
-                        timing::timestamp(),
-                        batches_len,
-                        verify_time_us / 1000,
-                        num_packets,
-                        (num_packets as f32 / (verify_time_us as f32 / 1_000_000.0))
-                    );
-
                     Self::update_stats(
                         &mut stats,
                         num_packets,
