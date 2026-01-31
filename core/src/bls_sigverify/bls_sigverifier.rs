@@ -99,7 +99,10 @@ impl BLSSigVerifier {
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
         let root_bank = self.sharable_banks.root();
 
-        self.prune_caches(&root_bank);
+        // Prune entries <= the new root slot
+        if self.last_checked_root_slot < root_bank.slot() {
+            self.prune_caches(&root_bank);
+        }
 
         // Recycle buffers.
         // Note: `cert_buffer` and `metric_buffer` are usually empty from draining,
@@ -157,18 +160,15 @@ impl BLSSigVerifier {
     }
 
     fn prune_caches(&mut self, root_bank: &Bank) {
-        // Prune entries <= the new root slot
-        if self.last_checked_root_slot < root_bank.slot() {
-            self.last_checked_root_slot = root_bank.slot();
-            self.verified_certs
-                .write()
-                .unwrap()
-                .retain(|cert| cert.slot() > root_bank.slot());
-            self.vote_payload_cache
-                .write()
-                .unwrap()
-                .retain(|vote, _| vote.slot() > root_bank.slot());
-        }
+        self.last_checked_root_slot = root_bank.slot();
+        self.verified_certs
+            .write()
+            .unwrap()
+            .retain(|cert| cert.slot() > root_bank.slot());
+        self.vote_payload_cache
+            .write()
+            .unwrap()
+            .retain(|vote, _| vote.slot() > root_bank.slot());
     }
 
     fn extract_and_filter_messages(
