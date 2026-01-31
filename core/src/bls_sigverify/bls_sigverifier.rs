@@ -95,7 +95,7 @@ impl BLSSigVerifier {
 
     pub fn verify_and_send_batches(
         &mut self,
-        mut batches: Vec<PacketBatch>,
+        batches: Vec<PacketBatch>,
     ) -> Result<(), BLSSigVerifyError> {
         let mut preprocess_time = Measure::start("preprocess");
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
@@ -113,7 +113,7 @@ impl BLSSigVerifier {
         self.cert_buffer.clear();
         self.metric_buffer.clear();
 
-        self.extract_and_filter_messages(&mut batches, &mut last_voted_slots, &root_bank);
+        self.extract_and_filter_messages(batches, &mut last_voted_slots, &root_bank);
 
         preprocess_time.stop();
         self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
@@ -175,7 +175,7 @@ impl BLSSigVerifier {
 
     fn extract_and_filter_messages(
         &mut self,
-        batches: &[PacketBatch],
+        batches: Vec<PacketBatch>,
         last_voted_slots: &mut HashMap<Pubkey, Slot>,
         root_bank: &Bank,
     ) {
