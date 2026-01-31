@@ -173,14 +173,14 @@ impl BLSSigVerifier {
 
     fn extract_and_filter_messages(
         &mut self,
-        batches: &mut [PacketBatch],
+        batches: &[PacketBatch],
         last_voted_slots: &mut HashMap<Pubkey, Slot>,
         root_bank: &Bank,
     ) {
         // Acquire a read lock for the whole batch to check duplicates
         let verified_certs = self.verified_certs.read().unwrap();
 
-        for mut packet in batches.iter_mut().flatten() {
+        for packet in batches.iter().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
 
             if packet.meta().discard() {
@@ -191,7 +191,6 @@ impl BLSSigVerifier {
             }
 
             let Ok(message) = packet.deserialize_slice::<ConsensusMessage, _>(..) else {
-                packet.meta_mut().set_discard(true);
                 self.stats
                     .received_malformed
                     .fetch_add(1, Ordering::Relaxed);
@@ -202,7 +201,6 @@ impl BLSSigVerifier {
                 ConsensusMessage::Vote(vote_message) => {
                     let Some((pubkey, bls_pubkey)) = self.resolve_voter(&vote_message, root_bank)
                     else {
-                        packet.meta_mut().set_discard(true);
                         continue;
                     };
 
@@ -214,7 +212,6 @@ impl BLSSigVerifier {
                     );
 
                     if self.check_stale_vote(&vote_message, root_bank) {
-                        packet.meta_mut().set_discard(true);
                         continue;
                     }
 
@@ -240,14 +237,12 @@ impl BLSSigVerifier {
                     // Only need certs newer than root slot
                     if cert.cert_type.slot() <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
                         continue;
                     }
 
                     // Skip if certificatae already verified
                     if verified_certs.contains(&cert.cert_type) {
                         self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
                         continue;
                     }
 
