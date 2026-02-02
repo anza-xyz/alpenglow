@@ -1,6 +1,6 @@
 use {
     bitvec::vec::BitVec,
-    rayon::iter::IntoParallelRefIterator,
+    rayon::{iter::IntoParallelRefIterator, join},
     solana_bls_signatures::{
         pubkey::Pubkey as BlsPubkey, signature::AsSignatureAffine, BlsError, PubkeyProjective,
         Signature as BlsSignature, SignatureProjective, VerifiablePubkey,
@@ -108,11 +108,13 @@ pub fn verify_base2<S: AsSignatureAffine>(
         Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
     };
 
-    let pk = if cfg!(debug_assertions) {
-        get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
+    let pubkeys = if cfg!(debug_assertions) {
+        collect_pubkeys(&ranks, checked_rank_map(rank_map, &ranks))?
     } else {
-        get_pubkey(&ranks, rank_map, max_validators)?
+        collect_pubkeys(&ranks, rank_map)?
     };
+
+    let pk = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
 
     pk.verify_signature(signature, payload)
         .map_err(|_| Error::VerifySigFalse)
@@ -136,17 +138,16 @@ where
 }
 
 /// Returns the [`PubkeyProjective`] by aggregating the [`BlsPubkey`] of the validators present in [`ranks`] using the [`rank_map`] to look up the [`BlsPubkey`].
-fn get_pubkey(
+fn collect_pubkeys(
     ranks: &BitVec<u8>,
     mut rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
-    max_validators: usize,
-) -> Result<PubkeyProjective, Error> {
-    let mut pubkeys = Vec::with_capacity(max_validators);
+) -> Result<Vec<BlsPubkey>, Error> {
+    let mut pubkeys = Vec::with_capacity(ranks.count_ones());
     for rank in ranks.iter_ones() {
         let pubkey = rank_map(rank).ok_or(Error::MissingRank)?;
         pubkeys.push(pubkey);
     }
-    Ok(PubkeyProjective::par_aggregate(pubkeys.par_iter())?)
+    Ok(pubkeys)
 }
 
 /// Verifies the [`signature`] of [`payload`] and [`fallback_payload`] which is signed by the validators in the base3 encoded [`ranks`]  using the [`rank_map`] to lookup the [`BlsPubkey`].
@@ -163,34 +164,36 @@ fn verify_base3(
     let ranks = decode(ranks, max_validators).map_err(Error::Decode)?;
     match ranks {
         Decoded::Base2(ranks) => {
-            let pk = if cfg!(debug_assertions) {
-                get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
+            let pubkeys = if cfg!(debug_assertions) {
+                collect_pubkeys(&ranks, checked_rank_map(rank_map, &ranks))?
             } else {
-                get_pubkey(&ranks, rank_map, max_validators)?
+                collect_pubkeys(&ranks, rank_map)?
             };
+            let pk = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
+
             pk.verify_signature(signature, payload)
                 .map_err(|_| Error::VerifySigFalse)
         }
         Decoded::Base3(ranks, fallback_ranks) => {
-            let pubkeys = if cfg!(debug_assertions) {
-                [
-                    get_pubkey(
-                        &ranks,
-                        checked_rank_map(&mut rank_map, &ranks),
-                        max_validators,
-                    )?,
-                    get_pubkey(
-                        &fallback_ranks,
-                        checked_rank_map(rank_map, &fallback_ranks),
-                        max_validators,
-                    )?,
-                ]
+            let (pubkeys_1, pubkeys_2) = if cfg!(debug_assertions) {
+                (
+                    collect_pubkeys(&ranks, checked_rank_map(&mut rank_map, &ranks))?,
+                    collect_pubkeys(&fallback_ranks, checked_rank_map(rank_map, &fallback_ranks))?,
+                )
             } else {
-                [
-                    get_pubkey(&ranks, &mut rank_map, max_validators)?,
-                    get_pubkey(&fallback_ranks, rank_map, max_validators)?,
-                ]
+                (
+                    collect_pubkeys(&ranks, &mut rank_map)?,
+                    collect_pubkeys(&fallback_ranks, rank_map)?,
+                )
             };
+
+            let (pk1_res, pk2_res) = join(
+                || PubkeyProjective::par_aggregate(pubkeys_1.par_iter()),
+                || PubkeyProjective::par_aggregate(pubkeys_2.par_iter()),
+            );
+
+            let pubkeys = [pk1_res?, pk2_res?];
+
             SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
                 signature,
