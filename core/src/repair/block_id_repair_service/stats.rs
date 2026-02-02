@@ -1,11 +1,23 @@
 #[derive(Default)]
 pub(super) struct BlockIdRepairResponsesStats {
+    /// Total # of received response packets
     pub total_packets: usize,
+
+    /// Response packets that were valid and processed
     pub processed: usize,
+
+    /// Dropped due to throttling responses
     pub dropped_packets: usize,
+
+    /// Invalid response (failed deserialization or nonce)
     pub invalid_packets: usize,
+
+    /// Ping challenges
     pub ping_responses: usize,
+
+    /// Responses to ParentAndFecSetCount requests
     pub parent_fec_set_count_responses: usize,
+    /// Responses to FecSetRoot requests
     pub fec_set_root_responses: usize,
 }
 
@@ -31,7 +43,9 @@ impl BlockIdRepairResponsesStats {
 
 #[derive(Default)]
 pub(super) struct BlockIdRepairRequestsStats {
+    /// Total requests we sent
     pub total_requests: usize,
+
     pub parent_fec_set_count_requests: usize,
     pub fec_set_root_requests: usize,
     pub shred_for_block_id_requests: usize,
