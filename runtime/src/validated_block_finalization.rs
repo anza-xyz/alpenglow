@@ -305,6 +305,7 @@ impl ValidatedBlockFinalizationCert {
         }
     }
 
+    /// Verifies the certificate, returning (stake present in certificate, total stake in validator set) on success.
     fn verify_certificate(
         bank: &Bank,
         cert: &Certificate,
