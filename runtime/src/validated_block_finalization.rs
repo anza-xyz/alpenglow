@@ -84,9 +84,8 @@ impl ValidatedBlockFinalizationCert {
         let validated =
             if let Some(notar_aggregate) = final_cert.notar_aggregate {
                 // Slow finalization
-                let notarize_cert_type =
-                    CertificateType::Notarize(final_cert.slot, final_cert.block_id);
-                let finalize_cert_type = CertificateType::Finalize(final_cert.slot);
+                let notarize_cert_type = CertificateType::Notarize(slot, block_id);
+                let finalize_cert_type = CertificateType::Finalize(slot);
 
                 let notarize_cert = Certificate {
                     cert_type: notarize_cert_type,
@@ -149,8 +148,7 @@ impl ValidatedBlockFinalizationCert {
                 })
             } else {
                 // Fast finalization
-                let fast_finalize_cert_type =
-                    CertificateType::FinalizeFast(final_cert.slot, final_cert.block_id);
+                let fast_finalize_cert_type = CertificateType::FinalizeFast(slot, block_id);
 
                 let fast_finalize_cert =
                     Certificate {
