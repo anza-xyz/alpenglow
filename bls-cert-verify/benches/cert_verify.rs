@@ -1,4 +1,4 @@
-use agave_bls_cert_verify::cert_verify::verify_cert_get_total_stake;
+use agave_bls_cert_verify::cert_verify::verify_certificate;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use solana_bls_signatures::{
     keypair::Keypair as BlsKeypair, pubkey::Pubkey as BlsPubkey,
@@ -107,13 +107,12 @@ fn bench_verify_cert(c: &mut Criterion) {
                 b.iter(|| {
                     // The rank_map closure simulates the Bank lookup.
                     // It adds stake (we use 1000 per validator) and returns the pubkey.
-                    let _stake =
-                        verify_cert_get_total_stake(&cert_base2, total_validators, |rank| {
-                            pubkeys_ref
-                                .get(rank)
-                                .map(|bls_pubkey| (TEST_STAKE, *bls_pubkey))
-                        })
-                        .unwrap();
+                    let _stake = verify_certificate(&cert_base2, total_validators, |rank| {
+                        pubkeys_ref
+                            .get(rank)
+                            .map(|bls_pubkey| (TEST_STAKE, *bls_pubkey))
+                    })
+                    .unwrap();
                 })
             },
         );
@@ -129,13 +128,12 @@ fn bench_verify_cert(c: &mut Criterion) {
             &size,
             |b, &total_validators| {
                 b.iter(|| {
-                    let _stake =
-                        verify_cert_get_total_stake(&cert_base3, total_validators, |rank| {
-                            pubkeys_ref
-                                .get(rank)
-                                .map(|bls_pubkey| (TEST_STAKE, *bls_pubkey))
-                        })
-                        .unwrap();
+                    let _stake = verify_certificate(&cert_base3, total_validators, |rank| {
+                        pubkeys_ref
+                            .get(rank)
+                            .map(|bls_pubkey| (TEST_STAKE, *bls_pubkey))
+                    })
+                    .unwrap();
                 })
             },
         );
