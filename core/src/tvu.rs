@@ -423,11 +423,11 @@ impl Tvu {
             );
             WindowService::new(
                 blockstore.clone(),
-                repair_socket.clone(),
+                repair_socket,
                 ancestor_hashes_socket,
                 block_id_repair_socket,
                 exit.clone(),
-                repair_info.clone(),
+                repair_info,
                 window_service_channels,
                 leader_schedule_cache.clone(),
                 outstanding_repair_requests,
@@ -599,10 +599,10 @@ impl Tvu {
         });
 
         let duplicate_shred_listener = DuplicateShredListener::new(
-            exit.clone(),
+            exit,
             cluster_info.clone(),
             DuplicateShredHandler::new(
-                blockstore.clone(),
+                blockstore,
                 leader_schedule_cache.clone(),
                 bank_forks.clone(),
                 duplicate_slots_sender,
