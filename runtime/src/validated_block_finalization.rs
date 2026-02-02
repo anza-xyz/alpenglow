@@ -39,17 +39,12 @@ pub enum BlockFinalizationCertError {
     },
 }
 
-/// A validated proof that a block has been finalized.
-///
-/// This type can only be constructed through validation methods, providing
-/// compile-time guarantees that the contained certificates are valid.
-///
 /// There are two ways a block can be finalized:
 /// - `Finalize`: Slow finalization with both a Finalize certificate and a Notarize certificate
 /// - `FastFinalize`: Fast finalization with a single FinalizeFast certificate
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum ValidatedBlockFinalizationCert {
+enum ValidatedBlockFinalizationCertKind {
     /// Slow finalization: requires both a Finalize cert and a Notarize cert for the same slot
     Finalize {
         /// The finalize certificate
@@ -60,6 +55,13 @@ pub enum ValidatedBlockFinalizationCert {
     /// Fast finalization: a single FastFinalize certificate
     FastFinalize(Certificate),
 }
+
+/// A validated proof that a block has been finalized.
+///
+/// This type can only be constructed through validation methods, providing
+/// compile-time guarantees that the contained certificates are valid.
+#[derive(Clone, Debug)]
+pub struct ValidatedBlockFinalizationCert(ValidatedBlockFinalizationCertKind);
 
 impl ValidatedBlockFinalizationCert {
     /// Creates a validated block finalization certificate from a footer's final certificate.
@@ -141,10 +143,10 @@ impl ValidatedBlockFinalizationCert {
                     });
                 }
 
-                Self::Finalize {
+                Self(ValidatedBlockFinalizationCertKind::Finalize {
                     finalize_cert,
                     notarize_cert,
-                }
+                })
             } else {
                 // Fast finalization
                 let fast_finalize_cert_type =
@@ -180,7 +182,9 @@ impl ValidatedBlockFinalizationCert {
                     });
                 }
 
-                Self::FastFinalize(fast_finalize_cert)
+                Self(ValidatedBlockFinalizationCertKind::FastFinalize(
+                    fast_finalize_cert,
+                ))
             };
 
         Ok(validated)
@@ -201,10 +205,10 @@ impl ValidatedBlockFinalizationCert {
             notarize_cert.cert_type.slot(),
             finalize_cert.cert_type.slot()
         );
-        Self::Finalize {
+        Self(ValidatedBlockFinalizationCertKind::Finalize {
             finalize_cert,
             notarize_cert,
-        }
+        })
     }
 
     /// Creates a validated fast finalization certificate from an already-validated certificate.
@@ -217,13 +221,13 @@ impl ValidatedBlockFinalizationCert {
     /// Using an unvalidated certificate will compromise the type's safety guarantees.
     pub fn from_validated_fast(cert: Certificate) -> Self {
         debug_assert!(cert.cert_type.is_fast_finalization());
-        Self::FastFinalize(cert)
+        Self(ValidatedBlockFinalizationCertKind::FastFinalize(cert))
     }
 
     /// Returns the slot that is finalized.
     pub fn slot(&self) -> Slot {
-        match self {
-            Self::Finalize {
+        match &self.0 {
+            ValidatedBlockFinalizationCertKind::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => {
@@ -233,18 +237,20 @@ impl ValidatedBlockFinalizationCert {
                 );
                 finalize_cert.cert_type.slot()
             }
-            Self::FastFinalize(certificate) => certificate.cert_type.slot(),
+            ValidatedBlockFinalizationCertKind::FastFinalize(certificate) => {
+                certificate.cert_type.slot()
+            }
         }
     }
 
     /// Returns the block that is finalized (slot, block_id).
     pub fn block(&self) -> (Slot, Hash) {
-        match self {
-            Self::Finalize { notarize_cert, .. } => notarize_cert
+        match &self.0 {
+            ValidatedBlockFinalizationCertKind::Finalize { notarize_cert, .. } => notarize_cert
                 .cert_type
                 .to_block()
                 .expect("notarize certificate has block"),
-            Self::FastFinalize(cert) => cert
+            ValidatedBlockFinalizationCertKind::FastFinalize(cert) => cert
                 .cert_type
                 .to_block()
                 .expect("fast finalize certificate has block"),
@@ -253,7 +259,7 @@ impl ValidatedBlockFinalizationCert {
 
     /// Returns true if this is a fast finalization.
     pub fn is_fast(&self) -> bool {
-        matches!(self, Self::FastFinalize(_))
+        matches!(self.0, ValidatedBlockFinalizationCertKind::FastFinalize(_))
     }
 
     /// Consumes self and returns the contained certificates.
@@ -261,19 +267,19 @@ impl ValidatedBlockFinalizationCert {
     /// For slow finalization, returns (finalize_cert, Some(notarize_cert)).
     /// For fast finalization, returns (fast_finalize_cert, None).
     pub fn into_certificates(self) -> (Certificate, Option<Certificate>) {
-        match self {
-            Self::Finalize {
+        match self.0 {
+            ValidatedBlockFinalizationCertKind::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => (finalize_cert, Some(notarize_cert)),
-            Self::FastFinalize(cert) => (cert, None),
+            ValidatedBlockFinalizationCertKind::FastFinalize(cert) => (cert, None),
         }
     }
 
     /// Converts this validated certificate into a [`FinalCertificate`] for inclusion in a block footer.
     pub fn to_final_certificate(&self) -> FinalCertificate {
-        match self {
-            Self::Finalize {
+        match &self.0 {
+            ValidatedBlockFinalizationCertKind::Finalize {
                 finalize_cert,
                 notarize_cert,
             } => {
@@ -290,7 +296,7 @@ impl ValidatedBlockFinalizationCert {
                     notar_aggregate: Some(VotesAggregate::from_certificate(notarize_cert)),
                 }
             }
-            Self::FastFinalize(cert) => {
+            ValidatedBlockFinalizationCertKind::FastFinalize(cert) => {
                 let (slot, block_id) = cert
                     .cert_type
                     .to_block()
