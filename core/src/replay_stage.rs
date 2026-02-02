@@ -289,7 +289,6 @@ pub struct ReplayStageConfig {
     pub banking_tracer: Arc<BankingTracer>,
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
-    pub migration_status: Arc<MigrationStatus>,
 }
 
 pub struct ReplaySenders {
@@ -602,7 +601,6 @@ impl ReplayStage {
             banking_tracer,
             snapshot_controller,
             replay_highest_frozen,
-            migration_status,
         } = config;
 
         let ReplaySenders {
@@ -640,6 +638,7 @@ impl ReplayStage {
         trace!("replay stage");
 
         // Start the replay stage loop
+        let migration_status = bank_forks.read().unwrap().migration_status();
         let mut identity_keypair = cluster_info.keypair().clone();
         let mut my_pubkey = identity_keypair.pubkey();
 
