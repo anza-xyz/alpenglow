@@ -144,7 +144,6 @@ fn get_pubkey(
     let mut pubkeys = Vec::with_capacity(max_validators);
     for rank in ranks.iter_ones() {
         let pubkey = rank_map(rank).ok_or(Error::MissingRank)?;
-        let pubkey = PubkeyProjective::try_from(pubkey)?;
         pubkeys.push(pubkey);
     }
     Ok(PubkeyProjective::par_aggregate(pubkeys.par_iter())?)
