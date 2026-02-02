@@ -966,7 +966,7 @@ impl Default for BankTestConfig {
 }
 
 /// Data returned from [`Bank::calculate_epoch_inflation_rewards()`].
-struct EpochInflationRewards {
+pub(crate) struct EpochInflationRewards {
     /// Amount of rewards a validator should get if it voted in every slot in
     /// the epoch and its stake is equal to the network capitalization i.e.
     /// the total supply.

@@ -1,5 +1,5 @@
 use {
-    crate::bank::{Bank, PrevEpochInflationRewards},
+    crate::bank::{Bank, EpochInflationRewards},
     solana_account::AccountSharedData,
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
@@ -62,13 +62,14 @@ impl VoteRewardAccountState {
         prev_epoch_capitalization: u64,
         additional_validator_rewards: u64,
     ) {
-        let PrevEpochInflationRewards {
-            validator_rewards,
-            prev_epoch_duration_in_years: _,
+        let EpochInflationRewards {
+            validator_rewards_lamports,
+            epoch_duration_in_years: _,
             validator_rate: _,
             foundation_rate: _,
-        } = bank.calculate_previous_epoch_inflation_rewards(prev_epoch_capitalization, prev_epoch);
-        let epoch_validator_rewards_lamports = validator_rewards + additional_validator_rewards;
+        } = bank.calculate_epoch_inflation_rewards(prev_epoch_capitalization, prev_epoch);
+        let epoch_validator_rewards_lamports =
+            validator_rewards_lamports + additional_validator_rewards;
         let state = Self {
             epoch_validator_rewards_lamports,
         };
