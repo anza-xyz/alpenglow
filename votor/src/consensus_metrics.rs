@@ -7,7 +7,7 @@ use {
     solana_pubkey::Pubkey,
     solana_votor_messages::vote::Vote,
     std::{
-        collections::{BTreeMap, HashSet},
+        collections::{BTreeMap, BTreeSet},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -151,7 +151,7 @@ pub struct ConsensusMetrics {
     epoch_metrics: BTreeMap<Epoch, EpochMetrics>,
 
     /// Epochs that have already been emitted (to prevent duplicate emissions).
-    emitted_epochs: HashSet<Epoch>,
+    emitted_epochs: BTreeSet<Epoch>,
 
     /// The highest finalized slot we've seen.
     highest_finalized_slot: Option<Slot>,
@@ -167,7 +167,7 @@ impl ConsensusMetrics {
     fn new(epoch_schedule: EpochSchedule, receiver: ConsensusMetricsEventReceiver) -> Self {
         Self {
             epoch_metrics: BTreeMap::default(),
-            emitted_epochs: HashSet::default(),
+            emitted_epochs: BTreeSet::default(),
             highest_finalized_slot: None,
             epoch_schedule,
             receiver,
@@ -290,25 +290,6 @@ impl ConsensusMetrics {
         self.maybe_emit_completed_epochs();
     }
 
-    /// Returns true if metrics for `epoch` should be emitted.
-    fn should_emit_epoch(
-        &self,
-        epoch: Epoch,
-        finalized_epoch: Epoch,
-        highest_finalized: Slot,
-    ) -> bool {
-        if self.emitted_epochs.contains(&epoch) {
-            return false;
-        }
-        // Emit if finalized slot is in a later epoch
-        if finalized_epoch > epoch {
-            return true;
-        }
-        // Emit if the last slot in epoch is finalized
-        let last_slot = self.epoch_schedule.get_last_slot_in_epoch(epoch);
-        highest_finalized >= last_slot
-    }
-
     /// Checks if any epochs are ready to be emitted and emits them.
     fn maybe_emit_completed_epochs(&mut self) {
         let Some(highest_finalized) = self.highest_finalized_slot else {
@@ -316,27 +297,18 @@ impl ConsensusMetrics {
         };
         let finalized_epoch = self.epoch_schedule.get_epoch(highest_finalized);
 
-        let epochs_to_emit: Vec<Epoch> = self
-            .epoch_metrics
-            .keys()
-            .filter(|&&epoch| self.should_emit_epoch(epoch, finalized_epoch, highest_finalized))
-            .copied()
-            .collect();
-
-        for epoch in epochs_to_emit {
-            self.emit_epoch_metrics(epoch);
-            self.emitted_epochs.insert(epoch);
+        for (&epoch, epoch_metrics) in &self.epoch_metrics {
+            if !self.emitted_epochs.contains(&epoch) && finalized_epoch > epoch {
+                Self::emit_epoch_metrics(epoch, epoch_metrics);
+                self.emitted_epochs.insert(epoch);
+            }
         }
 
         self.cleanup_old_epochs(finalized_epoch);
     }
 
     /// Emits metrics for the given epoch.
-    fn emit_epoch_metrics(&self, epoch: Epoch) {
-        let Some(epoch_metrics) = self.epoch_metrics.get(&epoch) else {
-            return;
-        };
-
+    fn emit_epoch_metrics(epoch: Epoch, epoch_metrics: &EpochMetrics) {
         for (addr, metrics) in &epoch_metrics.node_metrics {
             let addr = addr.to_string();
             datapoint_info!("consensus_vote_metrics",
@@ -400,8 +372,8 @@ impl ConsensusMetrics {
     /// Cleans up old epoch data to prevent unbounded memory growth.
     fn cleanup_old_epochs(&mut self, finalized_epoch: Epoch) {
         let cutoff_epoch = finalized_epoch.saturating_sub(EPOCHS_TO_RETAIN);
-        self.epoch_metrics.retain(|&epoch, _| epoch >= cutoff_epoch);
-        self.emitted_epochs.retain(|&epoch| epoch >= cutoff_epoch);
+        self.epoch_metrics = self.epoch_metrics.split_off(&cutoff_epoch);
+        self.emitted_epochs = self.emitted_epochs.split_off(&cutoff_epoch);
     }
 }
 
@@ -471,12 +443,14 @@ mod tests {
     }
 
     #[test]
-    fn test_emit_on_last_slot() {
+    fn test_no_emit_on_last_slot_of_same_epoch() {
         let mut metrics = new_metrics();
 
         metrics.record_start_of_slot(50, Instant::now());
         metrics.handle_slot_finalized(99);
+        assert!(!metrics.emitted_epochs.contains(&0));
 
+        metrics.handle_slot_finalized(100);
         assert!(metrics.emitted_epochs.contains(&0));
     }
 
