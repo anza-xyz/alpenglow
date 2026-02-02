@@ -64,7 +64,7 @@ use {
     },
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,
-    solana_vote::vote_account::VoteAccountsHashMap,
+    solana_vote::{vote_account::VoteAccountsHashMap, vote_parser::is_valid_vote_only_transaction},
     solana_votor_messages::migration::MigrationStatus,
     std::{
         borrow::Cow,
@@ -1752,12 +1752,18 @@ fn confirm_slot_entries(
         .into_iter()
         .zip(entry_tx_starting_indexes)
         .map(|(entry, tx_starting_index)| {
+            if !is_vote_only_bank {
+                return Ok(ReplayEntry {
+                    entry,
+                    starting_index: tx_starting_index,
+                });
+            }
+
             // If bank is in vote-only mode, validate that entries contain only vote transactions
             if let EntryType::Transactions(ref transactions) = entry {
-                if is_vote_only_bank
-                    && transactions
-                        .iter()
-                        .any(|tx| !tx.is_simple_vote_transaction())
+                if transactions
+                    .iter()
+                    .any(|tx| !is_valid_vote_only_transaction(tx))
                 {
                     return Err(BlockstoreProcessorError::UserTransactionsInVoteOnlyBank(
                         bank.slot(),

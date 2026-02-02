@@ -73,6 +73,9 @@ pub enum PohRecorderError {
 
     #[error("producing reward certs failed with {0}")]
     BuildRewardCerts(#[from] BuildRewardCertsRespError),
+
+    #[error("couldn't reschedule pre-UpdateParent transactions")]
+    RescheduleTransactionsError(Slot),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, PohRecorderError>;

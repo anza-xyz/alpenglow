@@ -29,7 +29,7 @@ use {
             verify_net_stats_access, SystemMonitorService, SystemMonitorStatsReportConfig,
         },
         tpu::{ForwardingClientOption, Tpu, TpuSockets},
-        tvu::{Tvu, TvuConfig, TvuSockets},
+        tvu::{AlpenglowInitializationState, Tvu, TvuConfig, TvuSockets},
     },
     anyhow::{anyhow, Context, Result},
     crossbeam_channel::{bounded, unbounded, Receiver},
@@ -758,7 +758,7 @@ impl Validator {
         timer.stop();
         info!("Cleaning orphaned account snapshot directories done. {timer}");
 
-        // token used to cancel tpu-client-next and streamer.
+        // token used to cancel tpu-client-next, streamer and BLS streamer.
         let cancel = CancellationToken::new();
         {
             let exit = exit.clone();
@@ -1158,7 +1158,7 @@ impl Validator {
             ))
         };
 
-        let alpenglow_connection_cache = Arc::new(ConnectionCache::new_with_client_options(
+        let bls_connection_cache = Arc::new(ConnectionCache::new_with_client_options(
             "connection_cache_alpenglow_quic",
             tpu_connection_pool_size,
             Some(node.sockets.quic_alpenglow_client),
@@ -1173,6 +1173,12 @@ impl Validator {
             )),
             Some((&staked_nodes, &identity_keypair.pubkey())),
         ));
+        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
+        key_notifiers.write().unwrap().add(
+            KeyUpdaterType::BlsConnectionCache,
+            bls_connection_cache.clone(),
+        );
+
         // test-validator crate may start the validator in a tokio runtime
         // context which forces us to use the same runtime because a nested
         // runtime will cause panic at drop. Outside test-validator crate, we
@@ -1446,6 +1452,10 @@ impl Validator {
         let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
             Arc::new(RwLock::new(None));
 
+        // Clone the non-vote sender for block creation loop (used for re-injecting transactions
+        // after sad leader handover)
+        let banking_stage_sender_for_bcl = banking_tracer_channels.non_vote_sender.clone();
+
         let block_creation_loop_config = BlockCreationLoopConfig {
             exit: exit.clone(),
             bank_forks: bank_forks.clone(),
@@ -1464,6 +1474,7 @@ impl Validator {
             build_reward_certs_sender,
             reward_certs_receiver,
             highest_finalized: highest_finalized.clone(),
+            banking_stage_sender: banking_stage_sender_for_bcl,
         };
         let block_creation_loop = BlockCreationLoop::new(block_creation_loop_config);
 
@@ -1640,7 +1651,7 @@ impl Validator {
             } else {
                 (None, None)
             };
-        let key_notifiers = Arc::new(RwLock::new(KeyUpdaters::default()));
+
         let tvu = Tvu::new(
             vote_account,
             authorized_voter_keypairs,
@@ -1709,22 +1720,23 @@ impl Validator {
             wen_restart_repair_slots.clone(),
             slot_status_notifier.clone(),
             vote_connection_cache,
-            alpenglow_connection_cache,
-            replay_highest_frozen.clone(),
-            leader_window_info_sender.clone(),
-            highest_parent_ready.clone(),
-            config.voting_service_test_override.clone(),
-            votor_event_sender.clone(),
-            votor_event_receiver,
-            optimistic_parent_sender,
-            alpenglow_quic_server_config,
-            staked_nodes.clone(),
-            key_notifiers.clone(),
-            alpenglow_last_voted.clone(),
-            migration_status.clone(),
-            reward_certs_sender,
-            build_reward_certs_receiver,
-            highest_finalized,
+            AlpenglowInitializationState {
+                leader_window_info_sender: leader_window_info_sender.clone(),
+                replay_highest_frozen: replay_highest_frozen.clone(),
+                highest_parent_ready: highest_parent_ready.clone(),
+                votor_event_sender: votor_event_sender.clone(),
+                votor_event_receiver,
+                staked_nodes: staked_nodes.clone(),
+                key_notifiers: key_notifiers.clone(),
+                alpenglow_quic_server_config,
+                bls_connection_cache,
+                voting_service_test_override: config.voting_service_test_override.clone(),
+                alpenglow_last_voted: alpenglow_last_voted.clone(),
+                reward_certs_sender,
+                build_reward_certs_receiver,
+                highest_finalized,
+                optimistic_parent_sender,
+            },
         )
         .map_err(ValidatorError::Other)?;
 

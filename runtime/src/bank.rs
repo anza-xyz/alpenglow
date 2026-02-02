@@ -216,7 +216,9 @@ pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
 
-const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
+/// This will be guaranteed through the VAT rules,
+/// only the top 2000 validators by stake will be present in vote account structures.
+pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
 
 // Minimum balance for an identity account to be considered for Alpenglow VAT.
 #[cfg(not(feature = "dev-context-only-utils"))]
@@ -963,11 +965,17 @@ impl Default for BankTestConfig {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct PrevEpochInflationRewards {
-    pub(crate) validator_rewards: u64,
-    pub(crate) prev_epoch_duration_in_years: f64,
+/// Data returned from [`Bank::calculate_epoch_inflation_rewards()`].
+struct EpochInflationRewards {
+    /// Amount of rewards a validator should get if it voted in every slot in
+    /// the epoch and its stake is equal to the network capitalization i.e.
+    /// the total supply.
+    pub(crate) validator_rewards_lamports: u64,
+    /// How long a single epoch lasts in years.
+    pub(crate) epoch_duration_in_years: f64,
+    /// The current inflation rate for the validators.
     pub(crate) validator_rate: f64,
+    /// The current inflation rate for the foundation.
     pub(crate) foundation_rate: f64,
 }
 
@@ -2413,11 +2421,12 @@ impl Bank {
         num_slots as f64 / self.slots_per_year
     }
 
-    pub(crate) fn calculate_previous_epoch_inflation_rewards(
+    /// For a given [`capitalization`] (total_supply in lamports) and [`epoch`], calculates various inflation related info.
+    pub(crate) fn calculate_epoch_inflation_rewards(
         &self,
-        prev_epoch_capitalization: u64,
-        prev_epoch: Epoch,
-    ) -> PrevEpochInflationRewards {
+        capitalization: u64,
+        epoch: Epoch,
+    ) -> EpochInflationRewards {
         let slot_in_year = self.slot_in_year_for_inflation();
         let (validator_rate, foundation_rate) = {
             let inflation = self.inflation.read().unwrap();
@@ -2427,14 +2436,13 @@ impl Bank {
             )
         };
 
-        let prev_epoch_duration_in_years = self.epoch_duration_in_years(prev_epoch);
-        let validator_rewards = (validator_rate
-            * prev_epoch_capitalization as f64
-            * prev_epoch_duration_in_years) as u64;
+        let epoch_duration_in_years = self.epoch_duration_in_years(epoch);
+        let validator_rewards_lamports =
+            (validator_rate * capitalization as f64 * epoch_duration_in_years) as u64;
 
-        PrevEpochInflationRewards {
-            validator_rewards,
-            prev_epoch_duration_in_years,
+        EpochInflationRewards {
+            validator_rewards_lamports,
+            epoch_duration_in_years,
             validator_rate,
             foundation_rate,
         }

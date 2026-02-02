@@ -16,11 +16,12 @@ frozen-abi = [
     "dep:solana-frozen-abi-macro",
     "solana-hash/frozen-abi",
 ]
-dev-context-only-utils = []
+dev-context-only-utils = ["dep:bincode", "dep:solana-keypair"]
 
 [dependencies]
 agave-feature-set = { workspace = true }
 agave-logger = { workspace = true }
+bincode = { workspace = true, optional = true }
 bitvec = { workspace = true }
 bytemuck = { workspace = true }
 log = { workspace = true }
@@ -39,6 +40,7 @@ solana-frozen-abi-macro = { workspace = true, optional = true, features = [
     "frozen-abi",
 ] }
 solana-hash = { workspace = true }
+solana-keypair = { workspace = true, optional = true }
 solana-program = { workspace = true }
 solana-signer-store = { workspace = true }
 solana-vote-interface = { workspace = true }

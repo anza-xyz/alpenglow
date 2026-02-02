@@ -158,7 +158,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
         &validator_pubkey,
         &voting_keypairs[0].borrow().vote_keypair.pubkey(),
         &voting_keypairs[0].borrow().stake_keypair.pubkey(),
-        Some(&voting_keypairs[0].borrow().bls_keypair.public),
+        Some(&voting_keypairs[0].borrow().bls_keypair.public.into()),
         stakes[0],
         VALIDATOR_LAMPORTS,
         FeeRateGovernor::new(0, 0), // most tests can't handle transaction fees
@@ -188,7 +188,7 @@ pub fn create_genesis_config_with_vote_accounts_and_cluster_type(
                 &node_pubkey,
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_to_compressed_bytes(&bls_pubkey)),
+                Some(bls_pubkey.to_bytes_compressed()),
                 0,
                 *stake,
             )
@@ -285,7 +285,7 @@ pub fn create_genesis_config_with_leader_with_mint_keypair(
 
     let bls_keypair =
         BLSKeypair::derive_from_signer(&voting_keypair, BLS_KEYPAIR_DERIVE_SEED).unwrap();
-    let bls_pubkey: BLSPubkey = bls_keypair.public;
+    let bls_pubkey: BLSPubkey = bls_keypair.public.into();
     let genesis_config = create_genesis_config_with_leader_ex(
         mint_lamports,
         &mint_keypair.pubkey(),

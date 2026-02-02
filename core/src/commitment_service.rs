@@ -81,7 +81,9 @@ impl AggregateCommitmentService {
             Sender<TowerCommitmentAggregationData>,
             Receiver<TowerCommitmentAggregationData>,
         ) = unbounded();
-        // This channel should not grow unbounded, cap at 1000 messages for now
+        // This channel should not grow unbounded, we expect at most 2 events per slot (`Notarize` and `Finalize`)
+        // Although unlikely, we could send out a lot of `Notarize` votes during catchup, overprovision at 1000 to account
+        // for any such weirdness.
         let (ag_sender, ag_receiver): (
             Sender<AlpenglowCommitmentAggregationData>,
             Receiver<AlpenglowCommitmentAggregationData>,
@@ -186,9 +188,12 @@ impl AggregateCommitmentService {
 
         match update_type {
             AlpenglowCommitmentType::Notarize => {
+                // Notarize (our first round vote in favor of a block) satisfies the Processed commitment level
                 w_block_commitment_cache.set_slot(slot);
             }
             AlpenglowCommitmentType::Finalized => {
+                // There is no distinction of OC, root, or finalized in Alpengow commitment.
+                // When receiving a finalilzation certificate we set all of these values.
                 w_block_commitment_cache.set_highest_confirmed_slot(slot);
                 w_block_commitment_cache.set_root(slot);
                 w_block_commitment_cache.set_highest_super_majority_root(slot);

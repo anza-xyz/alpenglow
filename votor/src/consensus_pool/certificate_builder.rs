@@ -520,7 +520,7 @@ mod tests {
             aggregate_pubkey.verify_signature(&cert.signature, &serialized_vote);
 
         assert!(
-            verification_result.unwrap_or(false),
+            verification_result.is_ok(),
             "BLS aggregate signature verification failed for base2 encoded certificate"
         );
     }

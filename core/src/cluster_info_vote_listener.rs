@@ -373,7 +373,7 @@ impl ClusterInfoVoteListener {
                 Ok(confirmed_slots) => {
                     let confirmed_slots = confirmed_slots
                         .into_iter()
-                        .filter(|(slot, _)| {
+                        .filter(|(slot, _hash)| {
                             migration_status.should_report_commitment_or_root(*slot)
                         })
                         .collect();

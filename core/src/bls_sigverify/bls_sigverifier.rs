@@ -398,7 +398,7 @@ impl BLSSigVerifier {
                     let payload_slice = distinct_payloads[0].as_slice();
                     aggregate_pubkeys[0]
                         .verify_signature(&aggregate_signature, payload_slice)
-                        .unwrap_or(false)
+                        .is_ok()
                 } else {
                     let payload_slices: Vec<&[u8]> =
                         distinct_payloads.iter().map(|p| p.as_slice()).collect();
@@ -408,10 +408,10 @@ impl BLSSigVerifier {
 
                     SignatureProjective::par_verify_distinct_aggregated(
                         &aggregate_pubkeys_affine,
-                        &aggregate_signature.into(),
+                        &aggregate_signature,
                         &payload_slices,
                     )
-                    .unwrap_or(false)
+                    .is_ok()
                 }
             } else {
                 false
@@ -441,7 +441,7 @@ impl BLSSigVerifier {
                 if vote_to_verify
                     .bls_pubkey
                     .verify_signature(&vote_to_verify.vote_message.signature, payload.as_slice())
-                    .unwrap_or(false)
+                    .is_ok()
                 {
                     true
                 } else {

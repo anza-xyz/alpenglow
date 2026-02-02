@@ -531,7 +531,6 @@ fn refresh_vote_accounts(
 pub(crate) mod tests {
     use {
         super::*,
-        crate::genesis_utils::bls_pubkey_to_compressed_bytes,
         rayon::ThreadPoolBuilder,
         solana_account::WritableAccount,
         solana_bls_signatures::keypair::Keypair as BLSKeypair,
@@ -556,7 +555,7 @@ pub(crate) mod tests {
                 &solana_pubkey::new_rand(),
                 &vote_pubkey,
                 &vote_pubkey,
-                Some(bls_pubkey_to_compressed_bytes(&bls_keypair.public)),
+                Some(bls_keypair.public.to_bytes_compressed()),
                 0,
                 1,
             )

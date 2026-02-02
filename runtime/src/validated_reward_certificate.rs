@@ -149,7 +149,7 @@ mod tests {
         },
         bitvec::vec::BitVec,
         solana_bls_signatures::{
-            Keypair as BlsKeypair, Signature as BLSSignature,
+            Keypair as BlsKeypair, Pubkey as BLSPubkey, Signature as BLSSignature,
             SignatureCompressed as BlsSignatureCompressed, SignatureProjective,
         },
         solana_hash::Hash,
@@ -197,7 +197,7 @@ mod tests {
             .collect::<Vec<_>>();
         let keypair_map = validator_keypairs
             .iter()
-            .map(|k| (k.bls_keypair.public, k.bls_keypair.clone()))
+            .map(|k| (BLSPubkey::from(k.bls_keypair.public), k.bls_keypair.clone()))
             .collect::<HashMap<_, _>>();
         let genesis = create_genesis_config_with_alpenglow_vote_accounts(
             1_000_000_000,

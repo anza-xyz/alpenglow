@@ -2,7 +2,7 @@ use {
     bitvec::vec::BitVec,
     rayon::iter::IntoParallelRefIterator,
     solana_bls_signatures::{
-        pubkey::Pubkey as BlsPubkey, signature::AsSignature, BlsError, PubkeyProjective,
+        pubkey::Pubkey as BlsPubkey, signature::AsSignatureAffine, BlsError, PubkeyProjective,
         Signature as BlsSignature, SignatureProjective, VerifiablePubkey,
     },
     solana_signer_store::{decode, DecodeError, Decoded},
@@ -93,7 +93,7 @@ pub fn verify_cert_get_total_stake(
 /// Verifies the [`signature`] of the [`payload`] which is signed by at most [`max_validators`] validators in the base2 encoded [`ranks`] using the [`rank_map`] to lookup the [`BlsPubkey`].
 ///
 /// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
-pub fn verify_base2<S: AsSignature>(
+pub fn verify_base2<S: AsSignatureAffine>(
     payload: &[u8],
     signature: &S,
     ranks: &[u8],
@@ -112,11 +112,8 @@ pub fn verify_base2<S: AsSignature>(
         get_pubkey(&ranks, rank_map, max_validators)?
     };
 
-    if pk.verify_signature(signature, payload)? {
-        Ok(())
-    } else {
-        Err(Error::VerifySigFalse)
-    }
+    pk.verify_signature(signature, payload)
+        .map_err(|_| Error::VerifySigFalse)
 }
 
 /// Add assertions to ensure that the rank_map is only accessed for ranks that are actually set.
@@ -170,11 +167,8 @@ fn verify_base3(
             } else {
                 get_pubkey(&ranks, rank_map, max_validators)?
             };
-            if pk.verify_signature(signature, payload)? {
-                Ok(())
-            } else {
-                Err(Error::VerifySigFalse)
-            }
+            pk.verify_signature(signature, payload)
+                .map_err(|_| Error::VerifySigFalse)
         }
         Decoded::Base3(ranks, fallback_ranks) => {
             let pubkeys = if cfg!(debug_assertions) {
@@ -183,31 +177,25 @@ fn verify_base3(
                         &ranks,
                         checked_rank_map(&mut rank_map, &ranks),
                         max_validators,
-                    )?
-                    .into(),
+                    )?,
                     get_pubkey(
                         &fallback_ranks,
                         checked_rank_map(rank_map, &fallback_ranks),
                         max_validators,
-                    )?
-                    .into(),
+                    )?,
                 ]
             } else {
                 [
-                    get_pubkey(&ranks, &mut rank_map, max_validators)?.into(),
-                    get_pubkey(&fallback_ranks, rank_map, max_validators)?.into(),
+                    get_pubkey(&ranks, &mut rank_map, max_validators)?,
+                    get_pubkey(&fallback_ranks, rank_map, max_validators)?,
                 ]
             };
-            let verified = SignatureProjective::par_verify_distinct_aggregated(
+            SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
                 signature,
                 &[payload, fallback_payload],
-            )?;
-            if verified {
-                Ok(())
-            } else {
-                Err(Error::VerifySigFalse)
-            }
+            )
+            .map_err(|_| Error::VerifySigFalse)
         }
     }
 }
@@ -276,7 +264,7 @@ mod test {
         );
         assert_eq!(
             verify_cert_get_total_stake(&cert, 10, |rank| {
-                bls_keypairs.get(rank).map(|kp| (100, kp.public))
+                bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap(),
             600
@@ -309,7 +297,7 @@ mod test {
         let cert = builder.build().expect("Failed to build certificate");
         assert_eq!(
             verify_cert_get_total_stake(&cert, 10, |rank| {
-                bls_keypairs.get(rank).map(|kp| (100, kp.public))
+                bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap(),
             700
@@ -338,7 +326,7 @@ mod test {
         };
         assert_eq!(
             verify_cert_get_total_stake(&cert, 10, |rank| {
-                bls_keypairs.get(rank).map(|kp| (100, kp.public))
+                bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap_err(),
             Error::VerifySigFalse

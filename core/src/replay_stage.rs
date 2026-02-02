@@ -8,7 +8,7 @@ use {
             DuplicateConfirmedSlotsReceiver, GossipVerifiedVoteHashReceiver, VoteTracker,
         },
         cluster_slots_service::{cluster_slots::ClusterSlots, ClusterSlotsUpdateSender},
-        commitment_service::{AggregateCommitmentService, TowerCommitmentAggregationData},
+        commitment_service::TowerCommitmentAggregationData,
         consensus::{
             fork_choice::{select_vote_and_reset_forks, ForkChoice, SelectVoteAndResetForkResult},
             heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
@@ -87,21 +87,15 @@ use {
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        consensus_metrics::{ConsensusMetricsEventReceiver, ConsensusMetricsEventSender},
-        event::{
-            CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventReceiver, VotorEventSender,
-        },
+        event::{CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventSender},
         root_utils,
-        vote_history::VoteHistory,
-        vote_history_storage::{SavedVoteHistory, VoteHistoryStorage},
+        vote_history_storage::SavedVoteHistory,
         voting_service::BLSOp,
         voting_utils::{self, GenerateVoteTxResult},
-        votor::{Votor, VotorConfig},
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, HighestFinalizedSlotCert},
+        consensus_message::ConsensusMessage,
         migration::{MigrationStatus, GENESIS_VOTE_REFRESH},
-        reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
         vote::Vote,
     },
     std::{
@@ -288,8 +282,6 @@ pub struct ReplayStageConfig {
     pub poh_recorder: Arc<RwLock<PohRecorder>>,
     pub poh_controller: PohController,
     pub tower: Tower,
-    pub vote_history: VoteHistory,
-    pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     pub vote_tracker: Arc<VoteTracker>,
     pub cluster_slots: Arc<ClusterSlots>,
     pub log_messages_bytes_limit: Option<usize>,
@@ -297,15 +289,7 @@ pub struct ReplayStageConfig {
     pub banking_tracer: Arc<BankingTracer>,
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
-    pub leader_window_info_sender: Sender<LeaderWindowInfo>,
-    pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
-    pub consensus_metrics_sender: ConsensusMetricsEventSender,
-    pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     pub migration_status: Arc<MigrationStatus>,
-    pub reward_votes_receiver: Receiver<AddVoteMessage>,
-    pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
-    pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
-    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
 }
 
 pub struct ReplaySenders {
@@ -327,6 +311,7 @@ pub struct ReplaySenders {
     pub votor_event_sender: VotorEventSender,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
+    pub lockouts_sender: Sender<TowerCommitmentAggregationData>,
 }
 
 pub struct ReplayReceivers {
@@ -337,8 +322,6 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
-    pub consensus_message_receiver: Receiver<ConsensusMessage>,
-    pub votor_event_receiver: VotorEventReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -395,6 +378,7 @@ impl ReplayLoopTiming {
         process_duplicate_slots_elapsed_us: u64,
         repair_correct_slots_elapsed_us: u64,
         retransmit_not_propagated_elapsed_us: u64,
+        start_leader_time_us: u64,
     ) {
         self.collect_frozen_banks_elapsed_us += collect_frozen_banks_elapsed_us;
         self.compute_bank_stats_elapsed_us += compute_bank_stats_elapsed_us;
@@ -415,19 +399,18 @@ impl ReplayLoopTiming {
         self.process_duplicate_slots_elapsed_us += process_duplicate_slots_elapsed_us;
         self.repair_correct_slots_elapsed_us += repair_correct_slots_elapsed_us;
         self.retransmit_not_propagated_elapsed_us += retransmit_not_propagated_elapsed_us;
+        self.start_leader_elapsed_us += start_leader_time_us;
     }
 
     fn update_common(
         &mut self,
         generate_new_bank_forks_elapsed_us: u64,
         replay_active_banks_elapsed_us: u64,
-        start_leader_elapsed_us: u64,
         wait_receive_elapsed_us: u64,
     ) {
         self.loop_count += 1;
         self.generate_new_bank_forks_elapsed_us += generate_new_bank_forks_elapsed_us;
         self.replay_active_banks_elapsed_us += replay_active_banks_elapsed_us;
-        self.start_leader_elapsed_us += start_leader_elapsed_us;
         self.wait_receive_elapsed_us += wait_receive_elapsed_us;
 
         self.maybe_submit();
@@ -587,8 +570,6 @@ impl ReplayLoopTiming {
 
 pub struct ReplayStage {
     t_replay: JoinHandle<()>,
-    votor: Votor,
-    commitment_service: AggregateCommitmentService,
 }
 
 impl ReplayStage {
@@ -614,8 +595,6 @@ impl ReplayStage {
             poh_recorder,
             mut poh_controller,
             mut tower,
-            vote_history,
-            vote_history_storage,
             vote_tracker,
             cluster_slots,
             log_messages_bytes_limit,
@@ -623,15 +602,7 @@ impl ReplayStage {
             banking_tracer,
             snapshot_controller,
             replay_highest_frozen,
-            leader_window_info_sender,
-            highest_parent_ready,
-            consensus_metrics_sender,
-            consensus_metrics_receiver,
             migration_status,
-            reward_votes_receiver,
-            build_reward_certs_receiver,
-            reward_certs_sender,
-            highest_finalized,
         } = config;
 
         let ReplaySenders {
@@ -653,6 +624,7 @@ impl ReplayStage {
             votor_event_sender,
             own_vote_sender,
             optimistic_parent_sender,
+            lockouts_sender,
         } = senders;
 
         let ReplayReceivers {
@@ -663,8 +635,6 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
-            consensus_message_receiver,
-            votor_event_receiver,
         } = receivers;
 
         trace!("replay stage");
@@ -672,47 +642,6 @@ impl ReplayStage {
         // Start the replay stage loop
         let mut identity_keypair = cluster_info.keypair().clone();
         let mut my_pubkey = identity_keypair.pubkey();
-        let (lockouts_sender, commitment_sender, commitment_service) =
-            AggregateCommitmentService::new(
-                exit.clone(),
-                block_commitment_cache.clone(),
-                rpc_subscriptions.clone(),
-            );
-
-        // Alpenglow specific objects
-        let votor_config = VotorConfig {
-            exit: exit.clone(),
-            vote_account,
-            wait_to_vote_slot,
-            wait_for_vote_to_start_leader,
-            vote_history,
-            vote_history_storage,
-            authorized_voter_keypairs: authorized_voter_keypairs.clone(),
-            blockstore: blockstore.clone(),
-            bank_forks: bank_forks.clone(),
-            cluster_info: cluster_info.clone(),
-            leader_schedule_cache: leader_schedule_cache.clone(),
-            rpc_subscriptions: rpc_subscriptions.clone(),
-            snapshot_controller: snapshot_controller.clone(),
-            bls_sender: bls_sender.clone(),
-            commitment_sender: commitment_sender.clone(),
-            drop_bank_sender: drop_bank_sender.clone(),
-            bank_notification_sender: bank_notification_sender.clone(),
-            leader_window_info_sender,
-            highest_parent_ready,
-            event_sender: votor_event_sender.clone(),
-            event_receiver: votor_event_receiver.clone(),
-            own_vote_sender: own_vote_sender.clone(),
-            consensus_message_receiver,
-            consensus_metrics_sender,
-            consensus_metrics_receiver,
-            migration_status: migration_status.clone(),
-            reward_votes_receiver,
-            build_reward_certs_receiver,
-            reward_certs_sender,
-            highest_finalized,
-        };
-        let votor = Votor::new(votor_config);
 
         let mut highest_frozen_slot = bank_forks
             .read()
@@ -949,10 +878,7 @@ impl ReplayStage {
                 }
 
                 let forks_root = bank_forks.read().unwrap().root();
-                let start_leader_time = if !migration_status.is_alpenglow_enabled() {
-                    // Will address this in https://github.com/anza-xyz/alpenglow/issues/619
-                    debug_assert!(!votor_event_receiver.is_full());
-
+                if !migration_status.is_alpenglow_enabled() {
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
@@ -1324,6 +1250,7 @@ impl ReplayStage {
                     }
                     reset_bank_time.stop();
 
+                    let mut start_leader_time = Measure::start("start_leader_time");
                     let mut dump_then_repair_correct_slots_time =
                         Measure::start("dump_then_repair_correct_slots_time");
                     // Used for correctness check
@@ -1361,26 +1288,6 @@ impl ReplayStage {
                     // may add a bank that will not included in either of these maps.
                     drop(ancestors);
                     drop(descendants);
-                    replay_timing.update_non_alpenglow(
-                        collect_frozen_banks_time.as_us(),
-                        compute_bank_stats_time.as_us(),
-                        select_vote_and_reset_forks_time.as_us(),
-                        reset_bank_time.as_us(),
-                        voting_time.as_us(),
-                        select_forks_time.as_us(),
-                        compute_slot_stats_time.as_us(),
-                        heaviest_fork_failures_time.as_us(),
-                        u64::from(did_complete_bank),
-                        process_ancestor_hashes_duplicate_slots_time.as_us(),
-                        process_duplicate_confirmed_slots_time.as_us(),
-                        process_unfrozen_gossip_verified_vote_hashes_time.as_us(),
-                        process_popular_pruned_forks_time.as_us(),
-                        process_duplicate_slots_time.as_us(),
-                        dump_then_repair_correct_slots_time.as_us(),
-                        retransmit_not_propagated_time.as_us(),
-                    );
-
-                    let mut start_leader_time = Measure::start("start_leader_time");
                     if !tpu_has_bank && !poh_controller.has_pending_message() {
                         if let Some(poh_slot) = Self::maybe_start_leader(
                             &my_pubkey,
@@ -1406,12 +1313,29 @@ impl ReplayStage {
                         }
                     }
                     start_leader_time.stop();
-                    start_leader_time
-                } else {
-                    let mut start_leader_time = Measure::start("start_leader_time");
-                    start_leader_time.stop();
-                    start_leader_time
-                };
+
+                    replay_timing.update_non_alpenglow(
+                        collect_frozen_banks_time.as_us(),
+                        compute_bank_stats_time.as_us(),
+                        select_vote_and_reset_forks_time.as_us(),
+                        reset_bank_time.as_us(),
+                        voting_time.as_us(),
+                        select_forks_time.as_us(),
+                        compute_slot_stats_time.as_us(),
+                        heaviest_fork_failures_time.as_us(),
+                        u64::try_from(new_frozen_slots.len()).expect(
+                            "something is very wrong, froze more than u64::MAX banks at once",
+                        ),
+                        process_ancestor_hashes_duplicate_slots_time.as_us(),
+                        process_duplicate_confirmed_slots_time.as_us(),
+                        process_unfrozen_gossip_verified_vote_hashes_time.as_us(),
+                        process_popular_pruned_forks_time.as_us(),
+                        process_duplicate_slots_time.as_us(),
+                        dump_then_repair_correct_slots_time.as_us(),
+                        retransmit_not_propagated_time.as_us(),
+                        start_leader_time.as_us(),
+                    );
+                }
 
                 let mut wait_receive_time = Measure::start("wait_receive_time");
                 if !did_complete_bank {
@@ -1429,7 +1353,6 @@ impl ReplayStage {
                 replay_timing.update_common(
                     generate_new_bank_forks_time.as_us(),
                     replay_active_banks_time.as_us(),
-                    start_leader_time.as_us(),
                     wait_receive_time.as_us(),
                 );
             }
@@ -1439,11 +1362,7 @@ impl ReplayStage {
             .spawn(run_replay)
             .unwrap();
 
-        Ok(Self {
-            t_replay,
-            votor,
-            commitment_service,
-        })
+        Ok(Self { t_replay })
     }
 
     /// Enables alpenglow
@@ -1472,9 +1391,9 @@ impl ReplayStage {
         let genesis_block @ (genesis_slot, block_id) = migration_status
             .genesis_block()
             .expect("Must be ready to enable");
-        warn!(
-            "{my_pubkey}: Alpenglow genesis vote has succeeded enabling alpenglow. Genesis block \
-             {genesis_block:?}"
+        info!(
+            "{my_pubkey} Alpenglow migration: Alpenglow genesis vote has succeeded enabling \
+             alpenglow. Genesis block {genesis_block:?}"
         );
 
         let genesis_bank = bank_forks.read().unwrap().get(genesis_slot).expect(
@@ -1513,7 +1432,7 @@ impl ReplayStage {
             .filter_map(|(slot, _)| (*slot > genesis_slot).then_some(*slot))
             .collect();
         for slot in slots_to_purge.into_iter() {
-            warn!("{my_pubkey}: Purging poh block in slot {slot}");
+            info!("{my_pubkey} Alpenglow migration: Purging poh block in slot {slot}");
             Self::purge_unconfirmed_slot(
                 slot,
                 ancestors,
@@ -1525,14 +1444,17 @@ impl ReplayStage {
             );
         }
 
-        // Purge any partial shreds greater than the genesis slot
+        // Purge any partial slots greater than the genesis slot
         let start_slot = genesis_slot + 1;
         let end_slot = blockstore
             .highest_slot()
             .unwrap()
             .expect("Highest slot must be present as blockstore is non-empty");
         if end_slot >= start_slot {
-            warn!("{my_pubkey}: Purging shreds {start_slot} to {end_slot} from blockstore");
+            info!(
+                "{my_pubkey} Alpenglow migration: Purging shreds {start_slot} to {end_slot} from \
+                 blockstore"
+            );
             blockstore.clear_unconfirmed_slots(start_slot, end_slot);
         }
 
@@ -1545,7 +1467,7 @@ impl ReplayStage {
         );
     }
 
-    /// If we have an eligble genesis block, send out a genesis vote
+    /// If we have an eligible genesis block, send out a genesis vote
     /// Returns false if no eligible block was found
     fn maybe_send_genesis_vote(
         migration_status: &MigrationStatus,
@@ -1574,7 +1496,7 @@ impl ReplayStage {
             GenerateVoteTxResult::ConsensusMessage(message) => {
                 // Send vote to ConsensusPool and rest of cluster
                 warn!(
-                    "{}: Casting genesis vote for ({slot}, {block_id})",
+                    "{} Alpenglow migration: Casting genesis vote for ({slot}, {block_id})",
                     identity_keypair.pubkey()
                 );
                 // If sending fails that means the channel is disconnected and we are shutting down
@@ -1590,7 +1512,8 @@ impl ReplayStage {
             }
             e => {
                 warn!(
-                    "{}: Unable to send genesis vote for {slot} {block_id}: {e:?}",
+                    "{} Alpenglow migration: Unable to send genesis vote for {slot} {block_id}: \
+                     {e:?}",
                     identity_keypair.pubkey()
                 );
             }
@@ -5090,8 +5013,6 @@ impl ReplayStage {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        self.commitment_service.join()?;
-        self.votor.join()?;
         self.t_replay.join().map(|_| ())
     }
 }
@@ -5101,6 +5022,7 @@ pub(crate) mod tests {
     use {
         super::*,
         crate::{
+            commitment_service::AggregateCommitmentService,
             consensus::{
                 progress_map::{ValidatorStakeInfo, RETRANSMIT_BASE_DELAY_MS},
                 tower_storage::{FileTowerStorage, NullTowerStorage},
