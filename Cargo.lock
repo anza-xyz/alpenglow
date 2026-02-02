@@ -85,7 +85,6 @@ dependencies = [
  "serde",
  "solana-bls-signatures",
  "solana-hash",
- "solana-keypair",
  "solana-signer-store",
  "solana-votor",
  "solana-votor-messages",
