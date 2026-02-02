@@ -240,6 +240,10 @@ impl BlockIdRepairType {
             BlockIdRepairType::FecSetRoot { slot, block_id, .. } => (*slot, *block_id),
         }
     }
+
+    pub(crate) fn slot(&self) -> Slot {
+        self.block().0
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1482,7 +1486,7 @@ impl ServeRepair {
         identity_keypair: &Keypair,
         staked_nodes: &HashMap<Pubkey, u64>,
     ) -> Result<(Vec<u8>, SocketAddr)> {
-        let slot = repair_request.block().0;
+        let slot = repair_request.slot();
         let repair_peers = match peers_cache.get(&slot) {
             Some(entry) if entry.asof.elapsed() < REPAIR_PEERS_CACHE_TTL => entry,
             _ => {
