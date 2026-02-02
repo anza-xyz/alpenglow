@@ -743,7 +743,7 @@ fn record_and_complete_block(
     );
 
     BlockComponentProcessor::update_bank_with_footer(
-        &working_bank.bank.clone_without_scheduler(),
+        &working_bank.bank,
         &footer,
         reward_slot_and_validators,
     );
