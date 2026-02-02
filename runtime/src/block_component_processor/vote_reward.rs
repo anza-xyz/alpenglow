@@ -98,15 +98,6 @@ pub enum PayVoteRewardError {
     MissingEpochStakes,
     #[error("missing validator")]
     MissingValidator,
-    #[error(
-        "calculating reward for validator {validator} with stake {validator_stake_lamports} \
-         failed with {error}"
-    )]
-    RewardCalculation {
-        validator: Pubkey,
-        validator_stake_lamports: u64,
-        error: FloatError,
-    },
 }
 
 /// Calculates and pays voting reward.
@@ -144,12 +135,7 @@ pub(super) fn calculate_and_pay_voting_reward(
             epoch_validator_rewards_lamports,
             total_stake_lamports,
             *validator_stake_lamports,
-        )
-        .map_err(|e| PayVoteRewardError::RewardCalculation {
-            validator,
-            validator_stake_lamports: *validator_stake_lamports,
-            error: e,
-        })?;
+        );
         let validator_reward_lamports = reward_lamports / 2;
         let leader_reward_lamports = reward_lamports - validator_reward_lamports;
         total_leader_reward_lamports =
@@ -158,38 +144,23 @@ pub(super) fn calculate_and_pay_voting_reward(
     Ok(())
 }
 
-/// Different types of errors possible when converting a [`f64`] to a [`u64`].
-#[derive(Debug, PartialEq, Eq, Error)]
-pub enum FloatError {
-    #[error("input {0} is inifinite")]
-    Infinite(String),
-    #[error("input {0} overflowed")]
-    Overflow(String),
-}
-
-/// Converts a [`f64`] into a [`u64`].
-fn round(input: f64) -> Result<u64, FloatError> {
-    if !input.is_finite() {
-        return Err(FloatError::Infinite(input.to_string()));
-    }
-    if input < 0.0 {
-        return Err(FloatError::Overflow(input.to_string()));
-    }
-    if input > u64::MAX as f64 {
-        return Err(FloatError::Overflow(input.to_string()));
-    }
-    Ok(input.round() as u64)
-}
-
 /// Computes the voting reward in Lamports.
 fn calculate_voting_reward(
     slots_per_epoch: u64,
     epoch_validator_rewards_lamports: u64,
     total_stake_lamports: u64,
     validator_stake_lamports: u64,
-) -> Result<u64, FloatError> {
-    let per_slot_inflation_lamports =
-        epoch_validator_rewards_lamports as f64 / slots_per_epoch as f64;
-    let fractional_stake_lamports = validator_stake_lamports as f64 / total_stake_lamports as f64;
-    round(fractional_stake_lamports * per_slot_inflation_lamports)
+) -> u64 {
+    // Rewards are computed as following:
+    // per_slot_inflation = epoch_validator_rewards_lamports / slots_per_epoch
+    // fractional_stake = validator_stake / total_stake_lamports
+    // rewards = fractional_stake * per_slot_inflation
+    //
+    // The code below is equivalent but changes the order of operations to maintain precision
+
+    let numerator = epoch_validator_rewards_lamports as u128 * validator_stake_lamports as u128;
+    let denominator = slots_per_epoch as u128 * total_stake_lamports as u128;
+
+    // SAFETY: the result should fit in u64 because we do not expect the inflation in a single epoch to exceed u64::MAX.
+    (numerator / denominator).try_into().unwrap()
 }
