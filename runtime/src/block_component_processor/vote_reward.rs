@@ -52,8 +52,10 @@ impl VoteRewardAccountState {
     /// At the start of a new epoch, over several slots we pay the inflation rewards from the previous epoch.
     /// This is called Partitioned Epoch Rewards (PER).
     /// As such, the capitalization keeps increasing in the first slots of the epoch.
-    /// Vote rewards are calculated as a function of the capitalization and we do not want voting in the initial slots to earn less rewards than voting in the later rewards.
-    /// As such this function is called with [`additional_validator_rewards`] which should be the total rewards that will be paid by PER and we use the capitalization from the previous epoch plus this value to compute the vote rewards.
+    /// Vote rewards are calculated as a function of the capitalization and we do not want voting in the initial slots
+    /// to earn less rewards than voting in the later rewards.
+    /// As such this function is called with [`additional_validator_rewards`] which should be the total rewards that
+    /// will be paid by PER and we use the capitalization from the previous epoch plus this value to compute the vote rewards.
     pub(crate) fn new_epoch_update_account(
         bank: &Bank,
         prev_epoch: Epoch,
