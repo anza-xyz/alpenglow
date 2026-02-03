@@ -219,10 +219,10 @@ impl BlockIdRepairService {
             Arc::new(StreamerReceiveStats::new(
                 "block_id_repair_response_receiver",
             )),
-            Some(Duration::from_millis(1)), // coalesce
-            false,                          // use_pinned_memory
-            None,                           // in_vote_only_mode
-            false,                          // is_staked_service
+            None,  // coalesce
+            false, // use_pinned_memory
+            None,  // in_vote_only_mode
+            false, // is_staked_service
         );
 
         let t_block_id_repair = Self::run(
