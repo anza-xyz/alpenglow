@@ -80,7 +80,10 @@ use {
         collections::HashSet,
         net::{SocketAddr, UdpSocket},
         num::NonZeroUsize,
-        sync::{atomic::AtomicBool, Arc, RwLock},
+        sync::{
+            atomic::{AtomicBool, AtomicU8},
+            Arc, RwLock,
+        },
         thread::{self, JoinHandle},
     },
     tokio::sync::mpsc::Sender as AsyncSender,
@@ -209,7 +212,7 @@ impl Tvu {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         exit: Arc<AtomicBool>,
         block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
-        turbine_disabled: Arc<AtomicBool>,
+        turbine_mode: Arc<AtomicU8>,
         transaction_status_sender: Option<TransactionStatusSender>,
         entry_notification_sender: Option<EntryNotifierSender>,
         vote_tracker: Arc<VoteTracker>,
@@ -296,7 +299,7 @@ impl Tvu {
             bank_forks.clone(),
             cluster_info.clone(),
             outstanding_repair_requests.clone(),
-            turbine_disabled,
+            turbine_mode,
             exit.clone(),
         );
 
@@ -825,7 +828,7 @@ pub mod tests {
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,
-            Arc::<AtomicBool>::default(),
+            Arc::<AtomicU8>::default(),
             None,
             None,
             Arc::<VoteTracker>::default(),

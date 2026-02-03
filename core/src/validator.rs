@@ -156,7 +156,7 @@ use {
         num::NonZeroUsize,
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, AtomicU64, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
             Arc, Mutex, RwLock,
         },
         thread::{sleep, Builder, JoinHandle},
@@ -266,6 +266,46 @@ pub struct GeneratorConfig {
     pub starting_keypairs: Arc<Vec<Keypair>>,
 }
 
+/// Controls turbine and repair behavior for testing network partitions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TurbineMode {
+    /// Normal operation - turbine and repair both enabled
+    #[default]
+    Enabled = 0,
+    /// Turbine disabled but repair still works (for equivocation tests)
+    TurbineDisabled = 1,
+    /// Both turbine and repair disabled (for partition tests)
+    TurbineAndRepairDisabled = 2,
+}
+
+impl TurbineMode {
+    pub fn is_turbine_disabled(self) -> bool {
+        matches!(self, Self::TurbineDisabled | Self::TurbineAndRepairDisabled)
+    }
+
+    pub fn is_repair_disabled(self) -> bool {
+        matches!(self, Self::TurbineAndRepairDisabled)
+    }
+}
+
+impl From<u8> for TurbineMode {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Enabled,
+            1 => Self::TurbineDisabled,
+            2 => Self::TurbineAndRepairDisabled,
+            _ => Self::Enabled,
+        }
+    }
+}
+
+impl From<TurbineMode> for u8 {
+    fn from(mode: TurbineMode) -> Self {
+        mode as u8
+    }
+}
+
 pub struct ValidatorConfig {
     pub halt_at_slot: Option<Slot>,
     pub expected_genesis_hash: Option<Hash>,
@@ -284,7 +324,8 @@ pub struct ValidatorConfig {
     pub max_ledger_shreds: Option<u64>,
     pub blockstore_options: BlockstoreOptions,
     pub broadcast_stage_type: BroadcastStageType,
-    pub turbine_disabled: Arc<AtomicBool>,
+    /// Intended to be parsed with TurbineMode::from
+    pub turbine_mode: Arc<AtomicU8>,
     pub fixed_leader_schedule: Option<FixedSchedule>,
     pub wait_for_supermajority: Option<Slot>,
     pub new_hard_forks: Option<Vec<Slot>>,
@@ -367,7 +408,7 @@ impl ValidatorConfig {
             pubsub_config: PubSubConfig::default(),
             snapshot_config: SnapshotConfig::new_load_only(),
             broadcast_stage_type: BroadcastStageType::Standard,
-            turbine_disabled: Arc::<AtomicBool>::default(),
+            turbine_mode: Arc::<AtomicU8>::default(),
             fixed_leader_schedule: None,
             wait_for_supermajority: None,
             new_hard_forks: None,
@@ -1679,7 +1720,7 @@ impl Validator {
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,
-            config.turbine_disabled.clone(),
+            config.turbine_mode.clone(),
             transaction_status_sender.clone(),
             entry_notification_sender.clone(),
             vote_tracker.clone(),
