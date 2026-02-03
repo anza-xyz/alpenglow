@@ -2335,9 +2335,12 @@ pub struct Sockets {
     // and receiving AncestorHashesResponse from the cluster.
     pub ancestor_hashes_requests: UdpSocket, // udp read/write
     pub ancestor_hashes_requests_quic: UdpSocket, // quic read/write
-    pub tpu_quic: Vec<UdpSocket>,            // quic read only
-    pub tpu_forwards_quic: Vec<UdpSocket>,   // quic read only
-    pub tpu_vote_quic: Vec<UdpSocket>,       // quic read only
+    // Socket sending out BlockIdRepairType requests,
+    // and receiving BlockIdRepairResponse from the cluster.
+    pub block_id_repair: UdpSocket, // udp read/write
+    pub tpu_quic: Vec<UdpSocket>, // quic read only
+    pub tpu_forwards_quic: Vec<UdpSocket>, // quic read only
+    pub tpu_vote_quic: Vec<UdpSocket>, // quic read only
 
     /// Client-side socket for ForwardingStage vote transactions
     pub tpu_vote_forwarding_client: UdpSocket, // udp write only

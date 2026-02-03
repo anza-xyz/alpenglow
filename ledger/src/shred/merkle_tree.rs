@@ -8,7 +8,7 @@ const_assert_eq!(SIZE_OF_MERKLE_ROOT, 32);
 const_assert_eq!(SIZE_OF_MERKLE_PROOF_ENTRY, 20);
 pub const SIZE_OF_MERKLE_PROOF_ENTRY: usize = std::mem::size_of::<MerkleProofEntry>();
 // Number of proof entries for the standard 64 shred batch.
-pub(crate) const PROOF_ENTRIES_FOR_32_32_BATCH: u8 = 6;
+pub const PROOF_ENTRIES_FOR_32_32_BATCH: u8 = 6;
 
 // Defense against second preimage attack:
 // https://en.wikipedia.org/wiki/Merkle_tree#Second_preimage_attack
@@ -66,7 +66,7 @@ impl MerkleTree {
         self.nodes.last().unwrap()
     }
 
-    pub(crate) fn make_merkle_proof(
+    pub fn make_merkle_proof(
         &self,
         mut index: usize, // leaf index ~ shred's erasure shard index.
         mut size: usize,  // number of leaves ~ erasure batch size.

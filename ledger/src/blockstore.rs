@@ -595,6 +595,109 @@ impl Blockstore {
     pub fn get_parent_meta(&self, slot: Slot) -> Result<Option<ParentMeta>> {
         self.parent_meta_cf.get(slot)
     }
+
+    /// Returns the location for `block_id` if it matches the currently stored block in this slot.
+    pub fn get_block_location(&self, slot: Slot, block_id: Hash) -> Option<BlockLocation> {
+        self.get_double_merkle_root(slot)
+            .filter(|stored_block_id| *stored_block_id == block_id)
+            .map(|_| BlockLocation::Original)
+    }
+
+    /// Returns SlotMeta from a specific location.
+    pub fn meta_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<SlotMeta>> {
+        match location {
+            BlockLocation::Original => self.meta(slot),
+            BlockLocation::Alternate { .. } => Ok(None),
+        }
+    }
+
+    /// Checks all available block versions, if we have a *complete* block for
+    /// `block_id`, returns the associated slot meta
+    pub fn meta_for_block_id(&self, slot: Slot, block_id: Hash) -> Result<Option<SlotMeta>> {
+        let Some(location) = self.get_block_location(slot, block_id) else {
+            return Ok(None);
+        };
+        self.meta_from_location(slot, location)
+    }
+
+    /// Returns data shred payload from a specific location.
+    pub fn get_data_shred_from_location(
+        &self,
+        slot: Slot,
+        index: u64,
+        location: BlockLocation,
+    ) -> Result<Option<Vec<u8>>> {
+        match location {
+            BlockLocation::Original => self.get_data_shred(slot, index),
+            BlockLocation::Alternate { .. } => Ok(None),
+        }
+    }
+
+    /// For the block in slot `slot` in the specified location, return the `block_id` of the parent block.
+    pub fn get_parent_block_id_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<Hash>> {
+        let Some(shred) = self.get_data_shred_from_location(slot, 0, location)? else {
+            return Ok(None);
+        };
+        Ok(shred::layout::get_chained_merkle_root(&shred))
+    }
+
+    /// Returns ParentMeta for the specified slot/location.
+    pub fn get_parent_meta_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<ParentMeta>> {
+        match location {
+            BlockLocation::Original => self.get_parent_meta(slot),
+            BlockLocation::Alternate { .. } => Ok(None),
+        }
+    }
+
+    /// Inserts a shred index into the alternate index for testing purposes.
+    /// This simulates receiving a data shred for an alternate block.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn insert_shred_index_for_alternate_block(
+        &self,
+        slot: Slot,
+        block_id: Hash,
+        shred_index: u32,
+    ) -> Result<()> {
+        use crate::blockstore_meta::Index;
+        let _ = block_id;
+        let mut index = self.index_cf.get(slot)?.unwrap_or_else(|| Index::new(slot));
+        index.data_mut().insert(shred_index as u64);
+        self.index_cf.put(slot, &index)
+    }
+
+    /// Test helper: directly set the double merkle root for a slot/location.
+    /// This simulates Turbine completing for a slot with a specific block_id.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn set_double_merkle_root(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+        double_merkle_root: Hash,
+    ) -> Result<()> {
+        use crate::blockstore_meta::DoubleMerkleMeta;
+        let meta = DoubleMerkleMeta {
+            double_merkle_root,
+            fec_set_count: 1, // Minimal valid value
+            proofs: vec![],   // Empty proofs for testing
+        };
+        match block_location {
+            BlockLocation::Original | BlockLocation::Alternate { .. } => {
+                self.double_merkle_meta_cf.put(slot, &meta)
+            }
+        }
+    }
     /// Returns true if the specified slot is full.
     pub fn is_full(&self, slot: Slot) -> bool {
         if let Ok(Some(meta)) = self.meta_cf.get(slot) {
@@ -701,6 +804,18 @@ impl Blockstore {
     /// Returns the DoubleMerkleMeta for the specified slot.
     pub fn get_double_merkle_meta(&self, slot: Slot) -> Result<Option<DoubleMerkleMeta>> {
         self.double_merkle_meta_cf.get(slot)
+    }
+
+    /// Returns the DoubleMerkleMeta for a specific block location.
+    pub fn get_double_merkle_meta_from_location(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Result<Option<DoubleMerkleMeta>> {
+        match block_location {
+            BlockLocation::Original => self.get_double_merkle_meta(slot),
+            BlockLocation::Alternate { .. } => Ok(None),
+        }
     }
 
     /// Returns the double merkle root for a block, computing and persisting it
@@ -812,6 +927,18 @@ impl Blockstore {
             .expect("Blockstore operations must succeed");
 
         double_merkle_root
+    }
+
+    /// Returns double merkle root for a specific location.
+    pub fn get_double_merkle_root_from_location(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+    ) -> Option<Hash> {
+        match block_location {
+            BlockLocation::Original => self.get_double_merkle_root(slot),
+            BlockLocation::Alternate { .. } => None,
+        }
     }
 
     /// Check whether the specified slot is an orphan slot which does not
@@ -2867,6 +2994,17 @@ impl Blockstore {
 
     pub fn get_index(&self, slot: Slot) -> Result<Option<Index>> {
         self.index_cf.get(slot)
+    }
+
+    pub fn get_index_from_location(
+        &self,
+        slot: Slot,
+        location: BlockLocation,
+    ) -> Result<Option<Index>> {
+        match location {
+            BlockLocation::Original => self.get_index(slot),
+            BlockLocation::Alternate { .. } => Ok(None),
+        }
     }
 
     /// Manually update the meta for a slot.

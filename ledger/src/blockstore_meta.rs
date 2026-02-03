@@ -512,8 +512,7 @@ impl ShredIndexV2 {
         }
     }
 
-    #[allow(unused)]
-    pub(crate) fn contains(&self, idx: u64) -> bool {
+    pub fn contains(&self, idx: u64) -> bool {
         self.index.contains(idx as usize)
     }
 
@@ -950,6 +949,14 @@ impl ParentMeta {
     pub fn block(&self) -> (Slot, Hash) {
         (self.parent_slot, self.parent_block_id)
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub enum BlockLocation {
+    Original,
+    Alternate {
+        block_id: Hash,
+    },
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
