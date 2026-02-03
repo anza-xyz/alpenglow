@@ -29,11 +29,32 @@ pub enum Error {
     WrongEncoding,
 }
 
-/// Verifies a [`Certificate`] and calculates the total signing stake.
+/// Verifies an Alpenglow `Certificate` and calculates the total signing stake.
 ///
 /// This function verifies that the aggregate signature matches the vote payload(s)
 /// derived from the certificate type. It concurrently accumulates the stake of
 /// the signers using the provided `rank_map`.
+///
+/// # Core Functionality
+/// - **Signature Verification**: Validates aggregate BLS signatures for `votor-messages`.
+/// - **Bitmap Processing**: Supports verification using bitmaps that conform to the
+///   `solana-signer-store` format.
+/// - **Stake Accumulation**: Calculates the total signing stake during the verification
+///   process.
+///
+/// # Ledger State and Rank Map
+///
+/// To maintain a lightweight dependency graph, this function does not manage the ledger
+/// state directly. Instead, the stake distribution and validator public keys must be
+/// provided via the `rank_map` lookup function.
+///
+/// # Arguments
+///
+/// * `cert` - The certificate to verify.
+/// * `max_validators` - The maximum number of validators (used for decoding the bitmap).
+/// * `rank_map` - A closure that maps a validator's rank (index) to their stake and public key.
+///
+/// # Returns
 ///
 /// On success, returns the total stake.
 pub fn verify_certificate(
@@ -102,8 +123,11 @@ fn serialize_vote(vote: &Vote) -> Vec<u8> {
     bincode::serialize(vote).expect("Vote serialization should never fail for valid Vote structs")
 }
 
-/// Verifies the `signature` of the `payload` signed by validators in `ranks`.
-/// This handles the standard case where all validators signed the exact same payload.
+/// Verifies a signature for a single payload signed by a set of validators.
+///
+/// This function handles the "Base2" case where all participating validators have signed
+/// the exact same payload. This is the standard verification path and covers virtually all
+/// cases in practice.
 pub fn verify_base2<S: AsSignatureAffine>(
     payload: &[u8],
     signature: &S,
@@ -126,14 +150,18 @@ fn verify_single_vote_signature<S: AsSignatureAffine>(
     rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
 ) -> Result<(), Error> {
     let pubkeys = collect_pubkeys(ranks, rank_map)?;
-    let pk = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
-    pk.verify_signature(signature, payload)
+    let pubkey = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
+    pubkey
+        .verify_signature(signature, payload)
         .map_err(|_| Error::VerifySigFalse)
 }
 
-/// Verifies a split-vote scenario where some validators signed `payload`
-/// and others signed `fallback_payload`.
-fn verify_base3(
+/// Verifies a signature for a split-vote scenario involving two distinct payloads.
+///
+/// This function handles the "Base3" case where participating validators are split
+/// between signing a primary `payload` and a `fallback_payload`. This path is used
+/// only in rare edge cases where a fallback vote is required.
+pub fn verify_base3(
     payload: &[u8],
     fallback_payload: &[u8],
     signature: &BlsSignature,
@@ -148,15 +176,15 @@ fn verify_base3(
             // Must run sequentially because `rank_map` captures `total_stake` (FnMut).
             // We pass a mutable reference for the first call so we can reuse the
             // closure for the second.
-            let pubkeys_1 = collect_pubkeys(&ranks, &mut rank_map)?;
-            let pubkeys_2 = collect_pubkeys(&fallback_ranks, rank_map)?;
+            let primary_pubkeys = collect_pubkeys(&ranks, &mut rank_map)?;
+            let fallback_pubkeys = collect_pubkeys(&fallback_ranks, rank_map)?;
 
-            let (pk1_res, pk2_res) = join(
-                || PubkeyProjective::par_aggregate(pubkeys_1.par_iter()),
-                || PubkeyProjective::par_aggregate(pubkeys_2.par_iter()),
+            let (primary_agg_res, fallback_agg_res) = join(
+                || PubkeyProjective::par_aggregate(primary_pubkeys.par_iter()),
+                || PubkeyProjective::par_aggregate(fallback_pubkeys.par_iter()),
             );
 
-            let pubkeys = [pk1_res?, pk2_res?];
+            let pubkeys = [primary_agg_res?, fallback_agg_res?];
 
             SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,

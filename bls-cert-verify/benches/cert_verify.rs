@@ -1,14 +1,16 @@
-use agave_bls_cert_verify::cert_verify::verify_certificate;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use solana_bls_signatures::{
-    keypair::Keypair as BlsKeypair, pubkey::Pubkey as BlsPubkey,
-    signature::Signature as BlsSignature,
-};
-use solana_hash::Hash;
-use solana_votor::consensus_pool::certificate_builder::CertificateBuilder;
-use solana_votor_messages::{
-    consensus_message::{Certificate, CertificateType, VoteMessage},
-    vote::Vote,
+use {
+    agave_bls_cert_verify::cert_verify::verify_certificate,
+    criterion::{criterion_group, criterion_main, BenchmarkId, Criterion},
+    solana_bls_signatures::{
+        keypair::Keypair as BlsKeypair, pubkey::Pubkey as BlsPubkey,
+        signature::Signature as BlsSignature,
+    },
+    solana_hash::Hash,
+    solana_votor::consensus_pool::certificate_builder::CertificateBuilder,
+    solana_votor_messages::{
+        consensus_message::{Certificate, CertificateType, VoteMessage},
+        vote::Vote,
+    },
 };
 
 // Creates random BLS keypairs for bench tests
