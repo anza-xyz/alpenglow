@@ -604,7 +604,7 @@ impl BlockIdRepairService {
                     }
                     Some(turbine_block_id) if turbine_block_id != block_id => {
                         // Turbine has a different block
-                        info!(
+                        warn!(
                             "{my_pubkey}: FetchBlock: Turbine has different block \
                              {turbine_block_id:?} vs requested {block_id:?} for slot {slot}, \
                              starting repair"
