@@ -311,7 +311,7 @@ impl BlockIdRepairService {
                                 Ok(event) => state.pending_repair_events.push(event),
                                 Err(_) => break,
                             },
-                            default(Duration::from_secs(1)) => (),
+                            default(Duration::from_secs(1)) => continue,
                         }
                     }
 
