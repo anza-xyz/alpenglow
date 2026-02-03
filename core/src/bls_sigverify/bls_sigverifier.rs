@@ -113,7 +113,7 @@ impl BLSSigVerifier {
         self.cert_buffer.clear();
         self.metric_buffer.clear();
 
-        self.extract_and_filter_messages(batches, &mut last_voted_slots, &root_bank);
+        self.extract_and_filter_messages(batches, &root_bank);
 
         preprocess_time.stop();
         self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
@@ -121,27 +121,41 @@ impl BLSSigVerifier {
             .preprocess_elapsed_us
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
+        // Destructure self to borrow fields independently for the closure
+        let vote_buffer = &self.vote_buffer;
+        let vote_payload_cache = &self.vote_payload_cache;
+        let stats = &self.stats;
+        let cluster_info = &self.cluster_info;
+        let leader_schedule = &self.leader_schedule;
+        let message_sender = &self.message_sender;
+        let votes_for_repair_sender = &self.votes_for_repair_sender;
+        let metric_buffer = &mut self.metric_buffer;
+        let cert_buffer = &mut self.cert_buffer;
+        let verified_certs = &self.verified_certs;
+
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
             || {
                 verify_and_send_votes(
-                    &self.vote_buffer,
+                    vote_buffer,
                     &root_bank,
-                    &self.vote_payload_cache,
-                    &self.stats,
-                    &self.cluster_info,
-                    &self.leader_schedule,
-                    &self.message_sender,
-                    &self.votes_for_repair_sender,
+                    vote_payload_cache,
+                    stats,
+                    cluster_info,
+                    leader_schedule,
+                    message_sender,
+                    votes_for_repair_sender,
+                    &mut last_voted_slots,
+                    metric_buffer,
                 )
             },
             || {
                 verify_and_send_certificates(
-                    &mut self.cert_buffer,
+                    cert_buffer,
                     &root_bank,
-                    &self.verified_certs,
-                    &self.stats,
-                    &self.message_sender,
+                    verified_certs,
+                    stats,
+                    message_sender,
                 )
             },
         );
@@ -173,12 +187,7 @@ impl BLSSigVerifier {
             .retain(|vote, _| vote.slot() > root_bank.slot());
     }
 
-    fn extract_and_filter_messages(
-        &mut self,
-        batches: Vec<PacketBatch>,
-        last_voted_slots: &mut HashMap<Pubkey, Slot>,
-        root_bank: &Bank,
-    ) {
+    fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
         for packet in batches.iter().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
 
@@ -202,13 +211,6 @@ impl BLSSigVerifier {
                     else {
                         continue;
                     };
-
-                    Self::record_vote_metrics(
-                        pubkey,
-                        vote_message.vote,
-                        last_voted_slots,
-                        &mut self.metric_buffer,
-                    );
 
                     if self.check_stale_vote(&vote_message, root_bank) {
                         continue;
@@ -341,20 +343,6 @@ impl BLSSigVerifier {
             })?;
 
         Some((*pubkey, *bls_pubkey))
-    }
-
-    fn record_vote_metrics(
-        pubkey: Pubkey,
-        vote: Vote,
-        last_voted_slots: &mut HashMap<Pubkey, Slot>,
-        consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-    ) {
-        if vote.is_notarization_or_finalization() {
-            let existing = last_voted_slots.entry(pubkey).or_insert(vote.slot());
-            *existing = (*existing).max(vote.slot());
-        }
-
-        consensus_metrics.push(ConsensusMetricsEvent::Vote { id: pubkey, vote });
     }
 
     fn check_stale_vote(&self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {

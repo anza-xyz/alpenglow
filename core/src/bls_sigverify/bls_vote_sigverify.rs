@@ -17,7 +17,7 @@ use {
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_votor::consensus_rewards,
+    solana_votor::{consensus_metrics::ConsensusMetricsEvent, consensus_rewards},
     solana_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
@@ -38,6 +38,7 @@ pub(crate) struct VoteToVerify {
 
 /// Verifies votes and sends verified votes to the consensus pool.
 /// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_and_send_votes(
     votes_to_verify: &[VoteToVerify],
     root_bank: &Bank,
@@ -47,6 +48,8 @@ pub(crate) fn verify_and_send_votes(
     leader_schedule: &LeaderScheduleCache,
     message_sender: &Sender<ConsensusMessage>,
     votes_for_repair_sender: &VerifiedVoteSender,
+    last_voted_slots: &mut HashMap<Pubkey, Slot>,
+    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
 ) -> Result<AddVoteMessage, BLSSigVerifyError> {
     let verified_votes = verify_votes(votes_to_verify, vote_payload_cache, stats);
 
@@ -67,6 +70,18 @@ pub(crate) fn verify_and_send_votes(
     let mut verified_votes_by_pubkey: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
+
+        if vote.vote_message.vote.is_notarization_or_finalization() {
+            let existing = last_voted_slots
+                .entry(vote.pubkey)
+                .or_insert(vote.vote_message.vote.slot());
+            *existing = (*existing).max(vote.vote_message.vote.slot());
+        }
+        consensus_metrics.push(ConsensusMetricsEvent::Vote {
+            id: vote.pubkey,
+            vote: vote.vote_message.vote,
+        });
+
         if vote.vote_message.vote.is_notarization_or_finalization()
             || vote.vote_message.vote.is_notarize_fallback()
         {
