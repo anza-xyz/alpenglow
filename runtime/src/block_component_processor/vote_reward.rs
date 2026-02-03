@@ -8,8 +8,6 @@ use {
     std::sync::LazyLock,
     thiserror::Error,
 };
-#[cfg(feature = "dev-context-only-utils")]
-use {solana_account::Account, solana_genesis_config::GenesisConfig};
 
 /// The account address for the off curve account used to store metadata for calculating and paying voting rewards.
 static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
@@ -31,12 +29,31 @@ pub(crate) struct VoteRewardAccountState {
 impl VoteRewardAccountState {
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     fn get_state(bank: &Bank) -> Self {
-        bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR)
-            // unwrap assumes that the account exists which should be the case if alpenglow is enabled.
-            .unwrap()
-            .deserialize_data()
-            // unwrap should be safe as the data being deserialized was serialized by us in [`Self::set_state`].
-            .unwrap()
+        match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
+            None => {
+                // this can happen in the first epoch when the account has not been created yet.
+                // we create a dummy state to handle this case with the assumption that this code
+                // will become active in an epoch before the epoch in which Alpenglow is activated.
+                let state = Self {
+                    epoch_validator_rewards_lamports: 0,
+                };
+                state.set_state(bank);
+                state
+            }
+            Some(acct) => {
+                // unwrap should be safe as the data being deserialized was serialized by us in [`Self::set_state`].
+                acct.deserialize_data().unwrap()
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_rent_needed() -> u64 {
+        let account_size = bincode::serialized_size(&Self {
+            epoch_validator_rewards_lamports: 0,
+        })
+        .unwrap();
+        Rent::default().minimum_balance(account_size as usize)
     }
 
     /// Serializes and updates [`Self`] into the accounts in the [`Bank`].
@@ -74,23 +91,6 @@ impl VoteRewardAccountState {
             epoch_validator_rewards_lamports,
         };
         state.set_state(bank);
-    }
-
-    #[cfg(feature = "dev-context-only-utils")]
-    /// Test only function to ensure the state and the account exists.
-    pub(crate) fn genesis_insert_account(
-        genesis_config: &mut GenesisConfig,
-        epoch_validator_rewards_lamports: u64,
-    ) {
-        let state = Self {
-            epoch_validator_rewards_lamports,
-        };
-        let state_size = bincode::serialized_size(&state).unwrap();
-        let lamports = Rent::default().minimum_balance(state_size as usize);
-        let account = Account::new_data(lamports, &state, &system_program::ID).unwrap();
-        genesis_config
-            .accounts
-            .insert(*VOTE_REWARD_ACCOUNT_ADDR, account);
     }
 }
 

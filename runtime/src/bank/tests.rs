@@ -5365,14 +5365,14 @@ fn test_bank_hash_consistency() {
             assert_eq!(bank.epoch(), 1);
             assert_eq!(
                 bank.hash().to_string(),
-                "BURo5b1ZCkgvjE4z9KviRgz6iRoQRad9JKWE82wjXPSc"
+                "6h1KzSuTW6MwkgjtEbrv6AyUZ2NHtSxCQi8epjHDFYh8"
             );
         }
         if bank.slot == 128 {
             assert_eq!(bank.epoch(), 2);
             assert_eq!(
                 bank.hash().to_string(),
-                "Fo3tkfmcJW6x7cPzvcWjG5fkdgvmJa184xJzEaSFJVBk"
+                "4GX3883TVK7SQfbPUHem4HXcqdHU2DZVAB6yEXspn2qe"
             );
             break;
         }
@@ -12543,8 +12543,11 @@ fn test_bank_burn_vat(enable_alpenglow: bool, enable_vat: bool) {
     assert!(bank_epoch_1.epoch_stakes(3).is_none());
     let capitalization_epoch_1 = bank_epoch_1.capitalization();
     if enable_alpenglow && enable_vat {
-        // VAT should be burned
-        assert!(capitalization_epoch_1 < capitalization_epoch_0);
+        // We expect the VAT to be burned so epoch 1's capitalization should be lower however
+        // the [`VoteRewardAccountState`] was not created in epoch 0 and is created in epoch
+        // 1 so we have to account for that.
+        let rent_needed = VoteRewardAccountState::get_rent_needed();
+        assert!(capitalization_epoch_1 - rent_needed < capitalization_epoch_0);
     } else {
         // VAT should not be burned
         assert!(capitalization_epoch_1 >= capitalization_epoch_0);
