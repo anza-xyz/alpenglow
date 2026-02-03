@@ -89,7 +89,7 @@ impl RepairRequest {
         match self {
             // Pong is always highest priority and handled separately in Ord,
             // so this should never be called. Return 0 as a fallback.
-            RepairRequest::Pong { .. } => 0,
+            RepairRequest::Pong { .. } => unimplemented!("Pong requests do not have a slot"),
             RepairRequest::Metadata(block_id_repair_type) => block_id_repair_type.slot(),
             RepairRequest::Shred(shred_repair_type) => shred_repair_type.slot(),
         }
