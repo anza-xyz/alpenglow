@@ -87,7 +87,9 @@ use {
     solana_transaction::Transaction,
     solana_vote::vote_transaction::VoteTransaction,
     solana_votor::{
-        event::{CompletedBlock, LeaderWindowInfo, VotorEvent, VotorEventSender},
+        event::{
+            CompletedBlock, LeaderWindowInfo, SwitchBankEventReceiver, VotorEvent, VotorEventSender,
+        },
         root_utils,
         vote_history_storage::SavedVoteHistory,
         voting_service::BLSOp,
@@ -321,6 +323,7 @@ pub struct ReplayReceivers {
     pub duplicate_confirmed_slots_receiver: Receiver<Vec<(u64, Hash)>>,
     pub gossip_verified_vote_hash_receiver: Receiver<(Pubkey, u64, Hash)>,
     pub popular_pruned_forks_receiver: Receiver<Vec<u64>>,
+    pub switch_bank_receiver: SwitchBankEventReceiver,
 }
 
 /// Timing information for the ReplayStage main processing loop
@@ -633,6 +636,7 @@ impl ReplayStage {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
+            switch_bank_receiver,
         } = receivers;
 
         trace!("replay stage");
@@ -714,6 +718,8 @@ impl ReplayStage {
                 unfrozen_gossip_verified_vote_hashes,
                 epoch_slots_frozen_slots,
             };
+            let mut pending_switches = HashMap::new();
+
             let (working_bank, in_vote_only_mode) = {
                 let r_bank_forks = bank_forks.read().unwrap();
                 (
@@ -822,7 +828,26 @@ impl ReplayStage {
                     migration_status.as_ref(),
                     &votor_event_sender,
                 );
+                replay_active_banks_time.stop();
                 let did_complete_bank = !new_frozen_slots.is_empty();
+
+                // Check if we've completed the migration conditions
+                if migration_status.is_ready_to_enable() {
+                    Self::enable_alpenglow(
+                        &exit,
+                        &my_pubkey,
+                        migration_status.as_ref(),
+                        bank_forks.as_ref(),
+                        blockstore.as_ref(),
+                        &mut poh_controller,
+                        &shared_poh_bank,
+                        leader_schedule_cache.as_ref(),
+                        &mut ancestors,
+                        &mut descendants,
+                        &mut progress,
+                    );
+                }
+
                 if migration_status.is_alpenglow_enabled() {
                     let fast_leader_handover_notifies = {
                         let bank_forks_r = bank_forks.read().unwrap();
@@ -857,28 +882,21 @@ impl ReplayStage {
                         let bank_forks_r = bank_forks.read().unwrap();
                         progress.handle_new_root(&bank_forks_r);
                     }
-                }
-                replay_active_banks_time.stop();
 
-                // Check if we've completed the migration conditions
-                if migration_status.is_ready_to_enable() {
-                    Self::enable_alpenglow(
-                        &exit,
+                    Self::process_switch_bank_events(
                         &my_pubkey,
-                        migration_status.as_ref(),
-                        bank_forks.as_ref(),
-                        blockstore.as_ref(),
-                        &mut poh_controller,
-                        &shared_poh_bank,
-                        leader_schedule_cache.as_ref(),
-                        &mut ancestors,
-                        &mut descendants,
+                        &switch_bank_receiver,
+                        &mut pending_switches,
+                        &blockstore,
+                        &bank_forks,
                         &mut progress,
                     );
-                }
 
-                let forks_root = bank_forks.read().unwrap().root();
-                if !migration_status.is_alpenglow_enabled() {
+                    // Banks might have been switched above, these maps are no longer accurate
+                    drop(ancestors);
+                    drop(descendants);
+                } else if !migration_status.is_alpenglow_enabled() {
+                    let forks_root = bank_forks.read().unwrap().root();
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
                     // Signalled by ancestor_hashes_service.
@@ -2114,6 +2132,130 @@ impl ReplayStage {
         descendants
             .remove(&slot)
             .expect("must exist based on earlier check");
+    }
+
+    /// Process switch block events from votor or replay.
+    ///
+    /// When receiving a switch request for block b we attempt to switch out the bank in slot(b)
+    /// for b if it the bank in slot(b) does not match the block id for b.
+    ///
+    /// When we need to switch a bank b, we first defer until we've repaired the ancestory of b:
+    /// - We must have block b and all of its ancestors up to any ancestor we've already replayed
+    /// - If no ancestor is replayed and it links back <= root, we can ignore this request
+    ///
+    /// Then to perform the switch for b and all of its ancestors identified above:
+    /// 1. If the existing turbine block in the slot is full, backup in Alternate column
+    /// 2. Purge any existing bank in the slot and clear the shreds from the turbine column
+    /// 3. Copy shreds from the Alternate column of the requested block to the Original column
+    ///
+    /// At this point generate_new_bank_forks can replay the fork up to b
+    ///
+    /// If there are multiple switch requests for a slot, we use the newest one.
+    fn process_switch_bank_events(
+        my_pubkey: &Pubkey,
+        switch_bank_receiver: &SwitchBankEventReceiver,
+        pending_switches: &mut HashMap<Slot, Hash>,
+        blockstore: &Blockstore,
+        bank_forks: &RwLock<BankForks>,
+        progress: &mut ProgressMap,
+    ) {
+        let root = bank_forks.read().unwrap().root();
+
+        switch_bank_receiver
+            .try_iter()
+            .for_each(|switch_bank_event| {
+                // Overwrite any pending switches, later switches take precedence
+                let (slot, block_id) = switch_bank_event.block();
+                if slot <= root {
+                    return;
+                }
+
+                if let Some(prev_block_id) = pending_switches.insert(slot, block_id) {
+                    info!(
+                        "{my_pubkey}: Overwriting previous switch request in {slot} for \
+                         {prev_block_id:?} to {block_id}"
+                    );
+                } else {
+                    info!("{my_pubkey}: Adding switch request in {slot} to {block_id}");
+                }
+            });
+
+        pending_switches.retain(|slot, block_id| {
+            if bank_forks.read().unwrap().block_id(*slot) == Some(*block_id) {
+                // Nothing to switch
+                return false;
+            }
+
+            // Check if we have received the block and all of its ancestors and collect the ones we
+            // need to switch out
+            let mut ancestor_slot = *slot;
+            let mut ancestor_block_id = *block_id;
+            let mut blocks_to_switch = vec![];
+            loop {
+                if ancestor_slot <= root {
+                    // Part of an unrooted fork ignore
+                    return false;
+                }
+
+                let Some(location) =
+                    blockstore.get_block_location(ancestor_slot, ancestor_block_id)
+                else {
+                    info!(
+                        "{my_pubkey}: Waiting for repair, deferring switch to slot \
+                         {ancestor_slot} {ancestor_block_id}"
+                    );
+                    // Still waiting on repair to finish - defer
+                    return true;
+                };
+
+                if location != BlockLocation::Original {
+                    // Need to switch this block
+                    blocks_to_switch.push((ancestor_slot, location));
+                }
+
+                let parent_meta = blockstore
+                    .get_parent_meta(ancestor_slot, location)
+                    .unwrap()
+                    .expect("Full slots must contain ParentMeta");
+
+                if bank_forks.read().unwrap().block_id(parent_meta.parent_slot)
+                    == Some(parent_meta.parent_block_id)
+                        // Genesis cannot be duplicate
+                        || parent_meta.parent_slot == 0
+                {
+                    info!(
+                        "{my_pubkey}: Ancestor in slot {} found in bank forks, time to switch",
+                        parent_meta.parent_slot
+                    );
+                    // We have this ancestor replayed, time to switch
+                    break;
+                }
+
+                // Check the next ancestor
+                ancestor_slot = parent_meta.parent_slot;
+                ancestor_block_id = parent_meta.parent_block_id;
+            }
+
+            // Switch the fork
+            for (slot, location) in blocks_to_switch.into_iter() {
+                info!("{my_pubkey}: Switching {slot} from {location:?}");
+
+                // Clear bank and progress before switching blockstore data
+                {
+                    let mut w_bank_forks = bank_forks.write().unwrap();
+                    if w_bank_forks.get(slot).is_some() {
+                        w_bank_forks.clear_bank(slot, true);
+                    }
+                }
+                let _ = progress.remove(&slot);
+
+                // Switch the blockstore data atomically, handles slot meta chaining so generate new bank forks can proceed
+                blockstore.switch_block_from_alternate(slot, location);
+                info!("{my_pubkey}: Switched {slot} from {location:?}");
+            }
+
+            false
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4781,6 +4923,7 @@ impl ReplayStage {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_new_bank_forks(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
@@ -4846,6 +4989,15 @@ impl ReplayStage {
                     // ParentMeta could have been updated in between. If so, continue and
                     // the next iteration of generate_new_bank_forks will have consistent values.
                     if parent_meta.parent_slot != parent_slot {
+                        continue;
+                    }
+
+                    if Some(parent_meta.parent_block_id) != parent_bank.block_id()
+                        // Genesis doesn't have a block id
+                        && parent_slot != 0
+                    {
+                        // There were duplicate blocks in this slot and we have the wrong one replayed
+                        // Do not continue down this fork
                         continue;
                     }
 

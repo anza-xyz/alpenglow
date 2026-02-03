@@ -5,7 +5,10 @@ use {
     crate::{
         commitment::{update_commitment_cache, CommitmentType},
         consensus_metrics::ConsensusMetricsEvent,
-        event::{CompletedBlock, RepairEvent, RepairEventSender, VotorEvent, VotorEventReceiver},
+        event::{
+            CompletedBlock, RepairEvent, RepairEventSender, SwitchBankEvent, SwitchBankEventSender,
+            VotorEvent, VotorEventReceiver,
+        },
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
@@ -319,7 +322,20 @@ impl EventHandler {
             }
 
             // Received a parent ready notification for `slot`
-            VotorEvent::ParentReady { slot, parent_block } => {
+            VotorEvent::ParentReady {
+                slot,
+                parent_block: parent_block @ (parent_slot, _parent_block_id),
+            } => {
+                // Only send switch event if parent_slot is greater than the highest finalized slot
+                // (or root if no finalized blocks yet)
+                let highest_finalized_slot = finalized_blocks
+                    .last()
+                    .map(|(slot, _)| *slot)
+                    .unwrap_or_else(|| vctx.sharable_banks.root().slot());
+                if parent_slot > highest_finalized_slot {
+                    request_switch(&ctx.switch_bank_sender, *my_pubkey, parent_block)?;
+                }
+
                 vctx.consensus_metrics_sender
                     .send((
                         Instant::now(),
@@ -827,6 +843,30 @@ fn request_repair(
     }
 }
 
+fn request_switch(
+    sender: &SwitchBankEventSender,
+    my_pubkey: Pubkey,
+    block: Block,
+) -> Result<(), EventLoopError> {
+    let (slot, block_id) = block;
+    let event = SwitchBankEvent::Switch { slot, block_id };
+    match sender.try_send(event) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(event)) => {
+            error!(
+                "{my_pubkey}: Switch bank event channel is full, this should not happen. Blocking \
+                 to send event for slot {slot}"
+            );
+            sender
+                .send(event)
+                .map_err(|_| EventLoopError::SenderDisconnected(SendError(())))
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            Err(EventLoopError::SenderDisconnected(SendError(())))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -834,7 +874,7 @@ mod tests {
         crate::{
             commitment::CommitmentAggregationData,
             consensus_metrics::ConsensusMetricsEventReceiver,
-            event::{LeaderWindowInfo, RepairEventReceiver},
+            event::{LeaderWindowInfo, RepairEventReceiver, SwitchBankEventReceiver},
             vote_history_storage::{
                 FileVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
                 VoteHistoryStorage,
@@ -888,6 +928,8 @@ mod tests {
         consensus_metrics_receiver: ConsensusMetricsEventReceiver,
         #[allow(dead_code)] // Keep receiver alive to prevent SenderDisconnected errors
         repair_event_receiver: RepairEventReceiver,
+        #[allow(dead_code)] // Keep receiver alive to prevent SenderDisconnected errors
+        switch_bank_receiver: SwitchBankEventReceiver,
         shared_context: SharedContext,
         voting_context: VotingContext,
         root_context: RootContext,
@@ -905,6 +947,7 @@ mod tests {
         let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
         let (leader_window_info_sender, leader_window_info_receiver) = unbounded();
         let (repair_event_sender, repair_event_receiver) = unbounded();
+        let (switch_bank_sender, switch_bank_receiver) = unbounded();
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
@@ -955,6 +998,7 @@ mod tests {
             rpc_subscriptions: None,
             highest_parent_ready: highest_parent_ready.clone(),
             repair_event_sender,
+            switch_bank_sender,
         };
 
         let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);
@@ -1002,6 +1046,7 @@ mod tests {
             cluster_info,
             consensus_metrics_receiver,
             repair_event_receiver,
+            switch_bank_receiver,
             highest_parent_ready,
             shared_context,
             voting_context,

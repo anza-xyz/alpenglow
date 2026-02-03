@@ -118,3 +118,21 @@ impl RepairEvent {
         }
     }
 }
+
+pub type SwitchBankEventSender = Sender<SwitchBankEvent>;
+pub type SwitchBankEventReceiver = Receiver<SwitchBankEvent>;
+
+/// Event sent to replay_stage when a bank needs to be switched as a result of a ParentReady
+#[derive(Debug, Copy, Clone)]
+pub enum SwitchBankEvent {
+    /// We need to switch any existing banks to this bank including ancestors
+    Switch { slot: Slot, block_id: Hash },
+}
+
+impl SwitchBankEvent {
+    pub fn block(&self) -> Block {
+        match self {
+            SwitchBankEvent::Switch { slot, block_id } => (*slot, *block_id),
+        }
+    }
+}
