@@ -297,6 +297,7 @@ pub struct ValidatorConfig {
     /// processing.
     pub run_verification: bool,
     pub require_tower: bool,
+    pub require_vote_history: bool,
     pub tower_storage: Arc<dyn TowerStorage>,
     pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     pub debug_keys: Option<Arc<HashSet<Pubkey>>>,
@@ -378,6 +379,7 @@ impl ValidatorConfig {
             max_genesis_archive_unpacked_size: MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
             run_verification: true,
             require_tower: false,
+            require_vote_history: false,
             tower_storage: Arc::new(NullTowerStorage::default()),
             vote_history_storage: Arc::new(NullVoteHistoryStorage::default()),
             debug_keys: None,
@@ -1594,11 +1596,10 @@ impl Validator {
                     vote_history
                 }
                 Err(e) => {
-                    // TODO(ashwin): we need to be viligant about this and add a CLI option to panic here.
-                    warn!(
-                        "Unable to retrieve vote history: {e:?} creating default vote history...."
+                    panic!(
+                        "Unable to retrieve vote history. If this is a new validator startup use \
+                         --do-not-require-vote-history: {e:?}"
                     );
-                    VoteHistory::new(identity_keypair.pubkey(), 0)
                 }
             };
             (Tower::default(), vote_history)
@@ -2199,7 +2200,7 @@ fn post_process_restored_vote_history(
     config: &ValidatorConfig,
     bank_forks: &BankForks,
 ) -> Result<VoteHistory, String> {
-    let mut should_require_vote_history = config.require_tower;
+    let mut should_require_vote_history = config.require_vote_history;
 
     let restored_vote_history = restored_vote_history.and_then(|mut vote_history| {
         let root_bank = bank_forks.root_bank();

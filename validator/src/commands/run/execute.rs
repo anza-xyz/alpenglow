@@ -530,6 +530,7 @@ pub fn execute(
 
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
+        require_vote_history: !matches.is_present("do_not_require_vote_history"),
         tower_storage,
         vote_history_storage,
         halt_at_slot: value_t!(matches, "dev_halt_at_slot", Slot).ok(),
@@ -730,6 +731,7 @@ pub fn execute(
             authorized_voter_keypairs: authorized_voter_keypairs.clone(),
             post_init: admin_service_post_init.clone(),
             tower_storage: validator_config.tower_storage.clone(),
+            vote_history_storage: validator_config.vote_history_storage.clone(),
             staked_nodes_overrides,
             rpc_to_plugin_manager_sender,
         },
