@@ -1,11 +1,12 @@
 use {
-    crate::bank::Bank,
+    crate::{bank::Bank, validated_block_finalization::ValidatedBlockFinalizationCert},
     agave_votor_messages::{
-        consensus_message::Certificate,
+        consensus_message::{Certificate, ConsensusMessage},
         fraction::Fraction,
         migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
     },
-    log::warn,
+    crossbeam_channel::Sender,
+    log::{info, warn},
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
         BlockFooterV1, BlockMarkerV1, GenesisCertificate, VersionedBlockFooter,
@@ -37,6 +38,8 @@ pub enum BlockComponentProcessorError {
     GenesisCertificateOnNonChild,
     #[error("GenesisCertificate was invalid and failed to verify")]
     GenesisCertificateFailedVerification,
+    #[error("Finalization certificate was invalid and failed to verify")]
+    InvalidFinalizationCertificate,
     #[error("Nanosecond clock out of bounds")]
     NanosecondClockOutOfBounds,
     #[error("Spurious update parent")]
@@ -102,6 +105,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: &VersionedBlockMarker,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
         migration_status: &MigrationStatus,
     ) -> Result<(), BlockComponentProcessorError> {
         // Pre-migration: blocks with block components should be marked as dead.
@@ -112,9 +116,12 @@ impl BlockComponentProcessor {
         let VersionedBlockMarker::V1(marker) = marker;
 
         match marker {
-            BlockMarkerV1::BlockFooter(footer) => {
-                self.on_footer(bank, parent_bank, footer.inner())
-            }
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(
+                bank,
+                parent_bank,
+                footer.inner(),
+                finalization_cert_sender,
+            ),
             BlockMarkerV1::BlockHeader(header) => self.on_header(header.inner()),
             BlockMarkerV1::UpdateParent(update_parent) => {
                 self.on_update_parent(update_parent.inner())
@@ -206,6 +213,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         footer: &VersionedBlockFooter,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
     ) -> Result<(), BlockComponentProcessorError> {
         if !self.has_header && self.update_parent.is_none() {
             return Err(BlockComponentProcessorError::MissingParentMarker);
@@ -218,7 +226,30 @@ impl BlockComponentProcessor {
         let VersionedBlockFooter::V1(footer) = footer;
 
         Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank, footer)?;
-        Self::update_bank_with_footer(bank, footer);
+        Self::update_bank_with_footer(bank.clone(), footer);
+
+        if let Some(final_cert) = footer.final_cert.clone() {
+            let validated = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank)
+                .map_err(|e| {
+                    warn!(
+                        "Failed to validate finalization certificate for bank {}: {e}",
+                        bank.slot()
+                    );
+                    BlockComponentProcessorError::InvalidFinalizationCertificate
+                })?;
+
+            if let Some(sender) = finalization_cert_sender {
+                let (finalize_cert, notarize_cert) = validated.into_certificates();
+                let mut certs = Vec::with_capacity(if notarize_cert.is_some() { 2 } else { 1 });
+                if let Some(notarize_cert) = notarize_cert {
+                    certs.push(ConsensusMessage::Certificate(notarize_cert));
+                }
+                certs.push(ConsensusMessage::Certificate(finalize_cert));
+                if sender.send(certs).is_err() {
+                    info!("Finalization certificate sender disconnected");
+                }
+            }
+        }
 
         self.has_footer = true;
         Ok(())
