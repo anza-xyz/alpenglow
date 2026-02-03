@@ -659,22 +659,20 @@ impl BlockIdRepairService {
     /// Check for requests that have timed out and move them back to pending_repair_requests.
     /// For shred requests, we check if the shred has been received before retrying.
     fn retry_timed_out_requests(blockstore: &Blockstore, state: &mut RepairState, now: u64) {
-        // TODO(ashwin): use extract_if when we upstream (rust 1.88+)
-        let mut timed_out = Vec::new();
         state.sent_requests.retain(|request, sent_time| {
             if now.saturating_sub(*sent_time) >= REPAIR_REQUEST_TIMEOUT_MS {
                 match request {
                     RepairRequest::Pong { .. } => {}
                     RepairRequest::Metadata(_) => {
                         // Metadata requests: always retry on timeout
-                        timed_out.push(request.clone());
+                        state.pending_repair_requests.push(request.clone());
                     }
                     // Since shred responses are sent to a different socket, we need to check
                     // blockstore to see if this expired request is actually expired, or if the
                     // shred has already been ingested
                     RepairRequest::Shred(shred_request) => {
                         if !Self::has_received_shred(blockstore, shred_request) {
-                            timed_out.push(request.clone());
+                            state.pending_repair_requests.push(request.clone());
                         }
                     }
                 }
@@ -683,7 +681,6 @@ impl BlockIdRepairService {
                 true
             }
         });
-        state.pending_repair_requests.extend(timed_out);
     }
 
     /// Check if we have received a shred for a ShredForBlockId request.
