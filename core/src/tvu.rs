@@ -347,7 +347,6 @@ impl Tvu {
             turbine_disabled,
             exit.clone(),
         );
-
         let (verified_sender, verified_receiver) = unbounded();
 
         let (retransmit_sender, retransmit_receiver) =
