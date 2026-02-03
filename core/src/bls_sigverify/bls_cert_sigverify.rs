@@ -1,14 +1,11 @@
 use {
     crate::bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
-    agave_bls_cert_verify::cert_verify::{
-        verify_cert_get_total_stake, Error as BlsCertVerifyError,
-    },
+    agave_bls_cert_verify::cert_verify::Error as BlsCertVerifyError,
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, ParallelIterator},
     solana_clock::Slot,
     solana_measure::measure::Measure,
     solana_runtime::{bank::Bank, epoch_stakes::BLSPubkeyToRankMap},
-    solana_votor::common::certificate_limits_and_vote_types,
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage},
         fraction::Fraction,
@@ -134,17 +131,15 @@ fn verify_bls_certificate(
     }
 
     let slot = cert_to_verify.cert_type.slot();
-    let Some((key_to_rank_map, total_stake)) = get_key_to_rank_map(bank, slot) else {
-        return Err(CertVerifyError::KeyToRankMapNotFound(slot));
-    };
+    let (aggregate_stake, total_stake) = bank.verify_certificate(cert_to_verify).map_err(|e| {
+        if matches!(e, BlsCertVerifyError::MissingRankMap) {
+            CertVerifyError::KeyToRankMapNotFound(slot)
+        } else {
+            CertVerifyError::CertVerifyFailed(e)
+        }
+    })?;
 
-    let (required_stake_fraction, _) = certificate_limits_and_vote_types(&cert_to_verify.cert_type);
-    let aggregate_stake =
-        verify_cert_get_total_stake(cert_to_verify, key_to_rank_map.len(), |rank| {
-            key_to_rank_map
-                .get_pubkey_and_stake(rank)
-                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
-        })?;
+    let (required_stake_fraction, _) = cert_to_verify.cert_type.limits_and_vote_types();
     let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
     if my_fraction < required_stake_fraction {
         return Err(CertVerifyError::NotEnoughStake(
