@@ -150,8 +150,8 @@ fn verify_single_vote_signature<S: AsSignatureAffine>(
     rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
 ) -> Result<(), Error> {
     let pubkeys = collect_pubkeys(ranks, rank_map)?;
-    let pubkey = PubkeyProjective::par_aggregate(pubkeys.par_iter())?;
-    pubkey
+    let agg_pubkey = aggregate_pubkeys(&pubkeys)?;
+    agg_pubkey
         .verify_signature(signature, payload)
         .map_err(|_| Error::VerifySigFalse)
 }
@@ -196,8 +196,13 @@ pub fn verify_base3(
     }
 }
 
-/// Collects public keys sequentially
-fn collect_pubkeys(
+/// Aggregates a slice of public keys into a single projective public key.
+pub fn aggregate_pubkeys(pubkeys: &[BlsPubkey]) -> Result<PubkeyProjective, Error> {
+    PubkeyProjective::par_aggregate(pubkeys.par_iter()).map_err(Error::VerifySig)
+}
+
+/// Collects public keys sequentially based on the provided ranks bitmap.
+pub fn collect_pubkeys(
     ranks: &BitVec<u8>,
     mut rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
 ) -> Result<Vec<BlsPubkey>, Error> {
