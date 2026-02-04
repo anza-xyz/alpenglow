@@ -111,7 +111,7 @@ fn bench_verify_cert(c: &mut Criterion) {
         let pubkeys_ref = &pubkeys;
 
         // Base2 Setup
-        // Assume 2/3rds of validataors sign
+        // Assume 2/3rds of validators sign
         let num_signers_base2 = (size * 2) / 3;
         let cert_base2 = create_base2_cert(&keypairs, num_signers_base2);
 
