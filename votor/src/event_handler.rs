@@ -410,6 +410,12 @@ impl EventHandler {
                 finalized_blocks.insert(block);
                 request_repair(&ctx.repair_event_sender, *my_pubkey, block)?;
 
+                vctx.consensus_metrics_sender
+                    .send((
+                        Instant::now(),
+                        vec![ConsensusMetricsEvent::SlotFinalized { slot: block.0 }],
+                    ))
+                    .map_err(|_| SendError(()))?;
                 Self::check_rootable_blocks(
                     my_pubkey,
                     ctx,
