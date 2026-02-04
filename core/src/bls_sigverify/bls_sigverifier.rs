@@ -3,22 +3,16 @@
 use {
     crate::{
         bls_sigverify::{
-            bls_sigverify_service::BLSSigVerifyServiceError, stats::BLSSigVerifierStats,
+            bls_cert_sigverify::{get_key_to_rank_map, verify_and_send_certificates},
+            bls_vote_sigverify::{verify_and_send_votes, VoteToVerify},
+            error::BLSSigVerifyError,
+            stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
-    agave_bls_cert_verify::cert_verify::{
-        verify_cert_get_total_stake, Error as BlsCertVerifyError,
-    },
     crossbeam_channel::{Sender, TrySendError},
-    rayon::iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-    },
-    solana_bls_signatures::{
-        pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
-        signature::SignatureProjective,
-    },
-    solana_clock::Slot,
+    solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
+    solana_clock::{Epoch, Slot},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
@@ -27,48 +21,23 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
-        common::certificate_limits_and_vote_types,
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
         consensus_rewards::{self},
     },
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
-        fraction::Fraction,
         reward_certificate::AddVoteMessage,
         vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
-        num::NonZeroU64,
         sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
-    thiserror::Error,
 };
 
-// TODO(sam): This logic of extracting the message payload for signature verification
-//            is brittle, but another bincode serialization would be wasteful.
-//            Revisit this to figure out the best way to handle this.
-
-fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
-    bank.epoch_stakes_from_slot(slot)
-        .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
-}
-
-#[derive(Debug, Error)]
-enum CertVerifyError {
-    #[error("Failed to find key to rank map for slot {0}")]
-    KeyToRankMapNotFound(Slot),
-
-    #[error("Cert Verification Error {0:?}")]
-    CertVerifyFailed(#[from] BlsCertVerifyError),
-
-    #[error("Not enough stake {0}: {1} < {2}")]
-    NotEnoughStake(u64, Fraction, Fraction),
-}
-
 pub struct BLSSigVerifier {
-    verified_votes_sender: VerifiedVoteSender,
+    votes_for_repair_sender: VerifiedVoteSender,
     reward_votes_sender: Sender<AddVoteMessage>,
     message_sender: Sender<ConsensusMessage>,
     sharable_banks: SharableBanks,
@@ -80,36 +49,148 @@ pub struct BLSSigVerifier {
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
+    epoch_rank_map_cache: [Option<(Epoch, Arc<BLSPubkeyToRankMap>)>; 2],
+
+    // Recycled buffers implementing the Buffer Recycling pattern.
+    //
+    // The `extract_and_filter_messages` function demultiplexes mixed consensus messages into
+    // distinct vectors for votes, certificates, and metrics. Since the quantity of each message
+    // type is dynamic, we use these persistent buffers (`vote_buffer`, `cert_buffer`, `metric_buffer`)
+    // to amortize the cost of heap allocations over time.
+    vote_buffer: Vec<VoteToVerify>,
+    cert_buffer: Vec<Certificate>,
+    metric_buffer: Vec<ConsensusMetricsEvent>,
 }
 
 impl BLSSigVerifier {
+    pub fn new(
+        sharable_banks: SharableBanks,
+        votes_for_repair_sender: VerifiedVoteSender,
+        reward_votes_sender: Sender<AddVoteMessage>,
+        message_sender: Sender<ConsensusMessage>,
+        consensus_metrics_sender: ConsensusMetricsEventSender,
+        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
+        cluster_info: Arc<ClusterInfo>,
+        leader_schedule: Arc<LeaderScheduleCache>,
+    ) -> Self {
+        Self {
+            sharable_banks,
+            votes_for_repair_sender,
+            reward_votes_sender,
+            message_sender,
+            stats: BLSSigVerifierStats::new(),
+            verified_certs: RwLock::new(HashSet::new()),
+            vote_payload_cache: RwLock::new(HashMap::new()),
+            consensus_metrics_sender,
+            last_checked_root_slot: 0,
+            alpenglow_last_voted,
+            cluster_info,
+            leader_schedule,
+            epoch_rank_map_cache: [None, None],
+            vote_buffer: Vec::new(),
+            cert_buffer: Vec::new(),
+            metric_buffer: Vec::new(),
+        }
+    }
+
     pub fn verify_and_send_batches(
         &mut self,
-        mut batches: Vec<PacketBatch>,
-    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
+        batches: Vec<PacketBatch>,
+    ) -> Result<(), BLSSigVerifyError> {
         let mut preprocess_time = Measure::start("preprocess");
-        // TODO(sam): ideally we want to avoid heap allocation, but let's use
-        //            `Vec` for now for clarity and then optimize for the final version
-        let mut votes_to_verify = Vec::new();
-        let mut certs_to_verify = Vec::new();
-        let mut consensus_metrics_to_send = Vec::new();
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
-
         let root_bank = self.sharable_banks.root();
+
+        // Prune entries <= the new root slot
         if self.last_checked_root_slot < root_bank.slot() {
-            self.last_checked_root_slot = root_bank.slot();
-            self.verified_certs
-                .write()
-                .unwrap()
-                .retain(|cert| cert.slot() > root_bank.slot());
-            self.vote_payload_cache
-                .write()
-                .unwrap()
-                .retain(|vote, _| vote.slot() > root_bank.slot());
+            self.prune_caches(&root_bank);
         }
 
-        for mut packet in batches.iter_mut().flatten() {
+        // Recycle buffers.
+        // Note: `cert_buffer` and `metric_buffer` are usually empty from draining,
+        // but we clear them explicitly to guarantee a clean state.
+        self.vote_buffer.clear();
+        self.cert_buffer.clear();
+        self.metric_buffer.clear();
+
+        self.extract_and_filter_messages(batches, &root_bank);
+
+        preprocess_time.stop();
+        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .preprocess_elapsed_us
+            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
+
+        // Destructure self to borrow fields independently for the closure
+        let vote_buffer = &self.vote_buffer;
+        let vote_payload_cache = &self.vote_payload_cache;
+        let stats = &self.stats;
+        let cluster_info = &self.cluster_info;
+        let leader_schedule = &self.leader_schedule;
+        let message_sender = &self.message_sender;
+        let votes_for_repair_sender = &self.votes_for_repair_sender;
+        let metric_buffer = &mut self.metric_buffer;
+        let cert_buffer = &mut self.cert_buffer;
+        let verified_certs = &self.verified_certs;
+
+        // Perform signature verification
+        let (votes_result, certs_result) = rayon::join(
+            || {
+                verify_and_send_votes(
+                    vote_buffer,
+                    &root_bank,
+                    vote_payload_cache,
+                    stats,
+                    cluster_info,
+                    leader_schedule,
+                    message_sender,
+                    votes_for_repair_sender,
+                    &mut last_voted_slots,
+                    metric_buffer,
+                )
+            },
+            || {
+                verify_and_send_certificates(
+                    cert_buffer,
+                    &root_bank,
+                    verified_certs,
+                    stats,
+                    message_sender,
+                )
+            },
+        );
+        let (add_vote_msg, ()) = (votes_result?, certs_result?);
+
+        // Send to RPC service for last voted tracking
+        self.alpenglow_last_voted
+            .update_last_voted(&last_voted_slots);
+
+        // Send to metrics service for metrics aggregation
+        Self::send_consensus_metrics(&mut self.metric_buffer, &self.consensus_metrics_sender);
+
+        // Send verified votes to the rewards container
+        self.send_reward_votes(add_vote_msg);
+
+        self.stats.maybe_report_stats();
+        Ok(())
+    }
+
+    fn prune_caches(&mut self, root_bank: &Bank) {
+        self.last_checked_root_slot = root_bank.slot();
+        self.verified_certs
+            .write()
+            .unwrap()
+            .retain(|cert| cert.slot() > root_bank.slot());
+        self.vote_payload_cache
+            .write()
+            .unwrap()
+            .retain(|vote, _| vote.slot() > root_bank.slot());
+    }
+
+    fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
+        for packet in batches.iter().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
+
             if packet.meta().discard() {
                 self.stats
                     .received_discarded
@@ -117,122 +198,95 @@ impl BLSSigVerifier {
                 continue;
             }
 
-            let message: ConsensusMessage = match packet.deserialize_slice(..) {
-                Ok(msg) => msg,
-                Err(_) => {
-                    self.stats
-                        .received_malformed
-                        .fetch_add(1, Ordering::Relaxed);
-                    packet.meta_mut().set_discard(true);
-                    continue;
-                }
+            let Ok(message) = packet.deserialize_slice::<ConsensusMessage, _>(..) else {
+                self.stats
+                    .received_malformed
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
             };
 
             match message {
                 ConsensusMessage::Vote(vote_message) => {
-                    // Missing epoch states
-                    let Some((key_to_rank_map, _)) =
-                        get_key_to_rank_map(&root_bank, vote_message.vote.slot())
+                    let Some((pubkey, bls_pubkey)) = self.resolve_voter(&vote_message, root_bank)
                     else {
-                        self.stats
-                            .received_no_epoch_stakes
-                            .fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
                         continue;
                     };
 
-                    // Invalid rank
-                    let Some((solana_pubkey, bls_pubkey, _stake)) =
-                        key_to_rank_map.get_pubkey_and_stake(vote_message.rank.into())
-                    else {
-                        self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    };
-
-                    // Capture votes received metrics before old messages are potentially discarded below.
-                    let slot = vote_message.vote.slot();
-                    if vote_message.vote.is_notarization_or_finalization() {
-                        let existing_slot = last_voted_slots.entry(*solana_pubkey).or_insert(slot);
-                        *existing_slot = (*existing_slot).max(slot);
-                    }
-                    consensus_metrics_to_send.push(ConsensusMetricsEvent::Vote {
-                        id: *solana_pubkey,
-                        vote: vote_message.vote,
-                    });
-
-                    // consensus pool does not need votes for slots older than root slot however the rewards container may still need them.
-                    if vote_message.vote.slot() <= root_bank.slot()
-                        && !consensus_rewards::wants_vote(
-                            &self.cluster_info,
-                            &self.leader_schedule,
-                            root_bank.slot(),
-                            &vote_message,
-                        )
-                    {
-                        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
+                    if self.check_stale_vote(&vote_message, root_bank) {
                         continue;
                     }
 
-                    votes_to_verify.push(VoteToVerify {
+                    // Push the vote to the recycled buffer.
+                    //
+                    // Note: We must store owned copies of `VoteMessage` here because standard
+                    // `serde` deserialization creates new instances on the stack from the packet
+                    // bytes. We cannot hold references to these stack-allocated objects beyond
+                    // the current loop iteration.
+                    //
+                    // If we switch to a zero-copy deserialization framework (e.g. `bytemuck::Pod`)
+                    // that allows viewing fields directly from the raw packet bytes, `VoteToVerify`
+                    // could be refactored to hold references/slices, avoiding the memory copy
+                    // entirely.
+                    self.vote_buffer.push(VoteToVerify {
                         vote_message,
-                        bls_pubkey: *bls_pubkey,
-                        pubkey: *solana_pubkey,
+                        bls_pubkey,
+                        pubkey,
                     });
                 }
+
                 ConsensusMessage::Certificate(cert) => {
                     // Only need certs newer than root slot
                     if cert.cert_type.slot() <= root_bank.slot() {
                         self.stats.received_old.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
                         continue;
                     }
+                    self.cert_buffer.push(cert);
+                }
+            }
 
-                    if self
-                        .verified_certs
-                        .read()
-                        .unwrap()
-                        .contains(&cert.cert_type)
-                    {
-                        self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
-                        packet.meta_mut().set_discard(true);
-                        continue;
-                    }
+            // Filter already verified certifies
+            if !self.cert_buffer.is_empty() {
+                let verified_certs = self.verified_certs.read().unwrap();
+                let len_before = self.cert_buffer.len();
 
-                    certs_to_verify.push(cert);
+                // apply in-place filtering
+                self.cert_buffer
+                    .retain(|cert| !verified_certs.contains(&cert.cert_type));
+
+                let len_after = self.cert_buffer.len();
+                let duplicates = len_before - len_after;
+                if duplicates > 0 {
+                    self.stats
+                        .received_verified
+                        .fetch_add(duplicates as u64, Ordering::Relaxed);
                 }
             }
         }
-        preprocess_time.stop();
-        self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .preprocess_elapsed_us
-            .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
+    }
 
-        let (votes_result, certs_result) = rayon::join(
-            || self.verify_and_send_votes(votes_to_verify, &root_bank),
-            || self.verify_and_send_certificates(certs_to_verify, &root_bank),
-        );
-
-        let add_vote_msg = votes_result?;
-        let () = certs_result?;
-
-        // Send to RPC service for last voted tracking
-        self.alpenglow_last_voted
-            .update_last_voted(&last_voted_slots);
-
-        // Send to metrics service for metrics aggregation
-        if self
-            .consensus_metrics_sender
-            .send((Instant::now(), consensus_metrics_to_send))
-            .is_err()
-        {
-            warn!("could not send consensus metrics, receive side of channel is closed");
+    fn send_consensus_metrics(
+        metrics: &mut Vec<ConsensusMetricsEvent>,
+        sender: &ConsensusMetricsEventSender,
+    ) {
+        if metrics.is_empty() {
+            return;
         }
 
-        let res = self.reward_votes_sender.try_send(add_vote_msg);
-        match res {
+        // Drain the buffer to create the Vec expected by the channel,
+        // leaving `metrics` empty but with capacity preserved.
+        //
+        // clippy suggests `mem::take` which would steal the buffer's capacity,
+        // defeating the buffer recycling optimization.
+        #[allow(clippy::drain_collect)]
+        let metrics_vec: Vec<_> = metrics.drain(..).collect();
+
+        if sender.send((Instant::now(), metrics_vec)).is_err() {
+            warn!("could not send consensus metrics, receive side of channel is closed");
+        }
+    }
+
+    fn send_reward_votes(&mut self, add_vote_msg: AddVoteMessage) {
+        match self.reward_votes_sender.try_send(add_vote_msg) {
             Ok(()) => (),
             Err(TrySendError::Full(_)) => {
                 self.stats.consensus_reward_send_failed =
@@ -244,368 +298,75 @@ impl BLSSigVerifier {
                 );
             }
         }
-
-        self.stats.maybe_report_stats();
-
-        Ok(())
-    }
-}
-
-impl BLSSigVerifier {
-    pub fn new(
-        sharable_banks: SharableBanks,
-        verified_votes_sender: VerifiedVoteSender,
-        reward_votes_sender: Sender<AddVoteMessage>,
-        message_sender: Sender<ConsensusMessage>,
-        consensus_metrics_sender: ConsensusMetricsEventSender,
-        alpenglow_last_voted: Arc<AlpenglowLastVoted>,
-        cluster_info: Arc<ClusterInfo>,
-        leader_schedule: Arc<LeaderScheduleCache>,
-    ) -> Self {
-        Self {
-            sharable_banks,
-            verified_votes_sender,
-            reward_votes_sender,
-            message_sender,
-            stats: BLSSigVerifierStats::new(),
-            verified_certs: RwLock::new(HashSet::new()),
-            vote_payload_cache: RwLock::new(HashMap::new()),
-            consensus_metrics_sender,
-            last_checked_root_slot: 0,
-            alpenglow_last_voted,
-            cluster_info,
-            leader_schedule,
-        }
     }
 
-    /// Verifies votes and sends verified votes to the consensus pool.
-    /// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
-    fn verify_and_send_votes(
-        &self,
-        votes_to_verify: Vec<VoteToVerify>,
+    fn key_to_rank_map_from_cache(
+        &mut self,
         root_bank: &Bank,
-    ) -> Result<AddVoteMessage, BLSSigVerifyServiceError<ConsensusMessage>> {
-        let verified_votes = self.verify_votes(votes_to_verify);
+        vote_message: &VoteMessage,
+    ) -> Option<Arc<BLSPubkeyToRankMap>> {
+        let slot = vote_message.vote.slot();
+        let vote_epoch = root_bank.epoch_schedule().get_epoch(slot);
+        let cache_index = (vote_epoch % 2) as usize;
 
-        let votes = verified_votes
-            .iter()
-            .filter_map(|v| {
-                let vote = v.vote_message;
-                consensus_rewards::wants_vote(
-                    &self.cluster_info,
-                    &self.leader_schedule,
-                    root_bank.slot(),
-                    &vote,
-                )
-                .then_some(vote)
-            })
-            .collect();
-        let add_vote_msg = AddVoteMessage { votes };
-
-        self.stats
-            .total_valid_packets
-            .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
-
-        let mut verified_votes_by_pubkey: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
-        for vote in verified_votes {
-            self.stats.received_votes.fetch_add(1, Ordering::Relaxed);
-            if vote.vote_message.vote.is_notarization_or_finalization()
-                || vote.vote_message.vote.is_notarize_fallback()
-            {
-                let slot = vote.vote_message.vote.slot();
-                let cur_slots: &mut Vec<Slot> =
-                    verified_votes_by_pubkey.entry(vote.pubkey).or_default();
-                if !cur_slots.contains(&slot) {
-                    cur_slots.push(slot);
-                }
-            }
-
-            // Send the votes to the consensus pool
-            match self
-                .message_sender
-                .try_send(ConsensusMessage::Vote(vote.vote_message))
-            {
-                Ok(()) => {
-                    self.stats.sent.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Full(_)) => {
-                    self.stats.sent_failed.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e @ TrySendError::Disconnected(_)) => {
-                    return Err(e.into());
-                }
+        if let Some((epoch, map)) = &self.epoch_rank_map_cache[cache_index] {
+            if *epoch == vote_epoch {
+                return Some(map.clone());
             }
         }
 
-        // Send votes
-        for (pubkey, slots) in verified_votes_by_pubkey {
-            match self.verified_votes_sender.try_send((pubkey, slots)) {
-                Ok(()) => {
-                    self.stats
-                        .verified_votes_sent
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e) => {
-                    trace!("Failed to send verified vote: {e}");
-                    self.stats
-                        .verified_votes_sent_failed
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-
-        Ok(add_vote_msg)
-    }
-
-    fn verify_votes(&self, votes_to_verify: Vec<VoteToVerify>) -> Vec<VoteToVerify> {
-        if votes_to_verify.is_empty() {
-            return vec![];
-        }
-
-        self.stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
-        let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
-
-        let payloads = votes_to_verify
-            .iter()
-            .map(|v| self.get_vote_payload(&v.vote_message.vote))
-            .collect::<Vec<_>>();
-        let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
-        for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
-            grouped_pubkeys
-                .entry(payload)
-                .or_default()
-                .push(&v.bls_pubkey);
-        }
-
-        let distinct_messages = grouped_pubkeys.len();
-        self.stats
-            .votes_batch_distinct_messages_count
-            .fetch_add(distinct_messages as u64, Ordering::Relaxed);
-
-        let (distinct_payloads, distinct_pubkeys): (Vec<_>, Vec<_>) =
-            grouped_pubkeys.into_iter().unzip();
-        let aggregate_pubkeys_result: Result<Vec<PubkeyProjective>, _> = distinct_pubkeys
-            .into_iter()
-            .map(|pks| PubkeyProjective::par_aggregate(pks.into_par_iter()))
-            .collect();
-
-        let verified_optimistically = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
-            let signatures = votes_to_verify
-                .par_iter()
-                .map(|v| &v.vote_message.signature);
-            if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(signatures) {
-                if distinct_messages == 1 {
-                    let payload_slice = distinct_payloads[0].as_slice();
-                    aggregate_pubkeys[0]
-                        .verify_signature(&aggregate_signature, payload_slice)
-                        .is_ok()
-                } else {
-                    let payload_slices: Vec<&[u8]> =
-                        distinct_payloads.iter().map(|p| p.as_slice()).collect();
-
-                    let aggregate_pubkeys_affine: Vec<BlsPubkey> =
-                        aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
-
-                    SignatureProjective::par_verify_distinct_aggregated(
-                        &aggregate_pubkeys_affine,
-                        &aggregate_signature,
-                        &payload_slices,
-                    )
-                    .is_ok()
-                }
-            } else {
-                false
-            }
-        } else {
-            // Public key aggregation failed.
-            false
-        };
-
-        if verified_optimistically {
-            votes_batch_optimistic_time.stop();
-            self.stats
-                .votes_batch_optimistic_elapsed_us
-                .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
-            return votes_to_verify;
-        }
-
-        // Fallback: If the batch fails, verify each vote signature individually in parallel
-        // to find the invalid ones.
-        //
-        // TODO(sam): keep a record of which validator's vote failed to incur penalty
-        let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
-        let verified_votes = votes_to_verify
-            .into_par_iter()
-            .zip(payloads.par_iter())
-            .filter(|(vote_to_verify, payload)| {
-                if vote_to_verify
-                    .bls_pubkey
-                    .verify_signature(&vote_to_verify.vote_message.signature, payload.as_slice())
-                    .is_ok()
-                {
-                    true
-                } else {
-                    self.stats
-                        .received_bad_signature_votes
-                        .fetch_add(1, Ordering::Relaxed);
-                    false
-                }
-            })
-            .map(|(v, _)| v)
-            .collect();
-        votes_batch_parallel_verify_time.stop();
-        self.stats
-            .votes_batch_parallel_verify_count
-            .fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .votes_batch_parallel_verify_elapsed_us
-            .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
-        verified_votes
-    }
-
-    fn verify_and_send_certificates(
-        &self,
-        certs_to_verify: Vec<Certificate>,
-        bank: &Bank,
-    ) -> Result<(), BLSSigVerifyServiceError<ConsensusMessage>> {
-        let verified_certs = self.verify_certificates(certs_to_verify, bank);
-        self.stats
-            .total_valid_packets
-            .fetch_add(verified_certs.len() as u64, Ordering::Relaxed);
-
-        for cert in verified_certs {
-            // Send the BLS certificate message to certificate pool.
-            match self
-                .message_sender
-                .try_send(ConsensusMessage::Certificate(cert))
-            {
-                Ok(()) => {
-                    self.stats.sent.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Full(_)) => {
-                    self.stats.sent_failed.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e @ TrySendError::Disconnected(_)) => {
-                    return Err(e.into());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn verify_certificates(
-        &self,
-        certs_to_verify: Vec<Certificate>,
-        bank: &Bank,
-    ) -> Vec<Certificate> {
-        if certs_to_verify.is_empty() {
-            return vec![];
-        }
-        self.stats.certs_batch_count.fetch_add(1, Ordering::Relaxed);
-        let mut certs_batch_verify_time = Measure::start("certs_batch_verify");
-        let verified_certs = certs_to_verify
-            .into_par_iter()
-            .filter(
-                |cert_to_verify| match self.verify_bls_certificate(cert_to_verify, bank) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        trace!(
-                            "Failed to verify BLS certificate: {:?}, error: {e}",
-                            cert_to_verify.cert_type
-                        );
-                        if let CertVerifyError::NotEnoughStake(..) = e {
-                            self.stats
-                                .received_not_enough_stake
-                                .fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            self.stats
-                                .received_bad_signature_certs
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        false
-                    }
-                },
-            )
-            .collect();
-        certs_batch_verify_time.stop();
-        self.stats
-            .certs_batch_elapsed_us
-            .fetch_add(certs_batch_verify_time.as_us(), Ordering::Relaxed);
-        verified_certs
-    }
-
-    fn verify_bls_certificate(
-        &self,
-        cert_to_verify: &Certificate,
-        bank: &Bank,
-    ) -> Result<(), CertVerifyError> {
-        if self
-            .verified_certs
-            .read()
-            .unwrap()
-            .contains(&cert_to_verify.cert_type)
-        {
-            self.stats.received_verified.fetch_add(1, Ordering::Relaxed);
-            return Ok(());
-        }
-
-        let slot = cert_to_verify.cert_type.slot();
-        let Some((key_to_rank_map, total_stake)) = get_key_to_rank_map(bank, slot) else {
-            return Err(CertVerifyError::KeyToRankMapNotFound(slot));
-        };
-
-        let (required_stake_fraction, _) =
-            certificate_limits_and_vote_types(&cert_to_verify.cert_type);
-        let aggregate_stake =
-            verify_cert_get_total_stake(cert_to_verify, key_to_rank_map.len(), |rank| {
-                key_to_rank_map
-                    .get_pubkey_and_stake(rank)
-                    .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
+        // cache miss
+        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
+            .or_else(|| {
+                self.stats
+                    .received_no_epoch_stakes
+                    .fetch_add(1, Ordering::Relaxed);
+                None
             })?;
-        let my_fraction = Fraction::new(aggregate_stake, NonZeroU64::new(total_stake).unwrap());
-        if my_fraction < required_stake_fraction {
-            return Err(CertVerifyError::NotEnoughStake(
-                aggregate_stake,
-                my_fraction,
-                required_stake_fraction,
-            ));
-        }
-
-        self.verified_certs
-            .write()
-            .unwrap()
-            .insert(cert_to_verify.cert_type);
-
-        Ok(())
+        self.epoch_rank_map_cache[cache_index] = Some((vote_epoch, key_to_rank_map.clone()));
+        Some(key_to_rank_map.clone())
     }
 
-    fn get_vote_payload(&self, vote: &Vote) -> Arc<Vec<u8>> {
-        let read_cache = self.vote_payload_cache.read().unwrap();
-        if let Some(payload) = read_cache.get(vote) {
-            return payload.clone();
-        }
-        drop(read_cache);
+    fn resolve_voter(
+        &mut self,
+        vote_message: &VoteMessage,
+        root_bank: &Bank,
+    ) -> Option<(Pubkey, BlsPubkey)> {
+        let key_to_rank_map = self.key_to_rank_map_from_cache(root_bank, vote_message)?;
 
-        // Not in cache, so get a write lock
-        let mut write_cache = self.vote_payload_cache.write().unwrap();
-        if let Some(payload) = write_cache.get(vote) {
-            return payload.clone();
+        // Invalid rank
+        let (pubkey, bls_pubkey, _) = key_to_rank_map
+            .get_pubkey_and_stake(vote_message.rank.into())
+            .or_else(|| {
+                self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
+                None
+            })?;
+
+        Some((*pubkey, *bls_pubkey))
+    }
+
+    fn check_stale_vote(&self, vote_message: &VoteMessage, root_bank: &Bank) -> bool {
+        // if newer than root, we should keep
+        if vote_message.vote.slot() > root_bank.slot() {
+            return false;
         }
 
-        let payload = Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"));
-        write_cache.insert(*vote, payload.clone());
-        payload
+        // even if old, we might still want it for the rewards container
+        if consensus_rewards::wants_vote(
+            &self.cluster_info,
+            &self.leader_schedule,
+            root_bank.slot(),
+            vote_message,
+        ) {
+            return false;
+        }
+
+        // otherwise, record stats and discard
+        self.stats.received_old.fetch_add(1, Ordering::Relaxed);
+        true
     }
 }
 
-#[derive(Debug)]
-struct VoteToVerify {
-    vote_message: VoteMessage,
-    bls_pubkey: BlsPubkey,
-    pubkey: Pubkey,
-}
-
-// Add tests for the BLS signature verifier
 #[cfg(test)]
 mod tests {
     use {
@@ -640,7 +401,7 @@ mod tests {
     };
 
     fn create_keypairs_and_bls_sig_verifier_with_channels(
-        verified_votes_sender: VerifiedVoteSender,
+        votes_for_repair_sender: VerifiedVoteSender,
         message_sender: Sender<ConsensusMessage>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         reward_votes_sender: Sender<AddVoteMessage>,
@@ -673,7 +434,7 @@ mod tests {
             validator_keypairs,
             BLSSigVerifier::new(
                 sharable_banks,
-                verified_votes_sender,
+                votes_for_repair_sender,
                 reward_votes_sender,
                 message_sender,
                 consensus_metrics_sender,
@@ -690,7 +451,7 @@ mod tests {
         VerifiedVoteReceiver,
         Receiver<ConsensusMessage>,
     ) {
-        let (verified_votes_sender, verified_votes_receiver) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, votes_for_repair_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = crossbeam_channel::unbounded();
         let (reward_votes_sender, reward_votes_receiver) = crossbeam_channel::unbounded();
@@ -702,7 +463,7 @@ mod tests {
             while reward_votes_receiver.recv().is_ok() {}
         });
         let (keypairs, verifier) = create_keypairs_and_bls_sig_verifier_with_channels(
-            verified_votes_sender,
+            votes_for_repair_sender,
             message_sender,
             consensus_metrics_sender,
             reward_votes_sender,
@@ -710,7 +471,7 @@ mod tests {
         (
             keypairs,
             verifier,
-            verified_votes_receiver,
+            votes_for_repair_receiver,
             message_receiver,
         )
     }
@@ -751,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_blssigverifier_send_packets() {
-        let (validator_keypairs, mut verifier, verified_votes_receiver, receiver) =
+        let (validator_keypairs, mut verifier, votes_for_repair_receiver, receiver) =
             create_keypairs_and_bls_sig_verifier();
 
         let vote_rank1 = 2;
@@ -774,7 +535,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 2);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 2);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 2);
-        let received_verified_votes1 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes1 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes1,
             (
@@ -797,7 +558,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 3); // 2 + 1 = 3
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 3); // 2 + 1 = 3
-        let received_verified_votes2 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes2 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes2,
             (
@@ -820,7 +581,7 @@ mod tests {
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(verifier.stats.sent.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
-        let received_verified_votes3 = verified_votes_receiver.try_recv().unwrap();
+        let received_verified_votes3 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
             received_verified_votes3,
             (
@@ -892,13 +653,13 @@ mod tests {
     #[test]
     fn test_blssigverifier_send_packets_channel_full() {
         agave_logger::setup();
-        let (verified_votes_sender, _verified_votes_receiver) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, _votes_for_repair_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::bounded(1);
         let (consensus_metrics_sender, _consensus_metrics_receiver) =
             crossbeam_channel::unbounded();
         let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let (validator_keypairs, mut verifier) = create_keypairs_and_bls_sig_verifier_with_channels(
-            verified_votes_sender,
+            votes_for_repair_sender,
             message_sender,
             consensus_metrics_sender,
             reward_votes_sender,
@@ -1537,7 +1298,7 @@ mod tests {
     #[test]
     fn test_verify_old_vote_and_cert() {
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
-        let (verified_vote_sender, _) = crossbeam_channel::unbounded();
+        let (votes_for_repair_sender, _) = crossbeam_channel::unbounded();
         let (consensus_metrics_sender, _) = crossbeam_channel::unbounded();
         let (reward_votes_sender, _reward_votes_receiver) = crossbeam_channel::unbounded();
         let validator_keypairs = (0..10)
@@ -1568,7 +1329,7 @@ mod tests {
         let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
         let mut sig_verifier = BLSSigVerifier::new(
             sharable_banks,
-            verified_vote_sender,
+            votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
             consensus_metrics_sender,

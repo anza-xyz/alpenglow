@@ -5,7 +5,7 @@ use {
     crate::{
         commitment::{update_commitment_cache, CommitmentType},
         consensus_metrics::ConsensusMetricsEvent,
-        event::{CompletedBlock, VotorEvent, VotorEventReceiver},
+        event::{CompletedBlock, RepairEvent, RepairEventSender, VotorEvent, VotorEventReceiver},
         event_handler::stats::EventHandlerStats,
         root_utils::{self, RootContext},
         timer_manager::TimerManager,
@@ -14,7 +14,7 @@ use {
         voting_utils::{generate_vote_message, VoteError, VotingContext},
         votor::SharedContext,
     },
-    crossbeam_channel::{select, RecvError, SendError},
+    crossbeam_channel::{select, RecvError, SendError, TrySendError},
     parking_lot::RwLock,
     solana_clock::Slot,
     solana_hash::Hash,
@@ -255,9 +255,6 @@ impl EventHandler {
                         slot,
                     });
                 }
-                consensus_metrics_events.push(ConsensusMetricsEvent::MaybeNewEpoch {
-                    epoch: bank.epoch(),
-                });
                 vctx.consensus_metrics_sender
                     .send((now, consensus_metrics_events))
                     .map_err(|_| SendError(()))?;
@@ -308,6 +305,12 @@ impl EventHandler {
                 info!("{my_pubkey}: Block Notarized {block:?}");
                 vctx.vote_history.add_block_notarized(block);
                 Self::try_final(my_pubkey, block, vctx, &mut votes)?;
+                request_repair(&ctx.repair_event_sender, *my_pubkey, block)?;
+            }
+
+            VotorEvent::BlockNotarizeFallback(block) => {
+                info!("{my_pubkey}: Block Notarize-Fallback {block:?}");
+                request_repair(&ctx.repair_event_sender, *my_pubkey, block)?;
             }
 
             VotorEvent::FirstShred(slot) => {
@@ -406,6 +409,14 @@ impl EventHandler {
             VotorEvent::Finalized(block, is_fast_finalization) => {
                 info!("{my_pubkey}: Finalized {block:?} fast: {is_fast_finalization}");
                 finalized_blocks.insert(block);
+                request_repair(&ctx.repair_event_sender, *my_pubkey, block)?;
+
+                vctx.consensus_metrics_sender
+                    .send((
+                        Instant::now(),
+                        vec![ConsensusMetricsEvent::SlotFinalized { slot: block.0 }],
+                    ))
+                    .map_err(|_| SendError(()))?;
                 Self::check_rootable_blocks(
                     my_pubkey,
                     ctx,
@@ -416,6 +427,7 @@ impl EventHandler {
                     received_shred,
                     stats,
                 )?;
+
                 if let Some(parent_block) =
                     Self::add_missing_parent_ready(block, ctx, vctx, local_context)
                 {
@@ -789,6 +801,33 @@ impl EventHandler {
     }
 }
 
+/// Sends a repair event to the block ID repair service.
+/// Tries non-blocking send first; if the channel is full, logs an error and blocks.
+/// Returns an error if the channel is disconnected.
+fn request_repair(
+    sender: &RepairEventSender,
+    my_pubkey: Pubkey,
+    block: Block,
+) -> Result<(), EventLoopError> {
+    let (slot, block_id) = block;
+    let event = RepairEvent::FetchBlock { slot, block_id };
+    match sender.try_send(event) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(event)) => {
+            error!(
+                "{my_pubkey}: Repair event channel is full, this should not happen. Blocking to \
+                 send event for slot {slot}"
+            );
+            sender
+                .send(event)
+                .map_err(|_| EventLoopError::SenderDisconnected(SendError(())))
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            Err(EventLoopError::SenderDisconnected(SendError(())))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -796,7 +835,7 @@ mod tests {
         crate::{
             commitment::CommitmentAggregationData,
             consensus_metrics::ConsensusMetricsEventReceiver,
-            event::LeaderWindowInfo,
+            event::{LeaderWindowInfo, RepairEventReceiver},
             vote_history_storage::{
                 FileVoteHistoryStorage, SavedVoteHistory, SavedVoteHistoryVersions,
                 VoteHistoryStorage,
@@ -848,6 +887,8 @@ mod tests {
         drop_bank_receiver: Receiver<Vec<BankWithScheduler>>,
         cluster_info: Arc<ClusterInfo>,
         consensus_metrics_receiver: ConsensusMetricsEventReceiver,
+        #[allow(dead_code)] // Keep receiver alive to prevent SenderDisconnected errors
+        repair_event_receiver: RepairEventReceiver,
         shared_context: SharedContext,
         voting_context: VotingContext,
         root_context: RootContext,
@@ -864,6 +905,7 @@ mod tests {
         let (event_sender, _event_receiver) = unbounded();
         let (consensus_metrics_sender, consensus_metrics_receiver) = unbounded();
         let (leader_window_info_sender, leader_window_info_receiver) = unbounded();
+        let (repair_event_sender, repair_event_receiver) = unbounded();
         let timer_manager = Arc::new(PlRwLock::new(TimerManager::new(
             event_sender.clone(),
             exit.clone(),
@@ -913,6 +955,7 @@ mod tests {
             blockstore,
             rpc_subscriptions: None,
             highest_parent_ready: highest_parent_ready.clone(),
+            repair_event_sender,
         };
 
         let vote_history = VoteHistory::new(my_node_keypair.pubkey(), 0);
@@ -959,6 +1002,7 @@ mod tests {
             drop_bank_receiver,
             cluster_info,
             consensus_metrics_receiver,
+            repair_event_receiver,
             highest_parent_ready,
             shared_context,
             voting_context,

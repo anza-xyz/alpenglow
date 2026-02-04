@@ -9,14 +9,10 @@ pub(crate) const STATS_INTERVAL_DURATION: Duration = Duration::from_secs(1);
 pub(crate) struct BLSPacketStats {
     pub(crate) recv_batches_us_hist: histogram::Histogram, // time to call recv_batch
     pub(crate) verify_batches_pp_us_hist: histogram::Histogram, // per-packet time to call verify_batch
-    pub(crate) dedup_packets_pp_us_hist: histogram::Histogram, // per-packet time to call verify_batch
     pub(crate) batches_hist: histogram::Histogram, // number of packet batches per verify call
     pub(crate) packets_hist: histogram::Histogram, // number of packets per verify call
-    pub(crate) num_deduper_saturations: usize,
     pub(crate) total_batches: usize,
     pub(crate) total_packets: usize,
-    pub(crate) total_dedup: usize,
-    pub(crate) total_dedup_time_us: usize,
     pub(crate) total_verify_time_us: usize,
 }
 
@@ -70,26 +66,6 @@ impl BLSPacketStats {
                 i64
             ),
             (
-                "dedup_packets_pp_us_90pct",
-                self.dedup_packets_pp_us_hist.percentile(90.0).unwrap_or(0),
-                i64
-            ),
-            (
-                "dedup_packets_pp_us_min",
-                self.dedup_packets_pp_us_hist.minimum().unwrap_or(0),
-                i64
-            ),
-            (
-                "dedup_packets_pp_us_max",
-                self.dedup_packets_pp_us_hist.maximum().unwrap_or(0),
-                i64
-            ),
-            (
-                "dedup_packets_pp_us_mean",
-                self.dedup_packets_pp_us_hist.mean().unwrap_or(0),
-                i64
-            ),
-            (
                 "batches_90pct",
                 self.batches_hist.percentile(90.0).unwrap_or(0),
                 i64
@@ -105,11 +81,8 @@ impl BLSPacketStats {
             ("packets_min", self.packets_hist.minimum().unwrap_or(0), i64),
             ("packets_max", self.packets_hist.maximum().unwrap_or(0), i64),
             ("packets_mean", self.packets_hist.mean().unwrap_or(0), i64),
-            ("num_deduper_saturations", self.num_deduper_saturations, i64),
             ("total_batches", self.total_batches, i64),
             ("total_packets", self.total_packets, i64),
-            ("total_dedup", self.total_dedup, i64),
-            ("total_dedup_time_us", self.total_dedup_time_us, i64),
             ("total_verify_time_us", self.total_verify_time_us, i64),
         );
     }
@@ -133,8 +106,8 @@ pub(crate) struct BLSSigVerifierStats {
 
     pub(crate) sent: AtomicU64,
     pub(crate) sent_failed: AtomicU64,
-    pub(crate) verified_votes_sent: AtomicU64,
-    pub(crate) verified_votes_sent_failed: AtomicU64,
+    pub(crate) votes_for_repair_sent: AtomicU64,
+    pub(crate) votes_for_repair_sent_failed: AtomicU64,
     pub(crate) received: AtomicU64,
     pub(crate) received_bad_rank: AtomicU64,
     pub(crate) received_bad_signature_certs: AtomicU64,
@@ -168,8 +141,8 @@ impl BLSSigVerifierStats {
 
             sent: AtomicU64::new(0),
             sent_failed: AtomicU64::new(0),
-            verified_votes_sent: AtomicU64::new(0),
-            verified_votes_sent_failed: AtomicU64::new(0),
+            votes_for_repair_sent: AtomicU64::new(0),
+            votes_for_repair_sent_failed: AtomicU64::new(0),
             received: AtomicU64::new(0),
             received_bad_rank: AtomicU64::new(0),
             received_bad_signature_certs: AtomicU64::new(0),
@@ -253,12 +226,12 @@ impl BLSSigVerifierStats {
             ),
             (
                 "verified_votes_sent",
-                self.verified_votes_sent.load(Ordering::Relaxed) as i64,
+                self.votes_for_repair_sent.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
                 "verified_votes_sent_failed",
-                self.verified_votes_sent_failed.load(Ordering::Relaxed) as i64,
+                self.votes_for_repair_sent_failed.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

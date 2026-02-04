@@ -1,10 +1,5 @@
 use {
-    solana_votor_messages::{
-        consensus_message::CertificateType,
-        fraction::Fraction,
-        migration::GENESIS_VOTE_THRESHOLD,
-        vote::{Vote, VoteType},
-    },
+    solana_votor_messages::{fraction::Fraction, vote::VoteType},
     std::time::Duration,
 };
 
@@ -29,51 +24,6 @@ pub const fn conflicting_types(vote_type: VoteType) -> &'static [VoteType] {
             VoteType::Skip,
             VoteType::SkipFallback,
         ],
-    }
-}
-
-/// Lookup from `CertificateId` to the `VoteType`s that contribute,
-/// as well as the stake fraction required for certificate completion.
-///
-/// Must be in sync with `vote_to_cert_types`
-pub const fn certificate_limits_and_vote_types(
-    cert_type: &CertificateType,
-) -> (Fraction, &'static [VoteType]) {
-    match cert_type {
-        CertificateType::Notarize(_, _) => (Fraction::from_percentage(60), &[VoteType::Notarize]),
-        CertificateType::NotarizeFallback(_, _) => (
-            Fraction::from_percentage(60),
-            &[VoteType::Notarize, VoteType::NotarizeFallback],
-        ),
-        CertificateType::FinalizeFast(_, _) => {
-            (Fraction::from_percentage(80), &[VoteType::Notarize])
-        }
-        CertificateType::Finalize(_) => (Fraction::from_percentage(60), &[VoteType::Finalize]),
-        CertificateType::Skip(_) => (
-            Fraction::from_percentage(60),
-            &[VoteType::Skip, VoteType::SkipFallback],
-        ),
-        CertificateType::Genesis(_, _) => (GENESIS_VOTE_THRESHOLD, &[VoteType::Genesis]),
-    }
-}
-
-/// Lookup from `Vote` to the `CertificateId`s the vote accounts for
-///
-/// Must be in sync with `certificate_limits_and_vote_types` and `VoteType::get_type`
-pub fn vote_to_cert_types(vote: &Vote) -> Vec<CertificateType> {
-    match vote {
-        Vote::Notarize(vote) => vec![
-            CertificateType::Notarize(vote.slot, vote.block_id),
-            CertificateType::NotarizeFallback(vote.slot, vote.block_id),
-            CertificateType::FinalizeFast(vote.slot, vote.block_id),
-        ],
-        Vote::NotarizeFallback(vote) => {
-            vec![CertificateType::NotarizeFallback(vote.slot, vote.block_id)]
-        }
-        Vote::Finalize(vote) => vec![CertificateType::Finalize(vote.slot)],
-        Vote::Skip(vote) => vec![CertificateType::Skip(vote.slot)],
-        Vote::SkipFallback(vote) => vec![CertificateType::Skip(vote.slot)],
-        Vote::Genesis(vote) => vec![CertificateType::Genesis(vote.slot, vote.block_id)],
     }
 }
 

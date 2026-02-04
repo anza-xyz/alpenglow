@@ -688,6 +688,43 @@ impl Blockstore {
         self.parent_meta_cf.put((slot, location), parent_meta)
     }
 
+    /// Inserts a shred index into the alternate index for testing purposes.
+    /// This simulates receiving a data shred for an alternate block.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn insert_shred_index_for_alternate_block(
+        &self,
+        slot: Slot,
+        block_id: Hash,
+        shred_index: u32,
+    ) -> Result<()> {
+        use crate::blockstore_meta::Index;
+        let mut index = self
+            .alt_index_cf
+            .get((slot, block_id))?
+            .unwrap_or_else(|| Index::new(slot));
+        index.data_mut().insert(shred_index as u64);
+        self.alt_index_cf.put((slot, block_id), &index)
+    }
+
+    /// Test helper: directly set the double merkle root for a slot/location.
+    /// This simulates Turbine completing for a slot with a specific block_id.
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn set_double_merkle_root(
+        &self,
+        slot: Slot,
+        block_location: BlockLocation,
+        double_merkle_root: Hash,
+    ) -> Result<()> {
+        use crate::blockstore_meta::DoubleMerkleMeta;
+        let meta = DoubleMerkleMeta {
+            double_merkle_root,
+            fec_set_count: 1, // Minimal valid value
+            proofs: vec![],   // Empty proofs for testing
+        };
+        self.double_merkle_meta_cf
+            .put((slot, block_location), &meta)
+    }
+
     /// Returns true if the specified slot is full.
     pub fn is_full(&self, slot: Slot) -> bool {
         if let Ok(Some(meta)) = self.meta_cf.get(slot) {
@@ -906,20 +943,10 @@ impl Blockstore {
         slot: Slot,
         block_location: BlockLocation,
     ) -> Option<Hash> {
-        let dmr = self
-            .double_merkle_meta_cf
+        self.double_merkle_meta_cf
             .get((slot, block_location))
             .expect("Blockstore operations must succeed")
-            .map(|meta| meta.double_merkle_root);
-
-        debug_assert!(
-            dmr.is_some()
-                || self
-                    .meta_from_location(slot, block_location)
-                    .unwrap()
-                    .is_none_or(|meta| !meta.is_full())
-        );
-        dmr
+            .map(|meta| meta.double_merkle_root)
     }
 
     /// Check whether the specified slot is an orphan slot which does not

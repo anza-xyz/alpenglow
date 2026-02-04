@@ -17,6 +17,8 @@ use {
 pub enum Error {
     #[error("missing rank in rank map")]
     MissingRank,
+    #[error("missing rank map")]
+    MissingRankMap,
     #[error("verify signature failed with {0:?}")]
     VerifySig(#[from] BlsError),
     #[error("verify signature return false")]

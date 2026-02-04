@@ -289,7 +289,6 @@ pub struct ReplayStageConfig {
     pub banking_tracer: Arc<BankingTracer>,
     pub snapshot_controller: Option<Arc<SnapshotController>>,
     pub replay_highest_frozen: Arc<ReplayHighestFrozen>,
-    pub migration_status: Arc<MigrationStatus>,
 }
 
 pub struct ReplaySenders {
@@ -602,7 +601,6 @@ impl ReplayStage {
             banking_tracer,
             snapshot_controller,
             replay_highest_frozen,
-            migration_status,
         } = config;
 
         let ReplaySenders {
@@ -640,6 +638,7 @@ impl ReplayStage {
         trace!("replay stage");
 
         // Start the replay stage loop
+        let migration_status = bank_forks.read().unwrap().migration_status();
         let mut identity_keypair = cluster_info.keypair().clone();
         let mut my_pubkey = identity_keypair.pubkey();
 
@@ -803,6 +802,7 @@ impl ReplayStage {
                     entry_notification_sender.as_ref(),
                     &verify_recyclers,
                     &replay_vote_sender,
+                    &own_vote_sender,
                     &bank_notification_sender,
                     rpc_subscriptions.as_deref(),
                     &slot_status_notifier,
@@ -2582,6 +2582,7 @@ impl ReplayStage {
         transaction_status_sender: Option<&TransactionStatusSender>,
         entry_notification_sender: Option<&EntryNotifierSender>,
         replay_vote_sender: &ReplayVoteSender,
+        finalization_cert_sender: &Sender<ConsensusMessage>,
         verify_recyclers: &VerifyRecyclers,
         log_messages_bytes_limit: Option<usize>,
         prioritization_fee_cache: &PrioritizationFeeCache,
@@ -2603,6 +2604,7 @@ impl ReplayStage {
             transaction_status_sender,
             entry_notification_sender,
             Some(replay_vote_sender),
+            Some(finalization_cert_sender),
             verify_recyclers,
             false,
             log_messages_bytes_limit,
@@ -3250,6 +3252,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
+        finalization_cert_sender: &Sender<ConsensusMessage>,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         active_bank_slots: &[Slot],
@@ -3334,6 +3337,7 @@ impl ReplayStage {
                             transaction_status_sender,
                             entry_notification_sender,
                             &replay_vote_sender.clone(),
+                            &finalization_cert_sender.clone(),
                             &verify_recyclers.clone(),
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
@@ -3367,6 +3371,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
+        finalization_cert_sender: &Sender<ConsensusMessage>,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         bank_slot: Slot,
@@ -3425,6 +3430,7 @@ impl ReplayStage {
                     transaction_status_sender,
                     entry_notification_sender,
                     &replay_vote_sender.clone(),
+                    finalization_cert_sender,
                     &verify_recyclers.clone(),
                     log_messages_bytes_limit,
                     prioritization_fee_cache,
@@ -3941,6 +3947,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
+        finalization_cert_sender: &Sender<ConsensusMessage>,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         slot_status_notifier: &Option<SlotStatusNotifier>,
@@ -3982,6 +3989,7 @@ impl ReplayStage {
                     entry_notification_sender,
                     verify_recyclers,
                     replay_vote_sender,
+                    finalization_cert_sender,
                     replay_timing,
                     log_messages_bytes_limit,
                     &active_bank_slots,
@@ -4003,6 +4011,7 @@ impl ReplayStage {
                         entry_notification_sender,
                         verify_recyclers,
                         replay_vote_sender,
+                        finalization_cert_sender,
                         replay_timing,
                         log_messages_bytes_limit,
                         *bank_slot,
@@ -5794,6 +5803,7 @@ pub(crate) mod tests {
                 .thread_name(|i| format!("solReplayTest{i:02}"))
                 .build()
                 .expect("new rayon threadpool");
+            let (finalization_cert_sender, _finalization_cert_receiver) = unbounded();
             let res = ReplayStage::replay_blockstore_into_bank(
                 &bank1,
                 &blockstore,
@@ -5803,6 +5813,7 @@ pub(crate) mod tests {
                 None,
                 None,
                 &replay_vote_sender,
+                &finalization_cert_sender,
                 &VerifyRecyclers::default(),
                 None,
                 &PrioritizationFeeCache::new(0u64),

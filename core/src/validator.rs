@@ -125,6 +125,7 @@ use {
         snapshot_controller::SnapshotController,
         snapshot_hash::StartingSnapshotHashes,
         snapshot_utils::{self, clean_orphaned_account_snapshot_dirs, SnapshotInterval},
+        validated_block_finalization::ValidatedBlockFinalizationCert,
     },
     solana_send_transaction_service::send_transaction_service::Config as SendTransactionServiceConfig,
     solana_shred_version::compute_shred_version,
@@ -147,7 +148,6 @@ use {
         vote_history_storage::{NullVoteHistoryStorage, VoteHistoryStorage},
         voting_service::VotingServiceOverride,
     },
-    solana_votor_messages::consensus_message::HighestFinalizedSlotCert,
     solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         borrow::Cow,
@@ -1449,7 +1449,7 @@ impl Validator {
         let (reward_certs_sender, reward_certs_receiver) = bounded(1);
 
         // Shared state for highest finalized certificates (updated by Votor, read by block creation loop)
-        let highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>> =
+        let highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>> =
             Arc::new(RwLock::new(None));
 
         // Clone the non-vote sender for block creation loop (used for re-injecting transactions
@@ -1664,6 +1664,7 @@ impl Validator {
                 fetch: node.sockets.tvu,
                 ancestor_hashes_requests: node.sockets.ancestor_hashes_requests,
                 alpenglow_quic: node.sockets.alpenglow,
+                block_id_repair: node.sockets.block_id_repair,
             },
             blockstore.clone(),
             ledger_signal_receiver,

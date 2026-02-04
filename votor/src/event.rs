@@ -1,6 +1,7 @@
 use {
     crossbeam_channel::{Receiver, Sender},
     solana_clock::Slot,
+    solana_hash::Hash,
     solana_runtime::bank::Bank,
     solana_votor_messages::consensus_message::Block,
     std::{sync::Arc, time::Instant},
@@ -34,6 +35,9 @@ pub enum VotorEvent {
 
     /// The block has received a notarization certificate
     BlockNotarized(Block),
+
+    /// The block has received a notarize-fallback certificate
+    BlockNotarizeFallback(Block),
 
     /// Received the first shred for the slot.
     FirstShred(Slot),
@@ -82,6 +86,7 @@ impl VotorEvent {
             | VotorEvent::SafeToNotar((s, _))
             | VotorEvent::Finalized((s, _), _)
             | VotorEvent::BlockNotarized((s, _))
+            | VotorEvent::BlockNotarizeFallback((s, _))
             | VotorEvent::ParentReady {
                 slot: s,
                 parent_block: _,
@@ -89,6 +94,27 @@ impl VotorEvent {
             VotorEvent::ProduceWindow(_) => false,
             VotorEvent::Standstill(_) => false,
             VotorEvent::SetIdentity => false,
+        }
+    }
+}
+
+pub type RepairEventSender = Sender<RepairEvent>;
+pub type RepairEventReceiver = Receiver<RepairEvent>;
+
+/// Event sent by votor to the block id repair service for informed repair
+#[derive(Debug, Copy, Clone)]
+pub enum RepairEvent {
+    /// We require that this block be fetched. This can happen for the following reasons:
+    /// - The block has received a NotarizeFallback certificate or stronger
+    /// - TODO(ashwin): An intrawindow block has reached the SafeToNotar threshold, however we need
+    ///   to check that the parent has reached notarize-fallback requiring us to fetch this block
+    FetchBlock { slot: Slot, block_id: Hash },
+}
+
+impl RepairEvent {
+    pub fn slot(&self) -> Slot {
+        match self {
+            RepairEvent::FetchBlock { slot, .. } => *slot,
         }
     }
 }

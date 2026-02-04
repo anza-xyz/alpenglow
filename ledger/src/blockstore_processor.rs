@@ -65,7 +65,7 @@ use {
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,
     solana_vote::{vote_account::VoteAccountsHashMap, vote_parser::is_valid_vote_only_transaction},
-    solana_votor_messages::migration::MigrationStatus,
+    solana_votor_messages::{consensus_message::ConsensusMessage, migration::MigrationStatus},
     std::{
         borrow::Cow,
         collections::{HashMap, HashSet},
@@ -1155,6 +1155,7 @@ fn confirm_full_slot(
         transaction_status_sender,
         entry_notification_sender,
         replay_vote_sender,
+        None,
         recyclers,
         opts.allow_dead_slots,
         opts.runtime_config.log_messages_bytes_limit,
@@ -1495,6 +1496,7 @@ pub fn confirm_slot(
     transaction_status_sender: Option<&TransactionStatusSender>,
     entry_notification_sender: Option<&EntryNotifierSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
+    finalization_cert_sender: Option<&Sender<ConsensusMessage>>,
     recyclers: &VerifyRecyclers,
     allow_dead_slots: bool,
     log_messages_bytes_limit: Option<usize>,
@@ -1586,6 +1588,7 @@ pub fn confirm_slot(
                             bank.clone_without_scheduler(),
                             parent_bank,
                             marker,
+                            finalization_cert_sender,
                             migration_status,
                         )
                         .inspect_err(|err| {
