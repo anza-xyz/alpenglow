@@ -10,7 +10,7 @@ use {
         consensus_pool::{
             parent_ready_tracker::BlockProductionParent, AddVoteError, ConsensusPool,
         },
-        event::{LeaderWindowInfo, VotorEvent, VotorEventSender},
+        event::{LeaderWindowInfo, RepairEvent, RepairEventSender, VotorEvent, VotorEventSender},
         voting_service::BLSOp,
     },
     crossbeam_channel::{select, Receiver, Sender, TrySendError},
@@ -26,11 +26,12 @@ use {
         validated_block_finalization::ValidatedBlockFinalizationCert,
     },
     solana_votor_messages::{
-        consensus_message::{Certificate, ConsensusMessage},
+        consensus_message::{Block, Certificate, ConsensusMessage},
         migration::MigrationStatus,
     },
     stats::ConsensusPoolServiceStats,
     std::{
+        collections::BTreeSet,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
@@ -60,6 +61,7 @@ pub(crate) struct ConsensusPoolContext {
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
     pub(crate) commitment_sender: Sender<CommitmentAggregationData>,
+    pub(crate) repair_event_sender: RepairEventSender,
 
     pub(crate) highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 }
@@ -218,6 +220,9 @@ impl ConsensusPoolService {
         // Kick off parent ready
         let mut kick_off_parent_ready = false;
 
+        // Track pending safe-to-notar blocks for intrawindow slots.
+        let mut pending_safe_to_notar: BTreeSet<Block> = BTreeSet::new();
+
         // Ingest votes into certificate pool and notify voting loop of new events
         while !ctx.exit.load(Ordering::Relaxed) {
             // Update the current pubkey if it has changed
@@ -283,6 +288,15 @@ impl ConsensusPoolService {
                     }
                 }
             }
+
+            // Process pending safe-to-notar blocks for intrawindow slots
+            Self::process_pending_safe_to_notar(
+                &ctx,
+                &mut consensus_pool,
+                &mut pending_safe_to_notar,
+                &mut events,
+                &mut stats,
+            )?;
 
             if events
                 .drain(..)
@@ -436,6 +450,79 @@ impl ConsensusPoolService {
         }
     }
 
+    /// Process pending safe-to-notar blocks for intrawindow slots.
+    ///
+    /// For each pending block:
+    /// 1. If it's new send a repair request
+    /// 2. If the slot is <= highest_finalized_slot, discard it
+    /// 3. Check if the block has been received in blockstore
+    /// 4. If received, verify the parent has a NotarizeFallback certificate
+    /// 5. If verified, emit SafeToNotar event and remove from pending
+    fn process_pending_safe_to_notar(
+        ctx: &ConsensusPoolContext,
+        consensus_pool: &mut ConsensusPool,
+        pending_safe_to_notar: &mut BTreeSet<Block>,
+        events: &mut Vec<VotorEvent>,
+        stats: &mut ConsensusPoolServiceStats,
+    ) -> Result<(), ()> {
+        // First, collect new pending blocks from the consensus pool and send them for repair
+        for block @ (slot, block_id) in consensus_pool.take_pending_safe_to_notar() {
+            if pending_safe_to_notar.insert(block) {
+                match ctx
+                    .repair_event_sender
+                    .try_send(RepairEvent::FetchBlock { slot, block_id })
+                {
+                    Ok(()) => (),
+                    Err(TrySendError::Full(event)) => {
+                        error!(
+                            "Repair event channel is full, this should not happen. Blocking to \
+                             send {event:?}",
+                        );
+                        ctx.repair_event_sender.send(event).map_err(|_| ())?;
+                    }
+                    Err(TrySendError::Disconnected(_)) => return Err(()),
+                }
+            }
+        }
+
+        let highest_finalized = consensus_pool.highest_finalized_slot().unwrap_or(0);
+
+        pending_safe_to_notar.retain(|&(slot, block_id)| {
+            // Discard if slot is at or below highest finalized
+            if slot <= highest_finalized {
+                return false;
+            }
+
+            // Check if we've received the full block in blockstore
+            let Some(location) = ctx.blockstore.get_block_location(slot, block_id) else {
+                // Block not yet received, keep waiting
+                return true;
+            };
+
+            // Block has been received, get the parent meta
+            let parent_meta = ctx
+                .blockstore
+                .get_parent_meta(slot, location)
+                .expect("Blockstore operations must succeed")
+                .expect("ParentMeta must exist if block location is present");
+
+            let parent_block = (parent_meta.parent_slot, parent_meta.parent_block_id);
+
+            // Check if the parent has a NotarizeFallback certificate (or stronger)
+            if consensus_pool.block_has_notar_fallback_or_stronger(parent_block) {
+                // All conditions met - emit SafeToNotar event
+                events.push(VotorEvent::SafeToNotar((slot, block_id)));
+                stats.pending_safe_to_notar_resolved += 1;
+                return false;
+            }
+
+            // Parent doesn't have the certificate yet, keep waiting
+            true
+        });
+
+        Ok(())
+    }
+
     pub(crate) fn join(self) -> thread::Result<()> {
         self.t_ingest.join()
     }
@@ -515,6 +602,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let leader_schedule_cache =
             Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
+        let (repair_event_sender, _repair_event_receiver) = crossbeam_channel::unbounded();
         let ctx = ConsensusPoolContext {
             exit: exit.clone(),
             migration_status: Arc::new(MigrationStatus::post_migration_status()),
@@ -527,6 +615,7 @@ mod tests {
             bls_sender,
             event_sender,
             commitment_sender,
+            repair_event_sender,
             highest_finalized: Arc::new(RwLock::new(None)),
         };
         ConsensusPoolServiceTestComponents {
@@ -757,5 +846,164 @@ mod tests {
         }
         assert!(setup_result.exit.load(Ordering::Relaxed));
         setup_result.consensus_pool_service.join().unwrap();
+    }
+
+    /// Creates a test context for testing process_pending_safe_to_notar directly
+    fn setup_pending_safe_to_notar_test(
+    ) -> (ConsensusPoolContext, ConsensusPool, Receiver<RepairEvent>) {
+        let (consensus_message_sender, consensus_message_receiver) = crossbeam_channel::unbounded();
+        let (bls_sender, _bls_receiver) = crossbeam_channel::unbounded();
+        let (event_sender, _event_receiver) = crossbeam_channel::unbounded();
+        let (commitment_sender, _commitment_receiver) = crossbeam_channel::unbounded();
+        let (repair_event_sender, repair_event_receiver) = crossbeam_channel::unbounded();
+
+        let validator_keypairs = (0..10)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let stake = (0..validator_keypairs.len())
+            .rev()
+            .map(|i| ((i.saturating_add(5).saturating_mul(100)) as u64))
+            .collect::<Vec<_>>();
+        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &validator_keypairs,
+            stake,
+        );
+        let my_keypair = validator_keypairs[0].node_keypair.insecure_clone();
+        let contact_info = ContactInfo::new_localhost(&my_keypair.pubkey(), 0);
+        let cluster_info = Arc::new(ClusterInfo::new(
+            contact_info,
+            Arc::new(my_keypair),
+            SocketAddrSpace::Unspecified,
+        ));
+        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
+        let bank_forks = BankForks::new_rw_arc(bank0);
+
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        let blockstore = Arc::new(Blockstore::open(ledger_path.path()).unwrap());
+        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
+        let exit = Arc::new(AtomicBool::new(false));
+        let leader_schedule_cache =
+            Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
+
+        let consensus_pool =
+            ConsensusPool::new_from_root_bank(cluster_info.clone(), &sharable_banks.root());
+
+        // Drop the sender to avoid unused variable warning
+        drop(consensus_message_sender);
+
+        let ctx = ConsensusPoolContext {
+            exit,
+            migration_status: Arc::new(MigrationStatus::post_migration_status()),
+            cluster_info,
+            my_vote_pubkey: Pubkey::new_unique(),
+            blockstore,
+            sharable_banks,
+            leader_schedule_cache,
+            consensus_message_receiver,
+            bls_sender,
+            event_sender,
+            commitment_sender,
+            repair_event_sender,
+            highest_finalized: Arc::new(RwLock::new(None)),
+        };
+
+        (ctx, consensus_pool, repair_event_receiver)
+    }
+
+    #[test]
+    fn test_pending_safe_to_notar_discards_finalized_blocks() {
+        let (ctx, mut consensus_pool, _repair_receiver) = setup_pending_safe_to_notar_test();
+        let mut pending_safe_to_notar: BTreeSet<Block> = BTreeSet::new();
+        let mut events = vec![];
+        let mut stats = ConsensusPoolServiceStats::new();
+
+        // Add some blocks to pending
+        let block1: Block = (5, Hash::new_unique());
+        let block2: Block = (10, Hash::new_unique());
+        let block3: Block = (15, Hash::new_unique());
+        pending_safe_to_notar.insert(block1);
+        pending_safe_to_notar.insert(block2);
+        pending_safe_to_notar.insert(block3);
+
+        // Simulate highest finalized being slot 10
+        // We need to add a finalization certificate to the pool
+        // For simplicity, we'll use a FinalizeFast certificate
+        let finalize_cert = Certificate {
+            cert_type: CertificateType::FinalizeFast(10, Hash::new_unique()),
+            signature: BLSSignature::default(),
+            bitmap: vec![],
+        };
+        let _ = consensus_pool.add_message(
+            &ctx.sharable_banks.root(),
+            &ctx.my_vote_pubkey,
+            ConsensusMessage::Certificate(finalize_cert),
+            &mut vec![],
+        );
+
+        // Process pending blocks
+        ConsensusPoolService::process_pending_safe_to_notar(
+            &ctx,
+            &mut consensus_pool,
+            &mut pending_safe_to_notar,
+            &mut events,
+            &mut stats,
+        )
+        .unwrap();
+
+        // Blocks at or below slot 10 should be discarded
+        assert!(
+            !pending_safe_to_notar.contains(&block1),
+            "Block at slot 5 should be discarded"
+        );
+        assert!(
+            !pending_safe_to_notar.contains(&block2),
+            "Block at slot 10 should be discarded"
+        );
+        // Block at slot 15 should still be pending
+        assert!(
+            pending_safe_to_notar.contains(&block3),
+            "Block at slot 15 should still be pending"
+        );
+    }
+
+    #[test]
+    fn test_pending_safe_to_notar_waits_for_block_in_blockstore() {
+        let (ctx, mut consensus_pool, _repair_receiver) = setup_pending_safe_to_notar_test();
+        let mut pending_safe_to_notar: BTreeSet<Block> = BTreeSet::new();
+        let mut events = vec![];
+        let mut stats = ConsensusPoolServiceStats::new();
+
+        // Add a block to pending
+        let block: Block = (100, Hash::new_unique());
+        pending_safe_to_notar.insert(block);
+
+        // Process pending blocks
+        ConsensusPoolService::process_pending_safe_to_notar(
+            &ctx,
+            &mut consensus_pool,
+            &mut pending_safe_to_notar,
+            &mut events,
+            &mut stats,
+        )
+        .unwrap();
+
+        // Block should still be pending since it's not in blockstore
+        assert!(
+            pending_safe_to_notar.contains(&block),
+            "Block should remain pending when not in blockstore"
+        );
+
+        // No SafeToNotar event should be emitted
+        assert!(
+            events.is_empty(),
+            "No SafeToNotar event should be emitted when block is not in blockstore"
+        );
+
+        // resolved stat should not be incremented
+        assert_eq!(
+            stats.pending_safe_to_notar_resolved.0, 0,
+            "Resolved stat should not be incremented"
+        );
     }
 }
