@@ -12559,6 +12559,7 @@ fn test_bank_burn_vat(enable_alpenglow: bool, enable_vat: bool) {
     assert!(bank_epoch_2.epoch_stakes(4).is_none());
     let capitalization_epoch_2 = bank_epoch_2.capitalization();
     if enable_alpenglow && enable_vat {
+        // VAT should be burned
         assert!(capitalization_epoch_2 < capitalization_epoch_1);
     } else {
         // VAT should not be burned
