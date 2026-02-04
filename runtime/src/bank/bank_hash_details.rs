@@ -2,6 +2,7 @@
 
 use {
     super::Bank,
+    crate::block_component_processor::vote_reward::VoteRewardAccountState,
     base64::{prelude::BASE64_STANDARD, Engine},
     log::*,
     serde::{
@@ -17,7 +18,7 @@ use {
     solana_transaction_context::TransactionReturnData,
     solana_transaction_error::TransactionResult,
     solana_transaction_status_client_types::UiInstruction,
-    std::str::FromStr,
+    std::{path::PathBuf, str::FromStr},
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -129,6 +130,14 @@ impl SlotDetails {
         let bank_hash_components = if include_bank_hash_components {
             let accounts = bank.get_accounts_for_bank_hash_details();
 
+            println!("SlotDetails::new_from_bank: checking accounts");
+            for account in accounts.iter() {
+                let vote_account_addr = VoteRewardAccountState::get_addr();
+                if vote_account_addr == account.0 {
+                    println!("vote account: {account:?}");
+                }
+            }
+
             Some(BankHashComponents {
                 parent_bank_hash: bank.parent_hash().to_string(),
                 signature_count: bank.signature_count(),
@@ -164,7 +173,7 @@ pub struct AccountsDetails {
 
 /// Used as an intermediate for serializing and deserializing account fields
 /// into a human readable format.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct SerdeAccount {
     pubkey: String,
     owner: String,
@@ -212,7 +221,12 @@ impl Serialize for AccountsDetails {
         S: Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(self.accounts.len()))?;
+        println!("serializer called");
         for account in self.accounts.iter() {
+            let vote_account_addr = VoteRewardAccountState::get_addr();
+            if vote_account_addr == account.0 {
+                println!("vote account: {account:?}");
+            }
             let temp_account = SerdeAccount::from(account);
             seq.serialize_element(&temp_account)?;
         }
@@ -244,13 +258,15 @@ pub fn write_bank_hash_details_file(bank: &Bank) -> std::result::Result<(), Stri
     let slot_details = SlotDetails::new_from_bank(bank, /*include_bank_hash_mixins:*/ true)?;
     let details = BankHashDetails::new(vec![slot_details]);
 
-    let parent_dir = bank
-        .rc
-        .accounts
-        .accounts_db
-        .get_base_working_path()
-        .join("bank_hash_details");
+    // let parent_dir = bank
+    //     .rc
+    //     .accounts
+    //     .accounts_db
+    //     .get_base_working_path()
+    //     .join("bank_hash_details");
+    let parent_dir = PathBuf::from("./tmp/bank_hash_details");
     let path = parent_dir.join(details.filename()?);
+    println!("going to write to path {path:?}");
     // A file with the same name implies the same hash for this slot. Skip
     // rewriting a duplicate file in this scenario
     if !path.exists() {

@@ -6,6 +6,7 @@ use {
     },
     crate::{
         accounts_background_service::{PrunedBanksRequestHandler, SendDroppedBankCallback},
+        bank::bank_hash_details::write_bank_hash_details_file,
         bank_client::BankClient,
         bank_forks::BankForks,
         genesis_utils::{
@@ -5354,6 +5355,7 @@ fn test_bank_hash_consistency() {
     loop {
         goto_end_of_slot(Arc::clone(&bank));
         if bank.slot == 0 {
+            write_bank_hash_details_file(&bank).unwrap();
             assert_eq!(bank.epoch(), 0);
             assert_eq!(
                 bank.hash().to_string(),
@@ -5362,6 +5364,7 @@ fn test_bank_hash_consistency() {
         }
 
         if bank.slot == 32 {
+            write_bank_hash_details_file(&bank).unwrap();
             assert_eq!(bank.epoch(), 1);
             assert_eq!(
                 bank.hash().to_string(),
