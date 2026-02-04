@@ -9,11 +9,10 @@ use {
         bank_client::BankClient,
         bank_forks::BankForks,
         genesis_utils::{
-            self, activate_all_features, activate_all_features_alpenglow, activate_feature,
-            bootstrap_validator_stake_lamports, create_genesis_config_with_alpenglow_vote_accounts,
-            create_genesis_config_with_leader, create_genesis_config_with_vote_accounts,
-            deactivate_features, genesis_sysvar_and_builtin_program_lamports, GenesisConfigInfo,
-            ValidatorVoteKeypairs,
+            self, activate_all_features, activate_feature, bootstrap_validator_stake_lamports,
+            create_genesis_config_with_alpenglow_vote_accounts, create_genesis_config_with_leader,
+            create_genesis_config_with_vote_accounts, deactivate_features,
+            genesis_sysvar_and_builtin_program_lamports, GenesisConfigInfo, ValidatorVoteKeypairs,
         },
         stake_history::StakeHistory,
         stakes::InvalidCacheEntryReason,
@@ -12505,51 +12504,64 @@ fn test_get_top_epoch_stakes() {
 
 #[test_matrix([false, true], [false, true])]
 fn test_bank_burn_vat(enable_alpenglow: bool, enable_vat: bool) {
-    // Create 100 vote accounts
-    let num_of_nodes: u64 = 100;
-    let voting_keypairs = (0..num_of_nodes)
-        .map(|_| ValidatorVoteKeypairs::new_rand())
-        .collect::<Vec<_>>();
-    let GenesisConfigInfo {
-        mut genesis_config, ..
-    } = create_genesis_config_with_alpenglow_vote_accounts(
-        1_000_000_000,
-        &voting_keypairs,
-        (1..num_of_nodes.checked_add(1).expect("Shouldn't be big")).collect::<Vec<_>>(),
-    );
-    activate_all_features_alpenglow(&mut genesis_config);
-    let mut features_to_deactivate = vec![];
-    if !enable_alpenglow {
-        features_to_deactivate.push(agave_feature_set::alpenglow::id());
-    }
-    if !enable_vat {
-        features_to_deactivate.push(agave_feature_set::alpenglow_vat_and_limit_validators::id());
-    }
-    deactivate_features(&mut genesis_config, &features_to_deactivate);
-    let bank_epoch_0 = Bank::new_for_tests(&genesis_config);
-    assert_eq!(bank_epoch_0.epoch(), 0);
-    let capitalization_epoch_0 = bank_epoch_0.capitalization();
-    assert!(bank_epoch_0.epoch_stakes(2).is_none());
+    // Create a bank with all features enabled expect for AG and VAT.
+    let bank_epoch_0 = {
+        let num_of_nodes: u64 = 100;
+        let voting_keypairs = (0..num_of_nodes)
+            .map(|_| ValidatorVoteKeypairs::new_rand())
+            .collect::<Vec<_>>();
+        let GenesisConfigInfo {
+            mut genesis_config, ..
+        } = create_genesis_config_with_alpenglow_vote_accounts(
+            1_000_000_000,
+            &voting_keypairs,
+            (1..num_of_nodes.checked_add(1).expect("Shouldn't be big")).collect::<Vec<_>>(),
+        );
+        let features_to_deactivate = vec![
+            agave_feature_set::alpenglow::id(),
+            agave_feature_set::alpenglow_vat_and_limit_validators::id(),
+        ];
+        deactivate_features(&mut genesis_config, &features_to_deactivate);
+        Bank::new_for_tests(&genesis_config)
+    };
 
-    // Create a child bank in epoch 1, child bank should not burn VAT
-    let first_slot_in_epoch_1 = bank_epoch_0.epoch_schedule().get_first_slot_in_epoch(1);
-    let bank_epoch_1 = Bank::new_from_parent(
-        Arc::new(bank_epoch_0),
-        &Pubkey::new_unique(),
-        first_slot_in_epoch_1,
-    );
-    assert_eq!(bank_epoch_1.epoch(), 1);
-    assert!(bank_epoch_1.epoch_stakes(2).is_some());
-    assert!(bank_epoch_1.epoch_stakes(3).is_none());
+    // Now move to a bank in the next epoch.
+    let mut bank_epoch_1 = {
+        let first_slot_in_epoch_1 = bank_epoch_0.epoch_schedule().get_first_slot_in_epoch(1);
+        Bank::new_from_parent(
+            Arc::new(bank_epoch_0),
+            &Pubkey::new_unique(),
+            first_slot_in_epoch_1,
+        )
+    };
     let capitalization_epoch_1 = bank_epoch_1.capitalization();
+
+    // Now move to a bank in the next epoch while enabling the features as per test inputs.
+    let bank_epoch_2 = {
+        let first_slot_in_epoch_2 = bank_epoch_1.epoch_schedule().get_first_slot_in_epoch(2);
+
+        let mut feature_set = FeatureSet::all_enabled();
+        if !enable_alpenglow {
+            feature_set.deactivate(&agave_feature_set::alpenglow::id());
+        }
+        if !enable_vat {
+            feature_set.deactivate(&agave_feature_set::alpenglow_vat_and_limit_validators::id());
+        }
+        bank_epoch_1.feature_set = Arc::new(feature_set);
+        Bank::new_from_parent(
+            Arc::new(bank_epoch_1),
+            &Pubkey::new_unique(),
+            first_slot_in_epoch_2,
+        )
+    };
+
+    assert!(bank_epoch_2.epoch_stakes(3).is_some());
+    assert!(bank_epoch_2.epoch_stakes(4).is_none());
+    let capitalization_epoch_2 = bank_epoch_2.capitalization();
     if enable_alpenglow && enable_vat {
-        // We expect the VAT to be burned so epoch 1's capitalization should be lower however
-        // the [`VoteRewardAccountState`] was not created in epoch 0 and is created in epoch
-        // 1 so we have to account for that.
-        let rent_needed = VoteRewardAccountState::get_rent_needed();
-        assert!(capitalization_epoch_1 - rent_needed < capitalization_epoch_0);
+        assert!(capitalization_epoch_2 < capitalization_epoch_1);
     } else {
         // VAT should not be burned
-        assert!(capitalization_epoch_1 >= capitalization_epoch_0);
+        assert!(capitalization_epoch_2 >= capitalization_epoch_1);
     }
 }

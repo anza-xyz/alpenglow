@@ -15,7 +15,6 @@ static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
         &[b"vote_reward_account"],
         &agave_feature_set::alpenglow::id(),
     );
-    println!("vote reward pubkey = {pubkey}");
     pubkey
 });
 
@@ -46,15 +45,6 @@ impl VoteRewardAccountState {
                 acct.deserialize_data().unwrap()
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn get_rent_needed() -> u64 {
-        let account_size = bincode::serialized_size(&Self {
-            epoch_validator_rewards_lamports: 0,
-        })
-        .unwrap();
-        Rent::default().minimum_balance(account_size as usize)
     }
 
     /// Serializes and updates [`Self`] into the accounts in the [`Bank`].
