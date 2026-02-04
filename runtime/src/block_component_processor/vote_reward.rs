@@ -28,10 +28,6 @@ pub(crate) struct VoteRewardAccountState {
 }
 
 impl VoteRewardAccountState {
-    pub fn get_addr() -> Pubkey {
-        *VOTE_REWARD_ACCOUNT_ADDR
-    }
-
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
     fn get_state(bank: &Bank) -> Self {
         match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
