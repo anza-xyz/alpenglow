@@ -37,53 +37,45 @@ fn get_matrix_params() -> impl Iterator<Item = (usize, usize)> {
     })
 }
 
-fn generate_test_data(
-    num_distinct_messages: usize,
-    batch_size: usize,
-) -> (Vec<VoteToVerify>, Vec<Arc<Vec<u8>>>) {
+fn generate_test_data(num_distinct_messages: usize, batch_size: usize) -> Vec<VoteToVerify> {
     assert!(
         batch_size >= num_distinct_messages,
         "Batch size must be >= distinct messages"
     );
 
-    // Generate the distinct messages (payloads)
-    let distinct_data: Vec<(Vote, Arc<Vec<u8>>)> = (0..num_distinct_messages)
+    // Pre-calculate the payloads to ensure exact distinctness
+    let base_payloads: Vec<Arc<Vec<u8>>> = (0..num_distinct_messages)
         .map(|i| {
-            // Create distinct votes by varying the slot.
-            // Use NotarizationVote as the standard case.
             let slot = (i as u64) + 100;
-            let block_id = Hash::new_unique();
-            let vote = Vote::new_notarization_vote(slot, block_id);
-            let payload_bytes = bincode::serialize(&vote).unwrap();
-            (vote, Arc::new(payload_bytes))
+            let vote = Vote::new_notarization_vote(slot, Hash::new_unique());
+            Arc::new(bincode::serialize(&vote).unwrap())
         })
         .collect();
 
     let mut votes_to_verify = Vec::with_capacity(batch_size);
-    let mut all_payloads = Vec::with_capacity(batch_size);
 
-    for (vote, payload_arc) in distinct_data.iter().cycle().take(batch_size) {
+    for i in 0..batch_size {
+        let payload = &base_payloads[i % num_distinct_messages];
+
         let bls_keypair = BLSKeypair::new();
-        let node_keypair = Keypair::new();
-        let signature = bls_keypair.sign(payload_arc);
+        let vote: Vote = bincode::deserialize(payload).unwrap();
+
+        let signature = bls_keypair.sign(payload);
 
         let vote_message = VoteMessage {
-            vote: *vote,
+            vote,
             signature: signature.into(),
-            rank: 0, // arbitrary number - doesn't impact sigverify performance
+            rank: 0,
         };
 
-        let vtv = VoteToVerify {
+        votes_to_verify.push(VoteToVerify {
             vote_message,
             bls_pubkey: bls_keypair.public.into(),
-            pubkey: node_keypair.pubkey(),
-        };
-
-        votes_to_verify.push(vtv);
-        all_payloads.push(payload_arc.clone());
+            pubkey: Keypair::new().pubkey(),
+        });
     }
 
-    (votes_to_verify, all_payloads)
+    votes_to_verify
 }
 
 // Single Signature Verification
@@ -112,14 +104,12 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_optimistic");
 
     for (batch_size, num_distinct) in get_matrix_params() {
-        let (votes, payloads) = generate_test_data(num_distinct, batch_size);
+        let votes = generate_test_data(num_distinct, batch_size);
         let stats = BLSSigVerifierStats::new();
         let label = format!("msgs_{}/batch_{}", num_distinct, batch_size);
 
         group.bench_function(&label, |b| {
-            b.iter(|| {
-                verify_votes_optimistic(black_box(&votes), black_box(&payloads), black_box(&stats))
-            })
+            b.iter(|| verify_votes_optimistic(black_box(&votes), black_box(&stats)))
         });
     }
     group.finish();
@@ -131,18 +121,12 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
     let mut group = c.benchmark_group("aggregate_pubkeys");
 
     for (batch_size, num_distinct) in get_matrix_params() {
-        let (votes, payloads) = generate_test_data(num_distinct, batch_size);
+        let votes = generate_test_data(num_distinct, batch_size);
         let stats = BLSSigVerifierStats::new();
         let label = format!("msgs_{}/batch_{}", num_distinct, batch_size);
 
         group.bench_function(&label, |b| {
-            b.iter(|| {
-                aggregate_pubkeys_by_payload(
-                    black_box(&votes),
-                    black_box(&payloads),
-                    black_box(&stats),
-                )
-            })
+            b.iter(|| aggregate_pubkeys_by_payload(black_box(&votes), black_box(&stats)))
         });
     }
     group.finish();
@@ -156,7 +140,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
     for &batch_size in BATCH_SIZES {
         // Use 1 distinct message just to generate valid data cheaply.
         // It doesn't affect signature aggregation performance.
-        let (votes, _payloads) = generate_test_data(1, batch_size);
+        let votes = generate_test_data(1, batch_size);
         let label = format!("batch_{}", batch_size);
 
         group.bench_function(&label, |b| {
@@ -173,14 +157,12 @@ fn bench_verify_votes_fallback(c: &mut Criterion) {
 
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
-        let (votes, payloads) = generate_test_data(1, batch_size);
+        let votes = generate_test_data(1, batch_size);
         let stats = BLSSigVerifierStats::new();
         let label = format!("batch_{}", batch_size);
 
         group.bench_function(&label, |b| {
-            b.iter(|| {
-                verify_votes_fallback(black_box(&votes), black_box(&payloads), black_box(&stats))
-            })
+            b.iter(|| verify_votes_fallback(black_box(&votes), black_box(&stats)))
         });
     }
     group.finish();

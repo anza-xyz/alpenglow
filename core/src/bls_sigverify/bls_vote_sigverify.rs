@@ -6,9 +6,7 @@ use {
         cluster_info_vote_listener::VerifiedVoteSender,
     },
     crossbeam_channel::{Sender, TrySendError},
-    rayon::iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-    },
+    rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     solana_bls_signatures::{
         pubkey::{Pubkey as BlsPubkey, PubkeyProjective, VerifiablePubkey},
         signature::SignatureProjective,
@@ -24,6 +22,11 @@ use {
     solana_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
+        vote::Vote,
+    },
+    std::{
+        collections::HashMap,
+        sync::{atomic::Ordering, Arc},
     },
     std::{collections::HashMap, sync::atomic::Ordering},
 };
@@ -34,6 +37,17 @@ pub(crate) struct VoteToVerify {
     pub vote_message: VoteMessage,
     pub bls_pubkey: BlsPubkey,
     pub pubkey: Pubkey,
+}
+
+impl VoteToVerify {
+    pub(crate) fn verify(&self) -> bool {
+        let Ok(payload) = bincode::serialize(&self.vote_message.vote) else {
+            return false;
+        };
+        self.bls_pubkey
+            .verify_signature(&self.vote_message.signature, &payload)
+            .is_ok()
+    }
 }
 
 /// Verifies votes and sends verified votes to the consensus pool.
@@ -134,27 +148,17 @@ fn verify_votes(
 
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
 
-    // TODO: use wincode instead of bincode
-    let payloads = votes_to_verify
-        .iter()
-        .map(|v| bincode::serialize(&v.vote_message.vote).expect("Failed to serialize vote"))
-        .collect::<Vec<_>>();
-
     // Try optimistic verification
-    if verify_votes_optimistic(votes_to_verify, &payloads, stats) {
+    if verify_votes_optimistic(votes_to_verify, stats) {
         return votes_to_verify.to_vec();
     }
 
     // Fallback to individual verification
-    verify_votes_fallback(votes_to_verify, &payloads, stats)
+    verify_votes_fallback(votes_to_verify, stats)
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn verify_votes_optimistic(
-    votes_to_verify: &[VoteToVerify],
-    payloads: &[Arc<Vec<u8>>],
-    stats: &BLSSigVerifierStats,
-) -> bool {
+fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerifierStats) -> bool {
     let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
 
     // aggregate signature
@@ -164,14 +168,13 @@ fn verify_votes_optimistic(
 
     // aggregate public keys by payload
     let (distinct_payloads, aggregate_pubkeys_result) =
-        aggregate_pubkeys_by_payload(votes_to_verify, payloads, stats);
+        aggregate_pubkeys_by_payload(votes_to_verify, stats);
 
     // final verification
     let verified = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
         if distinct_payloads.len() == 1 {
-            let payload_slice = distinct_payloads[0].as_slice();
             aggregate_pubkeys[0]
-                .verify_signature(&aggregate_signature, payload_slice)
+                .verify_signature(&aggregate_signature, &distinct_payloads[0])
                 .is_ok()
         } else {
             let payload_slices: Vec<&[u8]> =
@@ -208,18 +211,16 @@ fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, B
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_pubkeys_by_payload<'a>(
     votes: &[VoteToVerify],
-    payloads: &'a [Arc<Vec<u8>>],
     stats: &BLSSigVerifierStats,
-) -> (
-    Vec<&'a Arc<Vec<u8>>>,
-    Result<Vec<PubkeyProjective>, BlsError>,
-) {
-    let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
-    for (v, payload) in votes.iter().zip(payloads.iter()) {
+) -> (Vec<Arc<Vec<u8>>>, Result<Vec<PubkeyProjective>, BlsError>) {
+    let mut grouped_pubkeys: HashMap<Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+
+    for vote in votes {
+        let payload = get_vote_payload(&vote.vote_message.vote);
         grouped_pubkeys
             .entry(payload)
             .or_default()
-            .push(&v.bls_pubkey);
+            .push(&vote.bls_pubkey);
     }
 
     let distinct_messages = grouped_pubkeys.len();
@@ -241,30 +242,26 @@ fn aggregate_pubkeys_by_payload<'a>(
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_votes_fallback(
     votes_to_verify: &[VoteToVerify],
-    payloads: &[Arc<Vec<u8>>],
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
     let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
 
-    let verified_votes = votes_to_verify
+    let verified_votes: Vec<VoteToVerify> = votes_to_verify
         .into_par_iter()
-        .zip(payloads.par_iter())
-        .filter(|(vote_to_verify, payload)| {
-            if vote_to_verify
-                .bls_pubkey
-                .verify_signature(&vote_to_verify.vote_message.signature, payload.as_slice())
-                .is_ok()
-            {
-                true
-            } else {
+        .filter_map(|vote| {
+            // verify signature
+            if !vote.verify() {
+                // if fail, record stats and return `None`
                 stats
                     .received_bad_signature_votes
                     .fetch_add(1, Ordering::Relaxed);
-                false
+                return None;
             }
+            // if success, return `VoteToVerify` to provide to `Sender`s
+            Some(*vote)
         })
-        .map(|(v, _)| *v)
         .collect();
+
     votes_batch_parallel_verify_time.stop();
     stats
         .votes_batch_parallel_verify_count
@@ -273,4 +270,8 @@ fn verify_votes_fallback(
         .votes_batch_parallel_verify_elapsed_us
         .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
     verified_votes
+}
+
+fn get_vote_payload(vote: &Vote) -> Arc<Vec<u8>> {
+    Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"))
 }
