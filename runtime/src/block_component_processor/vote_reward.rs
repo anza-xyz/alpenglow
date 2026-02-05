@@ -20,7 +20,7 @@ static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
 
 /// The state stored in the off curve account used to store metadata for calculating and paying
 /// voting rewards.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct VoteRewardAccountState {
     /// The rewards (in lamports) that would be paid to a validator whose stake is equal to the
     /// capitalization and it voted in every slot in the epoch.  This is also the epoch inflation.
@@ -178,4 +178,65 @@ fn calculate_voting_reward(
     // SAFETY: the result should fit in u64 because we do not expect the inflation in a single
     // epoch to exceed u64::MAX.
     (numerator / denominator).try_into().unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, solana_genesis_config::GenesisConfig, solana_native_token::LAMPORTS_PER_SOL};
+
+    #[test]
+    fn calculate_voting_reward_does_not_panic() {
+        // the current circulating supply is about 566M.  The most extreme numbers are when all of
+        // it is staked by a single validator.
+        let circulating_supply = 566_000_000 * LAMPORTS_PER_SOL;
+
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let EpochInflationRewards {
+            validator_rewards_lamports,
+            ..
+        } = bank.calculate_epoch_inflation_rewards(circulating_supply, 1);
+
+        calculate_voting_reward(
+            bank.epoch_schedule().slots_per_epoch,
+            validator_rewards_lamports,
+            circulating_supply,
+            circulating_supply,
+        );
+    }
+
+    #[test]
+    fn serialization_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let state = VoteRewardAccountState {
+            epoch_validator_rewards_lamports: 1234,
+        };
+        state.set_state(&bank);
+        let deserialized = VoteRewardAccountState::new_from_bank(&bank);
+        assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn epoch_update_works() {
+        let bank = Bank::new_for_tests(&GenesisConfig::default());
+        let prev_epoch = 1;
+        let prev_epoch_capitalization = 12345;
+        let additional_validator_rewards = 6789;
+        VoteRewardAccountState::new_epoch_update_account(
+            &bank,
+            prev_epoch,
+            prev_epoch_capitalization,
+            additional_validator_rewards,
+        );
+        let VoteRewardAccountState {
+            epoch_validator_rewards_lamports,
+        } = VoteRewardAccountState::new_from_bank(&bank);
+        let EpochInflationRewards {
+            validator_rewards_lamports,
+            ..
+        } = bank.calculate_epoch_inflation_rewards(
+            prev_epoch_capitalization + additional_validator_rewards,
+            prev_epoch,
+        );
+        assert_eq!(epoch_validator_rewards_lamports, validator_rewards_lamports);
+    }
 }
