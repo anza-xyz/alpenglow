@@ -2350,6 +2350,7 @@ impl Bank {
         });
     }
 
+    /// Returns a reference to [`BLSPubkeyToRankMap`] for the given `slot`.
     pub fn get_rank_map(&self, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
         self.epoch_stakes_from_slot(slot)
             .map(|stake| stake.bls_pubkey_to_rank_map())
