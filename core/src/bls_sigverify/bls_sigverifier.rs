@@ -303,10 +303,15 @@ impl BLSSigVerifier {
         vote_message: &VoteMessage,
         root_bank: &Bank,
     ) -> Option<(Pubkey, BlsPubkey)> {
-        let key_to_rank_map = root_bank.get_rank_map(vote_message.vote.slot())?;
+        let Some(rank_map) = root_bank.get_rank_map(vote_message.vote.slot()) else {
+            self.stats
+                .received_no_epoch_stakes
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
 
         // Invalid rank
-        let (pubkey, bls_pubkey, _) = key_to_rank_map
+        let (pubkey, bls_pubkey, _) = rank_map
             .get_pubkey_and_stake(vote_message.rank.into())
             .or_else(|| {
                 self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);
