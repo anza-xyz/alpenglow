@@ -213,23 +213,27 @@ fn aggregate_pubkeys_by_payload<'a>(
     votes: &[VoteToVerify],
     stats: &BLSSigVerifierStats,
 ) -> (Vec<Arc<Vec<u8>>>, Result<Vec<PubkeyProjective>, BlsError>) {
-    let mut grouped_pubkeys: HashMap<Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+    let mut grouped_votes: HashMap<&Vote, Vec<&BlsPubkey>> = HashMap::new();
 
-    for vote in votes {
-        let payload = get_vote_payload(&vote.vote_message.vote);
-        grouped_pubkeys
-            .entry(payload)
+    for v in votes {
+        grouped_votes
+            .entry(&v.vote_message.vote)
             .or_default()
-            .push(&vote.bls_pubkey);
+            .push(&v.bls_pubkey);
     }
 
-    let distinct_messages = grouped_pubkeys.len();
+    let distinct_messages = grouped_votes.len();
     stats
         .votes_batch_distinct_messages_count
         .fetch_add(distinct_messages as u64, Ordering::Relaxed);
 
-    let (distinct_payloads, distinct_pubkeys_groups): (Vec<_>, Vec<_>) =
-        grouped_pubkeys.into_iter().unzip();
+    let (distinct_vote_structs, distinct_pubkeys_groups): (Vec<_>, Vec<_>) =
+        grouped_votes.into_iter().unzip();
+
+    let distinct_payloads: Vec<Arc<Vec<u8>>> = distinct_vote_structs
+        .into_par_iter()
+        .map(|vote| get_vote_payload(vote))
+        .collect();
 
     let aggregate_pubkeys_result = distinct_pubkeys_groups
         .into_par_iter()
