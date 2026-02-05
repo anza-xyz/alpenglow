@@ -1,3 +1,5 @@
+#[cfg(feature = "dev-context-only-utils")]
+use qualifier_attr::qualifiers;
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -91,6 +93,7 @@ impl BLSPacketStats {
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
 #[derive(Debug)]
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(crate) struct BLSSigVerifierStats {
     pub(crate) total_valid_packets: AtomicU64,
 
@@ -125,6 +128,7 @@ pub(crate) struct BLSSigVerifierStats {
 }
 
 impl BLSSigVerifierStats {
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
     pub(crate) fn new() -> Self {
         Self {
             total_valid_packets: AtomicU64::new(0),

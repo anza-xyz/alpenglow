@@ -1,3 +1,5 @@
+#[cfg(feature = "dev-context-only-utils")]
+use qualifier_attr::qualifiers;
 use {
     crate::{
         bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
@@ -26,6 +28,7 @@ use {
     std::{collections::HashMap, sync::atomic::Ordering},
 };
 
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VoteToVerify {
     pub vote_message: VoteMessage,
@@ -146,6 +149,7 @@ fn verify_votes(
     verify_votes_fallback(votes_to_verify, &payloads, stats)
 }
 
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_votes_optimistic(
     votes_to_verify: &[VoteToVerify],
     payloads: &[Arc<Vec<u8>>],
@@ -195,11 +199,13 @@ fn verify_votes_optimistic(
     verified
 }
 
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, BlsError> {
     let signatures = votes.par_iter().map(|v| &v.vote_message.signature);
     SignatureProjective::par_aggregate(signatures)
 }
 
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_pubkeys_by_payload<'a>(
     votes: &[VoteToVerify],
     payloads: &'a [Arc<Vec<u8>>],
@@ -232,6 +238,7 @@ fn aggregate_pubkeys_by_payload<'a>(
     (distinct_payloads, aggregate_pubkeys_result)
 }
 
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_votes_fallback(
     votes_to_verify: &[VoteToVerify],
     payloads: &[Arc<Vec<u8>>],
