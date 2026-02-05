@@ -86,6 +86,18 @@ impl VoteRewardAccountState {
         };
         state.set_state(bank);
     }
+
+    /// Returns the amount of lamports needed to store this account.
+    #[cfg(test)]
+    pub(crate) fn rent_needed_for_account(bank: &Bank) -> u64 {
+        let state = Self {
+            epoch_validator_rewards_lamports: 0,
+        };
+        let account_size = bincode::serialized_size(&state).unwrap();
+        bank.rent_collector()
+            .rent
+            .minimum_balance(account_size as usize)
+    }
 }
 
 /// Different types of errors that can happen when calculating and paying voting reward.

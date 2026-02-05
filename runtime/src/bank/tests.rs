@@ -812,10 +812,12 @@ where
     assert_ne!(bank2.capitalization(), bank0.capitalization());
 
     // verify the inflation is represented in validator_points
+    // and account for the additional created state.
     let paid_rewards = bank2.capitalization()
         - bank0.capitalization()
         - bank1_sysvar_delta()
-        - bank2_sysvar_delta();
+        - bank2_sysvar_delta()
+        - VoteRewardAccountState::rent_needed_for_account(&bank2);
 
     // this assumes that no new builtins or precompiles were activated in bank1 or bank2
     let EpochInflationRewards {
