@@ -33,7 +33,7 @@ use {
         system_monitor_service::SystemMonitorService,
         validator::{
             is_snapshot_config_valid, BlockProductionMethod, BlockVerificationMethod,
-            TransactionStructure, Validator, ValidatorConfig, ValidatorError,
+            TransactionStructure, TurbineMode, Validator, ValidatorConfig, ValidatorError,
             ValidatorStartProgress, ValidatorTpuConfig,
         },
     },
@@ -76,10 +76,7 @@ use {
         path::{Path, PathBuf},
         process::exit,
         str::FromStr,
-        sync::{
-            atomic::{AtomicBool, AtomicU8},
-            Arc, RwLock,
-        },
+        sync::{atomic::AtomicBool, Arc, RwLock},
     },
 };
 
@@ -611,7 +608,7 @@ pub fn execute(
             .is_present("delay_leader_block_for_pending_fork"),
         wen_restart_proto_path: value_t!(matches, "wen_restart", PathBuf).ok(),
         wen_restart_coordinator: value_t!(matches, "wen_restart_coordinator", Pubkey).ok(),
-        turbine_mode: Arc::<AtomicU8>::default(),
+        turbine_mode: TurbineMode::default(),
         retransmit_xdp,
         broadcast_stage_type: BroadcastStageType::Standard,
         use_tpu_client_next: !matches.is_present("use_connection_cache"),

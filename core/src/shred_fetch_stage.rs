@@ -27,7 +27,7 @@ use {
     std::{
         net::{SocketAddr, UdpSocket},
         sync::{
-            atomic::{AtomicBool, AtomicU8, Ordering},
+            atomic::{AtomicBool, Ordering},
             Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
@@ -72,7 +72,7 @@ impl ShredFetchStage {
         name: &'static str,
         flags: PacketFlags,
         repair_context: Option<&RepairContext>,
-        turbine_mode: Arc<AtomicU8>,
+        turbine_mode: TurbineMode,
     ) {
         // Only repair shreds need repair context.
         debug_assert_eq!(
@@ -152,7 +152,7 @@ impl ShredFetchStage {
             // Filter out shreds that are way too far in the future to avoid the
             // overhead of having to hold onto them.
             let max_slot = last_slot + MAX_SHRED_DISTANCE_MINIMUM.max(2 * slots_per_epoch);
-            let mode = TurbineMode::from(turbine_mode.load(Ordering::Relaxed));
+            let mode = turbine_mode.get();
             for mut packet in packet_batch.iter_mut().filter(|p| !p.meta().discard()) {
                 // When turbine is disabled, discard non-repair shreds.
                 // When both turbine and repair are disabled, discard all shreds.
@@ -204,7 +204,7 @@ impl ShredFetchStage {
         receiver_name: &'static str,
         flags: PacketFlags,
         repair_context: Option<RepairContext>,
-        turbine_mode: Arc<AtomicU8>,
+        turbine_mode: TurbineMode,
     ) -> (Vec<JoinHandle<()>>, JoinHandle<()>) {
         let (packet_sender, packet_receiver) =
             EvictingSender::new_bounded(SHRED_FETCH_CHANNEL_SIZE);
@@ -257,7 +257,7 @@ impl ShredFetchStage {
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: Arc<ClusterInfo>,
         outstanding_repair_requests: Arc<RwLock<OutstandingShredRepairs>>,
-        turbine_mode: Arc<AtomicU8>,
+        turbine_mode: TurbineMode,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let recycler = PacketBatchRecycler::warmed(100, 1024);

@@ -269,7 +269,7 @@ pub struct GeneratorConfig {
 /// Controls turbine and repair behavior for testing network partitions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TurbineMode {
+pub enum TurbineModeKind {
     /// Normal operation - turbine and repair both enabled
     #[default]
     Enabled = 0,
@@ -279,7 +279,7 @@ pub enum TurbineMode {
     TurbineAndRepairDisabled = 2,
 }
 
-impl TurbineMode {
+impl TurbineModeKind {
     pub fn is_turbine_disabled(self) -> bool {
         matches!(self, Self::TurbineDisabled | Self::TurbineAndRepairDisabled)
     }
@@ -289,7 +289,7 @@ impl TurbineMode {
     }
 }
 
-impl From<u8> for TurbineMode {
+impl From<u8> for TurbineModeKind {
     fn from(value: u8) -> Self {
         match value {
             0 => Self::Enabled,
@@ -300,9 +300,42 @@ impl From<u8> for TurbineMode {
     }
 }
 
-impl From<TurbineMode> for u8 {
-    fn from(mode: TurbineMode) -> Self {
+impl From<TurbineModeKind> for u8 {
+    fn from(mode: TurbineModeKind) -> Self {
         mode as u8
+    }
+}
+
+/// Thread-safe wrapper around [`TurbineModeKind`] for dynamically controlling
+/// turbine and repair behavior at runtime.
+#[derive(Clone, Debug)]
+pub struct TurbineMode(Arc<AtomicU8>);
+
+impl TurbineMode {
+    pub fn new(kind: TurbineModeKind) -> Self {
+        Self(Arc::new(AtomicU8::new(kind as u8)))
+    }
+
+    pub fn get(&self) -> TurbineModeKind {
+        TurbineModeKind::from(self.0.load(Ordering::Relaxed))
+    }
+
+    pub fn set(&self, kind: TurbineModeKind) {
+        self.0.store(kind as u8, Ordering::Relaxed);
+    }
+
+    pub fn is_turbine_disabled(&self) -> bool {
+        self.get().is_turbine_disabled()
+    }
+
+    pub fn is_repair_disabled(&self) -> bool {
+        self.get().is_repair_disabled()
+    }
+}
+
+impl Default for TurbineMode {
+    fn default() -> Self {
+        Self::new(TurbineModeKind::default())
     }
 }
 
@@ -324,8 +357,7 @@ pub struct ValidatorConfig {
     pub max_ledger_shreds: Option<u64>,
     pub blockstore_options: BlockstoreOptions,
     pub broadcast_stage_type: BroadcastStageType,
-    /// Intended to be parsed with TurbineMode::from
-    pub turbine_mode: Arc<AtomicU8>,
+    pub turbine_mode: TurbineMode,
     pub fixed_leader_schedule: Option<FixedSchedule>,
     pub wait_for_supermajority: Option<Slot>,
     pub new_hard_forks: Option<Vec<Slot>>,
@@ -408,7 +440,7 @@ impl ValidatorConfig {
             pubsub_config: PubSubConfig::default(),
             snapshot_config: SnapshotConfig::new_load_only(),
             broadcast_stage_type: BroadcastStageType::Standard,
-            turbine_mode: Arc::<AtomicU8>::default(),
+            turbine_mode: TurbineMode::default(),
             fixed_leader_schedule: None,
             wait_for_supermajority: None,
             new_hard_forks: None,
