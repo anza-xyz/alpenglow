@@ -1,7 +1,10 @@
 //! The `shred_fetch_stage` pulls shreds from UDP sockets and sends it to a channel.
 
 use {
-    crate::repair::{repair_service::OutstandingShredRepairs, serve_repair::ServeRepair},
+    crate::{
+        repair::{repair_service::OutstandingShredRepairs, serve_repair::ServeRepair},
+        validator::TurbineMode,
+    },
     agave_feature_set::FeatureSet,
     bytes::Bytes,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded},
@@ -69,7 +72,7 @@ impl ShredFetchStage {
         name: &'static str,
         flags: PacketFlags,
         repair_context: Option<&RepairContext>,
-        turbine_disabled: Arc<AtomicBool>,
+        turbine_mode: TurbineMode,
     ) {
         // Only repair shreds need repair context.
         debug_assert_eq!(
@@ -161,9 +164,15 @@ impl ShredFetchStage {
                     &epoch_schedule,
                 )
             };
-            let turbine_disabled = turbine_disabled.load(Ordering::Relaxed);
+            let mode = turbine_mode.get();
             for mut packet in packet_batch.iter_mut().filter(|p| !p.meta().discard()) {
-                if turbine_disabled
+                // When turbine is disabled, discard non-repair shreds.
+                // When both turbine and repair are disabled, discard all shreds.
+                let is_repair = packet.meta().repair();
+                let discard_turbine = mode.is_turbine_disabled() && !is_repair;
+                let discard_repair = mode.is_repair_disabled() && is_repair;
+                if discard_turbine
+                    || discard_repair
                     || should_discard_shred(
                         packet.as_ref(),
                         last_root,
@@ -209,7 +218,7 @@ impl ShredFetchStage {
         receiver_name: &'static str,
         flags: PacketFlags,
         repair_context: Option<RepairContext>,
-        turbine_disabled: Arc<AtomicBool>,
+        turbine_mode: TurbineMode,
     ) -> (Vec<JoinHandle<()>>, JoinHandle<()>) {
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let (packet_sender, packet_receiver) =
@@ -244,7 +253,7 @@ impl ShredFetchStage {
                     name,
                     flags,
                     repair_context.as_ref(),
-                    turbine_disabled,
+                    turbine_mode,
                 )
             })
             .unwrap();
@@ -261,7 +270,7 @@ impl ShredFetchStage {
         bank_forks: Arc<RwLock<BankForks>>,
         cluster_info: Arc<ClusterInfo>,
         outstanding_repair_requests: Arc<RwLock<OutstandingShredRepairs>>,
-        turbine_disabled: Arc<AtomicBool>,
+        turbine_mode: TurbineMode,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let recycler = PacketBatchRecycler::warmed(100, 1024);
@@ -284,7 +293,7 @@ impl ShredFetchStage {
             "shred_fetch_receiver",
             PacketFlags::empty(),
             None, // repair_context
-            turbine_disabled.clone(),
+            turbine_mode.clone(),
         );
 
         let (repair_receiver, repair_handler) = Self::packet_modifier(
@@ -300,7 +309,7 @@ impl ShredFetchStage {
             "shred_fetch_repair_receiver",
             PacketFlags::REPAIR,
             Some(repair_context.clone()),
-            turbine_disabled.clone(),
+            turbine_mode.clone(),
         );
 
         tvu_threads.extend(repair_receiver);
@@ -335,7 +344,7 @@ impl ShredFetchStage {
                             PacketFlags::REPAIR,
                             // No ping packets but need to verify repair nonce.
                             Some(&repair_context),
-                            turbine_disabled,
+                            turbine_mode,
                         )
                     })
                     .unwrap(),

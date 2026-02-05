@@ -161,8 +161,8 @@ use {
         path::{Path, PathBuf},
         str::FromStr,
         sync::{
+            atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
             Arc, Mutex, RwLock,
-            atomic::{AtomicBool, AtomicU64, Ordering},
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -333,6 +333,79 @@ pub struct GeneratorConfig {
     pub starting_keypairs: Arc<Vec<Keypair>>,
 }
 
+/// Controls turbine and repair behavior for testing network partitions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TurbineModeKind {
+    /// Normal operation - turbine and repair both enabled
+    #[default]
+    Enabled = 0,
+    /// Turbine disabled but repair still works (for equivocation tests)
+    TurbineDisabled = 1,
+    /// Both turbine and repair disabled (for partition tests)
+    TurbineAndRepairDisabled = 2,
+}
+
+impl TurbineModeKind {
+    pub fn is_turbine_disabled(self) -> bool {
+        matches!(self, Self::TurbineDisabled | Self::TurbineAndRepairDisabled)
+    }
+
+    pub fn is_repair_disabled(self) -> bool {
+        matches!(self, Self::TurbineAndRepairDisabled)
+    }
+}
+
+impl From<u8> for TurbineModeKind {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Enabled,
+            1 => Self::TurbineDisabled,
+            2 => Self::TurbineAndRepairDisabled,
+            _ => Self::Enabled,
+        }
+    }
+}
+
+impl From<TurbineModeKind> for u8 {
+    fn from(mode: TurbineModeKind) -> Self {
+        mode as u8
+    }
+}
+
+/// Thread-safe wrapper around [`TurbineModeKind`] for dynamically controlling
+/// turbine and repair behavior at runtime.
+#[derive(Clone, Debug)]
+pub struct TurbineMode(Arc<AtomicU8>);
+
+impl TurbineMode {
+    pub fn new(kind: TurbineModeKind) -> Self {
+        Self(Arc::new(AtomicU8::new(kind as u8)))
+    }
+
+    pub fn get(&self) -> TurbineModeKind {
+        TurbineModeKind::from(self.0.load(Ordering::Relaxed))
+    }
+
+    pub fn set(&self, kind: TurbineModeKind) {
+        self.0.store(kind as u8, Ordering::Relaxed);
+    }
+
+    pub fn is_turbine_disabled(&self) -> bool {
+        self.get().is_turbine_disabled()
+    }
+
+    pub fn is_repair_disabled(&self) -> bool {
+        self.get().is_repair_disabled()
+    }
+}
+
+impl Default for TurbineMode {
+    fn default() -> Self {
+        Self::new(TurbineModeKind::default())
+    }
+}
+
 pub struct ValidatorConfig {
     /// The destination file for validator logs; `stderr` is used if `None`
     pub logfile: Option<PathBuf>,
@@ -352,7 +425,7 @@ pub struct ValidatorConfig {
     pub max_ledger_shreds: Option<u64>,
     pub blockstore_options: BlockstoreOptions,
     pub broadcast_stage_type: BroadcastStageType,
-    pub turbine_disabled: Arc<AtomicBool>,
+    pub turbine_mode: TurbineMode,
     pub fixed_leader_schedule: Option<FixedSchedule>,
     pub wait_for_supermajority: Option<Slot>,
     pub new_hard_forks: Option<Vec<Slot>>,
@@ -432,7 +505,7 @@ impl ValidatorConfig {
             pubsub_config: PubSubConfig::default(),
             snapshot_config: SnapshotConfig::new_load_only(),
             broadcast_stage_type: BroadcastStageType::Standard,
-            turbine_disabled: Arc::<AtomicBool>::default(),
+            turbine_mode: TurbineMode::default(),
             fixed_leader_schedule: None,
             wait_for_supermajority: None,
             new_hard_forks: None,
@@ -1666,7 +1739,7 @@ impl Validator {
             &leader_schedule_cache,
             exit.clone(),
             block_commitment_cache,
-            config.turbine_disabled.clone(),
+            config.turbine_mode.clone(),
             transaction_status_sender.clone(),
             entry_notification_sender.clone(),
             vote_tracker.clone(),

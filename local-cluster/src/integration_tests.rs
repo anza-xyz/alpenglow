@@ -27,7 +27,7 @@ use {
     solana_core::{
         consensus::{SWITCH_FORK_THRESHOLD, Tower, tower_storage::FileTowerStorage},
         snapshot_packager_service::SnapshotPackagerService,
-        validator::{ValidatorConfig, is_snapshot_config_valid},
+        validator::{TurbineMode, TurbineModeKind, ValidatorConfig, is_snapshot_config_valid},
     },
     solana_gossip::gossip_service::discover_validators,
     solana_hash::Hash,
@@ -51,10 +51,7 @@ use {
         fs, iter,
         num::{NonZeroU64, NonZeroUsize},
         path::{Path, PathBuf},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
+        sync::{Arc, atomic::AtomicBool},
         thread::sleep,
         time::Duration,
     },
@@ -354,7 +351,7 @@ pub fn run_cluster_partition<C>(
         .collect();
     assert_eq!(node_stakes.len(), num_nodes);
     let mint_lamports = node_stakes.iter().sum::<u64>() * 2;
-    let turbine_disabled = Arc::new(AtomicBool::new(false));
+    let turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
     let wait_for_supermajority = if no_wait_for_vote_to_start_leader {
         // This helps nodes get a little more in sync by waiting for
         // supermajority to observe slot 0. It still doesn't provide perfect
@@ -369,7 +366,7 @@ pub fn run_cluster_partition<C>(
         None
     };
     let mut validator_config = ValidatorConfig {
-        turbine_disabled: turbine_disabled.clone(),
+        turbine_mode: turbine_mode.clone(),
         wait_for_supermajority,
         no_wait_for_vote_to_start_leader,
         ..ValidatorConfig::default_for_test()
@@ -463,13 +460,13 @@ pub fn run_cluster_partition<C>(
 
     info!("PARTITION_TEST start partition");
     on_partition_start(&mut cluster, &mut context);
-    turbine_disabled.store(true, Ordering::Relaxed);
+    turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
 
     sleep(partition_duration);
 
     on_before_partition_resolved(&mut cluster, &mut context);
     info!("PARTITION_TEST remove partition");
-    turbine_disabled.store(false, Ordering::Relaxed);
+    turbine_mode.set(TurbineModeKind::Enabled);
 
     // Give partitions time to propagate their blocks from during the partition
     // after the partition resolves

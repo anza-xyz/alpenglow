@@ -42,8 +42,9 @@ use {
         system_monitor_service::SystemMonitorService,
         tpu::MAX_VOTES_PER_SECOND,
         validator::{
-            BlockProductionMethod, BlockVerificationMethod, SchedulerPacing, Validator,
-            ValidatorConfig, ValidatorStartProgress, ValidatorTpuConfig, is_snapshot_config_valid,
+            BlockProductionMethod, BlockVerificationMethod, SchedulerPacing, TurbineMode,
+            Validator, ValidatorConfig, ValidatorStartProgress, ValidatorTpuConfig,
+            is_snapshot_config_valid,
         },
     },
     solana_genesis_utils::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
@@ -840,7 +841,7 @@ pub fn execute(
         tvu_shred_sigverify_threads: tvu_sigverify_threads,
         delay_leader_block_for_pending_fork: matches
             .is_present("delay_leader_block_for_pending_fork"),
-        turbine_disabled: Arc::<AtomicBool>::default(),
+        turbine_mode: TurbineMode::default(),
         broadcast_stage_type: BroadcastStageType::Standard,
         voting_service_additional_listeners: None,
         block_verification_method: value_t_or_exit!(

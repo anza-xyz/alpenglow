@@ -28,7 +28,10 @@ use {
         },
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
         replay_stage::DUPLICATE_THRESHOLD,
-        validator::{BlockProductionMethod, BlockVerificationMethod, ValidatorConfig},
+        validator::{
+            BlockProductionMethod, BlockVerificationMethod, TurbineMode, TurbineModeKind,
+            ValidatorConfig,
+        },
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
@@ -5479,9 +5482,9 @@ fn test_duplicate_shreds_switch_failure() {
         dup_shred1: &Shred,
         dup_shred2: &Shred,
     ) {
-        let disable_turbine = Arc::new(AtomicBool::new(true));
+        let turbine_mode = TurbineMode::new(TurbineModeKind::TurbineAndRepairDisabled);
         duplicate_fork_validator_info.config.voting_disabled = false;
-        duplicate_fork_validator_info.config.turbine_disabled = disable_turbine.clone();
+        duplicate_fork_validator_info.config.turbine_mode = turbine_mode.clone();
         info!("Restarting node: {pubkey}");
         cluster.restart_node(
             pubkey,
@@ -5502,7 +5505,7 @@ fn test_duplicate_shreds_switch_failure() {
             }
             sleep(Duration::from_millis(1000));
         }
-        disable_turbine.store(false, Ordering::Relaxed);
+        turbine_mode.set(TurbineModeKind::Enabled);
 
         // Send the validator the other version of the shred so they realize it's duplicate
         info!("Resending duplicate shreds to duplicate fork validator");
@@ -6506,7 +6509,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control component for network partition simulation
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_c_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule with Node B as primary leader (Node A will go offline)
     let (leader_schedule, validator_keys) =
@@ -6529,7 +6532,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
         make_identical_validator_configs(&validator_config, node_stakes.len());
 
     // Node C will have its turbine disabled during the experiment
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+    validator_configs[2].turbine_mode = node_c_turbine_mode.clone();
 
     // Cluster configuration
     let mut cluster_config = ClusterConfig {
@@ -6642,7 +6645,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
         fn handle_experiment_start(
             &mut self,
             vote: &Vote,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
+            node_c_turbine_mode: &TurbineMode,
         ) {
             // Phase 2: Start network partition experiment at slot 20
             if vote.slot() >= 20 && self.stage == Stage::Stability {
@@ -6650,7 +6653,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                     "Starting network partition experiment at slot {}",
                     vote.slot()
                 );
-                node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                node_c_turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
                 self.stage = Stage::ObserveNotarFallbacks;
             }
         }
@@ -6659,7 +6662,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             &mut self,
             vote: &Vote,
             node_name: usize,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
+            node_c_turbine_mode: &TurbineMode,
         ) {
             // Track NotarizeFallback votes from Node C
             if self.stage == Stage::ObserveNotarFallbacks
@@ -6676,7 +6679,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                 // Phase 3: End partition after observing sufficient NotarizeFallback votes
                 if self.notar_fallbacks.len() >= 5 {
                     info!("Sufficient NotarizeFallback votes observed, ending partition");
-                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                    node_c_turbine_mode.set(TurbineModeKind::Enabled);
                     self.stage = Stage::ObserveLiveness;
                 }
             }
@@ -6694,7 +6697,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
         let mut buf = [0u8; 65_535];
-        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let node_c_turbine_mode = node_c_turbine_mode.clone();
         let mut experiment_state = ExperimentState::new(vote_pubkeys.len());
         let timer = std::time::Instant::now();
 
@@ -6716,9 +6719,9 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                         for stage in Stage::all() {
                             if elapsed_time > stage.timeout() {
                                 panic!(
-                                    "Timeout during {:?}. node_c_turbine_disabled: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
+                                    "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest vote: {:#?}. Experiment state: {:#?}",
                                     stage,
-                                    node_c_turbine_disabled.load(Ordering::Acquire),
+                                    node_c_turbine_mode.get(),
                                     vote,
                                     experiment_state
                                 );
@@ -6732,11 +6735,11 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                             &mut cluster,
                             &validator_keys[0].pubkey(),
                         );
-                        experiment_state.handle_experiment_start(vote, &node_c_turbine_disabled);
+                        experiment_state.handle_experiment_start(vote, &node_c_turbine_mode);
                         experiment_state.handle_notar_fallback(
                             vote,
                             node_name,
-                            &node_c_turbine_disabled,
+                            &node_c_turbine_mode,
                         );
                     }
 
