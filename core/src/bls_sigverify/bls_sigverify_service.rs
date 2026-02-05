@@ -1,7 +1,7 @@
 use {
     crate::{
         bls_sigverify::{
-            bls_sigverifier::BLSSigVerifier, error::BLSSigVerifyError, stats::BLSPacketStats,
+            bls_sigverifier::BLSSigVerifier, error::BLSSigVerifyError, stats::PacketStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
@@ -21,7 +21,6 @@ use {
     std::{
         sync::Arc,
         thread::{self, Builder, JoinHandle},
-        time::Instant,
     },
 };
 
@@ -61,9 +60,7 @@ impl BLSSigVerifyService {
     }
 
     fn run(packet_receiver: Receiver<PacketBatch>, mut verifier: BLSSigVerifier) {
-        let mut stats = BLSPacketStats::default();
-        let mut last_print = Instant::now();
-
+        let mut stats = PacketStats::default();
         loop {
             // Receive packets
             let (batches, num_packets, recv_duration) =
@@ -83,11 +80,10 @@ impl BLSSigVerifyService {
 
             match verify_time_us {
                 Ok(verify_time_us) => {
-                    Self::update_stats(
-                        &mut stats,
-                        num_packets,
-                        batches_len,
-                        recv_duration,
+                    stats.update(
+                        num_packets as u64,
+                        batches_len as u64,
+                        recv_duration.as_micros() as u64,
                         verify_time_us,
                     );
                 }
@@ -96,12 +92,7 @@ impl BLSSigVerifyService {
                     _ => error!("{e:?}"),
                 },
             }
-
-            if last_print.elapsed().as_secs() > 2 {
-                stats.maybe_report();
-                stats = BLSPacketStats::default();
-                last_print = Instant::now();
-            }
+            stats.maybe_report();
         }
     }
 
@@ -129,28 +120,6 @@ impl BLSSigVerifyService {
         verifier.verify_and_send_batches(batches)?;
         verify_time.stop();
         Ok(verify_time.as_us())
-    }
-
-    fn update_stats(
-        stats: &mut BLSPacketStats,
-        num_packets: usize,
-        batches_len: usize,
-        recv_duration: Duration,
-        verify_time_us: u64,
-    ) {
-        stats
-            .recv_batches_us_hist
-            .increment(recv_duration.as_micros() as u64)
-            .unwrap();
-        stats
-            .verify_batches_pp_us_hist
-            .increment(verify_time_us / (num_packets as u64))
-            .unwrap();
-        stats.batches_hist.increment(batches_len as u64).unwrap();
-        stats.packets_hist.increment(num_packets as u64).unwrap();
-        stats.total_batches += batches_len;
-        stats.total_packets += num_packets;
-        stats.total_verify_time_us += verify_time_us as usize;
     }
 
     pub fn join(self) -> thread::Result<()> {

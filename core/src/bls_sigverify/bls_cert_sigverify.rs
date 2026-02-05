@@ -38,7 +38,7 @@ enum CertVerifyError {
     NotEnoughStake(u64, Fraction, Fraction),
 }
 
-pub(crate) fn verify_and_send_certificates(
+pub(super) fn verify_and_send_certificates(
     certs_buffer: &mut Vec<Certificate>,
     bank: &Bank,
     verified_certs: &RwLock<HashSet<CertificateType>>,

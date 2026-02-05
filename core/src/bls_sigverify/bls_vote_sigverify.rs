@@ -39,7 +39,7 @@ pub(crate) struct VoteToVerify {
 /// Verifies votes and sends verified votes to the consensus pool.
 /// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn verify_and_send_votes(
+pub(super) fn verify_and_send_votes(
     votes_to_verify: &[VoteToVerify],
     root_bank: &Bank,
     vote_payload_cache: &RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
