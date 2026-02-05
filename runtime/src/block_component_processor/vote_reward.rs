@@ -3,7 +3,6 @@ use {
     solana_account::AccountSharedData,
     solana_clock::{Epoch, Slot},
     solana_pubkey::Pubkey,
-    solana_rent::Rent,
     solana_system_interface::program as system_program,
     std::sync::LazyLock,
     thiserror::Error,
@@ -28,7 +27,7 @@ pub(crate) struct VoteRewardAccountState {
 
 impl VoteRewardAccountState {
     /// Returns the deserialized [`Self`] from the accounts in the [`Bank`].
-    fn get_state(bank: &Bank) -> Self {
+    fn new_from_bank(bank: &Bank) -> Self {
         match bank.get_account(&VOTE_REWARD_ACCOUNT_ADDR) {
             None => {
                 // this can happen in the first epoch when the account has not been created yet.
@@ -49,8 +48,12 @@ impl VoteRewardAccountState {
 
     /// Serializes and updates [`Self`] into the accounts in the [`Bank`].
     fn set_state(&self, bank: &Bank) {
+        // TODO: use wincode instead.
         let account_size = bincode::serialized_size(&self).unwrap();
-        let lamports = Rent::default().minimum_balance(account_size as usize);
+        let lamports = bank
+            .rent_collector()
+            .rent
+            .minimum_balance(account_size as usize);
         let account = AccountSharedData::new_data(lamports, &self, &system_program::ID).unwrap();
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
@@ -117,7 +120,7 @@ pub(super) fn calculate_and_pay_voting_reward(
         )
     };
     let epoch_validator_rewards_lamports =
-        VoteRewardAccountState::get_state(bank).epoch_validator_rewards_lamports;
+        VoteRewardAccountState::new_from_bank(bank).epoch_validator_rewards_lamports;
 
     let mut total_leader_reward_lamports = 0u64;
     for validator in validators {
@@ -130,6 +133,7 @@ pub(super) fn calculate_and_pay_voting_reward(
             total_stake_lamports,
             *validator_stake_lamports,
         );
+        // As per the Alpenglow SIMD, the rewards are split equally between the validators and the leader.
         let validator_reward_lamports = reward_lamports / 2;
         let leader_reward_lamports = reward_lamports - validator_reward_lamports;
         total_leader_reward_lamports =
