@@ -42,7 +42,7 @@ use {
         },
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
-        epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
+        epoch_stakes::{BLSPubkeyToRankMap, NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
         rent_collector::RentCollector,
@@ -2348,6 +2348,11 @@ impl Bank {
                 self.inherit_specially_retained_account_fields(account),
             )
         });
+    }
+
+    pub fn get_rank_map(&self, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+        self.epoch_stakes_from_slot(slot)
+            .map(|stake| stake.bls_pubkey_to_rank_map())
     }
 
     fn update_stake_history(&self, epoch: Option<Epoch>) {

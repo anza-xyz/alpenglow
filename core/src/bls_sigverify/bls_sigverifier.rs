@@ -36,11 +36,6 @@ use {
     },
 };
 
-fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
-    bank.epoch_stakes_from_slot(slot)
-        .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
-}
-
 pub struct BLSSigVerifier {
     votes_for_repair_sender: VerifiedVoteSender,
     reward_votes_sender: Sender<AddVoteMessage>,
@@ -321,7 +316,8 @@ impl BLSSigVerifier {
         }
 
         // cache miss
-        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
+        let key_to_rank_map = root_bank
+            .get_rank_map(vote_message.vote.slot())
             .or_else(|| {
                 self.stats
                     .received_no_epoch_stakes
