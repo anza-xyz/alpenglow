@@ -3,7 +3,7 @@
 use {
     crate::{
         bls_sigverify::{
-            bls_cert_sigverify::{get_key_to_rank_map, verify_and_send_certificates},
+            bls_cert_sigverify::verify_and_send_certificates,
             bls_vote_sigverify::{verify_and_send_votes, VoteToVerify},
             error::BLSSigVerifyError,
             stats::BLSSigVerifierStats,
@@ -35,6 +35,11 @@ use {
         time::Instant,
     },
 };
+
+fn get_key_to_rank_map(bank: &Bank, slot: Slot) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
+    bank.epoch_stakes_from_slot(slot)
+        .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
+}
 
 pub struct BLSSigVerifier {
     votes_for_repair_sender: VerifiedVoteSender,
