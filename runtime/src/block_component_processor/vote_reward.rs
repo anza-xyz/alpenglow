@@ -78,11 +78,12 @@ impl VoteRewardAccountState {
             epoch_duration_in_years: _,
             validator_rate: _,
             foundation_rate: _,
-        } = bank.calculate_epoch_inflation_rewards(prev_epoch_capitalization, prev_epoch);
-        let epoch_validator_rewards_lamports =
-            validator_rewards_lamports + additional_validator_rewards;
+        } = bank.calculate_epoch_inflation_rewards(
+            prev_epoch_capitalization + additional_validator_rewards,
+            prev_epoch,
+        );
         let state = Self {
-            epoch_validator_rewards_lamports,
+            epoch_validator_rewards_lamports: validator_rewards_lamports,
         };
         state.set_state(bank);
     }
