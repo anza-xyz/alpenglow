@@ -27,7 +27,6 @@ use {
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
-        vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -43,7 +42,6 @@ pub struct BLSSigVerifier {
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<CertificateType>>,
-    vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
@@ -80,7 +78,6 @@ impl BLSSigVerifier {
             message_sender,
             stats: BLSSigVerifierStats::new(),
             verified_certs: RwLock::new(HashSet::new()),
-            vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
@@ -123,7 +120,6 @@ impl BLSSigVerifier {
 
         // Destructure self to borrow fields independently for the closure
         let vote_buffer = &self.vote_buffer;
-        let vote_payload_cache = &self.vote_payload_cache;
         let stats = &self.stats;
         let cluster_info = &self.cluster_info;
         let leader_schedule = &self.leader_schedule;
@@ -139,7 +135,6 @@ impl BLSSigVerifier {
                 verify_and_send_votes(
                     vote_buffer,
                     &root_bank,
-                    vote_payload_cache,
                     stats,
                     cluster_info,
                     leader_schedule,
@@ -181,10 +176,6 @@ impl BLSSigVerifier {
             .write()
             .unwrap()
             .retain(|cert| cert.slot() > root_bank.slot());
-        self.vote_payload_cache
-            .write()
-            .unwrap()
-            .retain(|vote, _| vote.slot() > root_bank.slot());
     }
 
     fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
