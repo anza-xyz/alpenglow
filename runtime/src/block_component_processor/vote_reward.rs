@@ -8,7 +8,8 @@ use {
     thiserror::Error,
 };
 
-/// The account address for the off curve account used to store metadata for calculating and paying voting rewards.
+/// The account address for the off curve account used to store metadata for calculating and
+/// paying voting rewards.
 static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
     let (pubkey, _) = Pubkey::find_program_address(
         &[b"vote_reward_account"],
@@ -17,11 +18,12 @@ static VOTE_REWARD_ACCOUNT_ADDR: LazyLock<Pubkey> = LazyLock::new(|| {
     pubkey
 });
 
-/// The state stored in the off curve account used to store metadata for calculating and paying voting rewards.
+/// The state stored in the off curve account used to store metadata for calculating and paying
+/// voting rewards.
 #[derive(Deserialize, Serialize)]
 pub(crate) struct VoteRewardAccountState {
-    /// The rewards (in lamports) that would be paid to a validator whose stake is equal to the capitalization and it voted in every slot in the epoch.
-    /// This is also the epoch inflation.
+    /// The rewards (in lamports) that would be paid to a validator whose stake is equal to the
+    /// capitalization and it voted in every slot in the epoch.  This is also the epoch inflation.
     epoch_validator_rewards_lamports: u64,
 }
 
@@ -40,7 +42,8 @@ impl VoteRewardAccountState {
                 state
             }
             Some(acct) => {
-                // unwrap should be safe as the data being deserialized was serialized by us in [`Self::set_state`].
+                // unwrap should be safe as the data being deserialized was serialized by us in
+                // [`Self::set_state`].
                 acct.deserialize_data().unwrap()
             }
         }
@@ -58,15 +61,15 @@ impl VoteRewardAccountState {
         bank.store_account_and_update_capitalization(&VOTE_REWARD_ACCOUNT_ADDR, &account);
     }
 
-    /// Calculates and serializes a new version of [`Self`] into the accounts in the [`Bank`] when a new epoch starts.
-    ///
-    /// At the start of a new epoch, over several slots we pay the inflation rewards from the previous epoch.
-    /// This is called Partitioned Epoch Rewards (PER).
-    /// As such, the capitalization keeps increasing in the first slots of the epoch.
-    /// Vote rewards are calculated as a function of the capitalization and we do not want voting in the initial slots
-    /// to earn less rewards than voting in the later rewards.
-    /// As such this function is called with [`additional_validator_rewards`] which should be the total rewards that
-    /// will be paid by PER and we use the capitalization from the previous epoch plus this value to compute the vote rewards.
+    /// Calculates and serializes a new version of [`Self`] into the accounts in the [`Bank`]
+    /// when  a new epoch starts.   At the start of a new epoch, over several slots we pay the
+    /// inflation rewards from the  previous epoch.  This is called Partitioned Epoch Rewards
+    /// (PER).  As such, the capitalization keeps increasing in the first slots of the epoch.
+    /// Vote rewards are calculated as a function of the capitalization and we do not want
+    /// voting in the initial slots  to earn less rewards than voting in the later rewards.  As
+    /// such this function is called with [`additional_validator_rewards`] which should be the
+    /// total rewards that will be paid by PER and we use the capitalization from the previous
+    /// epoch plus this value to compute the vote rewards.
     pub(crate) fn new_epoch_update_account(
         bank: &Bank,
         prev_epoch: Epoch,
@@ -172,6 +175,7 @@ fn calculate_voting_reward(
     let numerator = epoch_validator_rewards_lamports as u128 * validator_stake_lamports as u128;
     let denominator = slots_per_epoch as u128 * total_stake_lamports as u128;
 
-    // SAFETY: the result should fit in u64 because we do not expect the inflation in a single epoch to exceed u64::MAX.
+    // SAFETY: the result should fit in u64 because we do not expect the inflation in a single
+    // epoch to exceed u64::MAX.
     (numerator / denominator).try_into().unwrap()
 }
