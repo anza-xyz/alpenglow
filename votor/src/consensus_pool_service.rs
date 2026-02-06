@@ -306,6 +306,14 @@ impl ConsensusPoolService {
                 return Self::handle_channel_disconnected(&mut ctx, "Votor event receiver");
             }
 
+            let wait_timeout = if pending_safe_to_notar.is_empty() {
+                Duration::from_secs(1)
+            } else {
+                // If there are pending blocks that are waiting for repair in order to emit
+                // SafeToNotar events, use a shorter timeout
+                Duration::from_millis(20)
+            };
+
             let messages: Vec<ConsensusMessage> = select! {
                 recv(ctx.consensus_message_receiver) -> msg => {
                     let Ok(first) = msg else {
@@ -313,7 +321,7 @@ impl ConsensusPoolService {
                     };
                     std::iter::once(first).chain(ctx.consensus_message_receiver.try_iter()).collect()
                 },
-                default(Duration::from_secs(1)) => continue
+                default(wait_timeout) => continue
             };
 
             for message in messages {
