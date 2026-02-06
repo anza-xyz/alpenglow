@@ -80,7 +80,7 @@ pub(crate) fn verify_and_send_votes(
         .total_valid_packets
         .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
 
-    let mut verified_votes_by_pubkey: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
+    let mut votes_for_repair = HashMap::new();
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
 
@@ -99,8 +99,7 @@ pub(crate) fn verify_and_send_votes(
             || vote.vote_message.vote.is_notarize_fallback()
         {
             let slot = vote.vote_message.vote.slot();
-            let cur_slots: &mut Vec<Slot> =
-                verified_votes_by_pubkey.entry(vote.pubkey).or_default();
+            let cur_slots: &mut Vec<Slot> = votes_for_repair.entry(vote.pubkey).or_default();
             if !cur_slots.contains(&slot) {
                 cur_slots.push(slot);
             }
@@ -121,7 +120,7 @@ pub(crate) fn verify_and_send_votes(
     }
 
     // Send votes for repair
-    for (pubkey, slots) in verified_votes_by_pubkey {
+    for (pubkey, slots) in votes_for_repair {
         match votes_for_repair_sender.try_send((pubkey, slots)) {
             Ok(()) => {
                 stats.votes_for_repair_sent.fetch_add(1, Ordering::Relaxed);
@@ -148,7 +147,7 @@ fn verify_votes(
 
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
 
-    // Try optimistic verification
+    // Try optimistic verification - fast to verify, but cannot identify invalid votes
     if verify_votes_optimistic(votes_to_verify, stats) {
         return votes_to_verify.to_vec();
     }
@@ -167,31 +166,27 @@ fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerif
     };
 
     // aggregate public keys by payload
-    let (distinct_payloads, aggregate_pubkeys_result) =
-        aggregate_pubkeys_by_payload(votes_to_verify, stats);
+    let (distinct_payloads, Ok(aggregate_pubkeys)) =
+        aggregate_pubkeys_by_payload(votes_to_verify, stats)
+    else {
+        return false;
+    };
 
-    // final verification
-    let verified = if let Ok(aggregate_pubkeys) = aggregate_pubkeys_result {
-        if distinct_payloads.len() == 1 {
-            aggregate_pubkeys[0]
-                .verify_signature(&aggregate_signature, &distinct_payloads[0])
-                .is_ok()
-        } else {
-            let payload_slices: Vec<&[u8]> =
-                distinct_payloads.iter().map(|p| p.as_slice()).collect();
-
-            let aggregate_pubkeys_affine: Vec<BlsPubkey> =
-                aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
-
-            SignatureProjective::par_verify_distinct_aggregated(
-                &aggregate_pubkeys_affine,
-                &aggregate_signature,
-                &payload_slices,
-            )
+    let verified = if distinct_payloads.len() == 1 {
+        // if one unique payload, just verify the aggregate signature the single payload
+        aggregate_pubkeys[0]
+            .verify_signature(&aggregate_signature, &distinct_payloads[0])
             .is_ok()
-        }
     } else {
-        false
+        // if non-unique payload, we need to apply a pairing for each messages,
+        // which is done inside `par_verify_distinct_aggregated`.
+        let payload_slices: Vec<&[u8]> = distinct_payloads.iter().map(|p| p.as_slice()).collect();
+        SignatureProjective::par_verify_distinct_aggregated(
+            &aggregate_pubkeys,
+            &aggregate_signature,
+            &payload_slices,
+        )
+        .is_ok()
     };
 
     votes_batch_optimistic_time.stop();
