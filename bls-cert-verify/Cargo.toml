@@ -20,8 +20,13 @@ solana-votor-messages = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 solana-hash = { workspace = true }
 solana-votor = { workspace = true }
+
+[[bench]]
+name = "cert_verify"
+harness = false
 
 [lints]
 workspace = true

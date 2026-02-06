@@ -21,12 +21,8 @@ use {
     solana_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
-        vote::Vote,
     },
-    std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc, RwLock},
-    },
+    std::{collections::HashMap, sync::atomic::Ordering},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -42,7 +38,6 @@ pub(crate) struct VoteToVerify {
 pub(crate) fn verify_and_send_votes(
     votes_to_verify: &[VoteToVerify],
     root_bank: &Bank,
-    vote_payload_cache: &RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     stats: &BLSSigVerifierStats,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
@@ -51,7 +46,7 @@ pub(crate) fn verify_and_send_votes(
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
 ) -> Result<AddVoteMessage, BLSSigVerifyError> {
-    let verified_votes = verify_votes(votes_to_verify, vote_payload_cache, stats);
+    let verified_votes = verify_votes(votes_to_verify, stats);
 
     let votes = verified_votes
         .iter()
@@ -127,7 +122,6 @@ pub(crate) fn verify_and_send_votes(
 
 fn verify_votes(
     votes_to_verify: &[VoteToVerify],
-    vote_payload_cache: &RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
     if votes_to_verify.is_empty() {
@@ -137,11 +131,12 @@ fn verify_votes(
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
     let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
 
+    // TODO: use wincode instead of bincode
     let payloads = votes_to_verify
         .iter()
-        .map(|v| get_vote_payload(&v.vote_message.vote, vote_payload_cache))
+        .map(|v| bincode::serialize(&v.vote_message.vote).expect("Failed to serialize vote"))
         .collect::<Vec<_>>();
-    let mut grouped_pubkeys: HashMap<&Arc<Vec<u8>>, Vec<&BlsPubkey>> = HashMap::new();
+    let mut grouped_pubkeys: HashMap<&[u8], Vec<&BlsPubkey>> = HashMap::new();
     for (v, payload) in votes_to_verify.iter().zip(payloads.iter()) {
         grouped_pubkeys
             .entry(payload)
@@ -167,21 +162,18 @@ fn verify_votes(
             .map(|v| &v.vote_message.signature);
         if let Ok(aggregate_signature) = SignatureProjective::par_aggregate(signatures) {
             if distinct_messages == 1 {
-                let payload_slice = distinct_payloads[0].as_slice();
+                let payload_slice = distinct_payloads[0];
                 aggregate_pubkeys[0]
                     .verify_signature(&aggregate_signature, payload_slice)
                     .is_ok()
             } else {
-                let payload_slices: Vec<&[u8]> =
-                    distinct_payloads.iter().map(|p| p.as_slice()).collect();
-
                 let aggregate_pubkeys_affine: Vec<BlsPubkey> =
                     aggregate_pubkeys.into_iter().map(|pk| pk.into()).collect();
 
                 SignatureProjective::par_verify_distinct_aggregated(
                     &aggregate_pubkeys_affine,
                     &aggregate_signature,
-                    &payload_slices,
+                    &distinct_payloads,
                 )
                 .is_ok()
             }
@@ -233,25 +225,4 @@ fn verify_votes(
         .votes_batch_parallel_verify_elapsed_us
         .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
     verified_votes
-}
-
-fn get_vote_payload(
-    vote: &Vote,
-    vote_payload_cache: &RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
-) -> Arc<Vec<u8>> {
-    let read_cache = vote_payload_cache.read().unwrap();
-    if let Some(payload) = read_cache.get(vote) {
-        return payload.clone();
-    }
-    drop(read_cache);
-
-    // Not in cache, so get a write lock
-    let mut write_cache = vote_payload_cache.write().unwrap();
-    if let Some(payload) = write_cache.get(vote) {
-        return payload.clone();
-    }
-
-    let payload = Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"));
-    write_cache.insert(*vote, payload.clone());
-    payload
 }

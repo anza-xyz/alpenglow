@@ -8,7 +8,6 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_signer_store::{encode_base2, EncodeError},
-    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -55,7 +54,7 @@ impl PartialCert {
     /// Adds a new observed vote to the aggregate.
     pub(super) fn add_vote(
         &mut self,
-        rank_map: &Arc<BLSPubkeyToRankMap>,
+        rank_map: &BLSPubkeyToRankMap,
         rank: u16,
         signature: &BLSSignature,
     ) -> Result<(), AddVoteError> {

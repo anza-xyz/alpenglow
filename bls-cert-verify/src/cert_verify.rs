@@ -1,6 +1,6 @@
 use {
     bitvec::vec::BitVec,
-    rayon::iter::IntoParallelRefIterator,
+    rayon::{iter::IntoParallelRefIterator, join},
     solana_bls_signatures::{
         pubkey::Pubkey as BlsPubkey, signature::AsSignatureAffine, BlsError, PubkeyProjective,
         Signature as BlsSignature, SignatureProjective, VerifiablePubkey,
@@ -29,72 +29,105 @@ pub enum Error {
     WrongEncoding,
 }
 
-/// Verifies a [`Certificate`] that is signed at most by [`max_validators`] using the provided [`rank_map`] closure to look up the [`BlsPubkey`] and stake.
+/// Verifies an Alpenglow `Certificate` and calculates the total signing stake.
 ///
-/// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
+/// This function verifies that the aggregate signature matches the vote payload(s)
+/// derived from the certificate type. It concurrently accumulates the stake of
+/// the signers using the provided `rank_map`.
 ///
-/// On success, returns the total stake that signed the certificate.
-pub fn verify_cert_get_total_stake(
+/// # Core Functionality
+/// - **Signature Verification**: Validates aggregate BLS signatures for `votor-messages`.
+/// - **Bitmap Processing**: Supports verification using bitmaps that conform to the
+///   `solana-signer-store` format.
+/// - **Stake Accumulation**: Calculates the total signing stake during the verification
+///   process.
+///
+/// # Ledger State and Rank Map
+///
+/// To maintain a lightweight dependency graph, this function does not manage the ledger
+/// state directly. Instead, the stake distribution and validator public keys must be
+/// provided via the `rank_map` lookup function.
+///
+/// # Arguments
+///
+/// * `cert` - The certificate to verify.
+/// * `max_validators` - The maximum number of validators (used for decoding the bitmap).
+/// * `rank_map` - A closure that maps a validator's rank (index) to their stake and public key.
+///
+/// # Returns
+///
+/// On success, returns the total stake.
+pub fn verify_certificate(
     cert: &Certificate,
     max_validators: usize,
     mut rank_map: impl FnMut(usize) -> Option<(u64, BlsPubkey)>,
 ) -> Result<u64, Error> {
     let mut total_stake = 0u64;
-    let rank_map = |ind: usize| {
+
+    // Wrap the `rank_map` to accumulate stake as a side-effect
+    let accumulating_rank_map = |ind: usize| {
         rank_map(ind).map(|(stake, pubkey)| {
             total_stake = total_stake.saturating_add(stake);
             pubkey
         })
     };
 
-    // SAFETY: unwrap()s when serializing [`Vote`] below are safe as votes are not an input.
+    let (primary_vote, fallback_vote) = get_vote_payloads(&cert.cert_type);
+    let primary_payload = serialize_vote(&primary_vote);
 
-    let () = match cert.cert_type {
-        CertificateType::Notarize(slot, block_id)
-        | CertificateType::FinalizeFast(slot, block_id) => verify_base2(
-            &bincode::serialize(&Vote::new_notarization_vote(slot, block_id)).unwrap(),
+    if let Some(fallback_vote) = fallback_vote {
+        let fallback_payload = serialize_vote(&fallback_vote);
+        verify_base3(
+            &primary_payload,
+            &fallback_payload,
             &cert.signature,
             &cert.bitmap,
             max_validators,
-            rank_map,
-        ),
-        CertificateType::Finalize(slot) => verify_base2(
-            &bincode::serialize(&Vote::new_finalization_vote(slot)).unwrap(),
+            accumulating_rank_map,
+        )
+    } else {
+        verify_base2(
+            &primary_payload,
             &cert.signature,
             &cert.bitmap,
             max_validators,
-            rank_map,
-        ),
-        CertificateType::Genesis(slot, block_id) => verify_base2(
-            &bincode::serialize(&Vote::new_genesis_vote(slot, block_id)).unwrap(),
-            &cert.signature,
-            &cert.bitmap,
-            max_validators,
-            rank_map,
-        ),
-        CertificateType::NotarizeFallback(slot, block_id) => verify_base3(
-            &bincode::serialize(&Vote::new_notarization_vote(slot, block_id)).unwrap(),
-            &bincode::serialize(&Vote::new_notarization_fallback_vote(slot, block_id)).unwrap(),
-            &cert.signature,
-            &cert.bitmap,
-            max_validators,
-            rank_map,
-        ),
-        CertificateType::Skip(slot) => verify_base3(
-            &bincode::serialize(&Vote::new_skip_vote(slot)).unwrap(),
-            &bincode::serialize(&Vote::new_skip_fallback_vote(slot)).unwrap(),
-            &cert.signature,
-            &cert.bitmap,
-            max_validators,
-            rank_map,
-        ),
+            accumulating_rank_map,
+        )
     }?;
+
     Ok(total_stake)
 }
 
-/// Verifies the [`signature`] of the [`payload`] which is signed by at most [`max_validators`] validators in the base2 encoded [`ranks`] using the [`rank_map`] to lookup the [`BlsPubkey`].
+fn get_vote_payloads(cert_type: &CertificateType) -> (Vote, Option<Vote>) {
+    match *cert_type {
+        CertificateType::Notarize(slot, hash) | CertificateType::FinalizeFast(slot, hash) => {
+            (Vote::new_notarization_vote(slot, hash), None)
+        }
+        CertificateType::Finalize(slot) => (Vote::new_finalization_vote(slot), None),
+        CertificateType::Genesis(slot, hash) => (Vote::new_genesis_vote(slot, hash), None),
+        CertificateType::NotarizeFallback(slot, hash) => (
+            Vote::new_notarization_vote(slot, hash),
+            Some(Vote::new_notarization_fallback_vote(slot, hash)),
+        ),
+        CertificateType::Skip(slot) => (
+            Vote::new_skip_vote(slot),
+            Some(Vote::new_skip_fallback_vote(slot)),
+        ),
+    }
+}
+
+fn serialize_vote(vote: &Vote) -> Vec<u8> {
+    // `expect` is safe because the `Vote` struct is composed entirely of primitive
+    // types (u64, Hash, enums) that are inherently serializable and it is constructed
+    // locally within this module.
+    bincode::serialize(vote).expect("Vote serialization should never fail for valid Vote structs")
+}
+
+/// Verifies a signature for a single payload signed by a set of validators.
 ///
-/// The [`rank_map`] closure can also be used by the caller to perform its own computation based on which ranks are accessed by the verification logic.
+/// This function handles the "Base2" case where all participating validators have signed
+/// the exact same payload. This is the standard verification path and covers virtually all
+/// cases in practice.
 pub fn verify_base2<S: AsSignatureAffine>(
     payload: &[u8],
     signature: &S,
@@ -107,53 +140,28 @@ pub fn verify_base2<S: AsSignatureAffine>(
         Decoded::Base2(ranks) => ranks,
         Decoded::Base3(_, _) => return Err(Error::WrongEncoding),
     };
+    verify_single_vote_signature(payload, signature, &ranks, rank_map)
+}
 
-    let pk = if cfg!(debug_assertions) {
-        get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
-    } else {
-        get_pubkey(&ranks, rank_map, max_validators)?
-    };
-
-    pk.verify_signature(signature, payload)
+fn verify_single_vote_signature<S: AsSignatureAffine>(
+    payload: &[u8],
+    signature: &S,
+    ranks: &BitVec<u8>,
+    rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
+) -> Result<(), Error> {
+    let pubkeys = collect_pubkeys(ranks, rank_map)?;
+    let agg_pubkey = aggregate_pubkeys(&pubkeys)?;
+    agg_pubkey
+        .verify_signature(signature, payload)
         .map_err(|_| Error::VerifySigFalse)
 }
 
-/// Add assertions to ensure that the rank_map is only accessed for ranks that are actually set.
-fn checked_rank_map<F>(
-    mut rank_map: F,
-    ranks: &BitVec<u8>,
-) -> impl FnMut(usize) -> Option<BlsPubkey> + use<'_, F>
-where
-    F: FnMut(usize) -> Option<BlsPubkey>,
-{
-    move |ind: usize| {
-        let pos = ranks
-            .get(ind)
-            .unwrap_or_else(|| panic!("{ind} is not valid in {ranks:?}"));
-        assert!(pos == true, "{ind} is not set in {ranks:?}");
-        rank_map(ind)
-    }
-}
-
-/// Returns the [`PubkeyProjective`] by aggregating the [`BlsPubkey`] of the validators present in [`ranks`] using the [`rank_map`] to look up the [`BlsPubkey`].
-fn get_pubkey(
-    ranks: &BitVec<u8>,
-    mut rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
-    max_validators: usize,
-) -> Result<PubkeyProjective, Error> {
-    let mut pubkeys = Vec::with_capacity(max_validators);
-    for rank in ranks.iter_ones() {
-        let pubkey = rank_map(rank).ok_or(Error::MissingRank)?;
-        let pubkey = PubkeyProjective::try_from(pubkey)?;
-        pubkeys.push(pubkey);
-    }
-    Ok(PubkeyProjective::par_aggregate(pubkeys.par_iter())?)
-}
-
-/// Verifies the [`signature`] of [`payload`] and [`fallback_payload`] which is signed by the validators in the base3 encoded [`ranks`]  using the [`rank_map`] to lookup the [`BlsPubkey`].
+/// Verifies a signature for a split-vote scenario involving two distinct payloads.
 ///
-/// [`rank_map`] is [`FnMut`] allowing caller to perform computation based on which validators signed the payload.
-fn verify_base3(
+/// This function handles the "Base3" case where participating validators are split
+/// between signing a primary `payload` and a `fallback_payload`. This path is used
+/// only in rare edge cases where a fallback vote is required.
+pub fn verify_base3(
     payload: &[u8],
     fallback_payload: &[u8],
     signature: &BlsSignature,
@@ -163,35 +171,21 @@ fn verify_base3(
 ) -> Result<(), Error> {
     let ranks = decode(ranks, max_validators).map_err(Error::Decode)?;
     match ranks {
-        Decoded::Base2(ranks) => {
-            let pk = if cfg!(debug_assertions) {
-                get_pubkey(&ranks, checked_rank_map(rank_map, &ranks), max_validators)?
-            } else {
-                get_pubkey(&ranks, rank_map, max_validators)?
-            };
-            pk.verify_signature(signature, payload)
-                .map_err(|_| Error::VerifySigFalse)
-        }
+        Decoded::Base2(ranks) => verify_single_vote_signature(payload, signature, &ranks, rank_map),
         Decoded::Base3(ranks, fallback_ranks) => {
-            let pubkeys = if cfg!(debug_assertions) {
-                [
-                    get_pubkey(
-                        &ranks,
-                        checked_rank_map(&mut rank_map, &ranks),
-                        max_validators,
-                    )?,
-                    get_pubkey(
-                        &fallback_ranks,
-                        checked_rank_map(rank_map, &fallback_ranks),
-                        max_validators,
-                    )?,
-                ]
-            } else {
-                [
-                    get_pubkey(&ranks, &mut rank_map, max_validators)?,
-                    get_pubkey(&fallback_ranks, rank_map, max_validators)?,
-                ]
-            };
+            // Must run sequentially because `rank_map` captures `total_stake` (FnMut).
+            // We pass a mutable reference for the first call so we can reuse the
+            // closure for the second.
+            let primary_pubkeys = collect_pubkeys(&ranks, &mut rank_map)?;
+            let fallback_pubkeys = collect_pubkeys(&fallback_ranks, rank_map)?;
+
+            let (primary_agg_res, fallback_agg_res) = join(
+                || PubkeyProjective::par_aggregate(primary_pubkeys.par_iter()),
+                || PubkeyProjective::par_aggregate(fallback_pubkeys.par_iter()),
+            );
+
+            let pubkeys = [primary_agg_res?, fallback_agg_res?];
+
             SignatureProjective::par_verify_distinct_aggregated(
                 &pubkeys,
                 signature,
@@ -200,6 +194,24 @@ fn verify_base3(
             .map_err(|_| Error::VerifySigFalse)
         }
     }
+}
+
+/// Aggregates a slice of public keys into a single projective public key.
+pub fn aggregate_pubkeys(pubkeys: &[BlsPubkey]) -> Result<PubkeyProjective, Error> {
+    PubkeyProjective::par_aggregate(pubkeys.par_iter()).map_err(Error::VerifySig)
+}
+
+/// Collects public keys sequentially based on the provided ranks bitmap.
+pub fn collect_pubkeys(
+    ranks: &BitVec<u8>,
+    mut rank_map: impl FnMut(usize) -> Option<BlsPubkey>,
+) -> Result<Vec<BlsPubkey>, Error> {
+    let mut pubkeys = Vec::with_capacity(ranks.count_ones());
+    for rank in ranks.iter_ones() {
+        let pubkey = rank_map(rank).ok_or(Error::MissingRank)?;
+        pubkeys.push(pubkey);
+    }
+    Ok(pubkeys)
 }
 
 #[cfg(test)]
@@ -265,7 +277,7 @@ mod test {
             &(0..6).collect::<Vec<_>>(),
         );
         assert_eq!(
-            verify_cert_get_total_stake(&cert, 10, |rank| {
+            verify_certificate(&cert, 10, |rank| {
                 bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap(),
@@ -298,7 +310,7 @@ mod test {
             .expect("Failed to aggregate votes");
         let cert = builder.build().expect("Failed to build certificate");
         assert_eq!(
-            verify_cert_get_total_stake(&cert, 10, |rank| {
+            verify_certificate(&cert, 10, |rank| {
                 bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap(),
@@ -327,7 +339,7 @@ mod test {
             bitmap: encoded_bitmap,
         };
         assert_eq!(
-            verify_cert_get_total_stake(&cert, 10, |rank| {
+            verify_certificate(&cert, 10, |rank| {
                 bls_keypairs.get(rank).map(|kp| (100, kp.public.into()))
             })
             .unwrap_err(),

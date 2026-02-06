@@ -10,10 +10,7 @@ use {
     solana_pubkey::Pubkey,
     solana_runtime::epoch_stakes::BLSPubkeyToRankMap,
     solana_votor_messages::reward_certificate::NotarRewardCertificate,
-    std::{
-        collections::{HashMap, HashSet},
-        sync::Arc,
-    },
+    std::collections::{HashMap, HashSet},
 };
 
 /// Struct to manage per slot state for notar votes used to build a [`NotarRewardCertificate`].
@@ -44,7 +41,7 @@ impl NotarEntry {
     /// Adds a new observed vote to the aggregate.
     pub(super) fn add_vote(
         &mut self,
-        rank_map: &Arc<BLSPubkeyToRankMap>,
+        rank_map: &BLSPubkeyToRankMap,
         rank: u16,
         signature: &BLSSignature,
         block_id: Hash,
