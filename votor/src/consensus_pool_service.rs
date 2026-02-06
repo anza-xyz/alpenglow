@@ -482,6 +482,7 @@ impl ConsensusPoolService {
                     }
                     Err(TrySendError::Disconnected(_)) => return Err(()),
                 }
+                stats.pending_safe_to_notar_repair_sent += 1;
             }
         }
 
