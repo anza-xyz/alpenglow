@@ -1,9 +1,9 @@
 /*
     To run this benchmark:
-    `cargo bench --bench bls_sigverify --features dev-context-only-utils`
+    `cargo bench --bench bls_vote_sigverify --features dev-context-only-utils`
 */
 
-#![allow(dead_code)]
+#![allow(clippy::arithmetic_side_effects)]
 
 use {
     criterion::{black_box, criterion_group, criterion_main, Criterion},
@@ -106,7 +106,7 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
         let stats = BLSSigVerifierStats::new();
-        let label = format!("msgs_{}/batch_{}", num_distinct, batch_size);
+        let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter(|| verify_votes_optimistic(black_box(&votes), black_box(&stats)))
@@ -123,7 +123,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
         let stats = BLSSigVerifierStats::new();
-        let label = format!("msgs_{}/batch_{}", num_distinct, batch_size);
+        let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter(|| aggregate_pubkeys_by_payload(black_box(&votes), black_box(&stats)))
@@ -141,7 +141,7 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
         // Use 1 distinct message just to generate valid data cheaply.
         // It doesn't affect signature aggregation performance.
         let votes = generate_test_data(1, batch_size);
-        let label = format!("batch_{}", batch_size);
+        let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter(|| aggregate_signatures(black_box(&votes)))
@@ -159,7 +159,7 @@ fn bench_verify_votes_fallback(c: &mut Criterion) {
         // Distinctness doesn't affect the cost of N individual verifications.
         let votes = generate_test_data(1, batch_size);
         let stats = BLSSigVerifierStats::new();
-        let label = format!("batch_{}", batch_size);
+        let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
             b.iter(|| verify_votes_fallback(black_box(&votes), black_box(&stats)))
