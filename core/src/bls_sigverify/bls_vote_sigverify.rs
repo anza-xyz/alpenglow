@@ -144,7 +144,6 @@ fn verify_votes(
     if votes_to_verify.is_empty() {
         return vec![];
     }
-
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
 
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
@@ -160,15 +159,17 @@ fn verify_votes(
 fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerifierStats) -> bool {
     let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
 
-    // aggregate signature
-    let Ok(aggregate_signature) = aggregate_signatures(votes_to_verify) else {
+    // aggregate signatures and public keys
+    let (signature_result, (distinct_payloads, pubkeys_result)) = rayon::join(
+        || aggregate_signatures(votes_to_verify),
+        || aggregate_pubkeys_by_payload(votes_to_verify, stats),
+    );
+
+    let Ok(aggregate_signature) = signature_result else {
         return false;
     };
 
-    // aggregate public keys by payload
-    let (distinct_payloads, Ok(aggregate_pubkeys)) =
-        aggregate_pubkeys_by_payload(votes_to_verify, stats)
-    else {
+    let Ok(aggregate_pubkeys) = pubkeys_result else {
         return false;
     };
 
