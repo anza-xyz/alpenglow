@@ -51,7 +51,8 @@ impl VoteToVerify {
 }
 
 /// Verifies votes and sends verified votes to the consensus pool.
-/// Also returns a copy of the verified votes that the rewards container is interested is so that the caller can send them to it.
+/// Also returns a `AddVoteMessage` that the caller should use to send the
+/// verified votes to the rewards container.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_and_send_votes(
     votes_to_verify: &[VoteToVerify],
@@ -225,7 +226,15 @@ fn verify_votes(
 fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerifierStats) -> bool {
     let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
 
-    // aggregate signatures and public keys
+    // For BLS verification, minimizing the expensive pairing operation is key.
+    // Each BLS signature verification requires two pairings.
+    //
+    // However, the BLS verification formula allows us to:
+    // 1. Aggregate all signatures into a single signature.
+    // 2. Aggregate public keys for each unique message.
+    //
+    // By verifying the aggregated signature against the aggregated public keys,
+    // the number of pairings required is reduced to (1 + number of distinct messages).
     let (signature_result, (distinct_payloads, pubkeys_result)) = rayon::join(
         || aggregate_signatures(votes_to_verify),
         || aggregate_pubkeys_by_payload(votes_to_verify, stats),
@@ -240,12 +249,13 @@ fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerif
     };
 
     let verified = if distinct_payloads.len() == 1 {
-        // if one unique payload, just verify the aggregate signature the single payload
+        // if one unique payload, just verify the aggregate signature for the single payload
+        // this requires (2 pairings)
         aggregate_pubkeys[0]
             .verify_signature(&aggregate_signature, &distinct_payloads[0])
             .is_ok()
     } else {
-        // if non-unique payload, we need to apply a pairing for each messages,
+        // if non-unique payload, we need to apply a pairing for each distinct message,
         // which is done inside `par_verify_distinct_aggregated`.
         let payload_slices: Vec<&[u8]> = distinct_payloads.iter().map(|p| p.as_slice()).collect();
         SignatureProjective::par_verify_distinct_aggregated(
@@ -267,6 +277,12 @@ fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerif
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, BlsError> {
     let signatures = votes.par_iter().map(|v| &v.vote_message.signature);
+    // TODO(sam): Currently, `par_aggregate` performs full validation
+    // (on-curve + subgroup check) for every signature. Since the subgroup
+    // check is expensive, we can use an `unchecked` deserialization here
+    // (performing only the cheap on-curve check) and rely on a single subgroup
+    // check on the final aggregated signature. This should save more than 80%
+    // of the time for signature aggregation.
     SignatureProjective::par_aggregate(signatures)
 }
 
@@ -297,6 +313,8 @@ fn aggregate_pubkeys_by_payload<'a>(
         .map(|vote| get_vote_payload(vote))
         .collect();
 
+    // TODO(sam): https://github.com/anza-xyz/alpenglow/issues/708
+    // should improve public key aggregation drastically (more than 80%)
     let aggregate_pubkeys_result = distinct_pubkeys_groups
         .into_par_iter()
         .map(|pks| PubkeyProjective::par_aggregate(pks.into_par_iter()))
