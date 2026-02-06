@@ -61,11 +61,46 @@ pub(crate) fn verify_and_send_votes(
     leader_schedule: &LeaderScheduleCache,
     message_sender: &Sender<ConsensusMessage>,
     votes_for_repair_sender: &VerifiedVoteSender,
+    reward_votes_sender: &Sender<AddVoteMessage>,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> Result<AddVoteMessage, BLSSigVerifyError> {
+) -> Result<(), BLSSigVerifyError> {
     let verified_votes = verify_votes(votes_to_verify, stats);
 
+    stats
+        .total_valid_packets
+        .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
+
+    send_votes_to_rewards(
+        &verified_votes,
+        root_bank,
+        cluster_info,
+        leader_schedule,
+        reward_votes_sender,
+        stats,
+    );
+
+    let votes_for_repair = process_and_send_votes_to_consensus(
+        &verified_votes,
+        message_sender,
+        last_voted_slots,
+        consensus_metrics,
+        stats,
+    )?;
+
+    send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats);
+
+    Ok(())
+}
+
+fn send_votes_to_rewards(
+    verified_votes: &[VoteToVerify],
+    root_bank: &Bank,
+    cluster_info: &ClusterInfo,
+    leader_schedule: &LeaderScheduleCache,
+    reward_votes_sender: &Sender<AddVoteMessage>,
+    stats: &BLSSigVerifierStats,
+) {
     let votes = verified_votes
         .iter()
         .filter_map(|v| {
@@ -74,12 +109,28 @@ pub(crate) fn verify_and_send_votes(
                 .then_some(vote)
         })
         .collect();
-    let add_vote_msg = AddVoteMessage { votes };
 
-    stats
-        .total_valid_packets
-        .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
+    match reward_votes_sender.try_send(AddVoteMessage { votes }) {
+        Ok(()) => (),
+        Err(TrySendError::Full(_)) => {
+            stats
+                .consensus_reward_send_failed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            warn!("could not send votes to reward container, receive side of channel is closed");
+        }
+    }
+}
 
+#[allow(clippy::too_many_arguments)]
+fn process_and_send_votes_to_consensus(
+    verified_votes: &[VoteToVerify],
+    message_sender: &Sender<ConsensusMessage>,
+    last_voted_slots: &mut HashMap<Pubkey, Slot>,
+    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
+    stats: &BLSSigVerifierStats,
+) -> Result<HashMap<Pubkey, Vec<Slot>>, BLSSigVerifyError> {
     let mut votes_for_repair = HashMap::new();
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
@@ -119,7 +170,14 @@ pub(crate) fn verify_and_send_votes(
         }
     }
 
-    // Send votes for repair
+    Ok(votes_for_repair)
+}
+
+fn send_votes_to_repair(
+    votes_for_repair: HashMap<Pubkey, Vec<Slot>>,
+    votes_for_repair_sender: &VerifiedVoteSender,
+    stats: &BLSSigVerifierStats,
+) {
     for (pubkey, slots) in votes_for_repair {
         match votes_for_repair_sender.try_send((pubkey, slots)) {
             Ok(()) => {
@@ -133,8 +191,6 @@ pub(crate) fn verify_and_send_votes(
             }
         }
     }
-
-    Ok(add_vote_msg)
 }
 
 fn verify_votes(

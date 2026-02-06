@@ -10,7 +10,7 @@ use {
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
-    crossbeam_channel::{Sender, TrySendError},
+    crossbeam_channel::Sender,
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
@@ -126,6 +126,7 @@ impl BLSSigVerifier {
         let metric_buffer = &mut self.metric_buffer;
         let cert_buffer = &mut self.cert_buffer;
         let verified_certs = &self.verified_certs;
+        let reward_votes_sender = &self.reward_votes_sender;
 
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
@@ -138,6 +139,7 @@ impl BLSSigVerifier {
                     leader_schedule,
                     message_sender,
                     votes_for_repair_sender,
+                    reward_votes_sender,
                     &mut last_voted_slots,
                     metric_buffer,
                 )
@@ -152,7 +154,9 @@ impl BLSSigVerifier {
                 )
             },
         );
-        let (add_vote_msg, ()) = (votes_result?, certs_result?);
+
+        votes_result?;
+        certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
@@ -160,9 +164,6 @@ impl BLSSigVerifier {
 
         // Send to metrics service for metrics aggregation
         Self::send_consensus_metrics(&mut self.metric_buffer, &self.consensus_metrics_sender);
-
-        // Send verified votes to the rewards container
-        self.send_reward_votes(add_vote_msg);
 
         self.stats.maybe_report_stats();
         Ok(())
@@ -274,19 +275,31 @@ impl BLSSigVerifier {
         }
     }
 
-    fn send_reward_votes(&mut self, add_vote_msg: AddVoteMessage) {
-        match self.reward_votes_sender.try_send(add_vote_msg) {
-            Ok(()) => (),
-            Err(TrySendError::Full(_)) => {
-                self.stats.consensus_reward_send_failed =
-                    self.stats.consensus_reward_send_failed.saturating_add(1);
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                warn!(
-                    "could not send votes to reward container, receive side of channel is closed"
-                );
+    fn key_to_rank_map_from_cache(
+        &mut self,
+        root_bank: &Bank,
+        vote_message: &VoteMessage,
+    ) -> Option<Arc<BLSPubkeyToRankMap>> {
+        let slot = vote_message.vote.slot();
+        let vote_epoch = root_bank.epoch_schedule().get_epoch(slot);
+        let cache_index = (vote_epoch % 2) as usize;
+
+        if let Some((epoch, map)) = &self.epoch_rank_map_cache[cache_index] {
+            if *epoch == vote_epoch {
+                return Some(map.clone());
             }
         }
+
+        // cache miss
+        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
+            .or_else(|| {
+                self.stats
+                    .received_no_epoch_stakes
+                    .fetch_add(1, Ordering::Relaxed);
+                None
+            })?;
+        self.epoch_rank_map_cache[cache_index] = Some((vote_epoch, key_to_rank_map.clone()));
+        Some(key_to_rank_map.clone())
     }
 
     fn resolve_voter(
