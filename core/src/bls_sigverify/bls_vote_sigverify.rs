@@ -135,42 +135,52 @@ fn process_and_send_votes_to_consensus(
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
 
-        if vote.vote_message.vote.is_notarization_or_finalization() {
-            let existing = last_voted_slots
-                .entry(vote.pubkey)
-                .or_insert(vote.vote_message.vote.slot());
-            *existing = (*existing).max(vote.vote_message.vote.slot());
-        }
+        let vote_msg = vote.vote_message;
+        let slot = vote_msg.vote.slot();
+
         consensus_metrics.push(ConsensusMetricsEvent::Vote {
             id: vote.pubkey,
             vote: vote.vote_message.vote,
         });
 
+        if vote.vote_message.vote.is_notarization_or_finalization() {
+            last_voted_slots
+                .entry(vote.pubkey)
+                .and_modify(|s| *s = (*s).max(slot))
+                .or_insert(vote.vote_message.vote.slot());
+        }
+
         if vote.vote_message.vote.is_notarization_or_finalization()
             || vote.vote_message.vote.is_notarize_fallback()
         {
-            let slot = vote.vote_message.vote.slot();
             let cur_slots: &mut Vec<Slot> = votes_for_repair.entry(vote.pubkey).or_default();
             if !cur_slots.contains(&slot) {
                 cur_slots.push(slot);
             }
         }
 
-        // Send the votes to the consensus pool
-        match message_sender.try_send(ConsensusMessage::Vote(vote.vote_message)) {
-            Ok(()) => {
-                stats.sent.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(TrySendError::Full(_)) => {
-                stats.sent_failed.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(e @ TrySendError::Disconnected(_)) => {
-                return Err(e.into());
-            }
-        }
+        send_vote_to_consensus_pool(message_sender, vote_msg, stats)?;
     }
 
     Ok(votes_for_repair)
+}
+
+fn send_vote_to_consensus_pool(
+    message_sender: &Sender<ConsensusMessage>,
+    vote_msg: VoteMessage,
+    stats: &BLSSigVerifierStats,
+) -> Result<(), BLSSigVerifyError> {
+    match message_sender.try_send(ConsensusMessage::Vote(vote_msg)) {
+        Ok(()) => {
+            stats.sent.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(TrySendError::Full(_)) => {
+            stats.sent_failed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(e @ TrySendError::Disconnected(_)) => Err(e.into()),
+    }
 }
 
 fn send_votes_to_repair(
