@@ -28,7 +28,6 @@ use {
         collections::HashMap,
         sync::{atomic::Ordering, Arc},
     },
-    std::{collections::HashMap, sync::atomic::Ordering},
 };
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
@@ -286,8 +285,9 @@ fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, B
     SignatureProjective::par_aggregate(signatures)
 }
 
+#[allow(clippy::type_complexity)]
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn aggregate_pubkeys_by_payload<'a>(
+fn aggregate_pubkeys_by_payload(
     votes: &[VoteToVerify],
     stats: &BLSSigVerifierStats,
 ) -> (Vec<Arc<Vec<u8>>>, Result<Vec<PubkeyProjective>, BlsError>) {
@@ -310,7 +310,7 @@ fn aggregate_pubkeys_by_payload<'a>(
 
     let distinct_payloads: Vec<Arc<Vec<u8>>> = distinct_vote_structs
         .into_par_iter()
-        .map(|vote| get_vote_payload(vote))
+        .map(get_vote_payload)
         .collect();
 
     // TODO(sam): https://github.com/anza-xyz/alpenglow/issues/708

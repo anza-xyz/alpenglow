@@ -275,33 +275,6 @@ impl BLSSigVerifier {
         }
     }
 
-    fn key_to_rank_map_from_cache(
-        &mut self,
-        root_bank: &Bank,
-        vote_message: &VoteMessage,
-    ) -> Option<Arc<BLSPubkeyToRankMap>> {
-        let slot = vote_message.vote.slot();
-        let vote_epoch = root_bank.epoch_schedule().get_epoch(slot);
-        let cache_index = (vote_epoch % 2) as usize;
-
-        if let Some((epoch, map)) = &self.epoch_rank_map_cache[cache_index] {
-            if *epoch == vote_epoch {
-                return Some(map.clone());
-            }
-        }
-
-        // cache miss
-        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
-            .or_else(|| {
-                self.stats
-                    .received_no_epoch_stakes
-                    .fetch_add(1, Ordering::Relaxed);
-                None
-            })?;
-        self.epoch_rank_map_cache[cache_index] = Some((vote_epoch, key_to_rank_map.clone()));
-        Some(key_to_rank_map.clone())
-    }
-
     fn resolve_voter(
         &mut self,
         vote_message: &VoteMessage,

@@ -127,6 +127,12 @@ pub(crate) struct BLSSigVerifierStats {
     pub(super) consensus_reward_send_failed: AtomicU64,
 }
 
+impl Default for BLSSigVerifierStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BLSSigVerifierStats {
     #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
     pub(crate) fn new() -> Self {
