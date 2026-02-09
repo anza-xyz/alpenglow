@@ -4997,6 +4997,8 @@ impl ReplayStage {
                     {
                         // There were duplicate blocks in this slot and we have the wrong one replayed
                         // Do not continue down this fork
+                        // If this fork ends up being ParentReady, then votor will take care of repairing
+                        // the duplicate parent block and performing the switch for us to continue replay.
                         continue;
                     }
 
