@@ -3344,7 +3344,7 @@ impl Blockstore {
         let Some(index) = self.get_index_from_location(slot, location)? else {
             return Ok(Vec::new());
         };
-        let num_shreds = index.data().range(start_index..).count();
+        let num_shreds = index.data().num_shreds();
         let mut shreds = Vec::with_capacity(num_shreds);
 
         let shred_bytes_iter: Box<dyn Iterator<Item = Box<[u8]>>> = match location {
