@@ -3260,16 +3260,7 @@ impl Blockstore {
     }
 
     pub fn get_data_shreds_for_slot(&self, slot: Slot, start_index: u64) -> Result<Vec<Shred>> {
-        self.slot_data_iterator(slot, start_index)
-            .expect("blockstore couldn't fetch iterator")
-            .map(|(_, bytes)| {
-                Shred::new_from_serialized_shred(Vec::from(bytes)).map_err(|err| {
-                    BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                        format!("Could not reconstruct shred from shred payload: {err:?}"),
-                    )))
-                })
-            })
-            .collect()
+        self.get_data_shreds_for_slot_from_location(slot, start_index, BlockLocation::Original)
     }
 
     #[cfg(test)]
@@ -3349,30 +3340,50 @@ impl Blockstore {
         start_index: u64,
         location: BlockLocation,
     ) -> Result<Vec<Shred>> {
+        // Get the index to determine capacity for pre-allocation
         let Some(index) = self.get_index_from_location(slot, location)? else {
             return Ok(Vec::new());
         };
+        let num_shreds = index.data().range(start_index..).count();
+        let mut shreds = Vec::with_capacity(num_shreds);
 
-        index
-            .data()
-            .range(start_index..)
-            .map(|shred_index| {
-                let shred_bytes = self
-                    .get_data_shred_from_location(slot, shred_index, location)?
-                    .ok_or_else(|| {
-                        let err = format!(
-                            "Missing shred data for slot {slot} index {shred_index} at \
-                             {location:?}"
-                        );
-                        BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(err)))
-                    })?;
-                Shred::new_from_serialized_shred(shred_bytes).map_err(|err| {
-                    BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                        format!("Could not reconstruct shred from shred payload: {err:?}"),
-                    )))
-                })
-            })
-            .collect()
+        let shred_bytes_iter: Box<dyn Iterator<Item = Box<[u8]>>> = match location {
+            BlockLocation::Original => {
+                let iter = self
+                    .data_shred_cf
+                    .iter(IteratorMode::From(
+                        (slot, start_index),
+                        IteratorDirection::Forward,
+                    ))?
+                    .take_while(move |((shred_slot, _), _)| *shred_slot == slot)
+                    .map(|(_, bytes)| bytes);
+                Box::new(iter)
+            }
+            BlockLocation::Alternate { block_id } => {
+                let iter = self
+                    .alt_data_shred_cf
+                    .iter(IteratorMode::From(
+                        (slot, start_index, block_id),
+                        IteratorDirection::Forward,
+                    ))?
+                    .take_while(move |((shred_slot, _, shred_block_id), _)| {
+                        *shred_slot == slot && *shred_block_id == block_id
+                    })
+                    .map(|(_, bytes)| bytes);
+                Box::new(iter)
+            }
+        };
+
+        for bytes in shred_bytes_iter {
+            let shred = Shred::new_from_serialized_shred(Vec::from(bytes)).map_err(|err| {
+                BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(format!(
+                    "Could not reconstruct shred from shred payload: {err:?}"
+                ))))
+            })?;
+            shreds.push(shred);
+        }
+
+        Ok(shreds)
     }
 
     /// Puts the shred of the specified slot-index in the column for the specified location
