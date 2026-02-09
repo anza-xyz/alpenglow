@@ -484,7 +484,7 @@ impl Tvu {
             rpc_subscriptions: rpc_subscriptions.clone(),
             consensus_metrics_sender,
             migration_status: migration_status.clone(),
-            highest_finalized: highest_finalized.clone(),
+            highest_finalized,
             snapshot_controller: snapshot_controller.clone(),
             bls_sender: bls_sender.clone(),
             commitment_sender: votor_commitment_sender,
