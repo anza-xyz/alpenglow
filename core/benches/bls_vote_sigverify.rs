@@ -10,7 +10,7 @@ use {
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
     solana_core::bls_sigverify::{
         bls_vote_sigverify::{
-            aggregate_pubkeys_by_payload, aggregate_signatures, verify_votes_fallback,
+            aggregate_pubkeys_by_payload, aggregate_signatures, verify_individual_votes,
             verify_votes_optimistic, VoteToVerify,
         },
         stats::BLSSigVerifierStats,
@@ -150,9 +150,9 @@ fn bench_aggregate_signatures(c: &mut Criterion) {
     group.finish();
 }
 
-// Fallback Verification - verifies each signatures in parallel threads
+// Individual Verification - verifies each signatures in parallel threads
 // Message distinctness is irrelevant.
-fn bench_verify_votes_fallback(c: &mut Criterion) {
+fn bench_verify_individual_votes(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_votes_fallback");
 
     for &batch_size in BATCH_SIZES {
@@ -162,7 +162,7 @@ fn bench_verify_votes_fallback(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| verify_votes_fallback(black_box(&votes), black_box(&stats)))
+            b.iter(|| verify_individual_votes(black_box(&votes), black_box(&stats)))
         });
     }
     group.finish();
@@ -174,6 +174,6 @@ criterion_group!(
     bench_verify_votes_optimistic,
     bench_aggregate_pubkeys,
     bench_aggregate_signatures,
-    bench_verify_votes_fallback
+    bench_verify_individual_votes
 );
 criterion_main!(benches);

@@ -24,10 +24,7 @@ use {
         reward_certificate::AddVoteMessage,
         vote::Vote,
     },
-    std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc},
-    },
+    std::{collections::HashMap, sync::atomic::Ordering},
 };
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
@@ -50,8 +47,9 @@ impl VoteToVerify {
 }
 
 /// Verifies votes and sends verified votes to the consensus pool.
-/// Also returns a `AddVoteMessage` that the caller should use to send the
-/// verified votes to the rewards container.
+///
+/// All verified votes are sent to the rewards, consensus, and repair senders
+/// inside this function.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_and_send_votes(
     votes_to_verify: &[VoteToVerify],
@@ -123,6 +121,13 @@ fn send_votes_to_rewards(
     }
 }
 
+/// Dispatches verified BLS votes to the consensus pool and aggregates vote
+/// data for the repair service.
+///
+/// # Returns
+///
+/// Returns a `HashMap` mapping validator public keys to the vector of slots
+/// they voted for, intended for the repair sender.
 #[allow(clippy::too_many_arguments)]
 fn process_and_send_votes_to_consensus(
     verified_votes: &[VoteToVerify],
@@ -218,7 +223,7 @@ fn verify_votes(
     }
 
     // Fallback to individual verification
-    verify_votes_fallback(votes_to_verify, stats)
+    verify_individual_votes(votes_to_verify, stats)
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
@@ -290,7 +295,7 @@ fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, B
 fn aggregate_pubkeys_by_payload(
     votes: &[VoteToVerify],
     stats: &BLSSigVerifierStats,
-) -> (Vec<Arc<Vec<u8>>>, Result<Vec<PubkeyProjective>, BlsError>) {
+) -> (Vec<Vec<u8>>, Result<Vec<PubkeyProjective>, BlsError>) {
     let mut grouped_votes: HashMap<&Vote, Vec<&BlsPubkey>> = HashMap::new();
 
     for v in votes {
@@ -305,26 +310,24 @@ fn aggregate_pubkeys_by_payload(
         .votes_batch_distinct_messages_count
         .fetch_add(distinct_messages as u64, Ordering::Relaxed);
 
-    let (distinct_vote_structs, distinct_pubkeys_groups): (Vec<_>, Vec<_>) =
-        grouped_votes.into_iter().unzip();
-
-    let distinct_payloads: Vec<Arc<Vec<u8>>> = distinct_vote_structs
+    let (distinct_payloads, distinct_pubkeys_results): (Vec<_>, Vec<_>) = grouped_votes
         .into_par_iter()
-        .map(get_vote_payload)
-        .collect();
-
-    // TODO(sam): https://github.com/anza-xyz/alpenglow/issues/708
-    // should improve public key aggregation drastically (more than 80%)
-    let aggregate_pubkeys_result = distinct_pubkeys_groups
-        .into_par_iter()
-        .map(|pks| PubkeyProjective::par_aggregate(pks.into_par_iter()))
-        .collect();
+        .map(|(vote, pubkeys)| {
+            (
+                get_vote_payload(vote),
+                // TODO(sam): https://github.com/anza-xyz/alpenglow/issues/708
+                // should improve public key aggregation drastically (more than 80%)
+                PubkeyProjective::par_aggregate(pubkeys.into_par_iter()),
+            )
+        })
+        .unzip();
+    let aggregate_pubkeys_result = distinct_pubkeys_results.into_iter().collect();
 
     (distinct_payloads, aggregate_pubkeys_result)
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn verify_votes_fallback(
+fn verify_individual_votes(
     votes_to_verify: &[VoteToVerify],
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
@@ -356,6 +359,6 @@ fn verify_votes_fallback(
     verified_votes
 }
 
-fn get_vote_payload(vote: &Vote) -> Arc<Vec<u8>> {
-    Arc::new(bincode::serialize(vote).expect("Failed to serialize vote"))
+fn get_vote_payload(vote: &Vote) -> Vec<u8> {
+    bincode::serialize(vote).expect("Failed to serialize vote")
 }
