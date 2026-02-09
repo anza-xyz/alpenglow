@@ -41,7 +41,7 @@ pub(super) fn verify_and_send_certificates(
 
     let valid_count = results.iter().filter(|&&valid| valid).count();
     stats
-        .total_valid_packets
+        .verified_certs_count
         .fetch_add(valid_count as u64, Ordering::Relaxed);
 
     for (cert, is_valid) in certs_buffer.drain(..).zip(results) {

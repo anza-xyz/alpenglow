@@ -6,7 +6,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use {
-    criterion::{black_box, criterion_group, criterion_main, Criterion},
+    criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion},
     solana_bls_signatures::{Keypair as BLSKeypair, Pubkey as BLSPubkey, VerifiablePubkey},
     solana_core::bls_sigverify::{
         bls_vote_sigverify::{
@@ -162,7 +162,11 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {
-            b.iter(|| verify_individual_votes(black_box(&votes), black_box(&stats)))
+            b.iter_batched(
+                || votes.clone(),
+                |votes| verify_individual_votes(black_box(votes), black_box(&stats)),
+                BatchSize::SmallInput,
+            )
         });
     }
     group.finish();

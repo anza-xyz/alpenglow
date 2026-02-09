@@ -52,11 +52,11 @@ pub struct BLSSigVerifier {
     //
     // The `extract_and_filter_messages` function demultiplexes mixed consensus messages into
     // distinct vectors for votes, certificates, and metrics. Since the quantity of each message
-    // type is dynamic, we use these persistent buffers (`vote_buffer`, `cert_buffer`, `metric_buffer`)
+    // type is dynamic, we use these persistent buffers (`cert_buffer`, `metric_buffer`)
     // to amortize the cost of heap allocations over time.
-    vote_buffer: Vec<VoteToVerify>,
     cert_buffer: Vec<Certificate>,
     metric_buffer: Vec<ConsensusMetricsEvent>,
+    votes_buffer: Vec<VoteToVerify>,
 }
 
 impl BLSSigVerifier {
@@ -82,13 +82,13 @@ impl BLSSigVerifier {
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
-            vote_buffer: Vec::new(),
+            votes_buffer: Vec::new(),
             cert_buffer: Vec::new(),
             metric_buffer: Vec::new(),
         }
     }
 
-    pub fn verify_and_send_batches(
+    pub(super) fn verify_and_send_batches(
         &mut self,
         batches: Vec<PacketBatch>,
     ) -> Result<(), BLSSigVerifyError> {
@@ -104,11 +104,11 @@ impl BLSSigVerifier {
         // Recycle buffers.
         // Note: `cert_buffer` and `metric_buffer` are usually empty from draining,
         // but we clear them explicitly to guarantee a clean state.
-        self.vote_buffer.clear();
         self.cert_buffer.clear();
         self.metric_buffer.clear();
 
-        self.extract_and_filter_messages(batches, &root_bank);
+        let votes_buffer = std::mem::take(&mut self.votes_buffer);
+        let votes_to_verify = self.extract_and_filter_messages(batches, &root_bank, votes_buffer);
 
         preprocess_time.stop();
         self.stats.preprocess_count.fetch_add(1, Ordering::Relaxed);
@@ -117,7 +117,6 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         // Destructure self to borrow fields independently for the closure
-        let vote_buffer = &self.vote_buffer;
         let stats = &self.stats;
         let cluster_info = &self.cluster_info;
         let leader_schedule = &self.leader_schedule;
@@ -132,7 +131,7 @@ impl BLSSigVerifier {
         let (votes_result, certs_result) = rayon::join(
             || {
                 verify_and_send_votes(
-                    vote_buffer,
+                    votes_to_verify,
                     &root_bank,
                     stats,
                     cluster_info,
@@ -155,7 +154,8 @@ impl BLSSigVerifier {
             },
         );
 
-        votes_result?;
+        self.votes_buffer = votes_result?;
+        self.votes_buffer.clear();
         certs_result?;
 
         // Send to RPC service for last voted tracking
@@ -177,7 +177,12 @@ impl BLSSigVerifier {
             .retain(|cert| cert.slot() > root_bank.slot());
     }
 
-    fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
+    fn extract_and_filter_messages(
+        &mut self,
+        batches: Vec<PacketBatch>,
+        root_bank: &Bank,
+        mut votes_buffer: Vec<VoteToVerify>,
+    ) -> Vec<VoteToVerify> {
         for packet in batches.iter().flatten() {
             self.stats.received.fetch_add(1, Ordering::Relaxed);
 
@@ -217,7 +222,7 @@ impl BLSSigVerifier {
                     // that allows viewing fields directly from the raw packet bytes, `VoteToVerify`
                     // could be refactored to hold references/slices, avoiding the memory copy
                     // entirely.
-                    self.vote_buffer.push(VoteToVerify {
+                    votes_buffer.push(VoteToVerify {
                         vote_message,
                         bls_pubkey,
                         pubkey,
@@ -252,6 +257,7 @@ impl BLSSigVerifier {
                 }
             }
         }
+        votes_buffer
     }
 
     fn send_consensus_metrics(

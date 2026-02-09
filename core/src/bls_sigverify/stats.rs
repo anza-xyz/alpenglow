@@ -148,14 +148,17 @@ impl PacketStats {
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(super) struct BLSSigVerifierStats {
-    pub(super) total_valid_packets: AtomicU64,
+    pub(super) verified_certs_count: AtomicU64,
+    pub(super) verified_votes_count: AtomicU64,
     pub(super) preprocess_count: AtomicU64,
     pub(super) preprocess_elapsed_us: AtomicU64,
     pub(super) votes_batch_count: AtomicU64,
     pub(super) votes_batch_distinct_messages_count: AtomicU64,
-    pub(super) votes_batch_optimistic_elapsed_us: AtomicU64,
-    pub(super) votes_batch_parallel_verify_count: AtomicU64,
-    pub(super) votes_batch_parallel_verify_elapsed_us: AtomicU64,
+
+    pub(super) verify_votes_optimistic_count: AtomicU64,
+    pub(super) verify_votes_optimistic_elapsed_us: AtomicU64,
+    pub(super) verify_individual_votes_count: AtomicU64,
+    pub(super) verify_individual_votes_elapsed_us: AtomicU64,
     pub(super) certs_batch_count: AtomicU64,
     pub(super) certs_batch_elapsed_us: AtomicU64,
 
@@ -182,15 +185,17 @@ pub(super) struct BLSSigVerifierStats {
 impl Default for BLSSigVerifierStats {
     fn default() -> Self {
         Self {
-            total_valid_packets: AtomicU64::new(0),
+            verified_certs_count: AtomicU64::new(0),
+            verified_votes_count: AtomicU64::new(0),
 
             preprocess_count: AtomicU64::new(0),
             preprocess_elapsed_us: AtomicU64::new(0),
             votes_batch_count: AtomicU64::new(0),
             votes_batch_distinct_messages_count: AtomicU64::new(0),
-            votes_batch_optimistic_elapsed_us: AtomicU64::new(0),
-            votes_batch_parallel_verify_count: AtomicU64::new(0),
-            votes_batch_parallel_verify_elapsed_us: AtomicU64::new(0),
+            verify_votes_optimistic_count: AtomicU64::new(0),
+            verify_votes_optimistic_elapsed_us: AtomicU64::new(0),
+            verify_individual_votes_count: AtomicU64::new(0),
+            verify_individual_votes_elapsed_us: AtomicU64::new(0),
             certs_batch_count: AtomicU64::new(0),
             certs_batch_elapsed_us: AtomicU64::new(0),
 
@@ -227,6 +232,16 @@ impl BLSSigVerifierStats {
         datapoint_info!(
             "bls_sig_verifier_stats",
             (
+                "verified_certs_count",
+                self.verified_certs_count.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verified_votes_count",
+                self.verified_votes_count.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
                 "preprocess_count",
                 self.preprocess_count.load(Ordering::Relaxed) as i64,
                 i64
@@ -248,20 +263,24 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
-                "votes_batch_optimistic_elapsed_us",
-                self.votes_batch_optimistic_elapsed_us
+                "verify_votes_optimistic_count",
+                self.verify_votes_optimistic_count.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_votes_optimistic_elapsed_us",
+                self.verify_votes_optimistic_elapsed_us
                     .load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
-                "votes_batch_parallel_verify_count",
-                self.votes_batch_parallel_verify_count
-                    .load(Ordering::Relaxed) as i64,
+                "verify_individual_votes_count",
+                self.verify_individual_votes_count.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
-                "votes_batch_parallel_verify_elapsed_us",
-                self.votes_batch_parallel_verify_elapsed_us
+                "verify_individual_votes_elapsed_us",
+                self.verify_individual_votes_elapsed_us
                     .load(Ordering::Relaxed) as i64,
                 i64
             ),

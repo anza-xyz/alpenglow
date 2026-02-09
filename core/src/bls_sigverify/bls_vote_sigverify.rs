@@ -2,8 +2,7 @@
 use qualifier_attr::qualifiers;
 use {
     crate::{
-        bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
-        cluster_info_vote_listener::VerifiedVoteSender,
+        bls_sigverify::stats::BLSSigVerifierStats, cluster_info_vote_listener::VerifiedVoteSender,
     },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
@@ -25,18 +24,27 @@ use {
         vote::Vote,
     },
     std::{collections::HashMap, sync::atomic::Ordering},
+    thiserror::Error,
 };
 
+#[derive(Debug, Error)]
+pub(super) enum VerifyVoteError {
+    #[error("channel to consensus pool disconnected")]
+    ConsensusPoolChannelDisconnected,
+    #[error("channel to rewards container disconnected")]
+    RewardsChannelDisconnected,
+}
+
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct VoteToVerify {
+#[derive(Clone)]
+pub(super) struct VoteToVerify {
     pub vote_message: VoteMessage,
     pub bls_pubkey: BlsPubkey,
     pub pubkey: Pubkey,
 }
 
 impl VoteToVerify {
-    pub(crate) fn verify(&self) -> bool {
+    fn verify(&self) -> bool {
         let Ok(payload) = bincode::serialize(&self.vote_message.vote) else {
             return false;
         };
@@ -50,9 +58,12 @@ impl VoteToVerify {
 ///
 /// All verified votes are sent to the rewards, consensus, and repair senders
 /// inside this function.
+///
+/// On success, returns the Vec of votes so that the memory can reused minimising allocation.
+/// Note: that the returned vec may be of a smaller length as this function will drop invalid votes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn verify_and_send_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     root_bank: &Bank,
     stats: &BLSSigVerifierStats,
     cluster_info: &ClusterInfo,
@@ -62,11 +73,11 @@ pub(super) fn verify_and_send_votes(
     reward_votes_sender: &Sender<AddVoteMessage>,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> Result<(), BLSSigVerifyError> {
+) -> Result<Vec<VoteToVerify>, VerifyVoteError> {
     let verified_votes = verify_votes(votes_to_verify, stats);
 
     stats
-        .total_valid_packets
+        .verified_votes_count
         .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
 
     send_votes_to_rewards(
@@ -76,7 +87,7 @@ pub(super) fn verify_and_send_votes(
         leader_schedule,
         reward_votes_sender,
         stats,
-    );
+    )?;
 
     let votes_for_repair = process_and_send_votes_to_consensus(
         &verified_votes,
@@ -85,10 +96,9 @@ pub(super) fn verify_and_send_votes(
         consensus_metrics,
         stats,
     )?;
-
     send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats);
 
-    Ok(())
+    Ok(verified_votes)
 }
 
 fn send_votes_to_rewards(
@@ -98,7 +108,7 @@ fn send_votes_to_rewards(
     leader_schedule: &LeaderScheduleCache,
     reward_votes_sender: &Sender<AddVoteMessage>,
     stats: &BLSSigVerifierStats,
-) {
+) -> Result<(), VerifyVoteError> {
     let votes = verified_votes
         .iter()
         .filter_map(|v| {
@@ -109,15 +119,14 @@ fn send_votes_to_rewards(
         .collect();
 
     match reward_votes_sender.try_send(AddVoteMessage { votes }) {
-        Ok(()) => (),
+        Ok(()) => Ok(()),
         Err(TrySendError::Full(_)) => {
             stats
                 .consensus_reward_send_failed
                 .fetch_add(1, Ordering::Relaxed);
+            Ok(())
         }
-        Err(TrySendError::Disconnected(_)) => {
-            warn!("could not send votes to reward container, receive side of channel is closed");
-        }
+        Err(TrySendError::Disconnected(_)) => Err(VerifyVoteError::RewardsChannelDisconnected),
     }
 }
 
@@ -135,7 +144,7 @@ fn process_and_send_votes_to_consensus(
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
     stats: &BLSSigVerifierStats,
-) -> Result<HashMap<Pubkey, Vec<Slot>>, BLSSigVerifyError> {
+) -> Result<HashMap<Pubkey, Vec<Slot>>, VerifyVoteError> {
     let mut votes_for_repair = HashMap::new();
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
@@ -174,7 +183,7 @@ fn send_vote_to_consensus_pool(
     message_sender: &Sender<ConsensusMessage>,
     vote_msg: VoteMessage,
     stats: &BLSSigVerifierStats,
-) -> Result<(), BLSSigVerifyError> {
+) -> Result<(), VerifyVoteError> {
     match message_sender.try_send(ConsensusMessage::Vote(vote_msg)) {
         Ok(()) => {
             stats.sent.fetch_add(1, Ordering::Relaxed);
@@ -184,7 +193,9 @@ fn send_vote_to_consensus_pool(
             stats.sent_failed.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
-        Err(e @ TrySendError::Disconnected(_)) => Err(e.into()),
+        Err(TrySendError::Disconnected(_)) => {
+            Err(VerifyVoteError::ConsensusPoolChannelDisconnected)
+        }
     }
 }
 
@@ -209,7 +220,7 @@ fn send_votes_to_repair(
 }
 
 fn verify_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
     if votes_to_verify.is_empty() {
@@ -218,17 +229,17 @@ fn verify_votes(
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
 
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
-    if verify_votes_optimistic(votes_to_verify, stats) {
-        return votes_to_verify.to_vec();
+    if verify_votes_optimistic(&votes_to_verify, stats) {
+        return votes_to_verify;
     }
-
     // Fallback to individual verification
     verify_individual_votes(votes_to_verify, stats)
 }
 
+/// Tries to validate the votes in a single aggregate.
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerifierStats) -> bool {
-    let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
+    let mut measure = Measure::start("verify_votes_optimistic");
 
     // For BLS verification, minimizing the expensive pairing operation is key.
     // Each BLS signature verification requires two pairings.
@@ -270,10 +281,13 @@ fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerif
         .is_ok()
     };
 
-    votes_batch_optimistic_time.stop();
+    measure.stop();
     stats
-        .votes_batch_optimistic_elapsed_us
-        .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
+        .verify_votes_optimistic_count
+        .fetch_add(1, Ordering::Relaxed);
+    stats
+        .verify_votes_optimistic_elapsed_us
+        .fetch_add(measure.as_us(), Ordering::Relaxed);
 
     verified
 }
@@ -326,14 +340,15 @@ fn aggregate_pubkeys_by_payload(
     (distinct_payloads, aggregate_pubkeys_result)
 }
 
+/// Verifies the votes individually.  Invalid votes are dropped and valid ones are returned.
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_individual_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
-    let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
+    let mut measure = Measure::start("verify_individual_votes");
 
-    let verified_votes: Vec<VoteToVerify> = votes_to_verify
+    let verified_votes: Vec<_> = votes_to_verify
         .into_par_iter()
         .filter_map(|vote| {
             // verify signature
@@ -345,17 +360,17 @@ fn verify_individual_votes(
                 return None;
             }
             // if success, return `VoteToVerify` to provide to `Sender`s
-            Some(*vote)
+            Some(vote)
         })
         .collect();
 
-    votes_batch_parallel_verify_time.stop();
+    measure.stop();
     stats
-        .votes_batch_parallel_verify_count
+        .verify_individual_votes_count
         .fetch_add(1, Ordering::Relaxed);
     stats
-        .votes_batch_parallel_verify_elapsed_us
-        .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
+        .verify_individual_votes_elapsed_us
+        .fetch_add(measure.as_us(), Ordering::Relaxed);
     verified_votes
 }
 
