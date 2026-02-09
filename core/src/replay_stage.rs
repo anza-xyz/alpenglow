@@ -4923,7 +4923,6 @@ impl ReplayStage {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn generate_new_bank_forks(
         blockstore: &Blockstore,
         bank_forks: &RwLock<BankForks>,
