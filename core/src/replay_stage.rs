@@ -2193,7 +2193,9 @@ impl ReplayStage {
             let mut blocks_to_switch = vec![];
             loop {
                 if ancestor_slot <= root {
-                    // Part of an unrooted fork ignore
+                    // This is either (1) an outdated attempt to switch out the
+                    // root or (2) attempt to switch to a fork that would end up
+                    // switching out the root, so we should ignore
                     return false;
                 }
 
