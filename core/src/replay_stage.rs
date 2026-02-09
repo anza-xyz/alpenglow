@@ -895,7 +895,7 @@ impl ReplayStage {
                     // Banks might have been switched above, these maps are no longer accurate
                     drop(ancestors);
                     drop(descendants);
-                } else if !migration_status.is_alpenglow_enabled() {
+                } else {
                     let forks_root = bank_forks.read().unwrap().root();
                     // Process cluster-agreed versions of duplicate slots for which we potentially
                     // have the wrong version. Our version was dead or pruned.
