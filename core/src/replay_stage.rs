@@ -2137,16 +2137,16 @@ impl ReplayStage {
     /// Process switch block events from votor or replay.
     ///
     /// When receiving a switch request for block b we attempt to switch out the bank in slot(b)
-    /// for b if it the bank in slot(b) does not match the block id for b.
+    /// for b if the bank in slot(b) does not match the block id for b.
     ///
     /// When we need to switch a bank b, we first defer until we've repaired the ancestory of b:
     /// - We must have block b and all of its ancestors up to any ancestor we've already replayed
     /// - If no ancestor is replayed and it links back <= root, we can ignore this request
     ///
-    /// Then to perform the switch for b and all of its ancestors identified above:
-    /// 1. If the existing turbine block in the slot is full, backup in Alternate column
-    /// 2. Purge any existing bank in the slot and clear the shreds from the turbine column
-    /// 3. Copy shreds from the Alternate column of the requested block to the Original column
+    /// Then to perform the switch for b and all of its ancestors identified above we:
+    /// - Clear the existing bank (if one exists) in the slot from bank forks and progress
+    /// - Use `blockstore::switch_block_from_alternate` to atommically switch the shreds fetched
+    ///   by informed repair into the original column
     ///
     /// At this point generate_new_bank_forks can replay the fork up to b
     ///
@@ -2164,12 +2164,12 @@ impl ReplayStage {
         switch_bank_receiver
             .try_iter()
             .for_each(|switch_bank_event| {
-                // Overwrite any pending switches, later switches take precedence
                 let (slot, block_id) = switch_bank_event.block();
                 if slot <= root {
                     return;
                 }
 
+                // Overwrite any pending switches, later switches take precedence
                 if let Some(prev_block_id) = pending_switches.insert(slot, block_id) {
                     info!(
                         "{my_pubkey}: Overwriting previous switch request in {slot} for \
