@@ -405,6 +405,11 @@ impl Tvu {
         };
 
         // Create switch block event channel for ReplayStage
+        // We emit a switch bank event when we observe a ParentReady.
+        // This event is filtered out if there are no duplicate blocks in this slot.
+        // However this filtering can only happen after we receive the shreds for the block.
+        // We overprovision at 100 leader windows - we would require almost 3 minutes of slow
+        // repair / turbine to hit the limit
         let (switch_bank_sender, switch_bank_receiver) = bounded(100);
 
         let window_service = {
