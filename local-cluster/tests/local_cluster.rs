@@ -7564,7 +7564,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                     "Starting network partition experiment at slot {}",
                     vote.slot()
                 );
-                node_c_turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
+                node_c_turbine_mode.set(TurbineModeKind::TurbineDisabled);
                 self.stage = Stage::ObserveNotarFallbacks;
             }
         }

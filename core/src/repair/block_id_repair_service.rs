@@ -2,9 +2,6 @@
 //! Receives [`RepairEvent`]s from votor / replay and engages in a repair process to fetch
 //! the block to the alternate blockstore column.
 //!
-//! Finally if the block is canonical or otherwise necessary to make progress, it will move
-//! the shreds over to the main blockstore column.
-//!
 //! Sends and processes [`BlockIdRepairType`] requests through a separate socket for block and
 //! fec set metadata. Additionally sends [`ShredRepairType`] requests through the main socket
 //! to fetch shreds.
@@ -547,7 +544,7 @@ impl BlockIdRepairService {
         state.response_stats.processed += 1;
     }
 
-    /// Process a repair event and generate any requests or do any blockstore column management
+    /// Process a repair event and generate any requests
     fn process_repair_event(
         my_pubkey: Pubkey,
         event: RepairEvent,

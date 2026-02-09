@@ -3,22 +3,22 @@
 use {
     crate::{
         bls_sigverify::{
-            bls_cert_sigverify::{get_key_to_rank_map, verify_and_send_certificates},
+            bls_cert_sigverify::verify_and_send_certificates,
             bls_vote_sigverify::{verify_and_send_votes, VoteToVerify},
             error::BLSSigVerifyError,
             stats::BLSSigVerifierStats,
         },
         cluster_info_vote_listener::VerifiedVoteSender,
     },
-    crossbeam_channel::{Sender, TrySendError},
+    crossbeam_channel::Sender,
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
-    solana_clock::{Epoch, Slot},
+    solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_rpc::alpenglow_last_voted::AlpenglowLastVoted,
-    solana_runtime::{bank::Bank, bank_forks::SharableBanks, epoch_stakes::BLSPubkeyToRankMap},
+    solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
@@ -27,7 +27,6 @@ use {
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
-        vote::Vote,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -43,13 +42,11 @@ pub struct BLSSigVerifier {
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<CertificateType>>,
-    vote_payload_cache: RwLock<HashMap<Vote, Arc<Vec<u8>>>>,
     consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
-    epoch_rank_map_cache: [Option<(Epoch, Arc<BLSPubkeyToRankMap>)>; 2],
 
     // Recycled buffers implementing the Buffer Recycling pattern.
     //
@@ -78,15 +75,13 @@ impl BLSSigVerifier {
             votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
-            stats: BLSSigVerifierStats::new(),
+            stats: BLSSigVerifierStats::default(),
             verified_certs: RwLock::new(HashSet::new()),
-            vote_payload_cache: RwLock::new(HashMap::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
-            epoch_rank_map_cache: [None, None],
             vote_buffer: Vec::new(),
             cert_buffer: Vec::new(),
             metric_buffer: Vec::new(),
@@ -123,7 +118,6 @@ impl BLSSigVerifier {
 
         // Destructure self to borrow fields independently for the closure
         let vote_buffer = &self.vote_buffer;
-        let vote_payload_cache = &self.vote_payload_cache;
         let stats = &self.stats;
         let cluster_info = &self.cluster_info;
         let leader_schedule = &self.leader_schedule;
@@ -132,6 +126,7 @@ impl BLSSigVerifier {
         let metric_buffer = &mut self.metric_buffer;
         let cert_buffer = &mut self.cert_buffer;
         let verified_certs = &self.verified_certs;
+        let reward_votes_sender = &self.reward_votes_sender;
 
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
@@ -139,12 +134,12 @@ impl BLSSigVerifier {
                 verify_and_send_votes(
                     vote_buffer,
                     &root_bank,
-                    vote_payload_cache,
                     stats,
                     cluster_info,
                     leader_schedule,
                     message_sender,
                     votes_for_repair_sender,
+                    reward_votes_sender,
                     &mut last_voted_slots,
                     metric_buffer,
                 )
@@ -159,7 +154,9 @@ impl BLSSigVerifier {
                 )
             },
         );
-        let (add_vote_msg, ()) = (votes_result?, certs_result?);
+
+        votes_result?;
+        certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
@@ -167,9 +164,6 @@ impl BLSSigVerifier {
 
         // Send to metrics service for metrics aggregation
         Self::send_consensus_metrics(&mut self.metric_buffer, &self.consensus_metrics_sender);
-
-        // Send verified votes to the rewards container
-        self.send_reward_votes(add_vote_msg);
 
         self.stats.maybe_report_stats();
         Ok(())
@@ -181,10 +175,6 @@ impl BLSSigVerifier {
             .write()
             .unwrap()
             .retain(|cert| cert.slot() > root_bank.slot());
-        self.vote_payload_cache
-            .write()
-            .unwrap()
-            .retain(|vote, _| vote.slot() > root_bank.slot());
     }
 
     fn extract_and_filter_messages(&mut self, batches: Vec<PacketBatch>, root_bank: &Bank) {
@@ -285,57 +275,20 @@ impl BLSSigVerifier {
         }
     }
 
-    fn send_reward_votes(&mut self, add_vote_msg: AddVoteMessage) {
-        match self.reward_votes_sender.try_send(add_vote_msg) {
-            Ok(()) => (),
-            Err(TrySendError::Full(_)) => {
-                self.stats.consensus_reward_send_failed =
-                    self.stats.consensus_reward_send_failed.saturating_add(1);
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                warn!(
-                    "could not send votes to reward container, receive side of channel is closed"
-                );
-            }
-        }
-    }
-
-    fn key_to_rank_map_from_cache(
-        &mut self,
-        root_bank: &Bank,
-        vote_message: &VoteMessage,
-    ) -> Option<Arc<BLSPubkeyToRankMap>> {
-        let slot = vote_message.vote.slot();
-        let vote_epoch = root_bank.epoch_schedule().get_epoch(slot);
-        let cache_index = (vote_epoch % 2) as usize;
-
-        if let Some((epoch, map)) = &self.epoch_rank_map_cache[cache_index] {
-            if *epoch == vote_epoch {
-                return Some(map.clone());
-            }
-        }
-
-        // cache miss
-        let (key_to_rank_map, _) = get_key_to_rank_map(root_bank, vote_message.vote.slot())
-            .or_else(|| {
-                self.stats
-                    .received_no_epoch_stakes
-                    .fetch_add(1, Ordering::Relaxed);
-                None
-            })?;
-        self.epoch_rank_map_cache[cache_index] = Some((vote_epoch, key_to_rank_map.clone()));
-        Some(key_to_rank_map.clone())
-    }
-
     fn resolve_voter(
         &mut self,
         vote_message: &VoteMessage,
         root_bank: &Bank,
     ) -> Option<(Pubkey, BlsPubkey)> {
-        let key_to_rank_map = self.key_to_rank_map_from_cache(root_bank, vote_message)?;
+        let Some(rank_map) = root_bank.get_rank_map(vote_message.vote.slot()) else {
+            self.stats
+                .received_no_epoch_stakes
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
 
         // Invalid rank
-        let (pubkey, bls_pubkey, _) = key_to_rank_map
+        let (pubkey, bls_pubkey, _) = rank_map
             .get_pubkey_and_stake(vote_message.rank.into())
             .or_else(|| {
                 self.stats.received_bad_rank.fetch_add(1, Ordering::Relaxed);

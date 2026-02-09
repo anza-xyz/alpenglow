@@ -8,7 +8,6 @@ use {
     solana_votor_messages::{
         consensus_message::VoteMessage, reward_certificate::SkipRewardCertificate, vote::Vote,
     },
-    std::sync::Arc,
     thiserror::Error,
 };
 
@@ -62,7 +61,7 @@ impl Entry {
     /// Adds the given [`VoteMessage`] to the aggregate.
     pub(super) fn add_vote(
         &mut self,
-        rank_map: &Arc<BLSPubkeyToRankMap>,
+        rank_map: &BLSPubkeyToRankMap,
         vote: &VoteMessage,
     ) -> Result<(), AddVoteError> {
         match vote.vote {
@@ -131,7 +130,7 @@ mod tests {
             },
         },
         solana_signer_store::{decode, Decoded},
-        std::collections::HashMap,
+        std::{collections::HashMap, sync::Arc},
     };
 
     pub(crate) fn validate_bitmap(bitmap: &[u8], num_set: usize, max_len: usize) {
@@ -172,11 +171,7 @@ mod tests {
         genesis_config.epoch_schedule = EpochSchedule::without_warmup();
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
         let bank = Bank::new_from_parent(bank, &Pubkey::default(), slot);
-        let rank_map = bank
-            .epoch_stakes_from_slot(slot)
-            .unwrap()
-            .bls_pubkey_to_rank_map()
-            .clone();
+        let rank_map = bank.get_rank_map(slot).unwrap().clone();
         let signing_keys = (0..max_validators)
             .map(|index| {
                 keypair_map

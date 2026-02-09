@@ -1,3 +1,5 @@
+#[cfg(feature = "dev-context-only-utils")]
+use qualifier_attr::qualifiers;
 use {
     histogram::Histogram,
     std::{
@@ -144,10 +146,9 @@ impl PacketStats {
 
 // We are adding our own stats because we do BLS decoding in batch verification,
 // and we send one BLS message at a time. So it makes sense to have finer-grained stats
-#[derive(Debug)]
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(super) struct BLSSigVerifierStats {
     pub(super) total_valid_packets: AtomicU64,
-
     pub(super) preprocess_count: AtomicU64,
     pub(super) preprocess_elapsed_us: AtomicU64,
     pub(super) votes_batch_count: AtomicU64,
@@ -175,11 +176,11 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) received_votes: AtomicU64,
     pub(super) last_stats_logged: Instant,
 
-    pub(super) consensus_reward_send_failed: u64,
+    pub(super) consensus_reward_send_failed: AtomicU64,
 }
 
-impl BLSSigVerifierStats {
-    pub(super) fn new() -> Self {
+impl Default for BLSSigVerifierStats {
+    fn default() -> Self {
         Self {
             total_valid_packets: AtomicU64::new(0),
 
@@ -210,10 +211,12 @@ impl BLSSigVerifierStats {
             received_votes: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
 
-            consensus_reward_send_failed: 0,
+            consensus_reward_send_failed: AtomicU64::new(0),
         }
     }
+}
 
+impl BLSSigVerifierStats {
     /// If sufficient time has passed since last report, report stats.
     pub(super) fn maybe_report_stats(&mut self) {
         let now = Instant::now();
@@ -345,10 +348,10 @@ impl BLSSigVerifierStats {
             ),
             (
                 "consensus_rewards_send_failed",
-                self.consensus_reward_send_failed as i64,
+                self.consensus_reward_send_failed.load(Ordering::Relaxed) as i64,
                 i64
             ),
         );
-        *self = BLSSigVerifierStats::new();
+        *self = BLSSigVerifierStats::default();
     }
 }

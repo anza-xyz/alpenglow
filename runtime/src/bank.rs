@@ -42,7 +42,7 @@ use {
         },
         bank_forks::BankForks,
         block_component_processor::BlockComponentProcessor,
-        epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
+        epoch_stakes::{BLSPubkeyToRankMap, NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
         rent_collector::RentCollector,
@@ -58,7 +58,7 @@ use {
         transaction_batch::{OwnedOrBorrowed, TransactionBatch},
     },
     accounts_lt_hash::{CacheValue as AccountsLtHashCacheValue, Stats as AccountsLtHashStats},
-    agave_bls_cert_verify::cert_verify::{verify_cert_get_total_stake, Error as CertVerifyError},
+    agave_bls_cert_verify::cert_verify::{self, Error as CertVerifyError},
     agave_feature_set::{self as feature_set, raise_cpi_nesting_limit_to_8, FeatureSet},
     agave_precompiles::{get_precompile, get_precompiles, is_precompile},
     agave_reserved_account_keys::ReservedAccountKeys,
@@ -2348,6 +2348,12 @@ impl Bank {
                 self.inherit_specially_retained_account_fields(account),
             )
         });
+    }
+
+    /// Returns a reference to [`BLSPubkeyToRankMap`] for the given `slot`.
+    pub fn get_rank_map(&self, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+        self.epoch_stakes_from_slot(slot)
+            .map(|stake| stake.bls_pubkey_to_rank_map())
     }
 
     fn update_stake_history(&self, epoch: Option<Epoch>) {
@@ -5125,7 +5131,7 @@ impl Bank {
         let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         let total_stake = epoch_stakes.total_stake();
 
-        let stake = verify_cert_get_total_stake(cert, key_to_rank_map.len(), |rank| {
+        let stake = cert_verify::verify_certificate(cert, key_to_rank_map.len(), |rank| {
             key_to_rank_map
                 .get_pubkey_and_stake(rank)
                 .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))

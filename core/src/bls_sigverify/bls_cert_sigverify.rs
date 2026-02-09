@@ -5,7 +5,7 @@ use {
     rayon::iter::{IntoParallelIterator, ParallelIterator},
     solana_clock::Slot,
     solana_measure::measure::Measure,
-    solana_runtime::{bank::Bank, epoch_stakes::BLSPubkeyToRankMap},
+    solana_runtime::bank::Bank,
     solana_votor_messages::{
         consensus_message::{Certificate, CertificateType, ConsensusMessage},
         fraction::Fraction,
@@ -13,18 +13,10 @@ use {
     std::{
         collections::HashSet,
         num::NonZeroU64,
-        sync::{atomic::Ordering, Arc, RwLock},
+        sync::{atomic::Ordering, RwLock},
     },
     thiserror::Error,
 };
-
-pub(crate) fn get_key_to_rank_map(
-    bank: &Bank,
-    slot: Slot,
-) -> Option<(&Arc<BLSPubkeyToRankMap>, u64)> {
-    bank.epoch_stakes_from_slot(slot)
-        .map(|stake| (stake.bls_pubkey_to_rank_map(), stake.total_stake()))
-}
 
 #[derive(Debug, Error)]
 enum CertVerifyError {
