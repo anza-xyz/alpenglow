@@ -143,16 +143,16 @@ impl Blockstore {
     /// that preserves `slot`'s `next_slots`. This ensures that `slot`'s fork is
     /// replayable upon repair of `slot`.
     pub(crate) fn purge_slot_cleanup_chaining(&self, slot: Slot) -> Result<bool> {
-        self.purge_slot_cleanup_chaining_impl(slot, /* keep_alt_columns */ false)
+        self.do_purge_slot_cleanup_chaining(slot, /* purge_alt_columns */ true)
     }
 
     /// Like `purge_slot_cleanup_chaining` but preserves alternate block columns.
     /// Used when switching from an alternate block to allow repair data to be retained.
     pub(crate) fn purge_slot_cleanup_chaining_keep_alt(&self, slot: Slot) -> Result<bool> {
-        self.purge_slot_cleanup_chaining_impl(slot, /* keep_alt_columns */ true)
+        self.do_purge_slot_cleanup_chaining(slot, /* purge_alt_columns */ false)
     }
 
-    fn purge_slot_cleanup_chaining_impl(&self, slot: Slot, keep_alt_columns: bool) -> Result<bool> {
+    fn do_purge_slot_cleanup_chaining(&self, slot: Slot, purge_alt_columns: bool) -> Result<bool> {
         let Some(mut slot_meta) = self.meta(slot)? else {
             return Err(BlockstoreError::SlotUnavailable);
         };
@@ -163,7 +163,7 @@ impl Blockstore {
             slot,
             slot,
             PurgeType::Exact,
-            keep_alt_columns,
+            purge_alt_columns,
         )?;
 
         if let Some(parent_slot) = slot_meta.parent_slot {
@@ -219,7 +219,7 @@ impl Blockstore {
             from_slot,
             to_slot,
             purge_type,
-            /* keep_alt_columns */ false,
+            /* purge_alt_columns */ true,
         )?;
         delete_range_timer.stop();
 
@@ -262,7 +262,7 @@ impl Blockstore {
         from_slot: Slot,
         to_slot: Slot,
         purge_type: PurgeType,
-        keep_alt_columns: bool,
+        purge_alt_columns: bool,
     ) -> Result<bool> {
         let mut columns_purged = self
             .meta_cf
@@ -329,19 +329,7 @@ impl Blockstore {
                 .delete_range_in_batch(write_batch, from_slot, to_slot)
                 .is_ok();
 
-        if keep_alt_columns {
-            // Only delete Original location entries for parent_meta and double_merkle_meta
-            for slot in from_slot..=to_slot {
-                columns_purged &= self
-                    .parent_meta_cf
-                    .delete_in_batch(write_batch, (slot, BlockLocation::Original))
-                    .is_ok();
-                columns_purged &= self
-                    .double_merkle_meta_cf
-                    .delete_in_batch(write_batch, (slot, BlockLocation::Original))
-                    .is_ok();
-            }
-        } else {
+        if purge_alt_columns {
             // Purge all alternate columns
             columns_purged &= self
                 .alt_meta_cf
@@ -371,6 +359,18 @@ impl Blockstore {
                     .double_merkle_meta_cf
                     .delete_range_in_batch(write_batch, from_slot, to_slot)
                     .is_ok();
+        } else {
+            // Only delete Original location entries for parent_meta and double_merkle_meta
+            for slot in from_slot..=to_slot {
+                columns_purged &= self
+                    .parent_meta_cf
+                    .delete_in_batch(write_batch, (slot, BlockLocation::Original))
+                    .is_ok();
+                columns_purged &= self
+                    .double_merkle_meta_cf
+                    .delete_in_batch(write_batch, (slot, BlockLocation::Original))
+                    .is_ok();
+            }
         }
 
         match purge_type {
