@@ -2008,11 +2008,14 @@ impl Blockstore {
     /// 1. Back up the original column data if it's a valid block that we don't have
     /// 2. Purges the original column data while preserving alternate columns
     /// 3. Copies shreds from the alternate location to the original location
+    /// 4. Verify that the switch was successfull
     ///
     /// Holds `insert_shreds_lock` for the entire operation.
-    pub fn switch_block_from_alternate(&self, slot: Slot, location: BlockLocation) {
+    ///
+    /// Assumes that the block at `location` is full.
+    pub fn switch_block_from_alternate(&self, slot: Slot, from_location: BlockLocation) {
         assert!(
-            !matches!(location, BlockLocation::Original),
+            !matches!(from_location, BlockLocation::Original),
             "Cannot switch from Original location"
         );
 
@@ -2030,24 +2033,24 @@ impl Blockstore {
         match self.purge_slot_cleanup_chaining_keep_alt(slot) {
             Ok(_) => {}
             Err(BlockstoreError::SlotUnavailable) => {
-                // No original slot meta, that's fine - just proceed with copying
+                // There was no block in the original column, continue to copying
             }
             Err(e) => panic!("Purge database operations failed: {e}"),
         }
 
         // 3. Copy shreds from alternate location to original
         let alt_meta = self
-            .meta_from_location(slot, location)
-            .expect("Database read failed")
+            .meta_from_location(slot, from_location)
+            .expect("Blockstore operations must succeed")
             .expect("Alternate slot must have SlotMeta");
         assert!(alt_meta.is_full(), "Alternate slot must be full");
 
-        self.copy_shreds_locked(&lock, slot, location, BlockLocation::Original);
+        self.copy_shreds_locked(&lock, slot, from_location, BlockLocation::Original);
 
-        // Verify the switch was successful
+        // 4. Verify the switch was successful
         assert!(
             self.meta(slot)
-                .expect("Database read failed")
+                .expect("Blockstore operations must suceed")
                 .expect("Slot must have SlotMeta after switch")
                 .is_full(),
             "Slot must be full after switch"
