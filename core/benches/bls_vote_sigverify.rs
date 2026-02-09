@@ -105,7 +105,7 @@ fn bench_verify_votes_optimistic(c: &mut Criterion) {
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let stats = BLSSigVerifierStats::new();
+        let stats = BLSSigVerifierStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
@@ -122,7 +122,7 @@ fn bench_aggregate_pubkeys(c: &mut Criterion) {
 
     for (batch_size, num_distinct) in get_matrix_params() {
         let votes = generate_test_data(num_distinct, batch_size);
-        let stats = BLSSigVerifierStats::new();
+        let stats = BLSSigVerifierStats::default();
         let label = format!("msgs_{num_distinct}/batch_{batch_size}");
 
         group.bench_function(&label, |b| {
@@ -158,7 +158,7 @@ fn bench_verify_individual_votes(c: &mut Criterion) {
     for &batch_size in BATCH_SIZES {
         // Distinctness doesn't affect the cost of N individual verifications.
         let votes = generate_test_data(1, batch_size);
-        let stats = BLSSigVerifierStats::new();
+        let stats = BLSSigVerifierStats::default();
         let label = format!("batch_{batch_size}");
 
         group.bench_function(&label, |b| {

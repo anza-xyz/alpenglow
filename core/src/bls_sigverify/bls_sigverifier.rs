@@ -75,7 +75,7 @@ impl BLSSigVerifier {
             votes_for_repair_sender,
             reward_votes_sender,
             message_sender,
-            stats: BLSSigVerifierStats::new(),
+            stats: BLSSigVerifierStats::default(),
             verified_certs: RwLock::new(HashSet::new()),
             consensus_metrics_sender,
             last_checked_root_slot: 0,

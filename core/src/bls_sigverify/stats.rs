@@ -129,13 +129,6 @@ pub(crate) struct BLSSigVerifierStats {
 
 impl Default for BLSSigVerifierStats {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BLSSigVerifierStats {
-    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-    pub(crate) fn new() -> Self {
         Self {
             total_valid_packets: AtomicU64::new(0),
 
@@ -169,7 +162,9 @@ impl BLSSigVerifierStats {
             consensus_reward_send_failed: AtomicU64::new(0),
         }
     }
+}
 
+impl BLSSigVerifierStats {
     /// If sufficient time has passed since last report, report stats.
     pub(crate) fn maybe_report_stats(&mut self) {
         let now = Instant::now();
@@ -305,6 +300,6 @@ impl BLSSigVerifierStats {
                 i64
             ),
         );
-        *self = BLSSigVerifierStats::new();
+        *self = BLSSigVerifierStats::default();
     }
 }
