@@ -21,6 +21,8 @@ pub struct MaliciousRepairConfig {
     pub bad_shred_slot_frequency: Option<Slot>,
     /// If set, respond maliciously for shred indices where `index % frequency == 0`
     pub bad_shred_index_frequency: Option<u64>,
+    /// If set, only respond maliciously for slots within this range (inclusive)
+    pub slot_range: Option<(Slot, Slot)>,
 }
 
 pub struct MaliciousRepairHandler {
@@ -49,6 +51,12 @@ impl MaliciousRepairHandler {
 
     /// Check if we should respond maliciously for this slot and shred index
     fn should_respond_maliciously(&self, slot: Slot, shred_index: u64) -> bool {
+        if let Some((start, end)) = self.config.slot_range {
+            if slot < start || slot > end {
+                return false;
+            }
+        }
+
         let slot_matches = self
             .config
             .bad_shred_slot_frequency

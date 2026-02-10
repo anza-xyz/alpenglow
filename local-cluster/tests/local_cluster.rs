@@ -6261,6 +6261,7 @@ fn test_alpenglow_basic_equivocation() {
     a_validator_config.repair_handler_type = RepairHandlerType::Malicious(MaliciousRepairConfig {
         bad_shred_slot_frequency: Some(2),
         bad_shred_index_frequency: Some(32), // Only equivocate for indices where index % 32 == 0
+        slot_range: Some((0, 50)),           // Only for the first 50 slots
     });
 
     // Cluster config
@@ -6286,6 +6287,8 @@ fn test_alpenglow_basic_equivocation() {
     let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
 
     // Ensure all nodes are rooting
+    // Although the low staked node might be behind while the leader is equivocating,
+    // once the leader stops equivocating it will be able to catch up
     cluster.check_for_new_roots(
         32,
         "test_alpenglow_basic_equivocation",
