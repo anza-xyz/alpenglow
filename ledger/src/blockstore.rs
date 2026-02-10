@@ -80,8 +80,8 @@ use {
         path::{Path, PathBuf},
         rc::Rc,
         sync::{
-            Arc, Mutex, RwLock,
             atomic::{AtomicBool, AtomicU64, Ordering},
+            Arc, Mutex, MutexGuard, RwLock,
         },
     },
     tar,
@@ -1565,10 +1565,42 @@ impl Blockstore {
 
         // Acquire the insertion lock
         let mut start = Measure::start("Blockstore lock");
-        let _lock = self.insert_shreds_lock.lock().unwrap();
+        let lock = self.insert_shreds_lock.lock().unwrap();
         start.stop();
         metrics.insert_lock_elapsed_us += start.as_us();
 
+        let result = self.do_insert_shreds_locked(
+            &lock,
+            shreds,
+            leader_schedule,
+            is_trusted,
+            should_recover_shreds,
+            metrics,
+        );
+
+        // Roll up metrics
+        total_start.stop();
+        metrics.total_elapsed_us += total_start.as_us();
+
+        result
+    }
+
+    /// Core shred insertion logic. Caller must pass the held `insert_shreds_lock` guard.
+    fn do_insert_shreds_locked<'a>(
+        &self,
+        _lock: &MutexGuard<'_, ()>,
+        shreds: impl IntoIterator<
+            Item = (Cow<'a, Shred>, /*is_repaired:*/ bool),
+            IntoIter: ExactSizeIterator,
+        >,
+        leader_schedule: Option<&LeaderScheduleCache>,
+        is_trusted: bool,
+        should_recover_shreds: Option<(
+            &ReedSolomonCache,
+            &EvictingSender<Vec<shred::Payload>>, // retransmit_sender
+        )>,
+        metrics: &mut BlockstoreInsertionMetrics,
+    ) -> Result<InsertResults> {
         let shreds = shreds.into_iter();
         let mut shred_insertion_tracker =
             ShredInsertionTracker::new(shreds.len(), self.get_write_batch()?);
@@ -1619,9 +1651,6 @@ impl Blockstore {
             update_parent_signals,
         );
 
-        // Roll up metrics
-        total_start.stop();
-        metrics.total_elapsed_us += total_start.as_us();
         metrics.index_meta_time_us += shred_insertion_tracker.index_meta_time_us;
 
         Ok(InsertResults {
@@ -1722,6 +1751,90 @@ impl Blockstore {
                 Err(e) => panic!("Purge database operations failed {e}"),
             }
         }
+    }
+
+    /// Helper to copy shreds from one location to another.
+    /// Reads all data shreds from `from_location` and inserts them at `to_location`.
+    fn copy_shreds_locked(
+        &self,
+        lock: &std::sync::MutexGuard<'_, ()>,
+        slot: Slot,
+        from_location: BlockLocation,
+        _to_location: BlockLocation,
+    ) {
+        let shreds = self
+            .get_data_shreds_for_slot_from_location(slot, /* start_index */ 0, from_location)
+            .expect("Failed to read shreds");
+
+        let shreds = shreds
+            .into_iter()
+            .map(|shred| (Cow::Owned(shred), /*is_repaired:*/ false));
+        self.do_insert_shreds_locked(
+            lock,
+            shreds,
+            None, // leader_schedule
+            true, // is_trusted
+            None, // should_recover_shreds
+            &mut BlockstoreInsertionMetrics::default(),
+        )
+        .expect("Blockstore insertion must succeed");
+    }
+
+    /// Switch the block in `slot` from an alternate location to the original location.
+    /// This atomically:
+    /// 1. Back up the original column data if it's a valid block that we don't have
+    /// 2. Purges the original column data while preserving alternate columns
+    /// 3. Copies shreds from the alternate location to the original location
+    /// 4. Verify that the switch was successfull
+    ///
+    /// Holds `insert_shreds_lock` for the entire operation.
+    ///
+    /// Assumes that the block at `location` is full.
+    pub fn switch_block_from_alternate(&self, slot: Slot, from_location: BlockLocation) {
+        assert!(
+            !matches!(from_location, BlockLocation::Original),
+            "Cannot switch from Original location"
+        );
+
+        let lock = self.insert_shreds_lock.lock().unwrap();
+
+        // 1. Backup the original block if needed
+        if let Some(dmr) = self.get_double_merkle_root_from_location(slot, BlockLocation::Original) {
+            let backup_location = BlockLocation::Alternate { block_id: dmr };
+            if self
+                .get_double_merkle_root_from_location(slot, backup_location)
+                .is_none()
+            {
+                self.copy_shreds_locked(&lock, slot, BlockLocation::Original, backup_location);
+            }
+        }
+
+        // 2. Purge the original column data, keeping alternate columns intact
+        match self.purge_slot_cleanup_chaining_keep_alt(slot) {
+            Ok(_) => {}
+            Err(BlockstoreError::SlotUnavailable) => {
+                // There was no block in the original column, continue to copying
+            }
+            Err(e) => panic!("Purge database operations failed: {e}"),
+        }
+
+        // 3. Copy shreds from alternate location to original
+        let alt_meta = self
+            .meta_from_location(slot, from_location)
+            .expect("Blockstore operations must succeed")
+            .expect("Alternate slot must have SlotMeta");
+        assert!(alt_meta.is_full(), "Alternate slot must be full");
+
+        self.copy_shreds_locked(&lock, slot, from_location, BlockLocation::Original);
+
+        // 4. Verify the switch was successful
+        assert!(
+            self.meta(slot)
+                .expect("Blockstore operations must suceed")
+                .expect("Slot must have SlotMeta after switch")
+                .is_full(),
+            "Slot must be full after switch"
+        );
     }
 
     // Bypasses erasure recovery becuase it is called from broadcast stage
@@ -2164,9 +2277,16 @@ impl Blockstore {
                     // progress. We cannot determine if we have the version that will eventually
                     // be complete, so we take the conservative approach and mark the slot as dead
                     // so that replay can dump and repair the correct version.
-                    self.dead_slots_cf
-                        .put_in_batch(write_batch, slot, &true)
-                        .unwrap();
+                    if self
+                        .dead_slots_cf
+                        .get(slot)
+                        .unwrap()
+                        .is_none_or(|dead| !dead)
+                    {
+                        self.dead_slots_cf
+                            .put_in_batch(write_batch, slot, &true)
+                            .unwrap();
+                    }
                     return Err(InsertDataShredError::InvalidShred);
                 }
             }
@@ -2838,16 +2958,7 @@ impl Blockstore {
     }
 
     pub fn get_data_shreds_for_slot(&self, slot: Slot, start_index: u64) -> Result<Vec<Shred>> {
-        self.slot_data_iterator(slot, start_index)
-            .expect("blockstore couldn't fetch iterator")
-            .map(|(_, bytes)| {
-                Shred::new_from_serialized_shred(Vec::from(bytes)).map_err(|err| {
-                    BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
-                        format!("Could not reconstruct shred from shred payload: {err:?}"),
-                    )))
-                })
-            })
-            .collect()
+        self.get_data_shreds_for_slot_from_location(slot, start_index, BlockLocation::Original)
     }
 
     #[cfg(test)]
@@ -2905,6 +3016,51 @@ impl Blockstore {
             .collect()
     }
 
+    /// Gets all data shreds for a slot from the specified location.
+    /// Returns shreds in index order starting from `start_index`.
+    pub fn get_data_shreds_for_slot_from_location(
+        &self,
+        slot: Slot,
+        start_index: u64,
+        location: BlockLocation,
+    ) -> Result<Vec<Shred>> {
+        if matches!(location, BlockLocation::Alternate { .. }) {
+            return Ok(Vec::new());
+        }
+
+        // Get the index to determine capacity for pre-allocation
+        let Some(index) = self.get_index_from_location(slot, location)? else {
+            return Ok(Vec::new());
+        };
+        let num_shreds = index.data().num_shreds();
+        let mut shreds = Vec::with_capacity(num_shreds);
+
+        let shred_bytes_iter: Box<dyn Iterator<Item = Box<[u8]>>> = match location {
+            BlockLocation::Original => {
+                let iter = self
+                    .data_shred_cf
+                    .iter(IteratorMode::From(
+                        (slot, start_index),
+                        IteratorDirection::Forward,
+                    ))?
+                    .take_while(move |((shred_slot, _), _)| *shred_slot == slot)
+                    .map(|(_, bytes)| bytes);
+                Box::new(iter)
+            }
+            BlockLocation::Alternate { .. } => Box::new(std::iter::empty()),
+        };
+
+        for bytes in shred_bytes_iter {
+            let shred = Shred::new_from_serialized_shred(Vec::from(bytes)).map_err(|err| {
+                BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(format!(
+                    "Could not reconstruct shred from shred payload: {err:?}"
+                ))))
+            })?;
+            shreds.push(shred);
+        }
+
+        Ok(shreds)
+    }
     // Only used by tests
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_entries(

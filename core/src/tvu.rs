@@ -418,6 +418,14 @@ impl Tvu {
             completed_slots_receiver,
         };
 
+        // Create switch block event channel for ReplayStage
+        // We emit a switch bank event when we observe a ParentReady.
+        // This event is filtered out if there are no duplicate blocks in this slot.
+        // However this filtering can only happen after we receive the shreds for the block.
+        // We overprovision at 100 leader windows - we would require almost 3 minutes of slow
+        // repair / turbine to hit the limit
+        let (switch_bank_sender, switch_bank_receiver) = bounded(100);
+
         let window_service = {
             let repair_service_channels = RepairServiceChannels::new(
                 repair_request_quic_sender,
@@ -497,6 +505,7 @@ impl Tvu {
             own_vote_sender: consensus_message_sender.clone(),
             reward_certs_sender,
             repair_event_sender,
+            switch_bank_sender,
             event_receiver: votor_event_receiver,
             consensus_message_receiver,
             consensus_metrics_receiver,
@@ -535,6 +544,7 @@ impl Tvu {
             duplicate_confirmed_slots_receiver,
             gossip_verified_vote_hash_receiver,
             popular_pruned_forks_receiver,
+            switch_bank_receiver,
         };
 
         let replay_stage_config = ReplayStageConfig {

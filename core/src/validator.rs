@@ -1517,6 +1517,8 @@ impl Validator {
                 config.repair_whitelist.clone(),
                 leader_state,
                 bank_forks_r.migration_status(),
+                identity_keypair.clone(),
+                leader_schedule_cache.clone(),
             )
         };
         let (repair_request_quic_sender, repair_request_quic_receiver) = unbounded();
