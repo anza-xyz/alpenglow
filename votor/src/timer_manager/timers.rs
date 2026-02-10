@@ -13,7 +13,7 @@ use {
 /// Calculate the timeout multiplier based on standstill state.
 /// Returns 1.0 if not in standstill, or 1.05^n where n is the number of
 /// leader windows since standstill started.
-pub(crate) fn calculate_timeout_multiplier(slot: Slot, standstill_slot: Option<Slot>) -> f64 {
+fn calculate_timeout_multiplier(slot: Slot, standstill_slot: Option<Slot>) -> f64 {
     match standstill_slot {
         None => 1.0,
         Some(standstill_slot) => {
