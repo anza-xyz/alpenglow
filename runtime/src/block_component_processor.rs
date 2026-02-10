@@ -14,7 +14,10 @@ use {
     },
     std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
+    vote_reward::calculate_and_pay_voting_reward,
 };
+
+pub(crate) mod vote_reward;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
@@ -337,10 +340,8 @@ impl BlockComponentProcessor {
         // Update clock sysvar from footer timestamp.
         let unix_timestamp_nanos = i64::try_from(footer.block_producer_time_nanos).unwrap_or(i64::MAX);
         bank.update_clock_from_footer(unix_timestamp_nanos);
-
+        calculate_and_pay_voting_reward(&bank, None).unwrap();
         // Record expected bank hash from footer for later verification when the bank is frozen.
         bank.set_expected_bank_hash(footer.bank_hash);
-
-        // TODO: rewards
     }
 }

@@ -43,7 +43,7 @@ use {
             },
         },
         bank_forks::BankForks,
-        block_component_processor::BlockComponentProcessor,
+        block_component_processor::{vote_reward::VoteRewardAccountState, BlockComponentProcessor},
         epoch_stakes::{
             BLSPubkeyToRankMap, DeserializableVersionedEpochStakes, NodeVoteAccounts,
             VersionedEpochStakes,
@@ -996,15 +996,17 @@ impl Default for BankTestConfig {
 }
 
 /// Data returned from [`Bank::calculate_epoch_inflation_rewards()`].
-struct EpochInflationRewards {
+pub(crate) struct EpochInflationRewards {
     /// Amount of rewards a validator should get if it voted in every slot in
     /// the epoch and its stake is equal to the network capitalization i.e.
     /// the total supply.
-    validator_rewards_lamports: u64,
+    pub(crate) validator_rewards_lamports: u64,
+    /// How long a single epoch lasts in years.
+    pub(crate) epoch_duration_in_years: f64,
     /// The current inflation rate for the validators.
-    validator_rate: f64,
+    pub(crate) validator_rate: f64,
     /// The current inflation rate for the foundation.
-    foundation_rate: f64,
+    pub(crate) foundation_rate: f64,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1440,6 +1442,7 @@ impl Bank {
                 new.process_new_epoch(
                     parent.epoch(),
                     parent.slot(),
+                    parent.capitalization.load(Relaxed),
                     parent.block_height(),
                     reward_calc_tracer,
                 );
@@ -1757,6 +1760,7 @@ impl Bank {
         &mut self,
         parent_epoch: Epoch,
         parent_slot: Slot,
+        parent_capitalization: u64,
         parent_height: u64,
         reward_calc_tracer: Option<impl RewardCalcTracer>,
     ) {
@@ -1797,12 +1801,19 @@ impl Bank {
 
         // Distribute rewards commission to vote accounts and cache stake rewards
         // for partitioned distribution in the upcoming slots.
-        self.begin_partitioned_rewards(
+        let epoch_validator_rewards = self.begin_partitioned_rewards(
             parent_epoch,
             parent_slot,
             parent_height,
             &rewards_calculation,
             &rewards_metrics,
+        );
+
+        VoteRewardAccountState::new_epoch_update_account(
+            self,
+            parent_epoch,
+            parent_capitalization,
+            epoch_validator_rewards,
         );
 
         report_new_epoch_metrics(
@@ -2151,7 +2162,7 @@ impl Bank {
     }
 
     /// Returns a reference to the [`VersionedEpochStakes`] corresponding to the given [`Slot`].
-    fn epoch_stakes_from_slot(&self, slot: Slot) -> Option<&VersionedEpochStakes> {
+    pub(crate) fn epoch_stakes_from_slot(&self, slot: Slot) -> Option<&VersionedEpochStakes> {
         let epoch = self.epoch_schedule().get_epoch(slot);
         self.epoch_stakes(epoch)
     }
@@ -2505,7 +2516,7 @@ impl Bank {
     }
 
     /// For a given [`capitalization`] (total_supply in lamports) and [`epoch`], calculates various inflation related info.
-    fn calculate_epoch_inflation_rewards(
+    pub(crate) fn calculate_epoch_inflation_rewards(
         &self,
         capitalization: u64,
         epoch: Epoch,
@@ -2525,6 +2536,7 @@ impl Bank {
 
         EpochInflationRewards {
             validator_rewards_lamports,
+            epoch_duration_in_years,
             validator_rate,
             foundation_rate,
         }
@@ -4343,7 +4355,7 @@ impl Bank {
 
     /// Technically this issues (or even burns!) new lamports,
     /// so be extra careful for its usage
-    fn store_account_and_update_capitalization(
+    pub(crate) fn store_account_and_update_capitalization(
         &self,
         pubkey: &Pubkey,
         new_account: &AccountSharedData,

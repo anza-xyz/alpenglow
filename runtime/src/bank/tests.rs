@@ -823,10 +823,12 @@ where
     assert_ne!(bank2.capitalization(), bank0.capitalization());
 
     // verify the inflation is represented in validator_points
+    // and account for the additional created state.
     let paid_rewards = bank2.capitalization()
         - bank0.capitalization()
         - bank1_sysvar_delta()
-        - bank2_sysvar_delta();
+        - bank2_sysvar_delta()
+        - VoteRewardAccountState::rent_needed_for_account(&bank2);
 
     // this assumes that no new builtins or precompiles were activated in bank1 or bank2
     let EpochInflationRewards {
@@ -5413,9 +5415,9 @@ fn test_bank_hash_consistency(deprecate_rent_exemption_threshold: bool) {
             assert_eq!(
                 bank.hash().to_string(),
                 if deprecate_rent_exemption_threshold {
-                    "HvCfM9MQCvCDH4zW39G7UqKDB4PLR5GaqVSf9Jfe5XnS"
+                    "A7TEq4YhqycvwrR3FskCnmrYefQq11eWMUhsMpVFRydT"
                 } else {
-                    "6h1KzSuTW6MwkgjtEbrv6AyUZ2NHtSxCQi8epjHDFYh8"
+                    "BURo5b1ZCkgvjE4z9KviRgz6iRoQRad9JKWE82wjXPSc"
                 }
             );
         }
@@ -5424,9 +5426,9 @@ fn test_bank_hash_consistency(deprecate_rent_exemption_threshold: bool) {
             assert_eq!(
                 bank.hash().to_string(),
                 if deprecate_rent_exemption_threshold {
-                    "GS2G4uVus4U97woniYLW1f2BWqoZFGFrpSQXto7PnjTT"
+                    "HKJNqEvqH8Te2K24XTQSj6WKggpxv8XK7eJDqSyQq7m2"
                 } else {
-                    "4GX3883TVK7SQfbPUHem4HXcqdHU2DZVAB6yEXspn2qe"
+                    "Fo3tkfmcJW6x7cPzvcWjG5fkdgvmJa184xJzEaSFJVBk"
                 }
             );
             break;

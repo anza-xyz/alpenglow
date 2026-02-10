@@ -111,7 +111,7 @@ impl Bank {
         parent_block_height: u64,
         rewards_calculation: &PartitionedRewardsCalculation,
         rewards_metrics: &RewardsMetrics,
-    ) {
+    ) -> u64 {
         self.distribute_reward_commissions(parent_epoch, rewards_calculation, rewards_metrics);
 
         let slot = self.slot();
@@ -147,6 +147,7 @@ impl Bank {
             ("parent_slot", parent_slot, i64),
             ("parent_block_height", parent_block_height, i64),
         );
+        distributed_rewards
     }
 
     // Calculate rewards from previous epoch and distribute reward commissions
@@ -298,9 +299,11 @@ impl Bank {
         let capitalization = self.capitalization();
         let EpochInflationRewards {
             validator_rewards_lamports,
+            epoch_duration_in_years,
             validator_rate,
             foundation_rate,
         } = self.calculate_epoch_inflation_rewards(capitalization, rewarded_epoch);
+        let _ = epoch_duration_in_years;
 
         let CalculateValidatorRewardsResult {
             reward_commission_accounts,
