@@ -9271,6 +9271,7 @@ dependencies = [
  "solana-clock",
  "solana-cluster-type",
  "solana-commitment-config",
+ "solana-compute-budget-interface",
  "solana-connection-cache",
  "solana-core",
  "solana-download-utils",

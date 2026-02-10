@@ -17,7 +17,7 @@ use {
     solana_clock::Slot,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
-        blockstore::Blockstore, leader_schedule_cache::LeaderScheduleCache,
+        leader_schedule_cache::LeaderScheduleCache,
         leader_schedule_utils::last_of_consecutive_leader_slots,
     },
     solana_pubkey::Pubkey,
@@ -48,7 +48,6 @@ pub(crate) struct ConsensusPoolContext {
 
     pub(crate) cluster_info: Arc<ClusterInfo>,
     pub(crate) my_vote_pubkey: Pubkey,
-    pub(crate) blockstore: Arc<Blockstore>,
     pub(crate) sharable_banks: SharableBanks,
     pub(crate) leader_schedule_cache: Arc<LeaderScheduleCache>,
 
@@ -422,14 +421,6 @@ impl ConsensusPoolService {
         let start_slot = *highest_parent_ready;
         let end_slot = last_of_consecutive_leader_slots(start_slot);
 
-        if (start_slot..=end_slot).any(|s| ctx.blockstore.has_existing_shreds_for_slot(s)) {
-            warn!(
-                "{my_pubkey}: We have already produced shreds in the window \
-                 {start_slot}-{end_slot}, skipping production of our leader window"
-            );
-            return;
-        }
-
         match consensus_pool
             .parent_ready_tracker
             .block_production_parent(start_slot)
@@ -547,7 +538,6 @@ mod tests {
         },
         solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
         solana_hash::Hash,
-        solana_ledger::get_tmp_ledger_path_auto_delete,
         solana_runtime::{
             bank_forks::{BankForks, SharableBanks},
             genesis_utils::{
@@ -605,8 +595,6 @@ mod tests {
         let bank0 = Bank::new_for_tests(&genesis.genesis_config);
         let bank_forks = BankForks::new_rw_arc(bank0);
 
-        let ledger_path = get_tmp_ledger_path_auto_delete!();
-        let blockstore = Blockstore::open(ledger_path.path()).unwrap();
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
         let exit = Arc::new(AtomicBool::new(false));
         let leader_schedule_cache =
@@ -617,7 +605,6 @@ mod tests {
             migration_status: Arc::new(MigrationStatus::post_migration_status()),
             cluster_info: Arc::new(cluster_info),
             my_vote_pubkey: Pubkey::new_unique(),
-            blockstore: Arc::new(blockstore),
             sharable_banks: sharable_banks.clone(),
             leader_schedule_cache: leader_schedule_cache.clone(),
             consensus_message_receiver,

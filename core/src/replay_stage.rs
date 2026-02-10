@@ -779,6 +779,7 @@ impl ReplayStage {
                     &mut progress,
                     &mut replay_timing,
                     migration_status.as_ref(),
+                    &my_pubkey,
                 );
                 generate_new_bank_forks_time.stop();
 
@@ -4790,6 +4791,7 @@ impl ReplayStage {
         progress: &mut ProgressMap,
         replay_timing: &mut ReplayLoopTiming,
         migration_status: &MigrationStatus,
+        my_pubkey: &Pubkey,
     ) {
         // Find the next slot that chains to the old slot
         let mut generate_new_bank_forks_read_lock =
@@ -4829,16 +4831,43 @@ impl ReplayStage {
                     continue;
                 }
 
+                let parent_meta = if !migration_status.should_allow_block_markers(child_slot) {
+                    None
+                } else {
+                    let parent_meta = blockstore
+                        .get_parent_meta(child_slot, BlockLocation::Original)
+                        .expect("Blockstore should not fail");
+
+                    if let Some(parent_meta) = parent_meta.as_ref() {
+                        // During FLH sad-path, BCL may abandon an optimistically-produced
+                        // slot and re-create it with a different (finalized) parent. If
+                        // background txs caused shreds to land in the blockstore before
+                        // the switch, replay may have already added the slot to progress
+                        // under the old parent. Clean up the stale entry so we can
+                        // re-create the bank with the correct parent.
+                        //
+                        // TODO(ksn): fix this logic to deal with duplicate blocks.
+                        if parent_slot == parent_meta.parent_slot
+                            && progress.contains_key(&child_slot)
+                        {
+                            warn!(
+                                "Removing stale progress entry for slot {child_slot} \
+                                 (new parent {parent_slot})"
+                            );
+                            progress.remove(&child_slot);
+                        }
+                    }
+
+                    parent_meta
+                };
+
                 debug_assert!(!progress.contains_key(&child_slot));
 
                 // Determine replay offset from ParentMeta.
                 let replay_offset = if !migration_status.should_allow_block_markers(child_slot) {
                     None
                 } else {
-                    let Some(parent_meta) = blockstore
-                        .get_parent_meta(child_slot, BlockLocation::Original)
-                        .expect("Blockstore should not fail")
-                    else {
+                    let Some(parent_meta) = parent_meta else {
                         continue;
                     };
 
@@ -4862,6 +4891,14 @@ impl ReplayStage {
                 let leader = leader_schedule_cache
                     .slot_leader_at(child_slot, Some(parent_bank))
                     .unwrap();
+
+                // In Alpenglow, BCL owns bank creation for our leader slots.
+                // Skip to avoid racing with BCL on bank_forks.insert().
+                if migration_status.should_allow_block_markers(child_slot) && leader == *my_pubkey {
+                    trace!("skipping bank creation for our leader slot {child_slot}");
+                    continue;
+                }
+
                 info!(
                     "new fork:{} parent:{} root:{}",
                     child_slot,
@@ -5289,6 +5326,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert!(bank_forks
             .read()
@@ -5314,6 +5352,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert!(bank_forks
             .read()
@@ -7226,6 +7265,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![3]);
 
@@ -7257,6 +7297,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![5]);
 
@@ -7289,6 +7330,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![6]);
 
@@ -7320,6 +7362,7 @@ pub(crate) mod tests {
             &mut progress,
             &mut replay_timing,
             &MigrationStatus::default(),
+            &Pubkey::default(),
         );
         assert_eq!(bank_forks.read().unwrap().active_bank_slots(), vec![7]);
     }
