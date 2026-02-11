@@ -97,7 +97,6 @@ pub struct VotorConfig {
     // Validator config
     pub vote_account: Pubkey,
     pub wait_to_vote_slot: Option<Slot>,
-    pub wait_for_vote_to_start_leader: bool,
     pub vote_history: VoteHistory,
     pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
 
@@ -160,7 +159,6 @@ impl Votor {
             exit,
             vote_account,
             wait_to_vote_slot,
-            wait_for_vote_to_start_leader,
             vote_history,
             vote_history_storage,
             authorized_voter_keypairs,
@@ -191,8 +189,7 @@ impl Votor {
         } = config;
 
         let migration_status = bank_forks.read().unwrap().migration_status();
-        let identity_keypair = cluster_info.keypair();
-        let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
+        let identity_keypair = cluster_info.keypair().clone();
 
         // Get the sharable root bank
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
@@ -215,7 +212,6 @@ impl Votor {
             identity_keypair,
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
-            has_new_vote_been_rooted,
             own_vote_sender,
             bls_sender: bls_sender.clone(),
             commitment_sender: commitment_sender.clone(),
