@@ -48,13 +48,15 @@ pub struct BLSSigVerifier {
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
 
+    /// Buffer to collect votes to be verified.  We try to minimise reallocations by reusing the buffer across consequtive calls to [`Self::verify_send_batches()`].
+    votes_buffer: Vec<VoteToVerify>,
+
     // Recycled buffers implementing the Buffer Recycling pattern.
     //
     // The `extract_and_filter_messages` function demultiplexes mixed consensus messages into
     // distinct vectors for votes, certificates, and metrics. Since the quantity of each message
-    // type is dynamic, we use these persistent buffers (`vote_buffer`, `cert_buffer`, `metric_buffer`)
+    // type is dynamic, we use these persistent buffers (`cert_buffer`, `metric_buffer`)
     // to amortize the cost of heap allocations over time.
-    vote_buffer: Vec<VoteToVerify>,
     cert_buffer: Vec<Certificate>,
     metric_buffer: Vec<ConsensusMetricsEvent>,
 }
@@ -82,7 +84,7 @@ impl BLSSigVerifier {
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
-            vote_buffer: Vec::new(),
+            votes_buffer: Vec::new(),
             cert_buffer: Vec::new(),
             metric_buffer: Vec::new(),
         }
@@ -104,7 +106,7 @@ impl BLSSigVerifier {
         // Recycle buffers.
         // Note: `cert_buffer` and `metric_buffer` are usually empty from draining,
         // but we clear them explicitly to guarantee a clean state.
-        self.vote_buffer.clear();
+        self.votes_buffer.clear();
         self.cert_buffer.clear();
         self.metric_buffer.clear();
 
@@ -117,7 +119,7 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         // Destructure self to borrow fields independently for the closure
-        let vote_buffer = &self.vote_buffer;
+        let votes_buffer = std::mem::take(&mut self.votes_buffer);
         let stats = &self.stats;
         let cluster_info = &self.cluster_info;
         let leader_schedule = &self.leader_schedule;
@@ -132,7 +134,7 @@ impl BLSSigVerifier {
         let (votes_result, certs_result) = rayon::join(
             || {
                 verify_and_send_votes(
-                    vote_buffer,
+                    votes_buffer,
                     &root_bank,
                     stats,
                     cluster_info,
@@ -155,8 +157,8 @@ impl BLSSigVerifier {
             },
         );
 
-        votes_result?;
-        certs_result?;
+        self.votes_buffer = votes_result?;
+        let () = certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
@@ -217,7 +219,7 @@ impl BLSSigVerifier {
                     // that allows viewing fields directly from the raw packet bytes, `VoteToVerify`
                     // could be refactored to hold references/slices, avoiding the memory copy
                     // entirely.
-                    self.vote_buffer.push(VoteToVerify {
+                    self.votes_buffer.push(VoteToVerify {
                         vote_message,
                         bls_pubkey,
                         pubkey,

@@ -28,15 +28,15 @@ use {
 };
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct VoteToVerify {
+#[derive(Clone)]
+pub(super) struct VoteToVerify {
     pub vote_message: VoteMessage,
     pub bls_pubkey: BlsPubkey,
     pub pubkey: Pubkey,
 }
 
 impl VoteToVerify {
-    pub(crate) fn verify(&self) -> bool {
+    fn verify(&self) -> bool {
         let Ok(payload) = bincode::serialize(&self.vote_message.vote) else {
             return false;
         };
@@ -46,13 +46,14 @@ impl VoteToVerify {
     }
 }
 
-/// Verifies votes and sends verified votes to the consensus pool.
+/// Verifies votes and sends the verified votes to the consensus pool; and sends the desired subset
+/// to rewards container and repair.
 ///
-/// All verified votes are sent to the rewards, consensus, and repair senders
-/// inside this function.
+/// Returns the Vec of [`VoteToVerify`] to the caller to enable reuse.  The length of the returned
+/// buffer might be lower than the input buffer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn verify_and_send_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     root_bank: &Bank,
     stats: &BLSSigVerifierStats,
     cluster_info: &ClusterInfo,
@@ -62,7 +63,7 @@ pub(super) fn verify_and_send_votes(
     reward_votes_sender: &Sender<AddVoteMessage>,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> Result<(), BLSSigVerifyError> {
+) -> Result<Vec<VoteToVerify>, BLSSigVerifyError> {
     let verified_votes = verify_votes(votes_to_verify, stats);
 
     stats
@@ -88,7 +89,7 @@ pub(super) fn verify_and_send_votes(
 
     send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats);
 
-    Ok(())
+    Ok(verified_votes)
 }
 
 fn send_votes_to_rewards(
@@ -209,17 +210,17 @@ fn send_votes_to_repair(
 }
 
 fn verify_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
     if votes_to_verify.is_empty() {
-        return vec![];
+        return votes_to_verify;
     }
     stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
 
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
-    if verify_votes_optimistic(votes_to_verify, stats) {
-        return votes_to_verify.to_vec();
+    if verify_votes_optimistic(&votes_to_verify, stats) {
+        return votes_to_verify;
     }
 
     // Fallback to individual verification
@@ -328,7 +329,7 @@ fn aggregate_pubkeys_by_payload(
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_individual_votes(
-    votes_to_verify: &[VoteToVerify],
+    votes_to_verify: Vec<VoteToVerify>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
     let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
@@ -345,7 +346,7 @@ fn verify_individual_votes(
                 return None;
             }
             // if success, return `VoteToVerify` to provide to `Sender`s
-            Some(*vote)
+            Some(vote)
         })
         .collect();
 
