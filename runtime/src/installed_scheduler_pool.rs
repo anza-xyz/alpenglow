@@ -488,8 +488,20 @@ impl BankWithScheduler {
         self.inner.bank.clone()
     }
 
-    pub fn register_tick(&self, hash: &Hash) {
-        self.inner.bank.register_tick(hash, &self.inner.scheduler);
+    pub fn register_tick(&self, poh_hash: &Hash) {
+        self.inner
+            .bank
+            .register_tick(poh_hash, &self.inner.scheduler);
+    }
+
+    /// Register a tick with an explicit blockhash for the recent blockhash sysvar.
+    ///
+    /// For Alpenglow blocks, the blockhash should be the double merkle root
+    /// For PoH blocks, this is the final PoH tick
+    pub fn register_tick_with_blockhash(&self, blockhash: &Hash) {
+        self.inner
+            .bank
+            .register_tick_with_blockhash(blockhash, &self.inner.scheduler);
     }
 
     #[cfg(feature = "dev-context-only-utils")]

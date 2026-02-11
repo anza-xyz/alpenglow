@@ -640,6 +640,7 @@ pub fn process_entries_for_tests(
         &mut batch_timing,
         None,
         &ignored_prioritization_fee_cache,
+        None, // double_merkle_root
     );
 
     debug!("process_entries: {batch_timing:?}");
@@ -655,10 +656,20 @@ fn process_entries(
     batch_timing: &mut BatchExecutionTiming,
     log_messages_bytes_limit: Option<usize>,
     prioritization_fee_cache: &PrioritizationFeeCache,
+    double_merkle_root: Option<&Hash>,
 ) -> Result<()> {
     // accumulator for entries that can be processed in parallel
     let mut batches = vec![];
     let mut tick_hashes = vec![];
+
+    // Register a tick, using the double merkle root as the blockhash if provided
+    let register_tick = |bank: &BankWithScheduler, tick_hash: &Hash| {
+        if let Some(blockhash) = double_merkle_root {
+            bank.register_tick_with_blockhash(blockhash);
+        } else {
+            bank.register_tick(tick_hash);
+        }
+    };
 
     for ReplayEntry {
         entry,
@@ -683,7 +694,7 @@ fn process_entries(
                         prioritization_fee_cache,
                     )?;
                     for hash in tick_hashes.drain(..) {
-                        bank.register_tick(&hash);
+                        register_tick(bank, &hash);
                     }
                 }
             }
@@ -720,7 +731,7 @@ fn process_entries(
         prioritization_fee_cache,
     )?;
     for hash in tick_hashes {
-        bank.register_tick(&hash);
+        register_tick(bank, &hash);
     }
     Ok(())
 }
@@ -1519,6 +1530,19 @@ pub fn confirm_slot(
         load_result
     }?;
 
+    // For Alpenglow blocks, the double merkle root is the blockhash
+    // This is computed during shred insertion when the slot becomes full.
+    // For PoH blocks we pass None and instead will use the tick hash.
+    let blockhash = if slot_full && migration_status.should_have_alpenglow_ticks(slot) {
+        Some(
+            blockstore
+                .get_double_merkle_root(slot, BlockLocation::Original)
+                .expect("Slot is full, DMR must exist"),
+        )
+    } else {
+        None
+    };
+
     // Process block components for Alpenglow slots. Note that we don't need to run migration checks
     // for BlockMarkers here, despite BlockMarkers only being active post-Alpenglow. Here's why:
     //
@@ -1579,6 +1603,7 @@ pub fn confirm_slot(
                     log_messages_bytes_limit,
                     prioritization_fee_cache,
                     migration_status,
+                    blockhash.as_ref(),
                 )?;
             }
             BlockComponent::BlockMarker(marker) => {
@@ -1627,6 +1652,7 @@ fn confirm_slot_entries(
     log_messages_bytes_limit: Option<usize>,
     prioritization_fee_cache: &PrioritizationFeeCache,
     migration_status: &MigrationStatus,
+    double_merkle_root: Option<&Hash>,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let ConfirmationTiming {
         confirmation_elapsed,
@@ -1789,6 +1815,7 @@ fn confirm_slot_entries(
         batch_execute_timing,
         log_messages_bytes_limit,
         prioritization_fee_cache,
+        double_merkle_root,
     )
     .map_err(BlockstoreProcessorError::from);
     replay_timer.stop();
@@ -5084,6 +5111,7 @@ pub mod tests {
             None,
             &PrioritizationFeeCache::new(0u64),
             &MigrationStatus::default(),
+            None, // double_merkle_root
         )
     }
 
@@ -5179,6 +5207,7 @@ pub mod tests {
             None,
             &PrioritizationFeeCache::new(0u64),
             &MigrationStatus::default(),
+            None, // double_merkle_root
         )
         .unwrap();
         assert_eq!(progress.num_txs, 2);
@@ -5225,6 +5254,7 @@ pub mod tests {
             None,
             &PrioritizationFeeCache::new(0u64),
             &MigrationStatus::default(),
+            None, // double_merkle_root
         )
         .unwrap();
         assert_eq!(progress.num_txs, 5);

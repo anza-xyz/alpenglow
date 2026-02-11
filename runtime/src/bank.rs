@@ -3067,13 +3067,28 @@ impl Bank {
     /// This is NOT thread safe because if tick height is updated by two different threads, the
     /// block boundary condition could be missed.
     pub fn register_tick(&self, hash: &Hash, scheduler: &InstalledSchedulerRwLock) {
+        self.register_tick_with_blockhash(hash, scheduler);
+    }
+
+    /// Register a tick with an explicit blockhash for the recent blockhash sysvar.
+    ///
+    /// For Alpenglow blocks, the blockhash should be the double merkle root
+    /// For PoH blocks, the blockhash is the final PoH hash
+    ///
+    /// This is NOT thread safe because if tick height is updated by two different threads, the
+    /// block boundary condition could be missed.
+    pub fn register_tick_with_blockhash(
+        &self,
+        blockhash: &Hash,
+        scheduler: &InstalledSchedulerRwLock,
+    ) {
         assert!(
             !self.freeze_started(),
             "register_tick() working on a bank that is already frozen or is undergoing freezing!"
         );
 
         if self.is_block_boundary(self.tick_height.load(Relaxed) + 1) {
-            self.register_recent_blockhash(hash, scheduler);
+            self.register_recent_blockhash(blockhash, scheduler);
         }
 
         // ReplayStage will start computing the accounts delta hash when it

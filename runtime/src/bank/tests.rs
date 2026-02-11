@@ -240,6 +240,34 @@ fn test_race_register_tick_freeze() {
     }
 }
 
+/// Test that `register_tick_with_blockhash` uses the provided blockhash
+/// for the recent blockhash sysvar.
+/// This is important for Alpenglow blocks where the blockhash should be the double merkle root.
+#[test]
+fn test_register_tick_with_blockhash() {
+    let (mut genesis_config, _) = create_genesis_config(50);
+    genesis_config.ticks_per_slot = 1; // One tick triggers block boundary
+
+    let bank = Arc::new(Bank::new_for_tests(&genesis_config));
+
+    // Create a blockhash (simulating Alpenglow double merkle root)
+    let blockhash = Hash::new_unique();
+
+    // Initial state - should have genesis hash
+    let genesis_hash = genesis_config.hash();
+    assert_eq!(bank.last_blockhash(), genesis_hash);
+    assert_ne!(blockhash, genesis_hash);
+
+    // Register tick with explicit blockhash (simulating Alpenglow double merkle root)
+    bank.register_tick_with_blockhash(&blockhash, &BankWithScheduler::no_scheduler_available());
+
+    // Bank should now be complete
+    assert!(bank.is_complete());
+
+    // The last blockhash should be the provided blockhash
+    assert_eq!(bank.last_blockhash(), blockhash);
+}
+
 fn new_executed_processing_result(
     status: Result<()>,
     fee_details: FeeDetails,
