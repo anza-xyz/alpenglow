@@ -159,10 +159,24 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) certs_batch_count: AtomicU64,
     pub(super) certs_batch_elapsed_us: AtomicU64,
 
-    pub(super) sent: AtomicU64,
-    pub(super) sent_failed: AtomicU64,
-    pub(super) votes_for_repair_sent: AtomicU64,
-    pub(super) votes_for_repair_sent_failed: AtomicU64,
+    /// Number of msgs sent to the consensus pool after verifying votes.
+    pub(super) verify_votes_consensus_sent: AtomicU64,
+    /// Number of msgs sent to repair after verifying votes.
+    pub(super) verify_votes_repair_sent: AtomicU64,
+    /// Number of msgs sent to rewards after verifying votes.
+    pub(super) verify_votes_rewards_sent: AtomicU64,
+    /// Number of times the consensus channel was full while verifying votes.
+    pub(super) verify_votes_consensus_channel_full: AtomicU64,
+    /// Number of times the repair channel was full while verifying votes.
+    pub(super) verify_votes_repair_channel_full: AtomicU64,
+    /// Number of times the rewards channel was full while verifying votes.
+    pub(super) verify_votes_rewards_channel_full: AtomicU64,
+
+    /// Number of msgs sent to the consensus pool after verifying certs.
+    pub(super) verify_certs_consensus_sent: AtomicU64,
+    /// Number of times the consensus channel was full while verifying certs.
+    pub(super) verify_certs_consensus_channel_full: AtomicU64,
+
     pub(super) received: AtomicU64,
     pub(super) received_bad_rank: AtomicU64,
     pub(super) received_bad_signature_certs: AtomicU64,
@@ -175,8 +189,6 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) received_verified: AtomicU64,
     pub(super) received_votes: AtomicU64,
     pub(super) last_stats_logged: Instant,
-
-    pub(super) consensus_reward_send_failed: AtomicU64,
 }
 
 impl Default for BLSSigVerifierStats {
@@ -194,10 +206,16 @@ impl Default for BLSSigVerifierStats {
             certs_batch_count: AtomicU64::new(0),
             certs_batch_elapsed_us: AtomicU64::new(0),
 
-            sent: AtomicU64::new(0),
-            sent_failed: AtomicU64::new(0),
-            votes_for_repair_sent: AtomicU64::new(0),
-            votes_for_repair_sent_failed: AtomicU64::new(0),
+            verify_votes_consensus_sent: AtomicU64::new(0),
+            verify_votes_repair_sent: AtomicU64::new(0),
+            verify_votes_rewards_sent: AtomicU64::new(0),
+            verify_votes_consensus_channel_full: AtomicU64::new(0),
+            verify_votes_repair_channel_full: AtomicU64::new(0),
+            verify_votes_rewards_channel_full: AtomicU64::new(0),
+
+            verify_certs_consensus_sent: AtomicU64::new(0),
+            verify_certs_consensus_channel_full: AtomicU64::new(0),
+
             received: AtomicU64::new(0),
             received_bad_rank: AtomicU64::new(0),
             received_bad_signature_certs: AtomicU64::new(0),
@@ -210,8 +228,6 @@ impl Default for BLSSigVerifierStats {
             received_verified: AtomicU64::new(0),
             received_votes: AtomicU64::new(0),
             last_stats_logged: Instant::now(),
-
-            consensus_reward_send_failed: AtomicU64::new(0),
         }
     }
 }
@@ -275,20 +291,48 @@ impl BLSSigVerifierStats {
                 self.certs_batch_elapsed_us.load(Ordering::Relaxed) as i64,
                 i64
             ),
-            ("sent", self.sent.load(Ordering::Relaxed) as i64, i64),
             (
-                "sent_failed",
-                self.sent_failed.load(Ordering::Relaxed) as i64,
+                "verify_votes_consensus_sent",
+                self.verify_votes_consensus_sent.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
-                "verified_votes_sent",
-                self.votes_for_repair_sent.load(Ordering::Relaxed) as i64,
+                "verify_votes_consensus_channel_full",
+                self.verify_votes_consensus_channel_full
+                    .load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
-                "verified_votes_sent_failed",
-                self.votes_for_repair_sent_failed.load(Ordering::Relaxed) as i64,
+                "verify_votes_repair_sent",
+                self.verify_votes_repair_sent.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verified_votes_repair_channel_full",
+                self.verify_votes_repair_channel_full
+                    .load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_votes_rewards_sent",
+                self.verify_votes_rewards_sent.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_votes_rewards_channel_full",
+                self.verify_votes_rewards_channel_full
+                    .load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_certs_consensus_sent",
+                self.verify_certs_consensus_sent.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verity_certs_consensus_channel_full",
+                self.verify_certs_consensus_channel_full
+                    .load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
@@ -344,11 +388,6 @@ impl BLSSigVerifierStats {
             (
                 "received_malformed",
                 self.received_malformed.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "consensus_rewards_send_failed",
-                self.consensus_reward_send_failed.load(Ordering::Relaxed) as i64,
                 i64
             ),
         );
