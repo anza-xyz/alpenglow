@@ -22,7 +22,19 @@ use {
         },
         thread::{self, Builder},
     },
+    thiserror::Error,
 };
+
+#[derive(Debug, Error)]
+#[allow(clippy::enum_variant_names)]
+enum BLSSigVerifierError {
+    #[error("channel to consensus pool disconnected")]
+    ConsensusPoolChannelDisconnected,
+    #[error("channel to rewards container disconnected")]
+    RewardsChannelDisconnected,
+    #[error("channel to repair disconnected")]
+    RepairChannelDisconnected,
+}
 
 pub fn spawn_service(
     exit: Arc<AtomicBool>,
@@ -91,7 +103,8 @@ impl BLSSigVerifier {
             const SOFT_RECEIVE_CAP: usize = 5_000;
             match streamer::recv_packet_batches(&receiver, SOFT_RECEIVE_CAP) {
                 Ok((batches, _, _)) => {
-                    if self.process_batches(batches).is_err() {
+                    if let Err(err) = self.process_batches(batches) {
+                        warn!("BLSSigVerifier exiting after channel disconnect: {err}");
                         break;
                     }
                 }
@@ -108,7 +121,7 @@ impl BLSSigVerifier {
     }
 
     /// Extract votes and certs from the packet batch, verify and send the results
-    fn process_batches(&mut self, batches: Vec<PacketBatch>) -> Result<(), ()> {
+    fn process_batches(&mut self, batches: Vec<PacketBatch>) -> Result<(), BLSSigVerifierError> {
         if self.migration_status.is_pre_feature_activation() {
             // We only need to start processing messages once the feature flag is active
             return Ok(());
@@ -122,7 +135,7 @@ impl BLSSigVerifier {
         let reward_votes = self.collect_reward_votes(&verified_votes, root.slot());
 
         self.send_results(verified_votes, verified_certs)?;
-        self.send_reward_votes(reward_votes);
+        self.send_reward_votes(reward_votes)?;
 
         Ok(())
     }
@@ -188,7 +201,7 @@ impl BLSSigVerifier {
         &self,
         votes: Vec<(VoteMessage, Pubkey)>,
         certs: Vec<Certificate>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), BLSSigVerifierError> {
         let mut votes_by_pubkey: HashMap<Pubkey, Vec<Slot>> = HashMap::new();
 
         // Send votes
@@ -213,17 +226,24 @@ impl BLSSigVerifier {
 
         // Send votes to repair service
         for (pubkey, slots) in votes_by_pubkey {
-            let _ = self.vote_sender.try_send((pubkey, slots));
+            match self.vote_sender.try_send((pubkey, slots)) {
+                Ok(()) | Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(BLSSigVerifierError::RepairChannelDisconnected);
+                }
+            }
         }
 
         Ok(())
     }
 
-    fn send(&self, msgs: Vec<ConsensusMessage>) -> Result<(), ()> {
+    fn send(&self, msgs: Vec<ConsensusMessage>) -> Result<(), BLSSigVerifierError> {
         match self.message_sender.try_send(msgs) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Ok(()),
-            Err(TrySendError::Disconnected(_)) => Err(()),
+            Err(TrySendError::Disconnected(_)) => {
+                Err(BLSSigVerifierError::ConsensusPoolChannelDisconnected)
+            }
         }
     }
 
@@ -247,11 +267,11 @@ impl BLSSigVerifier {
         AddVoteMessage { votes }
     }
 
-    fn send_reward_votes(&self, votes: AddVoteMessage) {
+    fn send_reward_votes(&self, votes: AddVoteMessage) -> Result<(), BLSSigVerifierError> {
         match self.reward_votes_sender.try_send(votes) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
             Err(TrySendError::Disconnected(_)) => {
-                warn!("reward vote channel disconnected");
+                Err(BLSSigVerifierError::RewardsChannelDisconnected)
             }
         }
     }
