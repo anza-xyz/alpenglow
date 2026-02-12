@@ -69,67 +69,129 @@ pub(super) fn verify_and_send_votes(
     stats: &BLSSigVerifierStats,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
-    message_sender: &Sender<ConsensusMessage>,
-    votes_for_repair_sender: &VerifiedVoteSender,
-    reward_votes_sender: &Sender<AddVoteMessage>,
+    channel_to_pool: &Sender<Vec<ConsensusMessage>>,
+    channel_to_repair: &VerifiedVoteSender,
+    channel_to_reward: &Sender<AddVoteMessage>,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
 ) -> Result<Vec<VoteToVerify>, Error> {
-    let verified_votes = verify_votes(votes_to_verify, stats);
-
+    if votes_to_verify.is_empty() {
+        return Ok(votes_to_verify);
+    }
     stats
-        .total_valid_packets
+        .votes_to_verify
+        .fetch_add(votes_to_verify.len() as u64, Ordering::Relaxed);
+    stats
+        .votes_to_verify_batches
+        .fetch_add(1, Ordering::Relaxed);
+    let verified_votes = verify_votes(votes_to_verify, stats);
+    stats
+        .verified_votes
         .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
 
-    send_votes_to_rewards(
+    let (votes_for_pool, msgs_for_repair, msg_for_reward) = process_verified_votes(
         &verified_votes,
         root_bank,
         cluster_info,
         leader_schedule,
-        reward_votes_sender,
-        stats,
-    )?;
-
-    let votes_for_repair = process_and_send_votes_to_consensus(
-        &verified_votes,
-        message_sender,
         last_voted_slots,
         consensus_metrics,
-        stats,
-    )?;
+    );
 
-    send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats)?;
+    send_votes_to_pool(votes_for_pool, channel_to_pool, stats)?;
+    send_votes_to_repair(msgs_for_repair, channel_to_repair, stats)?;
+    send_votes_to_rewards(msg_for_reward, channel_to_reward, stats)?;
 
     Ok(verified_votes)
 }
 
-fn send_votes_to_rewards(
+fn inspect_for_repair(
+    vote: &VoteToVerify,
+    last_voted_slots: &mut HashMap<Pubkey, Slot>,
+    msgs_for_repair: &mut HashMap<Pubkey, Vec<Slot>>,
+) {
+    let vote_slot = vote.vote_message.vote.slot();
+    if vote.vote_message.vote.is_notarization_or_finalization() {
+        last_voted_slots
+            .entry(vote.pubkey)
+            .and_modify(|s| *s = (*s).max(vote_slot))
+            .or_insert(vote.vote_message.vote.slot());
+    }
+
+    if vote.vote_message.vote.is_notarization_or_finalization()
+        || vote.vote_message.vote.is_notarize_fallback()
+    {
+        let slots: &mut Vec<_> = msgs_for_repair.entry(vote.pubkey).or_default();
+        if !slots.contains(&vote_slot) {
+            slots.push(vote_slot);
+        }
+    }
+}
+
+/// Processes the verified votes for various downstream services.
+///
+/// In particular, collects and returns the relevant messages for the consensus pool; rewards;
+/// and repair;
+///
+/// Also updates `last_voted_slots` and `consensus_metrics`.
+fn process_verified_votes(
     verified_votes: &[VoteToVerify],
     root_bank: &Bank,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
-    reward_votes_sender: &Sender<AddVoteMessage>,
+    last_voted_slots: &mut HashMap<Pubkey, Slot>,
+    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
+) -> (
+    Vec<ConsensusMessage>,
+    HashMap<Pubkey, Vec<Slot>>,
+    AddVoteMessage,
+) {
+    let mut votes_for_reward = Vec::with_capacity(verified_votes.len());
+    let mut msgs_for_repair = HashMap::new();
+    let mut votes_for_pool = Vec::with_capacity(verified_votes.len());
+    for vote in verified_votes {
+        let vote_message = vote.vote_message;
+        if consensus_rewards::wants_vote(
+            cluster_info,
+            leader_schedule,
+            root_bank.slot(),
+            &vote_message,
+        ) {
+            votes_for_reward.push(vote_message);
+        }
+
+        inspect_for_repair(vote, last_voted_slots, &mut msgs_for_repair);
+
+        votes_for_pool.push(ConsensusMessage::Vote(vote_message));
+
+        consensus_metrics.push(ConsensusMetricsEvent::Vote {
+            id: vote.pubkey,
+            vote: vote.vote_message.vote,
+        });
+    }
+    (
+        votes_for_pool,
+        msgs_for_repair,
+        AddVoteMessage {
+            votes: votes_for_reward,
+        },
+    )
+}
+
+fn send_votes_to_rewards(
+    msg: AddVoteMessage,
+    channel: &Sender<AddVoteMessage>,
     stats: &BLSSigVerifierStats,
 ) -> Result<(), Error> {
-    let votes = verified_votes
-        .iter()
-        .filter_map(|v| {
-            let vote = v.vote_message;
-            consensus_rewards::wants_vote(cluster_info, leader_schedule, root_bank.slot(), &vote)
-                .then_some(vote)
-        })
-        .collect::<Vec<_>>();
-    let len = votes.len();
-
-    match reward_votes_sender.try_send(AddVoteMessage { votes }) {
+    let len = msg.votes.len();
+    match channel.try_send(msg) {
         Ok(()) => {
             stats
                 .verify_votes_rewards_sent
                 .fetch_add(len as u64, Ordering::Relaxed);
             Ok(())
         }
-        Err(TrySendError::Full(msg)) => {
-            error!("Repair channel is full, dropping msg: {msg:?}");
+        Err(TrySendError::Full(_)) => {
             stats
                 .verify_votes_rewards_channel_full
                 .fetch_add(1, Ordering::Relaxed);
@@ -139,69 +201,23 @@ fn send_votes_to_rewards(
     }
 }
 
-/// Dispatches verified BLS votes to the consensus pool and aggregates vote
-/// data for the repair service.
-///
-/// # Returns
-///
-/// Returns a `HashMap` mapping validator public keys to the vector of slots
-/// they voted for, intended for the repair sender.
-#[allow(clippy::too_many_arguments)]
-fn process_and_send_votes_to_consensus(
-    verified_votes: &[VoteToVerify],
-    message_sender: &Sender<ConsensusMessage>,
-    last_voted_slots: &mut HashMap<Pubkey, Slot>,
-    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-    stats: &BLSSigVerifierStats,
-) -> Result<HashMap<Pubkey, Vec<Slot>>, Error> {
-    let mut votes_for_repair = HashMap::new();
-    for vote in verified_votes {
-        stats.received_votes.fetch_add(1, Ordering::Relaxed);
-
-        let vote_msg = vote.vote_message;
-        let slot = vote_msg.vote.slot();
-
-        consensus_metrics.push(ConsensusMetricsEvent::Vote {
-            id: vote.pubkey,
-            vote: vote.vote_message.vote,
-        });
-
-        if vote.vote_message.vote.is_notarization_or_finalization() {
-            last_voted_slots
-                .entry(vote.pubkey)
-                .and_modify(|s| *s = (*s).max(slot))
-                .or_insert(vote.vote_message.vote.slot());
-        }
-
-        if vote.vote_message.vote.is_notarization_or_finalization()
-            || vote.vote_message.vote.is_notarize_fallback()
-        {
-            let cur_slots: &mut Vec<Slot> = votes_for_repair.entry(vote.pubkey).or_default();
-            if !cur_slots.contains(&slot) {
-                cur_slots.push(slot);
-            }
-        }
-
-        send_vote_to_consensus_pool(message_sender, vote_msg, stats)?;
-    }
-
-    Ok(votes_for_repair)
-}
-
-fn send_vote_to_consensus_pool(
-    message_sender: &Sender<ConsensusMessage>,
-    vote_msg: VoteMessage,
+fn send_votes_to_pool(
+    votes: Vec<ConsensusMessage>,
+    channel: &Sender<Vec<ConsensusMessage>>,
     stats: &BLSSigVerifierStats,
 ) -> Result<(), Error> {
-    match message_sender.try_send(ConsensusMessage::Vote(vote_msg)) {
+    let len = votes.len();
+    if len == 0 {
+        return Ok(());
+    }
+    match channel.try_send(votes) {
         Ok(()) => {
             stats
                 .verify_votes_consensus_sent
-                .fetch_add(1, Ordering::Relaxed);
+                .fetch_add(len as u64, Ordering::Relaxed);
             Ok(())
         }
-        Err(TrySendError::Full(msg)) => {
-            error!("Repair channel is full, dropping msg: {msg:?}");
+        Err(TrySendError::Full(_)) => {
             stats
                 .verify_votes_consensus_channel_full
                 .fetch_add(1, Ordering::Relaxed);
@@ -212,19 +228,18 @@ fn send_vote_to_consensus_pool(
 }
 
 fn send_votes_to_repair(
-    votes_for_repair: HashMap<Pubkey, Vec<Slot>>,
-    votes_for_repair_sender: &VerifiedVoteSender,
+    votes: HashMap<Pubkey, Vec<Slot>>,
+    channel: &VerifiedVoteSender,
     stats: &BLSSigVerifierStats,
 ) -> Result<(), Error> {
-    for (pubkey, slots) in votes_for_repair {
-        match votes_for_repair_sender.try_send((pubkey, slots)) {
+    for (pubkey, slots) in votes {
+        match channel.try_send((pubkey, slots)) {
             Ok(()) => {
                 stats
                     .verify_votes_repair_sent
                     .fetch_add(1, Ordering::Relaxed);
             }
-            Err(TrySendError::Full(msg)) => {
-                error!("Repair channel is full, dropping msg: {msg:?}");
+            Err(TrySendError::Full(_)) => {
                 stats
                     .verify_votes_repair_channel_full
                     .fetch_add(1, Ordering::Relaxed);
@@ -239,11 +254,6 @@ fn verify_votes(
     votes_to_verify: Vec<VoteToVerify>,
     stats: &BLSSigVerifierStats,
 ) -> Vec<VoteToVerify> {
-    if votes_to_verify.is_empty() {
-        return votes_to_verify;
-    }
-    stats.votes_batch_count.fetch_add(1, Ordering::Relaxed);
-
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
     if verify_votes_optimistic(&votes_to_verify, stats) {
         return votes_to_verify;

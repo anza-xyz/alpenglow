@@ -151,7 +151,6 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) total_valid_packets: AtomicU64,
     pub(super) preprocess_count: AtomicU64,
     pub(super) preprocess_elapsed_us: AtomicU64,
-    pub(super) votes_batch_count: AtomicU64,
     pub(super) votes_batch_distinct_messages_count: AtomicU64,
     pub(super) votes_batch_optimistic_elapsed_us: AtomicU64,
     pub(super) votes_batch_parallel_verify_count: AtomicU64,
@@ -159,6 +158,12 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) certs_batch_count: AtomicU64,
     pub(super) certs_batch_elapsed_us: AtomicU64,
 
+    /// Number of votes that we attempted to verify.
+    pub(super) votes_to_verify: AtomicU64,
+    /// Number of batches of votes that we attempted to verify.
+    pub(super) votes_to_verify_batches: AtomicU64,
+    /// Number of votes that were successfully verified.
+    pub(super) verified_votes: AtomicU64,
     /// Number of msgs sent to the consensus pool after verifying votes.
     pub(super) verify_votes_consensus_sent: AtomicU64,
     /// Number of msgs sent to repair after verifying votes.
@@ -198,7 +203,6 @@ impl Default for BLSSigVerifierStats {
 
             preprocess_count: AtomicU64::new(0),
             preprocess_elapsed_us: AtomicU64::new(0),
-            votes_batch_count: AtomicU64::new(0),
             votes_batch_distinct_messages_count: AtomicU64::new(0),
             votes_batch_optimistic_elapsed_us: AtomicU64::new(0),
             votes_batch_parallel_verify_count: AtomicU64::new(0),
@@ -206,6 +210,9 @@ impl Default for BLSSigVerifierStats {
             certs_batch_count: AtomicU64::new(0),
             certs_batch_elapsed_us: AtomicU64::new(0),
 
+            votes_to_verify: AtomicU64::new(0),
+            votes_to_verify_batches: AtomicU64::new(0),
+            verified_votes: AtomicU64::new(0),
             verify_votes_consensus_sent: AtomicU64::new(0),
             verify_votes_repair_sent: AtomicU64::new(0),
             verify_votes_rewards_sent: AtomicU64::new(0),
@@ -253,11 +260,6 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
-                "votes_batch_count",
-                self.votes_batch_count.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
                 "votes_batch_distinct_messages_count",
                 self.votes_batch_distinct_messages_count
                     .load(Ordering::Relaxed) as i64,
@@ -289,6 +291,21 @@ impl BLSSigVerifierStats {
             (
                 "certs_batch_elapsed_us",
                 self.certs_batch_elapsed_us.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "votes_to_verify_batches",
+                self.votes_to_verify_batches.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "votes_to_verify",
+                self.votes_to_verify.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verified_votes",
+                self.verified_votes.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

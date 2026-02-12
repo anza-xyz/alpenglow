@@ -310,7 +310,7 @@ pub struct ReplaySenders {
     pub block_metadata_notifier: Option<BlockMetadataNotifierArc>,
     pub dumped_slots_sender: Sender<Vec<(u64, Hash)>>,
     pub votor_event_sender: VotorEventSender,
-    pub own_vote_sender: Sender<ConsensusMessage>,
+    pub own_vote_sender: Sender<Vec<ConsensusMessage>>,
     pub optimistic_parent_sender: Sender<LeaderWindowInfo>,
     pub lockouts_sender: Sender<TowerCommitmentAggregationData>,
 }
@@ -1493,7 +1493,7 @@ impl ReplayStage {
         vote_account: Pubkey,
         identity_keypair: &Arc<Keypair>,
         authorized_voter_keypairs: &Arc<std::sync::RwLock<Vec<Arc<Keypair>>>>,
-        own_vote_sender: &Sender<ConsensusMessage>,
+        own_vote_sender: &Sender<Vec<ConsensusMessage>>,
         bls_sender: &Sender<BLSOp>,
     ) -> bool {
         let Some((slot, block_id)) = migration_status.eligible_genesis_block() else {
@@ -1518,7 +1518,7 @@ impl ReplayStage {
                     identity_keypair.pubkey()
                 );
                 // If sending fails that means the channel is disconnected and we are shutting down
-                let _ = own_vote_sender.send(message.clone());
+                let _ = own_vote_sender.send(vec![message.clone()]);
                 let _ = bls_sender.send(BLSOp::PushVote {
                     message: Arc::new(message),
                     slot,
@@ -2725,7 +2725,7 @@ impl ReplayStage {
         transaction_status_sender: Option<&TransactionStatusSender>,
         entry_notification_sender: Option<&EntryNotifierSender>,
         replay_vote_sender: &ReplayVoteSender,
-        finalization_cert_sender: &Sender<ConsensusMessage>,
+        finalization_cert_sender: &Sender<Vec<ConsensusMessage>>,
         verify_recyclers: &VerifyRecyclers,
         log_messages_bytes_limit: Option<usize>,
         prioritization_fee_cache: &PrioritizationFeeCache,
@@ -3395,7 +3395,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
-        finalization_cert_sender: &Sender<ConsensusMessage>,
+        finalization_cert_sender: &Sender<Vec<ConsensusMessage>>,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         active_bank_slots: &[Slot],
@@ -3479,9 +3479,9 @@ impl ReplayStage {
                             &replay_progress,
                             transaction_status_sender,
                             entry_notification_sender,
-                            &replay_vote_sender.clone(),
-                            &finalization_cert_sender.clone(),
-                            &verify_recyclers.clone(),
+                            replay_vote_sender,
+                            finalization_cert_sender,
+                            verify_recyclers,
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
                             migration_status,
@@ -3514,7 +3514,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
-        finalization_cert_sender: &Sender<ConsensusMessage>,
+        finalization_cert_sender: &Sender<Vec<ConsensusMessage>>,
         replay_timing: &mut ReplayLoopTiming,
         log_messages_bytes_limit: Option<usize>,
         bank_slot: Slot,
@@ -4090,7 +4090,7 @@ impl ReplayStage {
         entry_notification_sender: Option<&EntryNotifierSender>,
         verify_recyclers: &VerifyRecyclers,
         replay_vote_sender: &ReplayVoteSender,
-        finalization_cert_sender: &Sender<ConsensusMessage>,
+        finalization_cert_sender: &Sender<Vec<ConsensusMessage>>,
         bank_notification_sender: &Option<BankNotificationSenderConfig>,
         rpc_subscriptions: Option<&RpcSubscriptions>,
         slot_status_notifier: &Option<SlotStatusNotifier>,

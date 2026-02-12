@@ -32,9 +32,9 @@ impl BLSSigVerifyService {
     pub fn new(
         packet_receiver: Receiver<PacketBatch>,
         sharable_banks: SharableBanks,
-        votes_for_repair_sender: VerifiedVoteSender,
-        reward_votes_sender: Sender<AddVoteMessage>,
-        message_sender: Sender<ConsensusMessage>,
+        channel_to_repair: VerifiedVoteSender,
+        channel_to_reward: Sender<AddVoteMessage>,
+        channel_to_pool: Sender<Vec<ConsensusMessage>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         cluster_info: Arc<ClusterInfo>,
@@ -42,9 +42,9 @@ impl BLSSigVerifyService {
     ) -> Self {
         let verifier = BLSSigVerifier::new(
             sharable_banks,
-            votes_for_repair_sender,
-            reward_votes_sender,
-            message_sender,
+            channel_to_repair,
+            channel_to_reward,
+            channel_to_pool,
             consensus_metrics_sender,
             alpenglow_last_voted,
             cluster_info,

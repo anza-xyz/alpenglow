@@ -35,7 +35,7 @@ pub(super) fn verify_and_send_certificates(
     bank: &Bank,
     verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
-    message_sender: &Sender<ConsensusMessage>,
+    channel_to_pool: &Sender<Vec<ConsensusMessage>>,
 ) -> Result<(), BLSSigVerifyError> {
     let results = verify_certificates(certs_buffer, bank, verified_certs, stats);
 
@@ -44,24 +44,29 @@ pub(super) fn verify_and_send_certificates(
         .total_valid_packets
         .fetch_add(valid_count as u64, Ordering::Relaxed);
 
-    for (cert, is_valid) in certs_buffer.drain(..).zip(results) {
-        // Send the BLS certificate message to certificate pool.
-        if is_valid {
-            match message_sender.try_send(ConsensusMessage::Certificate(cert)) {
-                Ok(()) => {
-                    stats
-                        .verify_certs_consensus_sent
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Full(_)) => {
-                    stats
-                        .verify_certs_consensus_channel_full
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e @ TrySendError::Disconnected(_)) => {
-                    return Err(e.into());
-                }
-            }
+    let certs = certs_buffer
+        .drain(..)
+        .zip(results)
+        .filter_map(|(cert, is_valid)| is_valid.then_some(ConsensusMessage::Certificate(cert)))
+        .collect::<Vec<_>>();
+    let len = certs.len();
+    if len == 0 {
+        return Ok(());
+    }
+
+    match channel_to_pool.try_send(certs) {
+        Ok(()) => {
+            stats
+                .verify_certs_consensus_sent
+                .fetch_add(len as u64, Ordering::Relaxed);
+        }
+        Err(TrySendError::Full(_)) => {
+            stats
+                .verify_certs_consensus_channel_full
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Err(e @ TrySendError::Disconnected(_)) => {
+            return Err(e.into());
         }
     }
     Ok(())

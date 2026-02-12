@@ -11,7 +11,7 @@ pub(super) enum BLSSigVerifyError {
     Send(Box<SendError<ConsensusMessage>>),
 
     #[error("TrySend error")]
-    TrySend(Box<TrySendError<ConsensusMessage>>),
+    TrySend(Box<TrySendError<Vec<ConsensusMessage>>>),
 
     #[error(transparent)]
     Streamer(#[from] solana_streamer::streamer::StreamerError),
@@ -26,8 +26,8 @@ impl From<SendError<ConsensusMessage>> for BLSSigVerifyError {
     }
 }
 
-impl From<TrySendError<ConsensusMessage>> for BLSSigVerifyError {
-    fn from(err: TrySendError<ConsensusMessage>) -> Self {
+impl From<TrySendError<Vec<ConsensusMessage>>> for BLSSigVerifyError {
+    fn from(err: TrySendError<Vec<ConsensusMessage>>) -> Self {
         Self::TrySend(Box::new(err))
     }
 }

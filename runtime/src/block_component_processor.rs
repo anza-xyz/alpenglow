@@ -125,7 +125,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: VersionedBlockMarker,
-        finalization_cert_sender: Option<&Sender<ConsensusMessage>>,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
         migration_status: &MigrationStatus,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
@@ -251,7 +251,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         footer: VersionedBlockFooter,
-        finalization_cert_sender: Option<&Sender<ConsensusMessage>>,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
     ) -> Result<(), BlockComponentProcessorError> {
         if !self.has_header && self.update_parent.is_none() {
             return Err(BlockComponentProcessorError::MissingParentMarker);
@@ -288,11 +288,11 @@ impl BlockComponentProcessor {
                 let (finalize_cert, notarize_cert) = validated.into_certificates();
                 if let Some(notarize_cert) = notarize_cert {
                     let _ = sender
-                        .send(ConsensusMessage::from(notarize_cert))
+                        .send(vec![ConsensusMessage::from(notarize_cert)])
                         .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
                 }
                 let _ = sender
-                    .send(ConsensusMessage::from(finalize_cert))
+                    .send(vec![ConsensusMessage::from(finalize_cert)])
                     .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
             }
         }

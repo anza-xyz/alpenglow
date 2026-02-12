@@ -56,7 +56,7 @@ pub(crate) struct ConsensusPoolContext {
     // just like regular votes. However do we need to convert
     // Vote -> BLSMessage -> Vote?
     // consider adding a separate pathway in consensus_pool.add_message() for ingesting own votes
-    pub(crate) consensus_message_receiver: Receiver<ConsensusMessage>,
+    pub(crate) consensus_message_receiver: Receiver<Vec<ConsensusMessage>>,
 
     pub(crate) bls_sender: Sender<BLSOp>,
     pub(crate) event_sender: VotorEventSender,
@@ -319,7 +319,7 @@ impl ConsensusPoolService {
                     let Ok(first) = msg else {
                         return Self::handle_channel_disconnected(&mut ctx, "BLS receiver");
                     };
-                    std::iter::once(first).chain(ctx.consensus_message_receiver.try_iter()).collect()
+                    std::iter::once(first).chain(ctx.consensus_message_receiver.try_iter()).flatten().collect()
                 },
                 default(wait_timeout) => continue
             };
@@ -566,7 +566,7 @@ mod tests {
 
     struct ConsensusPoolServiceTestComponents {
         consensus_pool_service: ConsensusPoolService,
-        consensus_message_sender: Sender<ConsensusMessage>,
+        consensus_message_sender: Sender<Vec<ConsensusMessage>>,
         bls_receiver: Receiver<BLSOp>,
         event_receiver: Receiver<VotorEvent>,
         commitment_receiver: Receiver<CommitmentAggregationData>,
@@ -655,14 +655,12 @@ mod tests {
     }
 
     fn test_send_and_receive<T>(
-        consensus_message_sender: &Sender<ConsensusMessage>,
+        consensus_message_sender: &Sender<Vec<ConsensusMessage>>,
         messages_to_send: Vec<ConsensusMessage>,
         receiver: &Receiver<T>,
         condition: impl Fn(&T) -> bool,
     ) {
-        for message in messages_to_send {
-            consensus_message_sender.send(message).unwrap();
-        }
+        consensus_message_sender.send(messages_to_send).unwrap();
         wait_for_event(receiver, condition);
     }
 
@@ -829,7 +827,7 @@ mod tests {
             };
             setup_result
                 .consensus_message_sender
-                .send(ConsensusMessage::Certificate(finalize_certificate))
+                .send(vec![ConsensusMessage::Certificate(finalize_certificate)])
                 .unwrap();
         }
         match channel_name {

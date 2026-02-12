@@ -36,9 +36,9 @@ use {
 };
 
 pub struct BLSSigVerifier {
-    votes_for_repair_sender: VerifiedVoteSender,
-    reward_votes_sender: Sender<AddVoteMessage>,
-    message_sender: Sender<ConsensusMessage>,
+    channel_to_repair: VerifiedVoteSender,
+    channel_to_reward: Sender<AddVoteMessage>,
+    channel_to_pool: Sender<Vec<ConsensusMessage>>,
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<CertificateType>>,
@@ -65,9 +65,9 @@ pub struct BLSSigVerifier {
 impl BLSSigVerifier {
     pub fn new(
         sharable_banks: SharableBanks,
-        votes_for_repair_sender: VerifiedVoteSender,
-        reward_votes_sender: Sender<AddVoteMessage>,
-        message_sender: Sender<ConsensusMessage>,
+        channel_to_repair: VerifiedVoteSender,
+        channel_to_reward: Sender<AddVoteMessage>,
+        channel_to_pool: Sender<Vec<ConsensusMessage>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         cluster_info: Arc<ClusterInfo>,
@@ -75,9 +75,9 @@ impl BLSSigVerifier {
     ) -> Self {
         Self {
             sharable_banks,
-            votes_for_repair_sender,
-            reward_votes_sender,
-            message_sender,
+            channel_to_repair,
+            channel_to_reward,
+            channel_to_pool,
             stats: BLSSigVerifierStats::default(),
             verified_certs: RwLock::new(HashSet::new()),
             consensus_metrics_sender,
@@ -119,17 +119,7 @@ impl BLSSigVerifier {
             .preprocess_elapsed_us
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
-        // Destructure self to borrow fields independently for the closure
         let votes_buffer = std::mem::take(&mut self.votes_buffer);
-        let stats = &self.stats;
-        let cluster_info = &self.cluster_info;
-        let leader_schedule = &self.leader_schedule;
-        let message_sender = &self.message_sender;
-        let votes_for_repair_sender = &self.votes_for_repair_sender;
-        let metric_buffer = &mut self.metric_buffer;
-        let cert_buffer = &mut self.cert_buffer;
-        let verified_certs = &self.verified_certs;
-        let reward_votes_sender = &self.reward_votes_sender;
 
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
@@ -137,23 +127,23 @@ impl BLSSigVerifier {
                 verify_and_send_votes(
                     votes_buffer,
                     &root_bank,
-                    stats,
-                    cluster_info,
-                    leader_schedule,
-                    message_sender,
-                    votes_for_repair_sender,
-                    reward_votes_sender,
+                    &self.stats,
+                    &self.cluster_info,
+                    &self.leader_schedule,
+                    &self.channel_to_pool,
+                    &self.channel_to_repair,
+                    &self.channel_to_reward,
                     &mut last_voted_slots,
-                    metric_buffer,
+                    &mut self.metric_buffer,
                 )
             },
             || {
                 verify_and_send_certificates(
-                    cert_buffer,
+                    &mut self.cert_buffer,
                     &root_bank,
-                    verified_certs,
-                    stats,
-                    message_sender,
+                    &self.verified_certs,
+                    &self.stats,
+                    &self.channel_to_pool,
                 )
             },
         );
@@ -332,7 +322,7 @@ mod tests {
             cluster_info_vote_listener::VerifiedVoteReceiver,
         },
         bitvec::prelude::{BitVec, Lsb0},
-        crossbeam_channel::Receiver,
+        crossbeam_channel::{Receiver, TryRecvError},
         solana_bls_signatures::{Signature, Signature as BLSSignature},
         solana_gossip::contact_info::ContactInfo,
         solana_hash::Hash,
@@ -358,7 +348,7 @@ mod tests {
 
     fn create_keypairs_and_bls_sig_verifier_with_channels(
         votes_for_repair_sender: VerifiedVoteSender,
-        message_sender: Sender<ConsensusMessage>,
+        message_sender: Sender<Vec<ConsensusMessage>>,
         consensus_metrics_sender: ConsensusMetricsEventSender,
         reward_votes_sender: Sender<AddVoteMessage>,
     ) -> (Vec<ValidatorVoteKeypairs>, BLSSigVerifier) {
@@ -405,7 +395,7 @@ mod tests {
         Vec<ValidatorVoteKeypairs>,
         BLSSigVerifier,
         VerifiedVoteReceiver,
-        Receiver<ConsensusMessage>,
+        Receiver<Vec<ConsensusMessage>>,
     ) {
         let (votes_for_repair_sender, votes_for_repair_receiver) = crossbeam_channel::unbounded();
         let (message_sender, message_receiver) = crossbeam_channel::unbounded();
@@ -466,6 +456,15 @@ mod tests {
         builder.build().expect("Failed to build certificate")
     }
 
+    fn expect_no_receive<T: std::fmt::Debug>(receiver: &Receiver<T>) {
+        match receiver.try_recv().unwrap_err() {
+            TryRecvError::Empty => (),
+            e => {
+                panic!("unexpected error {e:?}");
+            }
+        }
+    }
+
     #[test]
     fn test_blssigverifier_send_packets() {
         let (validator_keypairs, mut verifier, votes_for_repair_receiver, receiver) =
@@ -488,7 +487,7 @@ mod tests {
         assert!(verifier
             .verify_and_send_batches(messages_to_batches(&messages1))
             .is_ok());
-        assert_eq!(receiver.try_iter().count(), 2);
+        assert_eq!(receiver.try_iter().flatten().count(), 2);
         assert_eq!(
             verifier
                 .stats
@@ -524,7 +523,7 @@ mod tests {
             .verify_and_send_batches(messages_to_batches(&messages2))
             .is_ok());
 
-        assert_eq!(receiver.try_iter().count(), 1);
+        assert_eq!(receiver.try_iter().flatten().count(), 1);
         assert_eq!(
             verifier
                 .stats
@@ -560,7 +559,7 @@ mod tests {
         assert!(verifier
             .verify_and_send_batches(messages_to_batches(&messages3))
             .is_ok());
-        assert_eq!(receiver.try_iter().count(), 1);
+        assert_eq!(receiver.try_iter().flatten().count(), 1);
         assert_eq!(
             verifier
                 .stats
@@ -592,7 +591,7 @@ mod tests {
         assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
 
         // Expect no messages since the packet was malformed
-        assert!(receiver.is_empty(), "Malformed packet should not be sent");
+        expect_no_receive(&receiver);
 
         // Send a packet with no epoch stakes
         let vote_message_no_stakes = create_signed_vote_message(
@@ -615,10 +614,7 @@ mod tests {
         );
 
         // Expect no messages since the packet was malformed
-        assert!(
-            receiver.is_empty(),
-            "Packet with no epoch stakes should not be sent"
-        );
+        expect_no_receive(&receiver);
 
         // Send a packet with invalid rank
         let messages_invalid_rank = vec![ConsensusMessage::Vote(VoteMessage {
@@ -632,10 +628,7 @@ mod tests {
         assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
 
         // Expect no messages since the packet was malformed
-        assert!(
-            receiver.is_empty(),
-            "Packet with invalid rank should not be sent"
-        );
+        expect_no_receive(&receiver);
     }
 
     #[test]
@@ -663,14 +656,16 @@ mod tests {
             Vote::new_notarization_fallback_vote(6, Hash::new_unique()),
             2,
         ));
-        let messages = vec![msg1.clone(), msg2];
-        assert!(verifier
-            .verify_and_send_batches(messages_to_batches(&messages))
-            .is_ok());
+        verifier
+            .verify_and_send_batches(messages_to_batches(&[msg1.clone()]))
+            .unwrap();
+        verifier
+            .verify_and_send_batches(messages_to_batches(&[msg2]))
+            .unwrap();
 
         // We failed to send the second message because the channel is full.
-        assert_eq!(message_receiver.len(), 1);
-        assert_eq!(message_receiver.recv().unwrap(), msg1);
+        let msgs = message_receiver.try_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(msgs, vec![msg1]);
         assert_eq!(
             verifier
                 .stats
@@ -725,7 +720,7 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
-        assert!(receiver.is_empty(), "Discarded packet should not be sent");
+        expect_no_receive(&receiver);
         assert_eq!(
             verifier
                 .stats
@@ -765,7 +760,7 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             num_votes,
             "Did not send all valid packets"
         );
@@ -812,7 +807,7 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             num_votes,
             "Did not send all valid packets"
         );
@@ -870,7 +865,7 @@ mod tests {
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
-        let sent_messages: Vec<_> = message_receiver.try_iter().collect();
+        let sent_messages: Vec<_> = message_receiver.try_iter().flatten().collect();
         assert_eq!(
             sent_messages.len(),
             num_votes - 1,
@@ -932,7 +927,7 @@ mod tests {
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
-        let sent_messages: Vec<_> = message_receiver.try_iter().collect();
+        let sent_messages: Vec<_> = message_receiver.try_iter().flatten().collect();
         assert_eq!(
             sent_messages.len(),
             num_votes - 1,
@@ -959,7 +954,7 @@ mod tests {
 
     #[test]
     fn test_blssigverifier_verify_votes_empty_batch() {
-        let (_, mut verifier, _, _) = create_keypairs_and_bls_sig_verifier();
+        let (_, mut verifier, _r, _a) = create_keypairs_and_bls_sig_verifier();
 
         let packet_batches = vec![];
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
@@ -983,7 +978,7 @@ mod tests {
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             1,
             "Valid Base2 certificate should be sent"
         );
@@ -1006,7 +1001,7 @@ mod tests {
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             1,
             "Valid Base2 certificate should be sent"
         );
@@ -1030,7 +1025,7 @@ mod tests {
         // The call still succeeds, but the packet is marked for discard.
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             0,
             "This certificate should be invalid"
         );
@@ -1078,7 +1073,7 @@ mod tests {
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             1,
             "Valid Base3 certificate should be sent"
         );
@@ -1119,7 +1114,7 @@ mod tests {
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             1,
             "Valid Base3 certificate should be sent"
         );
@@ -1160,7 +1155,7 @@ mod tests {
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             0,
             "This certificate should be invalid"
         );
@@ -1198,10 +1193,7 @@ mod tests {
         let packet_batches = messages_to_batches(&[consensus_message]);
 
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
-        assert!(
-            message_receiver.is_empty(),
-            "Certificate with invalid signature should be discarded"
-        );
+        expect_no_receive(&message_receiver);
         assert_eq!(
             verifier
                 .stats
@@ -1265,7 +1257,7 @@ mod tests {
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             num_votes + 1,
             "All valid messages in a mixed batch should be sent"
         );
@@ -1304,10 +1296,7 @@ mod tests {
 
         let packet_batches = messages_to_batches(&[consensus_message]);
         assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
-        assert!(
-            message_receiver.is_empty(),
-            "Packet with invalid rank should be discarded"
-        );
+        expect_no_receive(&message_receiver);
         assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
     }
 
@@ -1368,10 +1357,7 @@ mod tests {
         assert!(sig_verifier
             .verify_and_send_batches(packet_batches_vote)
             .is_ok());
-        assert!(
-            message_receiver.is_empty(),
-            "Old vote should not have been sent"
-        );
+        expect_no_receive(&message_receiver);
         assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 1);
 
         let cert = create_signed_certificate_message(
@@ -1385,10 +1371,7 @@ mod tests {
         assert!(sig_verifier
             .verify_and_send_batches(packet_batches_cert)
             .is_ok());
-        assert!(
-            message_receiver.is_empty(),
-            "Old certificate should not have been sent"
-        );
+        expect_no_receive(&message_receiver);
         assert_eq!(sig_verifier.stats.received_old.load(Ordering::Relaxed), 2);
     }
 
@@ -1425,7 +1408,7 @@ mod tests {
         assert!(verifier.verify_and_send_batches(packet_batches1).is_ok());
 
         assert_eq!(
-            message_receiver.try_iter().count(),
+            message_receiver.try_iter().flatten().count(),
             1,
             "First certificate should be sent"
         );
@@ -1441,10 +1424,7 @@ mod tests {
         let packet_batches2 = messages_to_batches(&[consensus_message2]);
 
         assert!(verifier.verify_and_send_batches(packet_batches2).is_ok());
-        assert!(
-            message_receiver.is_empty(),
-            "Second, weaker certificate should not be sent"
-        );
+        expect_no_receive(&message_receiver);
         assert_eq!(
             verifier.stats.received.load(Ordering::Relaxed),
             2,
