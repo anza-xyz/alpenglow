@@ -1,15 +1,12 @@
 //! The BLS signature verifier.
 
 use {
-    crate::{
-        bls_sigverify::{
-            bls_cert_sigverify::verify_and_send_certificates,
-            bls_vote_sigverify::{verify_and_send_votes, VoteToVerify},
-            error::BLSSigVerifyError,
-            stats::BLSSigVerifierStats,
-        },
-        cluster_info_vote_listener::VerifiedVoteSender,
+    super::{
+        bls_cert_sigverify::{verify_and_send_certificates, Error as VerifyCertsError},
+        bls_vote_sigverify::{verify_and_send_votes, Error as VerifyVotesError, VoteToVerify},
+        stats::BLSSigVerifierStats,
     },
+    crate::cluster_info_vote_listener::VerifiedVoteSender,
     crossbeam_channel::Sender,
     solana_bls_signatures::pubkey::Pubkey as BlsPubkey,
     solana_clock::Slot,
@@ -33,7 +30,16 @@ use {
         sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
+    thiserror::Error,
 };
+
+#[derive(Error, Debug)]
+pub(super) enum Error {
+    #[error("verifying votes failed with {0}")]
+    VerifyVotes(#[from] VerifyVotesError),
+    #[error("verifying certs failed with {0}")]
+    VerifyCerts(#[from] VerifyCertsError),
+}
 
 pub struct BLSSigVerifier {
     votes_for_repair_sender: VerifiedVoteSender,
@@ -94,7 +100,7 @@ impl BLSSigVerifier {
     pub(super) fn verify_and_send_batches(
         &mut self,
         batches: Vec<PacketBatch>,
-    ) -> Result<(), BLSSigVerifyError> {
+    ) -> Result<(), Error> {
         let mut preprocess_time = Measure::start("preprocess");
         let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
         let root_bank = self.sharable_banks.root();

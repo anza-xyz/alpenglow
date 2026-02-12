@@ -1,5 +1,5 @@
 use {
-    crate::bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
+    super::stats::BLSSigVerifierStats,
     agave_bls_cert_verify::cert_verify::Error as BlsCertVerifyError,
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, ParallelIterator},
@@ -19,6 +19,12 @@ use {
 };
 
 #[derive(Debug, Error)]
+pub(super) enum Error {
+    #[error("channel to consensus pool disconnected")]
+    ConsensusPoolChannelDisconnected,
+}
+
+#[derive(Debug, Error)]
 enum CertVerifyError {
     #[error("Failed to find key to rank map for slot {0}")]
     KeyToRankMapNotFound(Slot),
@@ -36,7 +42,7 @@ pub(super) fn verify_and_send_certificates(
     verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
     message_sender: &Sender<ConsensusMessage>,
-) -> Result<(), BLSSigVerifyError> {
+) -> Result<(), Error> {
     let results = verify_certificates(certs_buffer, bank, verified_certs, stats);
 
     let valid_count = results.iter().filter(|&&valid| valid).count();
@@ -58,8 +64,8 @@ pub(super) fn verify_and_send_certificates(
                         .verify_certs_consensus_channel_full
                         .fetch_add(1, Ordering::Relaxed);
                 }
-                Err(e @ TrySendError::Disconnected(_)) => {
-                    return Err(e.into());
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(Error::ConsensusPoolChannelDisconnected);
                 }
             }
         }
