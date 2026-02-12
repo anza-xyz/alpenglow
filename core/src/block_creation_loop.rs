@@ -607,10 +607,7 @@ fn shutdown_and_drain_record_receiver(
 ) -> Result<(), PohRecorderError> {
     record_receiver.shutdown();
 
-    while !record_receiver.is_safe_to_restart() {
-        let Ok(record) = record_receiver.recv_timeout(Duration::ZERO) else {
-            continue;
-        };
+    for record in record_receiver.drain() {
         poh_recorder.write().unwrap().record(
             record.slot,
             record.mixins,

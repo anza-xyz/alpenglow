@@ -2,8 +2,7 @@
 use qualifier_attr::qualifiers;
 use {
     crate::{
-        bls_sigverify::{error::BLSSigVerifyError, stats::BLSSigVerifierStats},
-        cluster_info_vote_listener::VerifiedVoteSender,
+        bls_sigverify::stats::BLSSigVerifierStats, cluster_info_vote_listener::VerifiedVoteSender,
     },
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
@@ -25,7 +24,19 @@ use {
         vote::Vote,
     },
     std::{collections::HashMap, sync::atomic::Ordering},
+    thiserror::Error,
 };
+
+#[derive(Debug, Error)]
+#[allow(clippy::enum_variant_names)]
+pub(super) enum Error {
+    #[error("channel to consensus pool disconnected")]
+    ConsensusPoolChannelDisconnected,
+    #[error("channel to rewards container disconnected")]
+    RewardsChannelDisconnected,
+    #[error("channel to repair disconnected")]
+    RepairChannelDisconnected,
+}
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 #[derive(Clone, Debug)]
@@ -63,7 +74,7 @@ pub(super) fn verify_and_send_votes(
     reward_votes_sender: &Sender<AddVoteMessage>,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> Result<Vec<VoteToVerify>, BLSSigVerifyError> {
+) -> Result<Vec<VoteToVerify>, Error> {
     let verified_votes = verify_votes(votes_to_verify, stats);
 
     stats
@@ -77,7 +88,7 @@ pub(super) fn verify_and_send_votes(
         leader_schedule,
         reward_votes_sender,
         stats,
-    );
+    )?;
 
     let votes_for_repair = process_and_send_votes_to_consensus(
         &verified_votes,
@@ -87,7 +98,7 @@ pub(super) fn verify_and_send_votes(
         stats,
     )?;
 
-    send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats);
+    send_votes_to_repair(votes_for_repair, votes_for_repair_sender, stats)?;
 
     Ok(verified_votes)
 }
@@ -99,7 +110,7 @@ fn send_votes_to_rewards(
     leader_schedule: &LeaderScheduleCache,
     reward_votes_sender: &Sender<AddVoteMessage>,
     stats: &BLSSigVerifierStats,
-) {
+) -> Result<(), Error> {
     let votes = verified_votes
         .iter()
         .filter_map(|v| {
@@ -107,18 +118,24 @@ fn send_votes_to_rewards(
             consensus_rewards::wants_vote(cluster_info, leader_schedule, root_bank.slot(), &vote)
                 .then_some(vote)
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let len = votes.len();
 
     match reward_votes_sender.try_send(AddVoteMessage { votes }) {
-        Ok(()) => (),
-        Err(TrySendError::Full(_)) => {
+        Ok(()) => {
             stats
-                .consensus_reward_send_failed
+                .verify_votes_rewards_sent
+                .fetch_add(len as u64, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(TrySendError::Full(msg)) => {
+            error!("Repair channel is full, dropping msg: {msg:?}");
+            stats
+                .verify_votes_rewards_channel_full
                 .fetch_add(1, Ordering::Relaxed);
+            Ok(())
         }
-        Err(TrySendError::Disconnected(_)) => {
-            warn!("could not send votes to reward container, receive side of channel is closed");
-        }
+        Err(TrySendError::Disconnected(_)) => Err(Error::RewardsChannelDisconnected),
     }
 }
 
@@ -136,7 +153,7 @@ fn process_and_send_votes_to_consensus(
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
     stats: &BLSSigVerifierStats,
-) -> Result<HashMap<Pubkey, Vec<Slot>>, BLSSigVerifyError> {
+) -> Result<HashMap<Pubkey, Vec<Slot>>, Error> {
     let mut votes_for_repair = HashMap::new();
     for vote in verified_votes {
         stats.received_votes.fetch_add(1, Ordering::Relaxed);
@@ -175,17 +192,22 @@ fn send_vote_to_consensus_pool(
     message_sender: &Sender<ConsensusMessage>,
     vote_msg: VoteMessage,
     stats: &BLSSigVerifierStats,
-) -> Result<(), BLSSigVerifyError> {
+) -> Result<(), Error> {
     match message_sender.try_send(ConsensusMessage::Vote(vote_msg)) {
         Ok(()) => {
-            stats.sent.fetch_add(1, Ordering::Relaxed);
+            stats
+                .verify_votes_consensus_sent
+                .fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
-        Err(TrySendError::Full(_)) => {
-            stats.sent_failed.fetch_add(1, Ordering::Relaxed);
+        Err(TrySendError::Full(msg)) => {
+            error!("Repair channel is full, dropping msg: {msg:?}");
+            stats
+                .verify_votes_consensus_channel_full
+                .fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
-        Err(e @ TrySendError::Disconnected(_)) => Err(e.into()),
+        Err(TrySendError::Disconnected(_)) => Err(Error::ConsensusPoolChannelDisconnected),
     }
 }
 
@@ -193,20 +215,24 @@ fn send_votes_to_repair(
     votes_for_repair: HashMap<Pubkey, Vec<Slot>>,
     votes_for_repair_sender: &VerifiedVoteSender,
     stats: &BLSSigVerifierStats,
-) {
+) -> Result<(), Error> {
     for (pubkey, slots) in votes_for_repair {
         match votes_for_repair_sender.try_send((pubkey, slots)) {
             Ok(()) => {
-                stats.votes_for_repair_sent.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(e) => {
-                trace!("Failed to send verified vote: {e}");
                 stats
-                    .votes_for_repair_sent_failed
+                    .verify_votes_repair_sent
                     .fetch_add(1, Ordering::Relaxed);
             }
+            Err(TrySendError::Full(msg)) => {
+                error!("Repair channel is full, dropping msg: {msg:?}");
+                stats
+                    .verify_votes_repair_channel_full
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Disconnected(_)) => return Err(Error::RepairChannelDisconnected),
         }
     }
+    Ok(())
 }
 
 fn verify_votes(

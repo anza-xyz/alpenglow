@@ -1,11 +1,12 @@
 use {
+    super::bls_vote_sigverify::Error as VerifyVotesError,
     crossbeam_channel::{SendError, TrySendError},
     solana_votor_messages::consensus_message::ConsensusMessage,
     thiserror::Error,
 };
 
 #[derive(Error, Debug)]
-pub enum BLSSigVerifyError {
+pub(super) enum BLSSigVerifyError {
     #[error("Send error")]
     Send(Box<SendError<ConsensusMessage>>),
 
@@ -14,6 +15,9 @@ pub enum BLSSigVerifyError {
 
     #[error(transparent)]
     Streamer(#[from] solana_streamer::streamer::StreamerError),
+
+    #[error("verifying votes failed with {0}")]
+    VerifyVotes(#[from] VerifyVotesError),
 }
 
 impl From<SendError<ConsensusMessage>> for BLSSigVerifyError {

@@ -49,10 +49,14 @@ pub(super) fn verify_and_send_certificates(
         if is_valid {
             match message_sender.try_send(ConsensusMessage::Certificate(cert)) {
                 Ok(()) => {
-                    stats.sent.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .verify_certs_consensus_sent
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 Err(TrySendError::Full(_)) => {
-                    stats.sent_failed.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .verify_certs_consensus_channel_full
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e @ TrySendError::Disconnected(_)) => {
                     return Err(e.into());

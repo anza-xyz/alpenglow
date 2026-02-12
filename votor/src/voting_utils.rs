@@ -117,7 +117,6 @@ pub struct VotingContext {
     pub authorized_voter_keypairs: Arc<std::sync::RwLock<Vec<Arc<Keypair>>>>,
     // The BLS keypair should always change with authorized_voter_keypairs.
     pub derived_bls_keypairs: HashMap<Pubkey, Arc<BLSKeypair>>,
-    pub has_new_vote_been_rooted: bool,
     pub own_vote_sender: Sender<ConsensusMessage>,
     pub bls_sender: Sender<BLSOp>,
     pub commitment_sender: Sender<CommitmentAggregationData>,
@@ -373,7 +372,6 @@ mod tests {
                 my_keys.vote_keypair.insecure_clone(),
             )])),
             derived_bls_keypairs: HashMap::new(),
-            has_new_vote_been_rooted: false,
             own_vote_sender,
             bls_sender: unbounded().0,
             commitment_sender: unbounded().0,

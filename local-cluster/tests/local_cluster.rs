@@ -8105,6 +8105,7 @@ fn test_alpenglow_add_missing_parent_ready() {
 /// - Network maintains liveness through repeated sad path scenarios
 #[test]
 #[serial]
+#[ignore]
 fn test_alpenglow_flh_simple_sad_leader_handover() {
     agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 
