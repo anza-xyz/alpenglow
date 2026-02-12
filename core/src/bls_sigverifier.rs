@@ -74,6 +74,9 @@ pub struct BLSSigVerifier {
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
     migration_status: Arc<MigrationStatus>,
+    // Reused buffers to avoid reallocating per packet batch.
+    vote_buffer: Vec<VoteMessage>,
+    cert_buffer: Vec<Certificate>,
 }
 
 impl BLSSigVerifier {
@@ -94,6 +97,8 @@ impl BLSSigVerifier {
             cluster_info,
             leader_schedule,
             migration_status,
+            vote_buffer: Vec::new(),
+            cert_buffer: Vec::new(),
         }
     }
 
@@ -128,10 +133,17 @@ impl BLSSigVerifier {
         }
 
         let root = self.banks.root();
-        let (votes, certs) = self.extract_messages(batches, &root);
+        self.vote_buffer.clear();
+        self.cert_buffer.clear();
+        Self::extract_messages(
+            batches,
+            &root,
+            &mut self.vote_buffer,
+            &mut self.cert_buffer,
+        );
 
-        let verified_votes = self.verify_votes(votes, &root);
-        let verified_certs = self.verify_certificates(certs, &root);
+        let verified_votes = Self::verify_votes(self.vote_buffer.drain(..), &root);
+        let verified_certs = Self::verify_certificates(self.cert_buffer.drain(..), &root);
         let reward_votes = self.collect_reward_votes(&verified_votes, root.slot());
 
         self.send_results(verified_votes, verified_certs)?;
@@ -141,25 +153,20 @@ impl BLSSigVerifier {
     }
 
     fn extract_messages(
-        &self,
         batches: Vec<PacketBatch>,
         _root: &Bank,
-    ) -> (Vec<VoteMessage>, Vec<Certificate>) {
-        let mut votes = Vec::new();
-        let mut certs = Vec::new();
-
+        votes: &mut Vec<VoteMessage>,
+        certs: &mut Vec<Certificate>,
+    ) {
         for batch in batches {
             for packet in batch.into_iter() {
-                self.extract_packet(packet, &mut votes, &mut certs);
+                Self::extract_packet(packet, votes, certs);
             }
         }
-
-        (votes, certs)
     }
 
     /// Retrieve the bls message from the packet, performing any filtering checks as needed
     fn extract_packet(
-        &self,
         packet: solana_perf::packet::PacketRef,
         votes: &mut Vec<VoteMessage>,
         certs: &mut Vec<Certificate>,
@@ -178,7 +185,7 @@ impl BLSSigVerifier {
         }
     }
 
-    fn verify_votes(&self, votes: Vec<VoteMessage>, bank: &Bank) -> Vec<(VoteMessage, Pubkey)> {
+    fn verify_votes(votes: impl IntoIterator<Item = VoteMessage>, bank: &Bank) -> Vec<(VoteMessage, Pubkey)> {
         // Actual BLS signature verification to follow
         votes
             .into_iter()
@@ -192,9 +199,9 @@ impl BLSSigVerifier {
             .collect()
     }
 
-    fn verify_certificates(&self, certs: Vec<Certificate>, _bank: &Bank) -> Vec<Certificate> {
+    fn verify_certificates(certs: impl IntoIterator<Item = Certificate>, _bank: &Bank) -> Vec<Certificate> {
         // Actual certificate verification to follow
-        certs
+        certs.into_iter().collect()
     }
 
     fn send_results(
