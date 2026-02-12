@@ -48,7 +48,8 @@ pub struct BLSSigVerifier {
     cluster_info: Arc<ClusterInfo>,
     leader_schedule: Arc<LeaderScheduleCache>,
 
-    /// Buffer to collect votes to be verified.  We try to minimise reallocations by reusing the buffer across consequtive calls to [`Self::verify_send_batches()`].
+    /// Buffer to collect votes to be verified.  We try to minimise reallocations by reusing the
+    /// buffer across consecutive calls to [`Self::verify_send_batches()`].
     votes_buffer: Vec<VoteToVerify>,
 
     // Recycled buffers implementing the Buffer Recycling pattern.

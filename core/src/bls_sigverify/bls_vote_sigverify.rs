@@ -28,7 +28,7 @@ use {
 };
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct VoteToVerify {
     pub vote_message: VoteMessage,
     pub bls_pubkey: BlsPubkey,
