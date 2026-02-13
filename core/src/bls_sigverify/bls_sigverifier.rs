@@ -491,9 +491,9 @@ mod tests {
             ConsensusMessage::Certificate(cert),
         ];
 
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages1))
-            .is_ok());
+            .unwrap();
         assert_eq!(receiver.try_iter().count(), 2);
         assert_eq!(
             verifier
@@ -526,9 +526,9 @@ mod tests {
             vote_rank2,
         );
         let messages2 = vec![ConsensusMessage::Vote(vote_message2)];
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages2))
-            .is_ok());
+            .unwrap();
 
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(
@@ -563,9 +563,9 @@ mod tests {
             vote_rank3,
         );
         let messages3 = vec![ConsensusMessage::Vote(vote_message3)];
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages3))
-            .is_ok());
+            .unwrap();
         assert_eq!(receiver.try_iter().count(), 1);
         assert_eq!(
             verifier
@@ -592,7 +592,7 @@ mod tests {
 
         let packets = vec![Packet::default()];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
 
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
         assert_eq!(verifier.stats.received_malformed.load(Ordering::Relaxed), 1);
@@ -608,9 +608,9 @@ mod tests {
         );
         let messages_no_stakes = vec![ConsensusMessage::Vote(vote_message_no_stakes)];
 
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages_no_stakes))
-            .is_ok());
+            .unwrap();
 
         assert_eq!(
             verifier
@@ -632,9 +632,9 @@ mod tests {
             signature: Signature::default(),
             rank: 1000, // Invalid rank
         })];
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages_invalid_rank))
-            .is_ok());
+            .unwrap();
         assert_eq!(verifier.stats.received_bad_rank.load(Ordering::Relaxed), 1);
 
         // Expect no messages since the packet was malformed
@@ -670,9 +670,9 @@ mod tests {
             2,
         ));
         let messages = vec![msg1.clone(), msg2];
-        assert!(verifier
+        verifier
             .verify_and_send_batches(messages_to_batches(&messages))
-            .is_ok());
+            .unwrap();
 
         // We failed to send the second message because the channel is full.
         assert_eq!(message_receiver.len(), 1);
@@ -730,7 +730,7 @@ mod tests {
         let packets = vec![packet];
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert!(receiver.is_empty(), "Discarded packet should not be sent");
         assert_eq!(
             verifier
@@ -769,7 +769,7 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             num_votes,
@@ -875,7 +875,7 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         let sent_messages: Vec<_> = message_receiver.try_iter().collect();
         assert_eq!(
             sent_messages.len(),
@@ -937,7 +937,7 @@ mod tests {
         }
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         let sent_messages: Vec<_> = message_receiver.try_iter().collect();
         assert_eq!(
             sent_messages.len(),
@@ -968,7 +968,7 @@ mod tests {
         let (_, mut verifier, _, _) = create_keypairs_and_bls_sig_verifier();
 
         let packet_batches = vec![];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
     }
 
@@ -987,7 +987,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             1,
@@ -1010,7 +1010,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             1,
@@ -1034,7 +1034,7 @@ mod tests {
         let packet_batches = messages_to_batches(&[consensus_message]);
 
         // The call still succeeds, but the packet is marked for discard.
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             0,
@@ -1082,7 +1082,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             1,
@@ -1123,7 +1123,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             1,
@@ -1164,7 +1164,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             0,
@@ -1203,7 +1203,7 @@ mod tests {
         let consensus_message = ConsensusMessage::Certificate(cert);
         let packet_batches = messages_to_batches(&[consensus_message]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert!(
             message_receiver.is_empty(),
             "Certificate with invalid signature should be discarded"
@@ -1269,7 +1269,7 @@ mod tests {
         packets.push(cert_packet);
 
         let packet_batches = vec![PinnedPacketBatch::new(packets).into()];
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert_eq!(
             message_receiver.try_iter().count(),
             num_votes + 1,
@@ -1309,7 +1309,7 @@ mod tests {
         });
 
         let packet_batches = messages_to_batches(&[consensus_message]);
-        assert!(verifier.verify_and_send_batches(packet_batches).is_ok());
+        verifier.verify_and_send_batches(packet_batches).unwrap();
         assert!(
             message_receiver.is_empty(),
             "Packet with invalid rank should be discarded"
@@ -1371,9 +1371,9 @@ mod tests {
         });
         let packet_batches_vote = messages_to_batches(&[consensus_message_vote]);
 
-        assert!(sig_verifier
+        sig_verifier
             .verify_and_send_batches(packet_batches_vote)
-            .is_ok());
+            .unwrap();
         assert!(
             message_receiver.is_empty(),
             "Old vote should not have been sent"
@@ -1388,9 +1388,9 @@ mod tests {
         let consensus_message_cert = ConsensusMessage::Certificate(cert);
         let packet_batches_cert = messages_to_batches(&[consensus_message_cert]);
 
-        assert!(sig_verifier
+        sig_verifier
             .verify_and_send_batches(packet_batches_cert)
-            .is_ok());
+            .unwrap();
         assert!(
             message_receiver.is_empty(),
             "Old certificate should not have been sent"
@@ -1428,7 +1428,7 @@ mod tests {
         let consensus_message1 = ConsensusMessage::Certificate(cert1);
         let packet_batches1 = messages_to_batches(&[consensus_message1]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches1).is_ok());
+        verifier.verify_and_send_batches(packet_batches1).unwrap();
 
         assert_eq!(
             message_receiver.try_iter().count(),
@@ -1446,7 +1446,7 @@ mod tests {
         let consensus_message2 = ConsensusMessage::Certificate(cert2);
         let packet_batches2 = messages_to_batches(&[consensus_message2]);
 
-        assert!(verifier.verify_and_send_batches(packet_batches2).is_ok());
+        verifier.verify_and_send_batches(packet_batches2).unwrap();
         assert!(
             message_receiver.is_empty(),
             "Second, weaker certificate should not be sent"
