@@ -30,6 +30,10 @@ pub enum BlockError {
     #[error("invalid tick hash count")]
     InvalidTickHashCount,
 
+    /// Alpenglow blocks must have exactly one tick at the end
+    #[error("invalid tick count")]
+    InvalidTickCount,
+
     /// Blocks must end in a tick entry, trailing transaction entries are not allowed to guarantee
     /// that each block has the same number of hashes
     #[error("trailing entry")]
