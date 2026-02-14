@@ -3358,7 +3358,7 @@ impl ReplayStage {
                             &replay_progress,
                             transaction_status_sender,
                             entry_notification_sender,
-                            &replay_vote_sender.clone(),
+                            replay_vote_sender,
                             finalization_cert_sender,
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
