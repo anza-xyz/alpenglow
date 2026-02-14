@@ -1084,7 +1084,7 @@ fn verify_ticks(
     tick_hash_count: &mut u64,
     migration_status: &MigrationStatus,
 ) -> std::result::Result<(), BlockError> {
-    let next_bank_tick_height = bank.tick_height() + entries.tick_count();
+    let next_bank_tick_height = bank.tick_height().saturating_add(entries.tick_count());
     let max_bank_tick_height = bank.max_tick_height();
 
     if next_bank_tick_height > max_bank_tick_height {
@@ -1110,17 +1110,48 @@ fn verify_ticks(
         }
     }
 
-    if migration_status.should_have_alpenglow_ticks(bank.slot()) {
-        return Ok(());
+    // Alpenglow blocks must have exactly one tick (the "alpentick") at the end of the block.
+    // The tick height is pre-set to max_tick_height - 1, so we verify entries contain exactly
+    // 1 tick when the slot is full.
+    if migration_status.should_have_alpenglow_ticks(bank.slot())
+        && slot_full
+        && entries.tick_count() != 1
+    {
+        warn!(
+            "Alpenglow slot {} should have exactly 1 tick, found {}",
+            bank.slot(),
+            entries.tick_count()
+        );
+        return Err(BlockError::InvalidTickCount);
     }
 
-    let hashes_per_tick = bank.hashes_per_tick().unwrap_or(0);
-    if !entries.verify_tick_hash_count(tick_hash_count, hashes_per_tick) {
-        warn!(
-            "Tick with invalid number of hashes found in slot: {}",
-            bank.slot()
-        );
-        return Err(BlockError::InvalidTickHashCount);
+    if migration_status.should_have_alpenglow_ticks(bank.slot()) {
+        // For Alpenglow in low-power mode, verify the alpentick has at least 1 hash
+        // to ensure the PoH chain continues. We use the accumulated hash count from
+        // entries before the alpentick (penultimate) plus the alpentick's own hashes.
+        for entry in entries {
+            *tick_hash_count = tick_hash_count.saturating_add(entry.num_hashes);
+            if entry.is_tick() {
+                if *tick_hash_count == 0 {
+                    warn!(
+                        "Alpenglow alpentick has zero accumulated hashes in slot: {}",
+                        bank.slot()
+                    );
+                    return Err(BlockError::InvalidTickHashCount);
+                }
+                *tick_hash_count = 0;
+            }
+        }
+    } else {
+        // For non-Alpenglow blocks, verify exact hash count per tick
+        let hashes_per_tick = bank.hashes_per_tick().unwrap_or(0);
+        if !entries.verify_tick_hash_count(tick_hash_count, hashes_per_tick) {
+            warn!(
+                "Tick with invalid number of hashes found in slot: {}",
+                bank.slot()
+            );
+            return Err(BlockError::InvalidTickHashCount);
+        }
     }
 
     Ok(())
@@ -5627,5 +5658,77 @@ pub mod tests {
         );
         // Adding another None will noop (even though the block is already full)
         assert!(check_block_cost_limits(&bank, &tx_costs[0..1]).is_ok());
+    }
+
+    /// Test that Alpenglow blocks must have exactly 1 tick at the end.
+    #[test]
+    fn test_verify_ticks_alpenglow() {
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(10_000);
+        let bank = Bank::new_for_tests(&genesis_config);
+
+        // Set up bank for Alpenglow: tick_height = max_tick_height - 1
+        // This simulates what set_alpenglow_ticks() does
+        bank.set_tick_height(bank.max_tick_height().saturating_sub(1));
+
+        // Use post_migration_status which enables Alpenglow for slot > 0
+        // Bank is at slot 0, so we need to check a slot > 0 for Alpenglow ticks
+        let migration_status = MigrationStatus::post_migration_status();
+
+        // For slot 0, Alpenglow is not yet enabled (genesis_cert slot is 0)
+        // Let's verify with slot 0 first - should pass normal verification
+        let entries_one_tick = create_ticks(1, 0, genesis_config.hash());
+        let mut tick_hash_count = 0;
+        assert!(verify_ticks(
+            &bank,
+            &entries_one_tick,
+            true,
+            &mut tick_hash_count,
+            &migration_status
+        )
+        .is_ok());
+
+        // Now create a child bank at slot 1 (which is an Alpenglow block)
+        let bank1 = Bank::new_from_parent(Arc::new(bank), &Pubkey::default(), 1);
+        // Set up as Alpenglow block
+        bank1.set_tick_height(bank1.max_tick_height().saturating_sub(1));
+
+        // Test: Alpenglow block with exactly 1 tick with at least 1 hash should pass
+        // Alpenglow uses low-power mode which requires at least 1 hash per tick
+        let entries_one_tick = create_ticks(1, 1, genesis_config.hash());
+        let mut tick_hash_count = 0;
+        assert!(verify_ticks(
+            &bank1,
+            &entries_one_tick,
+            true,
+            &mut tick_hash_count,
+            &migration_status
+        )
+        .is_ok());
+
+        // Test: Alpenglow block with 0 ticks should fail
+        let entries_no_ticks: Vec<Entry> = vec![];
+        let mut tick_hash_count = 0;
+        let result = verify_ticks(
+            &bank1,
+            &entries_no_ticks,
+            true,
+            &mut tick_hash_count,
+            &migration_status,
+        );
+        // With 0 ticks, next_tick_height < max_tick_height, so should be TooFewTicks
+        assert_eq!(result, Err(BlockError::TooFewTicks));
+
+        // Test: Alpenglow block with 2 ticks should fail
+        let entries_two_ticks = create_ticks(2, 0, genesis_config.hash());
+        let mut tick_hash_count = 0;
+        let result = verify_ticks(
+            &bank1,
+            &entries_two_ticks,
+            true,
+            &mut tick_hash_count,
+            &migration_status,
+        );
+        // With 2 ticks, next_tick_height > max_tick_height, so should be TooManyTicks
+        assert_eq!(result, Err(BlockError::TooManyTicks));
     }
 }
