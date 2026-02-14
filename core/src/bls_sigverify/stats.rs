@@ -170,12 +170,16 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) verify_votes_repair_sent: AtomicU64,
     /// Number of msgs sent to rewards after verifying votes.
     pub(super) verify_votes_rewards_sent: AtomicU64,
+    /// Number of msgs sent to metrics after verifying votes.
+    pub(super) verify_votes_metrics_sent: AtomicU64,
     /// Number of times the consensus channel was full while verifying votes.
     pub(super) verify_votes_consensus_channel_full: AtomicU64,
     /// Number of times the repair channel was full while verifying votes.
     pub(super) verify_votes_repair_channel_full: AtomicU64,
     /// Number of times the rewards channel was full while verifying votes.
     pub(super) verify_votes_rewards_channel_full: AtomicU64,
+    /// Number of times the metrics channel was full while verifying votes.
+    pub(super) verify_votes_metrics_channel_full: AtomicU64,
 
     /// Number of msgs sent to the consensus pool after verifying certs.
     pub(super) verify_certs_consensus_sent: AtomicU64,
@@ -216,9 +220,11 @@ impl Default for BLSSigVerifierStats {
             verify_votes_consensus_sent: AtomicU64::new(0),
             verify_votes_repair_sent: AtomicU64::new(0),
             verify_votes_rewards_sent: AtomicU64::new(0),
+            verify_votes_metrics_sent: AtomicU64::new(0),
             verify_votes_consensus_channel_full: AtomicU64::new(0),
             verify_votes_repair_channel_full: AtomicU64::new(0),
             verify_votes_rewards_channel_full: AtomicU64::new(0),
+            verify_votes_metrics_channel_full: AtomicU64::new(0),
 
             verify_certs_consensus_sent: AtomicU64::new(0),
             verify_certs_consensus_channel_full: AtomicU64::new(0),
@@ -338,6 +344,17 @@ impl BLSSigVerifierStats {
             (
                 "verify_votes_rewards_channel_full",
                 self.verify_votes_rewards_channel_full
+                    .load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_votes_metrics_sent",
+                self.verify_votes_metrics_sent.load(Ordering::Relaxed) as i64,
+                i64
+            ),
+            (
+                "verify_votes_metrics_channel_full",
+                self.verify_votes_metrics_channel_full
                     .load(Ordering::Relaxed) as i64,
                 i64
             ),

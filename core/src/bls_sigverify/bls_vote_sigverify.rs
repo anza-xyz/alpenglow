@@ -17,13 +17,16 @@ use {
     solana_measure::measure::Measure,
     solana_pubkey::Pubkey,
     solana_runtime::bank::Bank,
-    solana_votor::{consensus_metrics::ConsensusMetricsEvent, consensus_rewards},
+    solana_votor::{
+        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+        consensus_rewards,
+    },
     solana_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
         vote::Vote,
     },
-    std::{collections::HashMap, sync::atomic::Ordering},
+    std::{collections::HashMap, sync::atomic::Ordering, time::Instant},
     thiserror::Error,
 };
 
@@ -36,6 +39,8 @@ pub(super) enum Error {
     RewardsChannelDisconnected,
     #[error("channel to repair disconnected")]
     RepairChannelDisconnected,
+    #[error("channel to metrics disconnected")]
+    MetricsChannelDisconnected,
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
@@ -72,8 +77,8 @@ pub(super) fn verify_and_send_votes(
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
     channel_to_repair: &VerifiedVoteSender,
     channel_to_reward: &Sender<AddVoteMessage>,
+    channel_to_metrics: &ConsensusMetricsEventSender,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
-    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
 ) -> Result<Vec<VoteToVerify>, Error> {
     if votes_to_verify.is_empty() {
         return Ok(votes_to_verify);
@@ -89,18 +94,18 @@ pub(super) fn verify_and_send_votes(
         .verified_votes
         .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
 
-    let (votes_for_pool, msgs_for_repair, msg_for_reward) = process_verified_votes(
+    let (votes_for_pool, msgs_for_repair, msg_for_reward, msg_for_metrics) = process_verified_votes(
         &verified_votes,
         root_bank,
         cluster_info,
         leader_schedule,
         last_voted_slots,
-        consensus_metrics,
     );
 
     send_votes_to_pool(votes_for_pool, channel_to_pool, stats)?;
     send_votes_to_repair(msgs_for_repair, channel_to_repair, stats)?;
     send_votes_to_rewards(msg_for_reward, channel_to_reward, stats)?;
+    send_votes_to_metrics(msg_for_metrics, channel_to_metrics, stats)?;
 
     Ok(verified_votes)
 }
@@ -131,24 +136,25 @@ fn inspect_for_repair(
 /// Processes the verified votes for various downstream services.
 ///
 /// In particular, collects and returns the relevant messages for the consensus pool; rewards;
-/// and repair;
+/// repair; and metrics;
 ///
-/// Also updates `last_voted_slots` and `consensus_metrics`.
+/// Also updates `last_voted_slots`.
 fn process_verified_votes(
     verified_votes: &[VoteToVerify],
     root_bank: &Bank,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
-    consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
 ) -> (
     Vec<ConsensusMessage>,
     HashMap<Pubkey, Vec<Slot>>,
     AddVoteMessage,
+    Vec<ConsensusMetricsEvent>,
 ) {
     let mut votes_for_reward = Vec::with_capacity(verified_votes.len());
     let mut msgs_for_repair = HashMap::new();
     let mut votes_for_pool = Vec::with_capacity(verified_votes.len());
+    let mut votes_for_metrics = Vec::with_capacity(verified_votes.len());
     for vote in verified_votes {
         let vote_message = vote.vote_message;
         if consensus_rewards::wants_vote(
@@ -164,7 +170,7 @@ fn process_verified_votes(
 
         votes_for_pool.push(ConsensusMessage::Vote(vote_message));
 
-        consensus_metrics.push(ConsensusMetricsEvent::Vote {
+        votes_for_metrics.push(ConsensusMetricsEvent::Vote {
             id: vote.pubkey,
             vote: vote.vote_message.vote,
         });
@@ -175,7 +181,32 @@ fn process_verified_votes(
         AddVoteMessage {
             votes: votes_for_reward,
         },
+        votes_for_metrics,
     )
+}
+
+fn send_votes_to_metrics(
+    votes: Vec<ConsensusMetricsEvent>,
+    channel: &ConsensusMetricsEventSender,
+    stats: &BLSSigVerifierStats,
+) -> Result<(), Error> {
+    let len = votes.len();
+    let msg = (Instant::now(), votes);
+    match channel.try_send(msg) {
+        Ok(()) => {
+            stats
+                .verify_votes_metrics_sent
+                .fetch_add(len as u64, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(TrySendError::Full(_)) => {
+            stats
+                .verify_votes_metrics_channel_full
+                .fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(TrySendError::Disconnected(_)) => Err(Error::MetricsChannelDisconnected),
+    }
 }
 
 fn send_votes_to_rewards(

@@ -18,7 +18,7 @@ use {
     solana_runtime::{bank::Bank, bank_forks::SharableBanks},
     solana_streamer::packet::PacketBatch,
     solana_votor::{
-        consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
+        consensus_metrics::ConsensusMetricsEventSender,
         consensus_rewards::{self},
     },
     solana_votor_messages::{
@@ -28,7 +28,6 @@ use {
     std::{
         collections::{HashMap, HashSet},
         sync::{atomic::Ordering, Arc, RwLock},
-        time::Instant,
     },
     thiserror::Error,
 };
@@ -45,10 +44,10 @@ pub struct BLSSigVerifier {
     channel_to_repair: VerifiedVoteSender,
     channel_to_reward: Sender<AddVoteMessage>,
     channel_to_pool: Sender<Vec<ConsensusMessage>>,
+    channel_to_metrics: ConsensusMetricsEventSender,
     sharable_banks: SharableBanks,
     stats: BLSSigVerifierStats,
     verified_certs: RwLock<HashSet<CertificateType>>,
-    consensus_metrics_sender: ConsensusMetricsEventSender,
     last_checked_root_slot: Slot,
     alpenglow_last_voted: Arc<AlpenglowLastVoted>,
     cluster_info: Arc<ClusterInfo>,
@@ -62,10 +61,9 @@ pub struct BLSSigVerifier {
     //
     // The `extract_and_filter_messages` function demultiplexes mixed consensus messages into
     // distinct vectors for votes, certificates, and metrics. Since the quantity of each message
-    // type is dynamic, we use these persistent buffers (`cert_buffer`, `metric_buffer`)
+    // type is dynamic, we use these persistent buffers (`cert_buffer`)
     // to amortize the cost of heap allocations over time.
     cert_buffer: Vec<Certificate>,
-    metric_buffer: Vec<ConsensusMetricsEvent>,
 }
 
 impl BLSSigVerifier {
@@ -74,7 +72,7 @@ impl BLSSigVerifier {
         channel_to_repair: VerifiedVoteSender,
         channel_to_reward: Sender<AddVoteMessage>,
         channel_to_pool: Sender<Vec<ConsensusMessage>>,
-        consensus_metrics_sender: ConsensusMetricsEventSender,
+        channel_to_metrics: ConsensusMetricsEventSender,
         alpenglow_last_voted: Arc<AlpenglowLastVoted>,
         cluster_info: Arc<ClusterInfo>,
         leader_schedule: Arc<LeaderScheduleCache>,
@@ -86,14 +84,13 @@ impl BLSSigVerifier {
             channel_to_pool,
             stats: BLSSigVerifierStats::default(),
             verified_certs: RwLock::new(HashSet::new()),
-            consensus_metrics_sender,
+            channel_to_metrics,
             last_checked_root_slot: 0,
             alpenglow_last_voted,
             cluster_info,
             leader_schedule,
             votes_buffer: Vec::new(),
             cert_buffer: Vec::new(),
-            metric_buffer: Vec::new(),
         }
     }
 
@@ -115,7 +112,6 @@ impl BLSSigVerifier {
         // but we clear them explicitly to guarantee a clean state.
         self.votes_buffer.clear();
         self.cert_buffer.clear();
-        self.metric_buffer.clear();
 
         self.extract_and_filter_messages(batches, &root_bank);
 
@@ -139,8 +135,8 @@ impl BLSSigVerifier {
                     &self.channel_to_pool,
                     &self.channel_to_repair,
                     &self.channel_to_reward,
+                    &self.channel_to_metrics,
                     &mut last_voted_slots,
-                    &mut self.metric_buffer,
                 )
             },
             || {
@@ -160,9 +156,6 @@ impl BLSSigVerifier {
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
             .update_last_voted(&last_voted_slots);
-
-        // Send to metrics service for metrics aggregation
-        Self::send_consensus_metrics(&mut self.metric_buffer, &self.consensus_metrics_sender);
 
         self.stats.maybe_report_stats();
         Ok(())
@@ -250,27 +243,6 @@ impl BLSSigVerifier {
                         .fetch_add(duplicates as u64, Ordering::Relaxed);
                 }
             }
-        }
-    }
-
-    fn send_consensus_metrics(
-        metrics: &mut Vec<ConsensusMetricsEvent>,
-        sender: &ConsensusMetricsEventSender,
-    ) {
-        if metrics.is_empty() {
-            return;
-        }
-
-        // Drain the buffer to create the Vec expected by the channel,
-        // leaving `metrics` empty but with capacity preserved.
-        //
-        // clippy suggests `mem::take` which would steal the buffer's capacity,
-        // defeating the buffer recycling optimization.
-        #[allow(clippy::drain_collect)]
-        let metrics_vec: Vec<_> = metrics.drain(..).collect();
-
-        if sender.send((Instant::now(), metrics_vec)).is_err() {
-            warn!("could not send consensus metrics, receive side of channel is closed");
         }
     }
 
