@@ -26,7 +26,7 @@ use {
         reward_certificate::AddVoteMessage,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashSet,
         sync::{atomic::Ordering, Arc, RwLock},
         time::Instant,
     },
@@ -102,7 +102,6 @@ impl BLSSigVerifier {
         batches: Vec<PacketBatch>,
     ) -> Result<(), Error> {
         let mut preprocess_time = Measure::start("preprocess");
-        let mut last_voted_slots: HashMap<Pubkey, Slot> = HashMap::new();
         let root_bank = self.sharable_banks.root();
 
         // Prune entries <= the new root slot
@@ -139,7 +138,6 @@ impl BLSSigVerifier {
                     &self.channel_to_pool,
                     &self.channel_to_repair,
                     &self.channel_to_reward,
-                    &mut last_voted_slots,
                     &mut self.metric_buffer,
                 )
             },
@@ -154,7 +152,8 @@ impl BLSSigVerifier {
             },
         );
 
-        self.votes_buffer = votes_result?;
+        let (votes_buffer, last_voted_slots) = votes_result?;
+        self.votes_buffer = votes_buffer;
         let () = certs_result?;
 
         // Send to RPC service for last voted tracking

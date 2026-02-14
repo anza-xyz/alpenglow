@@ -72,11 +72,10 @@ pub(super) fn verify_and_send_votes(
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
     channel_to_repair: &VerifiedVoteSender,
     channel_to_reward: &Sender<AddVoteMessage>,
-    last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> Result<Vec<VoteToVerify>, Error> {
+) -> Result<(Vec<VoteToVerify>, HashMap<Pubkey, Slot>), Error> {
     if votes_to_verify.is_empty() {
-        return Ok(votes_to_verify);
+        return Ok((votes_to_verify, HashMap::new()));
     }
     stats
         .votes_to_verify
@@ -89,27 +88,22 @@ pub(super) fn verify_and_send_votes(
         .verified_votes
         .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
 
-    let (votes_for_pool, msgs_for_repair, msg_for_reward) = process_verified_votes(
+    let last_voted_slots = process_verified_votes(
         &verified_votes,
         root_bank,
         cluster_info,
         leader_schedule,
-        last_voted_slots,
         consensus_metrics,
-    );
+        channel_to_pool,
+        channel_to_repair,
+        channel_to_reward,
+        stats,
+    )?;
 
-    send_votes_to_pool(votes_for_pool, channel_to_pool, stats)?;
-    send_votes_to_repair(msgs_for_repair, channel_to_repair, stats)?;
-    send_votes_to_rewards(msg_for_reward, channel_to_reward, stats)?;
-
-    Ok(verified_votes)
+    Ok((verified_votes, last_voted_slots))
 }
 
-fn inspect_for_repair(
-    vote: &VoteToVerify,
-    last_voted_slots: &mut HashMap<Pubkey, Slot>,
-    msgs_for_repair: &mut HashMap<Pubkey, Vec<Slot>>,
-) {
+fn inspect_for_last_voted(vote: &VoteToVerify, last_voted_slots: &mut HashMap<Pubkey, Slot>) {
     let vote_slot = vote.vote_message.vote.slot();
     if vote.vote_message.vote.is_notarization_or_finalization() {
         last_voted_slots
@@ -117,6 +111,10 @@ fn inspect_for_repair(
             .and_modify(|s| *s = (*s).max(vote_slot))
             .or_insert(vote.vote_message.vote.slot());
     }
+}
+
+fn inspect_for_repair(vote: &VoteToVerify, msgs_for_repair: &mut HashMap<Pubkey, Vec<Slot>>) {
+    let vote_slot = vote.vote_message.vote.slot();
 
     if vote.vote_message.vote.is_notarization_or_finalization()
         || vote.vote_message.vote.is_notarize_fallback()
@@ -128,27 +126,24 @@ fn inspect_for_repair(
     }
 }
 
-/// Processes the verified votes for various downstream services.
+/// Processes the verified votes for various downstream services and updates `consensus_metrics`.
 ///
-/// In particular, collects and returns the relevant messages for the consensus pool; rewards;
-/// and repair;
-///
-/// Also updates `last_voted_slots` and `consensus_metrics`.
+/// Returns `last_voted_slots`.
 fn process_verified_votes(
     verified_votes: &[VoteToVerify],
     root_bank: &Bank,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
-    last_voted_slots: &mut HashMap<Pubkey, Slot>,
     consensus_metrics: &mut Vec<ConsensusMetricsEvent>,
-) -> (
-    Vec<ConsensusMessage>,
-    HashMap<Pubkey, Vec<Slot>>,
-    AddVoteMessage,
-) {
+    channel_to_pool: &Sender<Vec<ConsensusMessage>>,
+    channel_to_repair: &VerifiedVoteSender,
+    channel_to_reward: &Sender<AddVoteMessage>,
+    stats: &BLSSigVerifierStats,
+) -> Result<HashMap<Pubkey, Slot>, Error> {
     let mut votes_for_reward = Vec::with_capacity(verified_votes.len());
-    let mut msgs_for_repair = HashMap::new();
     let mut votes_for_pool = Vec::with_capacity(verified_votes.len());
+    let mut msgs_for_repair = HashMap::new();
+    let mut last_voted_slots = HashMap::new();
     for vote in verified_votes {
         let vote_message = vote.vote_message;
         if consensus_rewards::wants_vote(
@@ -160,22 +155,23 @@ fn process_verified_votes(
             votes_for_reward.push(vote_message);
         }
 
-        inspect_for_repair(vote, last_voted_slots, &mut msgs_for_repair);
-
+        inspect_for_last_voted(vote, &mut last_voted_slots);
+        inspect_for_repair(vote, &mut msgs_for_repair);
         votes_for_pool.push(ConsensusMessage::Vote(vote_message));
-
         consensus_metrics.push(ConsensusMetricsEvent::Vote {
             id: vote.pubkey,
             vote: vote.vote_message.vote,
         });
     }
-    (
-        votes_for_pool,
-        msgs_for_repair,
-        AddVoteMessage {
-            votes: votes_for_reward,
-        },
-    )
+
+    send_votes_to_pool(votes_for_pool, channel_to_pool, stats)?;
+    send_votes_to_repair(msgs_for_repair, channel_to_repair, stats)?;
+    let msg_for_reward = AddVoteMessage {
+        votes: votes_for_reward,
+    };
+    send_votes_to_rewards(msg_for_reward, channel_to_reward, stats)?;
+
+    Ok(last_voted_slots)
 }
 
 fn send_votes_to_rewards(
