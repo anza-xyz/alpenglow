@@ -78,7 +78,6 @@ dependencies = [
 name = "agave-bls-cert-verify"
 version = "3.1.0"
 dependencies = [
- "bincode",
  "bitvec",
  "criterion",
  "rayon",
@@ -89,6 +88,7 @@ dependencies = [
  "solana-votor",
  "solana-votor-messages",
  "thiserror 2.0.17",
+ "wincode",
 ]
 
 [[package]]
