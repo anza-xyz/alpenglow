@@ -241,8 +241,12 @@ impl ConsensusPoolService {
                     .genesis_block()
                     .expect("Alpenglow is enabled");
                 let root_bank = ctx.sharable_banks.root();
-                // can expect once we have block id in snapshots (SIMD-0333)
-                let root_block = (root_bank.slot(), root_bank.block_id().unwrap_or_default());
+                let root_block = (
+                    root_bank.slot(),
+                    root_bank
+                        .block_id()
+                        .expect("block_id must be present in snapshots"),
+                );
                 let kick_off_block @ (kick_off_slot, _) = genesis_block.max(root_block);
                 let start_slot = kick_off_slot.checked_add(1).unwrap();
 
