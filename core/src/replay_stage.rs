@@ -6948,7 +6948,7 @@ pub(crate) mod tests {
     #[test]
     fn test_check_propagation_for_start_leader() {
         let mut progress_map = ProgressMap::default();
-        let poh_slot = 5;
+        let poh_slot = NUM_CONSECUTIVE_LEADER_SLOTS + 1;
         let parent_slot = poh_slot - NUM_CONSECUTIVE_LEADER_SLOTS;
 
         // If there is no previous leader slot (previous leader slot is None),
@@ -7055,13 +7055,14 @@ pub(crate) mod tests {
     #[test]
     fn test_check_propagation_skip_propagation_check() {
         let mut progress_map = ProgressMap::default();
-        let poh_slot = 4;
+        let poh_slot = NUM_CONSECUTIVE_LEADER_SLOTS + 4;
         let mut parent_slot = poh_slot - 1;
+        let last_leader_slot = poh_slot - 1;
 
-        // Set up the progress map to show that the last leader slot of 4 is 3,
-        // which means 3 and 4 are consecutive leader slots
+        // Set up the progress map to show that the last leader slot is the parent,
+        // which means they are consecutive leader slots
         progress_map.insert(
-            3,
+            last_leader_slot,
             ForkProgress::new(
                 Hash::default(),
                 None,
@@ -7083,7 +7084,7 @@ pub(crate) mod tests {
         // If propagation threshold was achieved on parent, block should
         // also be created
         progress_map
-            .get_mut(&3)
+            .get_mut(&last_leader_slot)
             .unwrap()
             .propagated_stats
             .is_propagated = true;
@@ -7093,7 +7094,7 @@ pub(crate) mod tests {
             &progress_map,
         ));
 
-        // Now insert another parent slot 2 for which this validator is also the leader
+        // Now insert another parent slot for which this validator is also the leader
         parent_slot = poh_slot - NUM_CONSECUTIVE_LEADER_SLOTS + 1;
         progress_map.insert(
             parent_slot,

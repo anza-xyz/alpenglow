@@ -195,33 +195,15 @@ mod tests {
             VotorEvent::TimeoutCrashedLeader(0)
         ));
 
-        assert!(matches!(
-            timer_state
-                .progress(one_micro, timer_state.next_fire().unwrap())
-                .unwrap(),
-            VotorEvent::Timeout(0)
-        ));
-
-        assert!(matches!(
-            timer_state
-                .progress(one_micro, timer_state.next_fire().unwrap())
-                .unwrap(),
-            VotorEvent::Timeout(1)
-        ));
-
-        assert!(matches!(
-            timer_state
-                .progress(one_micro, timer_state.next_fire().unwrap())
-                .unwrap(),
-            VotorEvent::Timeout(2)
-        ));
-
-        assert!(matches!(
-            timer_state
-                .progress(one_micro, timer_state.next_fire().unwrap())
-                .unwrap(),
-            VotorEvent::Timeout(3)
-        ));
+        // Expect 8 timeout events for slots 0-7 (8 leader slots per window)
+        for expected_slot in 0..8u64 {
+            assert!(matches!(
+                timer_state
+                    .progress(one_micro, timer_state.next_fire().unwrap())
+                    .unwrap(),
+                VotorEvent::Timeout(s) if s == expected_slot
+            ));
+        }
         assert!(timer_state.next_fire().is_none());
     }
 
@@ -244,10 +226,10 @@ mod tests {
             events.remove(0),
             VotorEvent::TimeoutCrashedLeader(0)
         ));
-        assert!(matches!(events.remove(0), VotorEvent::Timeout(0)));
-        assert!(matches!(events.remove(0), VotorEvent::Timeout(1)));
-        assert!(matches!(events.remove(0), VotorEvent::Timeout(2)));
-        assert!(matches!(events.remove(0), VotorEvent::Timeout(3)));
+        // Expect 8 timeout events for slots 0-7 (8 leader slots per window)
+        for expected_slot in 0..8u64 {
+            assert!(matches!(events.remove(0), VotorEvent::Timeout(s) if s == expected_slot));
+        }
         assert!(events.is_empty());
         let stats = timers.stats();
         assert_eq!(stats.set_timeout_count(), 1);
