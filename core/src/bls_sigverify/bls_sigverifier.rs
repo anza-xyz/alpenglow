@@ -129,7 +129,6 @@ impl BLSSigVerifier {
                 verify_and_send_votes(
                     votes_buffer,
                     &root_bank,
-                    &self.stats,
                     &self.cluster_info,
                     &self.leader_schedule,
                     &self.channel_to_pool,
@@ -150,13 +149,15 @@ impl BLSSigVerifier {
             },
         );
 
-        self.votes_buffer = votes_result?;
+        let (votes_buffer, vote_stats) = votes_result?;
+        self.votes_buffer = votes_buffer;
         let () = certs_result?;
 
         // Send to RPC service for last voted tracking
         self.alpenglow_last_voted
             .update_last_voted(&last_voted_slots);
 
+        self.stats.vote_stats.merge(vote_stats);
         self.stats.maybe_report_stats();
         Ok(())
     }
@@ -466,13 +467,7 @@ mod tests {
             .verify_and_send_batches(messages_to_batches(&messages1))
             .unwrap();
         assert_eq!(receiver.try_iter().flatten().count(), 2);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, 1);
         assert_eq!(
             verifier
                 .stats
@@ -502,13 +497,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(receiver.try_iter().flatten().count(), 1);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            2
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, 2);
         assert_eq!(
             verifier
                 .stats
@@ -538,13 +527,7 @@ mod tests {
             .verify_and_send_batches(messages_to_batches(&messages3))
             .unwrap();
         assert_eq!(receiver.try_iter().flatten().count(), 1);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 0);
         let received_verified_votes3 = votes_for_repair_receiver.try_recv().unwrap();
         assert_eq!(
@@ -644,20 +627,8 @@ mod tests {
         // We failed to send the second message because the channel is full.
         let msgs = message_receiver.try_iter().flatten().collect::<Vec<_>>();
         assert_eq!(msgs, vec![msg1]);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_channel_full
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, 1);
+        assert_eq!(verifier.stats.vote_stats.pool_channel_full, 1);
     }
 
     #[test]
@@ -699,13 +670,7 @@ mod tests {
 
         verifier.verify_and_send_batches(packet_batches).unwrap();
         expect_no_receive(&receiver);
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, 0);
         assert_eq!(verifier.stats.received.load(Ordering::Relaxed), 1);
         assert_eq!(verifier.stats.received_discarded.load(Ordering::Relaxed), 1);
         assert_eq!(verifier.stats.received_votes.load(Ordering::Relaxed), 0);
@@ -789,11 +754,14 @@ mod tests {
             num_votes,
             "Did not send all valid packets"
         );
+        assert_eq!(verifier.stats.vote_stats.distinct_votes_stats.count(), 1);
         assert_eq!(
             verifier
                 .stats
-                .votes_batch_distinct_messages_count
-                .load(Ordering::Relaxed),
+                .vote_stats
+                .distinct_votes_stats
+                .mean::<u64>()
+                .unwrap(),
             2
         );
     }
@@ -856,13 +824,6 @@ mod tests {
                 false
             }
         }));
-        assert_eq!(
-            verifier
-                .stats
-                .received_bad_signature_votes
-                .load(Ordering::Relaxed),
-            1
-        );
     }
 
     #[test]
@@ -920,14 +881,6 @@ mod tests {
                 false
             }
         }));
-
-        assert_eq!(
-            verifier
-                .stats
-                .received_bad_signature_votes
-                .load(Ordering::Relaxed),
-            1
-        );
     }
 
     #[test]
@@ -1239,13 +1192,7 @@ mod tests {
             num_votes + 1,
             "All valid messages in a mixed batch should be sent"
         );
-        assert_eq!(
-            verifier
-                .stats
-                .verify_votes_consensus_sent
-                .load(Ordering::Relaxed),
-            num_votes as u64
-        );
+        assert_eq!(verifier.stats.vote_stats.pool_sent, num_votes as u64);
         assert_eq!(
             verifier
                 .stats

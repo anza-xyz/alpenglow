@@ -1,9 +1,7 @@
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
 use {
-    crate::{
-        bls_sigverify::stats::BLSSigVerifierStats, cluster_info_vote_listener::VerifiedVoteSender,
-    },
+    crate::cluster_info_vote_listener::VerifiedVoteSender,
     crossbeam_channel::{Sender, TrySendError},
     rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     solana_bls_signatures::{
@@ -20,16 +18,18 @@ use {
     solana_votor::{
         consensus_metrics::{ConsensusMetricsEvent, ConsensusMetricsEventSender},
         consensus_rewards,
+        welford_stats::WelfordStats,
     },
     solana_votor_messages::{
         consensus_message::{ConsensusMessage, VoteMessage},
         reward_certificate::AddVoteMessage,
         vote::Vote,
     },
-    std::{collections::HashMap, sync::atomic::Ordering, time::Instant},
+    std::{collections::HashMap, time::Instant},
     thiserror::Error,
 };
 
+/// Different types of errors that verifying votes can fail with.
 #[derive(Debug, Error)]
 #[allow(clippy::enum_variant_names)]
 pub(super) enum Error {
@@ -41,6 +41,151 @@ pub(super) enum Error {
     RepairChannelDisconnected,
     #[error("channel to metrics disconnected")]
     MetricsChannelDisconnected,
+}
+
+/// Struct to capture and report on stats for this module.
+//
+// Some fields are are `pub` to facilitate testing.
+#[derive(Default)]
+#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+pub(super) struct Stats {
+    /// Number of votes [`verify_and_send_votes`] was requested to verify.
+    votes_to_verify: u64,
+    /// Number of votes [`verify_and_send_votes`] successfully verified.
+    verified_votes: u64,
+
+    /// Number of votes sent successfully over the channel to metrics.
+    metrics_sent: u64,
+    /// Number of times the channel to metrics was full.
+    metrics_channel_full: u64,
+    /// Number of votes sent successfully over the channel to rewards.
+    rewards_sent: u64,
+    /// Number of times the channel to rewards was full.
+    rewards_channel_full: u64,
+    /// Number of votes sent successfully over the channel to consensus pool.
+    pub(super) pool_sent: u64,
+    /// Number of times the channel to consensus pool was full.
+    pub(super) pool_channel_full: u64,
+    /// Number of votes sent successully over the channel to repair.
+    repair_sent: u64,
+    /// Number of times the channel to repair was full.
+    repair_channel_full: u64,
+
+    /// Stats for [`verify_and_send_votes`].
+    fn_verify_and_send_votes_stats: WelfordStats,
+    /// Stats for [`verify_votes_optimistic`].
+    fn_verify_votes_optimistic_stats: WelfordStats,
+    /// Stats for [`verify_individual_votes`].
+    fn_verify_individual_votes_stats: WelfordStats,
+
+    /// Stats for number of distinct votes in batches.
+    pub(super) distinct_votes_stats: WelfordStats,
+}
+
+impl Stats {
+    pub(super) fn merge(&mut self, other: Self) {
+        let Self {
+            votes_to_verify,
+            verified_votes,
+            metrics_sent,
+            metrics_channel_full,
+            rewards_sent,
+            rewards_channel_full,
+            repair_sent,
+            repair_channel_full,
+            pool_sent,
+            pool_channel_full,
+            fn_verify_and_send_votes_stats,
+            fn_verify_votes_optimistic_stats,
+            fn_verify_individual_votes_stats: fn_verify_individual_votes,
+            distinct_votes_stats,
+        } = other;
+        self.votes_to_verify += votes_to_verify;
+        self.verified_votes += verified_votes;
+        self.metrics_sent += metrics_sent;
+        self.metrics_channel_full += metrics_channel_full;
+        self.rewards_sent += rewards_sent;
+        self.rewards_channel_full += rewards_channel_full;
+        self.repair_sent += repair_sent;
+        self.repair_channel_full += repair_channel_full;
+        self.pool_sent += pool_sent;
+        self.pool_channel_full += pool_channel_full;
+        self.fn_verify_and_send_votes_stats
+            .merge(fn_verify_and_send_votes_stats);
+        self.fn_verify_votes_optimistic_stats
+            .merge(fn_verify_votes_optimistic_stats);
+        self.fn_verify_individual_votes_stats
+            .merge(fn_verify_individual_votes);
+        self.distinct_votes_stats.merge(distinct_votes_stats);
+    }
+
+    pub(super) fn report(&self) {
+        let Self {
+            votes_to_verify,
+            verified_votes,
+            metrics_sent,
+            metrics_channel_full,
+            rewards_sent,
+            rewards_channel_full,
+            repair_sent,
+            repair_channel_full,
+            pool_sent,
+            pool_channel_full,
+            fn_verify_and_send_votes_stats,
+            fn_verify_votes_optimistic_stats,
+            fn_verify_individual_votes_stats,
+            distinct_votes_stats,
+        } = self;
+        datapoint_info!(
+            "bls_vote_sigverify_stats",
+            ("votes_to_verify", *votes_to_verify, i64),
+            ("verified_votes", *verified_votes, i64),
+            ("metrics_sent", *metrics_sent, i64),
+            ("metrics_channel_full", *metrics_channel_full, i64),
+            ("rewards_sent", *rewards_sent, i64),
+            ("rewards_channel_full", *rewards_channel_full, i64),
+            ("repair_sent", *repair_sent, i64),
+            ("repair_channel_full", *repair_channel_full, i64),
+            ("pool_sent", *pool_sent, i64),
+            ("pool_channel_full", *pool_channel_full, i64),
+            (
+                "fn_verify_and_send_votes_count",
+                fn_verify_and_send_votes_stats.count(),
+                i64
+            ),
+            (
+                "fn_verify_and_send_votes_mean",
+                fn_verify_and_send_votes_stats.mean().unwrap_or(0),
+                i64
+            ),
+            (
+                "fn_verify_votes_optimistic_count",
+                fn_verify_votes_optimistic_stats.count(),
+                i64
+            ),
+            (
+                "fn_verify_votes_optimistic_mean",
+                fn_verify_votes_optimistic_stats.mean().unwrap_or(0),
+                i64
+            ),
+            (
+                "fn_verify_individual_votes_count",
+                fn_verify_individual_votes_stats.count(),
+                i64
+            ),
+            (
+                "fn_verify_individual_votes_mean",
+                fn_verify_individual_votes_stats.mean().unwrap_or(0),
+                i64
+            ),
+            ("distinct_votes_count", distinct_votes_stats.count(), i64),
+            (
+                "distinct_votes_mean",
+                distinct_votes_stats.mean().unwrap_or(0),
+                i64
+            ),
+        );
+    }
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
@@ -71,7 +216,6 @@ impl VoteToVerify {
 pub(super) fn verify_and_send_votes(
     votes_to_verify: Vec<VoteToVerify>,
     root_bank: &Bank,
-    stats: &BLSSigVerifierStats,
     cluster_info: &ClusterInfo,
     leader_schedule: &LeaderScheduleCache,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
@@ -79,20 +223,15 @@ pub(super) fn verify_and_send_votes(
     channel_to_reward: &Sender<AddVoteMessage>,
     channel_to_metrics: &ConsensusMetricsEventSender,
     last_voted_slots: &mut HashMap<Pubkey, Slot>,
-) -> Result<Vec<VoteToVerify>, Error> {
+) -> Result<(Vec<VoteToVerify>, Stats), Error> {
+    let mut measure = Measure::start("verify_and_send_votes");
+    let mut stats = Stats::default();
     if votes_to_verify.is_empty() {
-        return Ok(votes_to_verify);
+        return Ok((votes_to_verify, stats));
     }
-    stats
-        .votes_to_verify
-        .fetch_add(votes_to_verify.len() as u64, Ordering::Relaxed);
-    stats
-        .votes_to_verify_batches
-        .fetch_add(1, Ordering::Relaxed);
-    let verified_votes = verify_votes(votes_to_verify, stats);
-    stats
-        .verified_votes
-        .fetch_add(verified_votes.len() as u64, Ordering::Relaxed);
+    stats.votes_to_verify += votes_to_verify.len() as u64;
+    let verified_votes = verify_votes(votes_to_verify, &mut stats);
+    stats.verified_votes += verified_votes.len() as u64;
 
     let (votes_for_pool, msgs_for_repair, msg_for_reward, msg_for_metrics) = process_verified_votes(
         &verified_votes,
@@ -102,12 +241,16 @@ pub(super) fn verify_and_send_votes(
         last_voted_slots,
     );
 
-    send_votes_to_pool(votes_for_pool, channel_to_pool, stats)?;
-    send_votes_to_repair(msgs_for_repair, channel_to_repair, stats)?;
-    send_votes_to_rewards(msg_for_reward, channel_to_reward, stats)?;
-    send_votes_to_metrics(msg_for_metrics, channel_to_metrics, stats)?;
+    send_votes_to_pool(votes_for_pool, channel_to_pool, &mut stats)?;
+    send_votes_to_repair(msgs_for_repair, channel_to_repair, &mut stats)?;
+    send_votes_to_rewards(msg_for_reward, channel_to_reward, &mut stats)?;
+    send_votes_to_metrics(msg_for_metrics, channel_to_metrics, &mut stats)?;
 
-    Ok(verified_votes)
+    measure.stop();
+    stats
+        .fn_verify_and_send_votes_stats
+        .add_sample(measure.as_us());
+    Ok((verified_votes, stats))
 }
 
 fn inspect_for_repair(
@@ -188,21 +331,17 @@ fn process_verified_votes(
 fn send_votes_to_metrics(
     votes: Vec<ConsensusMetricsEvent>,
     channel: &ConsensusMetricsEventSender,
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> Result<(), Error> {
     let len = votes.len();
     let msg = (Instant::now(), votes);
     match channel.try_send(msg) {
         Ok(()) => {
-            stats
-                .verify_votes_metrics_sent
-                .fetch_add(len as u64, Ordering::Relaxed);
+            stats.metrics_sent += len as u64;
             Ok(())
         }
         Err(TrySendError::Full(_)) => {
-            stats
-                .verify_votes_metrics_channel_full
-                .fetch_add(1, Ordering::Relaxed);
+            stats.metrics_channel_full += 1;
             Ok(())
         }
         Err(TrySendError::Disconnected(_)) => Err(Error::MetricsChannelDisconnected),
@@ -212,20 +351,16 @@ fn send_votes_to_metrics(
 fn send_votes_to_rewards(
     msg: AddVoteMessage,
     channel: &Sender<AddVoteMessage>,
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> Result<(), Error> {
     let len = msg.votes.len();
     match channel.try_send(msg) {
         Ok(()) => {
-            stats
-                .verify_votes_rewards_sent
-                .fetch_add(len as u64, Ordering::Relaxed);
+            stats.rewards_sent += len as u64;
             Ok(())
         }
         Err(TrySendError::Full(_)) => {
-            stats
-                .verify_votes_rewards_channel_full
-                .fetch_add(1, Ordering::Relaxed);
+            stats.rewards_channel_full += 1;
             Ok(())
         }
         Err(TrySendError::Disconnected(_)) => Err(Error::RewardsChannelDisconnected),
@@ -235,7 +370,7 @@ fn send_votes_to_rewards(
 fn send_votes_to_pool(
     votes: Vec<ConsensusMessage>,
     channel: &Sender<Vec<ConsensusMessage>>,
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> Result<(), Error> {
     let len = votes.len();
     if len == 0 {
@@ -243,15 +378,11 @@ fn send_votes_to_pool(
     }
     match channel.try_send(votes) {
         Ok(()) => {
-            stats
-                .verify_votes_consensus_sent
-                .fetch_add(len as u64, Ordering::Relaxed);
+            stats.pool_sent += len as u64;
             Ok(())
         }
         Err(TrySendError::Full(_)) => {
-            stats
-                .verify_votes_consensus_channel_full
-                .fetch_add(1, Ordering::Relaxed);
+            stats.pool_channel_full += 1;
             Ok(())
         }
         Err(TrySendError::Disconnected(_)) => Err(Error::ConsensusPoolChannelDisconnected),
@@ -261,19 +392,15 @@ fn send_votes_to_pool(
 fn send_votes_to_repair(
     votes: HashMap<Pubkey, Vec<Slot>>,
     channel: &VerifiedVoteSender,
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> Result<(), Error> {
     for (pubkey, slots) in votes {
         match channel.try_send((pubkey, slots)) {
             Ok(()) => {
-                stats
-                    .verify_votes_repair_sent
-                    .fetch_add(1, Ordering::Relaxed);
+                stats.repair_sent += 1;
             }
             Err(TrySendError::Full(_)) => {
-                stats
-                    .verify_votes_repair_channel_full
-                    .fetch_add(1, Ordering::Relaxed);
+                stats.repair_channel_full += 1;
             }
             Err(TrySendError::Disconnected(_)) => return Err(Error::RepairChannelDisconnected),
         }
@@ -281,10 +408,7 @@ fn send_votes_to_repair(
     Ok(())
 }
 
-fn verify_votes(
-    votes_to_verify: Vec<VoteToVerify>,
-    stats: &BLSSigVerifierStats,
-) -> Vec<VoteToVerify> {
+fn verify_votes(votes_to_verify: Vec<VoteToVerify>, stats: &mut Stats) -> Vec<VoteToVerify> {
     // Try optimistic verification - fast to verify, but cannot identify invalid votes
     if verify_votes_optimistic(&votes_to_verify, stats) {
         return votes_to_verify;
@@ -295,8 +419,8 @@ fn verify_votes(
 }
 
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerifierStats) -> bool {
-    let mut votes_batch_optimistic_time = Measure::start("votes_batch_optimistic");
+fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &mut Stats) -> bool {
+    let mut measure = Measure::start("verify_votes_optimistic");
 
     // For BLS verification, minimizing the expensive pairing operation is key.
     // Each BLS signature verification requires two pairings.
@@ -338,11 +462,10 @@ fn verify_votes_optimistic(votes_to_verify: &[VoteToVerify], stats: &BLSSigVerif
         .is_ok()
     };
 
-    votes_batch_optimistic_time.stop();
+    measure.stop();
     stats
-        .votes_batch_optimistic_elapsed_us
-        .fetch_add(votes_batch_optimistic_time.as_us(), Ordering::Relaxed);
-
+        .fn_verify_votes_optimistic_stats
+        .add_sample(measure.as_us());
     verified
 }
 
@@ -362,7 +485,7 @@ fn aggregate_signatures(votes: &[VoteToVerify]) -> Result<SignatureProjective, B
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn aggregate_pubkeys_by_payload(
     votes: &[VoteToVerify],
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> (Vec<Vec<u8>>, Result<Vec<PubkeyProjective>, BlsError>) {
     let mut grouped_votes: HashMap<&Vote, Vec<&BlsPubkey>> = HashMap::new();
 
@@ -373,10 +496,9 @@ fn aggregate_pubkeys_by_payload(
             .push(&v.bls_pubkey);
     }
 
-    let distinct_messages = grouped_votes.len();
     stats
-        .votes_batch_distinct_messages_count
-        .fetch_add(distinct_messages as u64, Ordering::Relaxed);
+        .distinct_votes_stats
+        .add_sample(grouped_votes.len() as u64);
 
     let (distinct_payloads, distinct_pubkeys_results): (Vec<_>, Vec<_>) = grouped_votes
         .into_par_iter()
@@ -397,33 +519,19 @@ fn aggregate_pubkeys_by_payload(
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 fn verify_individual_votes(
     votes_to_verify: Vec<VoteToVerify>,
-    stats: &BLSSigVerifierStats,
+    stats: &mut Stats,
 ) -> Vec<VoteToVerify> {
-    let mut votes_batch_parallel_verify_time = Measure::start("votes_batch_parallel_verify");
+    let mut measure = Measure::start("verify_individual_votes");
 
     let verified_votes: Vec<VoteToVerify> = votes_to_verify
         .into_par_iter()
-        .filter_map(|vote| {
-            // verify signature
-            if !vote.verify() {
-                // if fail, record stats and return `None`
-                stats
-                    .received_bad_signature_votes
-                    .fetch_add(1, Ordering::Relaxed);
-                return None;
-            }
-            // if success, return `VoteToVerify` to provide to `Sender`s
-            Some(vote)
-        })
+        .filter_map(|vote| vote.verify().then_some(vote))
         .collect();
 
-    votes_batch_parallel_verify_time.stop();
+    measure.stop();
     stats
-        .votes_batch_parallel_verify_count
-        .fetch_add(1, Ordering::Relaxed);
-    stats
-        .votes_batch_parallel_verify_elapsed_us
-        .fetch_add(votes_batch_parallel_verify_time.as_us(), Ordering::Relaxed);
+        .fn_verify_individual_votes_stats
+        .add_sample(measure.as_us());
     verified_votes
 }
 

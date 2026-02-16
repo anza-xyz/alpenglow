@@ -2,7 +2,7 @@ use num_traits::NumCast;
 
 /// Welford's online algorithm for computing running mean, variance, and standard deviation.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct WelfordStats {
+pub struct WelfordStats {
     /// Number of samples added.
     count: u64,
     /// Running mean, updated incrementally with each sample.
@@ -15,7 +15,7 @@ pub(crate) struct WelfordStats {
 
 impl WelfordStats {
     /// Adds a sample and updates all running statistics.
-    pub(crate) fn add_sample(&mut self, value: u64) {
+    pub fn add_sample(&mut self, value: u64) {
         self.count = self.count.checked_add(1).unwrap();
         let v = value as f64;
         let d = v - self.mean;
@@ -24,13 +24,21 @@ impl WelfordStats {
         self.max = self.max.max(value);
     }
 
+    /// Merges two sets of stats together.
+    pub fn merge(&mut self, other: Self) {
+        self.merge_mean(&other);
+        self.merge_m2(&other);
+        self.max = self.max.max(other.max);
+        self.count = self.count.checked_add(other.count).unwrap();
+    }
+
     /// Returns the number of samples added.
-    pub(crate) fn count(&self) -> u64 {
+    pub fn count(&self) -> u64 {
         self.count
     }
 
     /// Returns the mean, or `None` if no samples have been added.
-    pub(crate) fn mean<T: NumCast>(&self) -> Option<T> {
+    pub fn mean<T: NumCast>(&self) -> Option<T> {
         match self.count {
             0 => None,
             _ => NumCast::from(self.mean),
@@ -38,7 +46,7 @@ impl WelfordStats {
     }
 
     /// Returns the sample standard deviation, or `None` if fewer than 2 samples.
-    pub(crate) fn stddev<T: NumCast>(&self) -> Option<T> {
+    pub fn stddev<T: NumCast>(&self) -> Option<T> {
         match self.count {
             0 | 1 => None,
             n => {
@@ -49,11 +57,29 @@ impl WelfordStats {
     }
 
     /// Returns the maximum value seen, or `None` if no samples have been added.
-    pub(crate) fn maximum<T: NumCast>(&self) -> Option<T> {
+    pub fn maximum<T: NumCast>(&self) -> Option<T> {
         match self.count {
             0 => None,
             _ => NumCast::from(self.max),
         }
+    }
+
+    /// Merges two sets of means together.
+    fn merge_mean(&mut self, other: &Self) {
+        let count = self.count.checked_add(other.count).unwrap();
+        self.mean =
+            (self.count as f64 * self.mean + other.count as f64 * other.mean) / count as f64;
+    }
+
+    /// Merges two sets of variances together.
+    /// link: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+    fn merge_m2(&mut self, other: &Self) {
+        let count = self.count.checked_add(other.count).unwrap();
+        let delta = other.mean - self.mean;
+        let sum_sq_diff = self.m2
+            + other.m2
+            + (delta * delta) * self.count as f64 * other.count as f64 / count as f64;
+        self.m2 = sum_sq_diff;
     }
 }
 

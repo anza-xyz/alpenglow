@@ -1,6 +1,7 @@
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
 use {
+    super::bls_vote_sigverify::Stats as VoteStats,
     histogram::Histogram,
     std::{
         sync::atomic::{AtomicU64, Ordering},
@@ -151,35 +152,10 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) total_valid_packets: AtomicU64,
     pub(super) preprocess_count: AtomicU64,
     pub(super) preprocess_elapsed_us: AtomicU64,
-    pub(super) votes_batch_distinct_messages_count: AtomicU64,
-    pub(super) votes_batch_optimistic_elapsed_us: AtomicU64,
-    pub(super) votes_batch_parallel_verify_count: AtomicU64,
-    pub(super) votes_batch_parallel_verify_elapsed_us: AtomicU64,
     pub(super) certs_batch_count: AtomicU64,
     pub(super) certs_batch_elapsed_us: AtomicU64,
 
-    /// Number of votes that we attempted to verify.
-    pub(super) votes_to_verify: AtomicU64,
-    /// Number of batches of votes that we attempted to verify.
-    pub(super) votes_to_verify_batches: AtomicU64,
-    /// Number of votes that were successfully verified.
-    pub(super) verified_votes: AtomicU64,
-    /// Number of msgs sent to the consensus pool after verifying votes.
-    pub(super) verify_votes_consensus_sent: AtomicU64,
-    /// Number of msgs sent to repair after verifying votes.
-    pub(super) verify_votes_repair_sent: AtomicU64,
-    /// Number of msgs sent to rewards after verifying votes.
-    pub(super) verify_votes_rewards_sent: AtomicU64,
-    /// Number of msgs sent to metrics after verifying votes.
-    pub(super) verify_votes_metrics_sent: AtomicU64,
-    /// Number of times the consensus channel was full while verifying votes.
-    pub(super) verify_votes_consensus_channel_full: AtomicU64,
-    /// Number of times the repair channel was full while verifying votes.
-    pub(super) verify_votes_repair_channel_full: AtomicU64,
-    /// Number of times the rewards channel was full while verifying votes.
-    pub(super) verify_votes_rewards_channel_full: AtomicU64,
-    /// Number of times the metrics channel was full while verifying votes.
-    pub(super) verify_votes_metrics_channel_full: AtomicU64,
+    pub(super) vote_stats: VoteStats,
 
     /// Number of msgs sent to the consensus pool after verifying certs.
     pub(super) verify_certs_consensus_sent: AtomicU64,
@@ -189,7 +165,6 @@ pub(super) struct BLSSigVerifierStats {
     pub(super) received: AtomicU64,
     pub(super) received_bad_rank: AtomicU64,
     pub(super) received_bad_signature_certs: AtomicU64,
-    pub(super) received_bad_signature_votes: AtomicU64,
     pub(super) received_not_enough_stake: AtomicU64,
     pub(super) received_discarded: AtomicU64,
     pub(super) received_malformed: AtomicU64,
@@ -203,28 +178,13 @@ pub(super) struct BLSSigVerifierStats {
 impl Default for BLSSigVerifierStats {
     fn default() -> Self {
         Self {
+            vote_stats: VoteStats::default(),
             total_valid_packets: AtomicU64::new(0),
 
             preprocess_count: AtomicU64::new(0),
             preprocess_elapsed_us: AtomicU64::new(0),
-            votes_batch_distinct_messages_count: AtomicU64::new(0),
-            votes_batch_optimistic_elapsed_us: AtomicU64::new(0),
-            votes_batch_parallel_verify_count: AtomicU64::new(0),
-            votes_batch_parallel_verify_elapsed_us: AtomicU64::new(0),
             certs_batch_count: AtomicU64::new(0),
             certs_batch_elapsed_us: AtomicU64::new(0),
-
-            votes_to_verify: AtomicU64::new(0),
-            votes_to_verify_batches: AtomicU64::new(0),
-            verified_votes: AtomicU64::new(0),
-            verify_votes_consensus_sent: AtomicU64::new(0),
-            verify_votes_repair_sent: AtomicU64::new(0),
-            verify_votes_rewards_sent: AtomicU64::new(0),
-            verify_votes_metrics_sent: AtomicU64::new(0),
-            verify_votes_consensus_channel_full: AtomicU64::new(0),
-            verify_votes_repair_channel_full: AtomicU64::new(0),
-            verify_votes_rewards_channel_full: AtomicU64::new(0),
-            verify_votes_metrics_channel_full: AtomicU64::new(0),
 
             verify_certs_consensus_sent: AtomicU64::new(0),
             verify_certs_consensus_channel_full: AtomicU64::new(0),
@@ -232,7 +192,6 @@ impl Default for BLSSigVerifierStats {
             received: AtomicU64::new(0),
             received_bad_rank: AtomicU64::new(0),
             received_bad_signature_certs: AtomicU64::new(0),
-            received_bad_signature_votes: AtomicU64::new(0),
             received_not_enough_stake: AtomicU64::new(0),
             received_discarded: AtomicU64::new(0),
             received_malformed: AtomicU64::new(0),
@@ -253,6 +212,7 @@ impl BLSSigVerifierStats {
         if time_since_last_log < STATS_INTERVAL_DURATION {
             return;
         }
+        self.vote_stats.report();
         datapoint_info!(
             "bls_sig_verifier_stats",
             (
@@ -266,30 +226,6 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
-                "votes_batch_distinct_messages_count",
-                self.votes_batch_distinct_messages_count
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_batch_optimistic_elapsed_us",
-                self.votes_batch_optimistic_elapsed_us
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_batch_parallel_verify_count",
-                self.votes_batch_parallel_verify_count
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_batch_parallel_verify_elapsed_us",
-                self.votes_batch_parallel_verify_elapsed_us
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
                 "certs_batch_count",
                 self.certs_batch_count.load(Ordering::Relaxed) as i64,
                 i64
@@ -297,65 +233,6 @@ impl BLSSigVerifierStats {
             (
                 "certs_batch_elapsed_us",
                 self.certs_batch_elapsed_us.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_to_verify_batches",
-                self.votes_to_verify_batches.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "votes_to_verify",
-                self.votes_to_verify.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verified_votes",
-                self.verified_votes.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_consensus_sent",
-                self.verify_votes_consensus_sent.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_consensus_channel_full",
-                self.verify_votes_consensus_channel_full
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_repair_sent",
-                self.verify_votes_repair_sent.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verified_votes_repair_channel_full",
-                self.verify_votes_repair_channel_full
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_rewards_sent",
-                self.verify_votes_rewards_sent.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_rewards_channel_full",
-                self.verify_votes_rewards_channel_full
-                    .load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_metrics_sent",
-                self.verify_votes_metrics_sent.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "verify_votes_metrics_channel_full",
-                self.verify_votes_metrics_channel_full
-                    .load(Ordering::Relaxed) as i64,
                 i64
             ),
             (
@@ -382,11 +259,6 @@ impl BLSSigVerifierStats {
             (
                 "received_bad_signature_certs",
                 self.received_bad_signature_certs.load(Ordering::Relaxed) as i64,
-                i64
-            ),
-            (
-                "received_bad_signature_votes",
-                self.received_bad_signature_votes.load(Ordering::Relaxed) as i64,
                 i64
             ),
             (

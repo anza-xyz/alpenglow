@@ -16,7 +16,7 @@ pub mod vote_history_storage;
 pub mod voting_service;
 pub mod voting_utils;
 pub mod votor;
-mod welford_stats;
+pub mod welford_stats;
 
 #[macro_use]
 extern crate log;
