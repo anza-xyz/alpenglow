@@ -21,6 +21,7 @@ use {
     },
     solana_cluster_type::ClusterType,
     solana_commitment_config::CommitmentConfig,
+    solana_compute_budget_interface::ComputeBudgetInstruction,
     solana_connection_cache::client_connection::ClientConnection,
     solana_core::{
         consensus::{
@@ -34,7 +35,10 @@ use {
         validator::{BlockVerificationMethod, TurbineMode, TurbineModeKind, ValidatorConfig},
     },
     solana_download_utils::download_snapshot_archive,
-    solana_entry::entry::create_ticks,
+    solana_entry::{
+        block_component::{BlockComponent, BlockMarkerV1, VersionedBlockMarker},
+        entry::create_ticks,
+    },
     solana_epoch_schedule::{MAX_LEADER_SCHEDULE_EPOCH_OFFSET, MINIMUM_SLOTS_PER_EPOCH},
     solana_gossip::{crds_data::MAX_VOTES, gossip_service::discover_validators},
     solana_hard_forks::HardForks,
@@ -8098,7 +8102,38 @@ fn test_alpenglow_add_missing_parent_ready() {
 /// - Vote forwarding continues (without skip injection) to maintain consensus
 /// - Uses `check_for_new_roots` to verify cluster continues making progress
 /// - Asserts at least 2 sad path slots were successfully finalized in Phase 2
-///
+fn log_blockstore_slot_components(ledger_path: &Path, from_slot: u64) {
+    let blockstore = open_blockstore(ledger_path);
+    for (slot, _meta) in blockstore.slot_meta_iterator(from_slot).unwrap() {
+        let Ok((components, _ranges, _is_full)) =
+            blockstore.get_slot_components_with_shred_info(slot, 0, true)
+        else {
+            continue;
+        };
+        if components.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<String> = components
+            .iter()
+            .map(|component| match component {
+                BlockComponent::EntryBatch(entries) => {
+                    let num_txs: usize = entries.iter().map(|e| e.transactions.len()).sum();
+                    format!("EntryBatch({num_txs})")
+                }
+                BlockComponent::BlockMarker(VersionedBlockMarker::V1(marker)) => match marker {
+                    BlockMarkerV1::BlockHeader(_) => "BlockHeader".to_string(),
+                    BlockMarkerV1::BlockFooter(_) => "BlockFooter".to_string(),
+                    BlockMarkerV1::UpdateParent(_) => "UpdateParent".to_string(),
+                    BlockMarkerV1::GenesisCertificate(_) => "GenesisCertificate".to_string(),
+                },
+            })
+            .collect();
+
+        info!("Slot {slot} components: [{}]", parts.join(", "));
+    }
+}
+
 /// ## Key Validation Points
 /// - FLH sad path triggers correctly when optimistic parent mismatches finalized parent
 /// - Leaders recover and produce blocks after sad path detection
@@ -8108,6 +8143,8 @@ fn test_alpenglow_add_missing_parent_ready() {
 #[ignore]
 fn test_alpenglow_flh_simple_sad_leader_handover() {
     agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+
+    let send_background_txs = true;
 
     // 4 nodes: 0, 1 are leaders (15% each), 2, 3 are exited with majority stake (35% each).
     // Ranks by stake: nodes 2,3 are ranks 0,1; nodes 0,1 are ranks 2,3.
@@ -8391,6 +8428,181 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         }
     });
 
+    // Spawn a background thread to fund an account and send transfers at 20 tx/sec.
+    let tx_sender_thread = if send_background_txs {
+        let cancel = cancel.clone();
+        let rpc_url_0 = format!(
+            "http://{}",
+            cluster
+                .get_contact_info(&validator_keys[0].pubkey())
+                .unwrap()
+                .rpc()
+                .unwrap()
+        );
+        let rpc_url_1 = format!(
+            "http://{}",
+            cluster
+                .get_contact_info(&validator_keys[1].pubkey())
+                .unwrap()
+                .rpc()
+                .unwrap()
+        );
+        let funding_keypair = cluster.funding_keypair.insecure_clone();
+
+        Some(
+            Builder::new()
+                .name("dummy-tx-sender".to_string())
+                .spawn(move || {
+                    let clients = [
+                        RpcClient::new_with_commitment(
+                            rpc_url_0,
+                            CommitmentConfig::processed(),
+                        ),
+                        RpcClient::new_with_commitment(
+                            rpc_url_1,
+                            CommitmentConfig::processed(),
+                        ),
+                    ];
+
+                    // Fund the source account with 10 SOL.
+                    // Use fire-and-forget send + balance polling to avoid
+                    // expiration panics while the cluster is still settling.
+                    let tx_source_keypair = Keypair::new();
+                    let fund_amount = 10 * solana_native_token::LAMPORTS_PER_SOL;
+                    loop {
+                        if cancel.is_cancelled() {
+                            return;
+                        }
+                        let Ok(blockhash) = clients[0].get_latest_blockhash() else {
+                            sleep(Duration::from_millis(200));
+                            continue;
+                        };
+                        let fund_tx = solana_transaction::Transaction::new_signed_with_payer(
+                            &[solana_system_interface::instruction::transfer(
+                                &funding_keypair.pubkey(),
+                                &tx_source_keypair.pubkey(),
+                                fund_amount,
+                            )],
+                            Some(&funding_keypair.pubkey()),
+                            &[&funding_keypair],
+                            blockhash,
+                        );
+                        let _ = clients[0].send_transaction(&fund_tx);
+                        // Poll until the account is funded
+                        for _ in 0..20 {
+                            sleep(Duration::from_millis(200));
+                            if let Ok(bal) = clients[0].get_balance(&tx_source_keypair.pubkey()) {
+                                if bal >= fund_amount {
+                                    break;
+                                }
+                            }
+                        }
+                        if let Ok(bal) = clients[0].get_balance(&tx_source_keypair.pubkey()) {
+                            if bal >= fund_amount {
+                                break;
+                            }
+                        }
+                        warn!("tx-sender: funding not confirmed yet, retrying...");
+                    }
+                    info!("tx-sender: funded source account");
+
+                    let mut send_count = 0u64;
+                    let mut blockhash = Hash::default();
+
+                    loop {
+                        if cancel.is_cancelled() {
+                            return;
+                        }
+
+                        // Refresh blockhash every 20 sends (~1 second)
+                        if send_count % 20 == 0 {
+                            match clients[0].get_latest_blockhash() {
+                                Ok(hash) => blockhash = hash,
+                                Err(e) => {
+                                    debug!("tx-sender: failed to get blockhash: {e:?}");
+                                    sleep(Duration::from_millis(50));
+                                    continue;
+                                }
+                            }
+                        }
+
+                        let client = &clients[send_count as usize % 2];
+                        let dest_pubkey = solana_pubkey::new_rand();
+
+                        // 0.0001 SOL = 100_000 lamports transfer
+                        let transfer_ix = solana_system_interface::instruction::transfer(
+                            &tx_source_keypair.pubkey(),
+                            &dest_pubkey,
+                            100_000,
+                        );
+                        // Priority fee ~0.0002 SOL: 1_000_000 micro-lamports/CU × 200k CU default
+                        let priority_fee_ix =
+                            ComputeBudgetInstruction::set_compute_unit_price(1_000_000);
+
+                        let tx = solana_transaction::Transaction::new_signed_with_payer(
+                            &[priority_fee_ix, transfer_ix],
+                            Some(&tx_source_keypair.pubkey()),
+                            &[&tx_source_keypair],
+                            blockhash,
+                        );
+
+                        if let Err(e) = client.send_transaction(&tx) {
+                            debug!("tx-sender: failed to send tx: {e:?}");
+                        }
+
+                        send_count += 1;
+                        sleep(Duration::from_millis(50));
+                    }
+                })
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+
+    let blockstore_monitor_thread = {
+        let cancel = cancel.clone();
+        let node_0_ledger_path = cluster.ledger_path(&validator_keys[0].pubkey());
+        let node_0_rpc_url = format!(
+            "http://{}",
+            cluster
+                .get_contact_info(&validator_keys[0].pubkey())
+                .unwrap()
+                .rpc()
+                .unwrap()
+        );
+
+        Builder::new()
+            .name("blockstore-monitor".to_string())
+            .spawn(move || {
+                let rpc_client = RpcClient::new(node_0_rpc_url);
+                let mut last_finalized: u64 = 0;
+
+                loop {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+
+                    let finalized = rpc_client
+                        .get_slot_with_commitment(CommitmentConfig::finalized())
+                        .unwrap_or(0);
+
+                    if finalized > last_finalized {
+                        info!(
+                            "Node 0 finalized slot {finalized} (was {last_finalized}), \
+                             logging components for slots {}..={finalized}",
+                            last_finalized + 1
+                        );
+                        log_blockstore_slot_components(&node_0_ledger_path, last_finalized + 1);
+                        last_finalized = finalized;
+                    }
+
+                    sleep(Duration::from_millis(500));
+                }
+            })
+            .unwrap()
+    };
+
     cluster_tests::check_for_new_roots(
         16,
         &alive_contact_infos,
@@ -8401,6 +8613,12 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
     // Stop the vote listener and get the finalized sad path slots
     cancel.cancel();
     vote_listener_thread.join().expect("vote listener panicked");
+    if let Some(t) = tx_sender_thread {
+        t.join().expect("tx sender panicked");
+    }
+    blockstore_monitor_thread
+        .join()
+        .expect("blockstore monitor panicked");
 
     let finalized_sad_path_slots = finalized_sad_path_slots.lock().unwrap();
 
@@ -8414,6 +8632,10 @@ fn test_alpenglow_flh_simple_sad_leader_handover() {
         "{} sad path slots finalized",
         finalized_sad_path_slots.len()
     );
+
+    // Log final blockstore status for node 0
+    let node_0_ledger_path = cluster.ledger_path(&validator_keys[0].pubkey());
+    log_blockstore_slot_components(&node_0_ledger_path, 0);
 
     quic_server_thread.join().expect("quic server panicked");
 }
