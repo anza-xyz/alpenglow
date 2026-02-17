@@ -433,8 +433,8 @@ mod tests {
 
     #[test]
     fn test_bls_pubkeys_of() {
-        let bls_pubkey1: BLSPubkey = BLSKeypair::new().public;
-        let bls_pubkey2: BLSPubkey = BLSKeypair::new().public;
+        let bls_pubkey1: BLSPubkey = BLSKeypair::new().public.into();
+        let bls_pubkey2: BLSPubkey = BLSKeypair::new().public.into();
         let matches = app().get_matches_from(vec![
             "test",
             "--multiple",

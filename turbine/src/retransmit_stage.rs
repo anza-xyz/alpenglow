@@ -7,7 +7,7 @@ use {
         xdp::XdpSender,
     },
     bytes::Bytes,
-    crossbeam_channel::{Receiver, Sender, TryRecvError},
+    crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError},
     lru::LruCache,
     rand::Rng,
     rayon::{prelude::*, ThreadPool, ThreadPoolBuilder},
@@ -910,14 +910,19 @@ fn notify_subscribers(
             .notify_first_shred_received(slot);
     }
     if migration_status.should_send_votor_event(slot) {
-        votor_event_sender
-            .send(VotorEvent::FirstShred(slot))
-            .map_err(|err| {
-                warn!(
-                    "Sending {:?} failed as channel became disconnected.  Ignoring.",
-                    err.into_inner()
+        match votor_event_sender.try_send(VotorEvent::FirstShred(slot)) {
+            Ok(()) => (),
+            Err(TrySendError::Full(event)) => {
+                error!(
+                    "Votor event channel is backed up len {}, something is wrong, blocking",
+                    votor_event_sender.len(),
                 );
-            })?
+                let _ = votor_event_sender.send(event);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                info!("Votor event channel disconnectioned, we are shutting down")
+            }
+        }
     }
 
     Ok(())

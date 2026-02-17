@@ -1,5 +1,4 @@
 use {
-    crate::common::certificate_limits_and_vote_types,
     bitvec::prelude::*,
     solana_bls_signatures::{BlsError, SignatureProjective},
     solana_signer_store::{encode_base2, encode_base3, EncodeError},
@@ -152,7 +151,7 @@ impl BuilderType {
         cert_type: &CertificateType,
         msgs: &[VoteMessage],
     ) -> Result<(), AggregateError> {
-        let vote_types = certificate_limits_and_vote_types(cert_type).1;
+        let vote_types = cert_type.limits_and_vote_types().1;
         match self {
             Self::Skip {
                 signature0,
@@ -520,7 +519,7 @@ mod tests {
             aggregate_pubkey.verify_signature(&cert.signature, &serialized_vote);
 
         assert!(
-            verification_result.unwrap_or(false),
+            verification_result.is_ok(),
             "BLS aggregate signature verification failed for base2 encoded certificate"
         );
     }

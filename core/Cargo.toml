@@ -233,7 +233,7 @@ name = "gen_keys"
 name = "ed25519_sigverify"
 
 [[bench]]
-name = "bls_sigverify"
+name = "bls_vote_sigverify"
 harness = false
 
 [[bench]]

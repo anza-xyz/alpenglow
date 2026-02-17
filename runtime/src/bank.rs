@@ -41,8 +41,8 @@ use {
             partitioned_epoch_rewards::{EpochRewardStatus, VoteRewardsAccounts},
         },
         bank_forks::BankForks,
-        block_component_processor::BlockComponentProcessor,
-        epoch_stakes::{NodeVoteAccounts, VersionedEpochStakes},
+        block_component_processor::{vote_reward::VoteRewardAccountState, BlockComponentProcessor},
+        epoch_stakes::{BLSPubkeyToRankMap, NodeVoteAccounts, VersionedEpochStakes},
         inflation_rewards::points::InflationPointCalculationEvent,
         installed_scheduler_pool::{BankWithScheduler, InstalledSchedulerRwLock},
         rent_collector::RentCollector,
@@ -58,6 +58,7 @@ use {
         transaction_batch::{OwnedOrBorrowed, TransactionBatch},
     },
     accounts_lt_hash::{CacheValue as AccountsLtHashCacheValue, Stats as AccountsLtHashStats},
+    agave_bls_cert_verify::cert_verify::{self, Error as CertVerifyError},
     agave_feature_set::{self as feature_set, raise_cpi_nesting_limit_to_8, FeatureSet},
     agave_precompiles::{get_precompile, get_precompiles, is_precompile},
     agave_reserved_account_keys::ReservedAccountKeys,
@@ -216,7 +217,9 @@ pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
 
-const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
+/// This will be guaranteed through the VAT rules,
+/// only the top 2000 validators by stake will be present in vote account structures.
+pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
 
 // Minimum balance for an identity account to be considered for Alpenglow VAT.
 #[cfg(not(feature = "dev-context-only-utils"))]
@@ -964,17 +967,17 @@ impl Default for BankTestConfig {
 }
 
 /// Data returned from [`Bank::calculate_epoch_inflation_rewards()`].
-struct EpochInflationRewards {
+pub(crate) struct EpochInflationRewards {
     /// Amount of rewards a validator should get if it voted in every slot in
     /// the epoch and its stake is equal to the network capitalization i.e.
     /// the total supply.
-    validator_rewards_lamports: u64,
+    pub(crate) validator_rewards_lamports: u64,
     /// How long a single epoch lasts in years.
-    epoch_duration_in_years: f64,
+    pub(crate) epoch_duration_in_years: f64,
     /// The current inflation rate for the validators.
-    validator_rate: f64,
+    pub(crate) validator_rate: f64,
     /// The current inflation rate for the foundation.
-    foundation_rate: f64,
+    pub(crate) foundation_rate: f64,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1403,6 +1406,7 @@ impl Bank {
                 new.process_new_epoch(
                     parent.epoch(),
                     parent.slot(),
+                    parent.capitalization.load(Relaxed),
                     parent.block_height(),
                     reward_calc_tracer,
                 );
@@ -1649,6 +1653,7 @@ impl Bank {
         &mut self,
         parent_epoch: Epoch,
         parent_slot: Slot,
+        parent_capitalization: u64,
         parent_height: u64,
         reward_calc_tracer: Option<impl RewardCalcTracer>,
     ) {
@@ -1679,7 +1684,7 @@ impl Bank {
 
         let mut rewards_metrics = RewardsMetrics::default();
         // After saving a snapshot of stakes, apply stake rewards and commission
-        let (_, update_rewards_with_thread_pool_time_us) = measure_us!(self
+        let (epoch_validator_rewards, update_rewards_with_thread_pool_time_us) = measure_us!(self
             .begin_partitioned_rewards(
                 reward_calc_tracer,
                 &thread_pool,
@@ -1688,6 +1693,13 @@ impl Bank {
                 parent_height,
                 &mut rewards_metrics,
             ));
+
+        VoteRewardAccountState::new_epoch_update_account(
+            self,
+            parent_epoch,
+            parent_capitalization,
+            epoch_validator_rewards,
+        );
 
         report_new_epoch_metrics(
             epoch,
@@ -2347,6 +2359,12 @@ impl Bank {
         });
     }
 
+    /// Returns a reference to [`BLSPubkeyToRankMap`] for the given `slot`.
+    pub fn get_rank_map(&self, slot: Slot) -> Option<&Arc<BLSPubkeyToRankMap>> {
+        self.epoch_stakes_from_slot(slot)
+            .map(|stake| stake.bls_pubkey_to_rank_map())
+    }
+
     fn update_stake_history(&self, epoch: Option<Epoch>) {
         if epoch == Some(self.epoch()) {
             return;
@@ -2406,7 +2424,7 @@ impl Bank {
     }
 
     /// For a given [`capitalization`] (total_supply in lamports) and [`epoch`], calculates various inflation related info.
-    fn calculate_epoch_inflation_rewards(
+    pub(crate) fn calculate_epoch_inflation_rewards(
         &self,
         capitalization: u64,
         epoch: Epoch,
@@ -4158,7 +4176,7 @@ impl Bank {
 
     /// Technically this issues (or even burns!) new lamports,
     /// so be extra careful for its usage
-    fn store_account_and_update_capitalization(
+    pub(crate) fn store_account_and_update_capitalization(
         &self,
         pubkey: &Pubkey,
         new_account: &AccountSharedData,
@@ -5106,6 +5124,29 @@ impl Bank {
     pub fn epoch_stakes_from_slot(&self, slot: Slot) -> Option<&VersionedEpochStakes> {
         let epoch = self.epoch_schedule().get_epoch(slot);
         self.epoch_stakes(epoch)
+    }
+
+    /// Verify a BLS certificate's signature using this bank's epoch stakes.
+    ///
+    /// Returns (stake present in certificate, total stake in validator set) on success.
+    pub fn verify_certificate(
+        &self,
+        cert: &Certificate,
+    ) -> std::result::Result<(u64, u64), CertVerifyError> {
+        let slot = cert.cert_type.slot();
+        let epoch_stakes = self
+            .epoch_stakes_from_slot(slot)
+            .ok_or(CertVerifyError::MissingRankMap)?;
+        let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
+        let total_stake = epoch_stakes.total_stake();
+
+        let stake = cert_verify::verify_certificate(cert, key_to_rank_map.len(), |rank| {
+            key_to_rank_map
+                .get_pubkey_and_stake(rank)
+                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
+        })?;
+
+        Ok((stake, total_stake))
     }
 
     pub fn epoch_stakes_map(&self) -> &HashMap<Epoch, VersionedEpochStakes> {

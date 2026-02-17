@@ -26,7 +26,7 @@ use {
     solana_core::{
         consensus::{tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD},
         snapshot_packager_service::SnapshotPackagerService,
-        validator::{is_snapshot_config_valid, ValidatorConfig},
+        validator::{is_snapshot_config_valid, TurbineMode, TurbineModeKind, ValidatorConfig},
     },
     solana_gossip::gossip_service::discover_validators,
     solana_hash::Hash,
@@ -53,10 +53,7 @@ use {
         net::SocketAddr,
         num::{NonZeroU64, NonZeroUsize},
         path::{Path, PathBuf},
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
+        sync::{atomic::AtomicBool, Arc},
         thread::sleep,
         time::Duration,
     },
@@ -71,7 +68,8 @@ pub const AG_DEBUG_LOG_FILTER: &str =
      solana_core::block_creation_loop=trace,solana_votor=trace,solana_votor::voting_service=info,\
      solana_votor::vote_history_storage=info,solana_core::validator=info,\
      solana_votor::consensus_metrics=info,solana_core::consensus=info,\
-     solana_ledger::blockstore_processor=info,solana_ledger::blockstore=info";
+     solana_ledger::blockstore_processor=info,solana_core::repair::block_id_repair_service=trace,
+     solana_core::repair::repair_handler=info";
 pub const DEFAULT_NODE_STAKE: u64 = 10 * LAMPORTS_PER_SOL;
 
 pub fn last_vote_in_tower(tower_path: &Path, node_pubkey: &Pubkey) -> Option<(Slot, Hash)> {
@@ -413,9 +411,9 @@ pub fn run_cluster_partition<C>(
         .collect();
     assert_eq!(node_stakes.len(), num_nodes);
     let mint_lamports = node_stakes.iter().sum::<u64>() * 2;
-    let turbine_disabled = Arc::new(AtomicBool::new(false));
+    let turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
     let mut validator_config = ValidatorConfig {
-        turbine_disabled: turbine_disabled.clone(),
+        turbine_mode: turbine_mode.clone(),
         wait_for_supermajority: Some(0),
         ..ValidatorConfig::default_for_test()
     };
@@ -513,7 +511,7 @@ pub fn run_cluster_partition<C>(
 
     info!("PARTITION_TEST start partition");
     on_partition_start(&mut cluster, &mut context);
-    turbine_disabled.store(true, Ordering::Relaxed);
+    turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
     // Make all to all votes/certs not able to reach each other by overriding the
     // alpenglow port override to SocketAddr which no one is listening on.
     let blackhole_addr: SocketAddr = solana_net_utils::bind_to_localhost()
@@ -530,7 +528,7 @@ pub fn run_cluster_partition<C>(
 
     on_before_partition_resolved(&mut cluster, &mut context);
     info!("PARTITION_TEST remove partition");
-    turbine_disabled.store(false, Ordering::Relaxed);
+    turbine_mode.set(TurbineModeKind::Enabled);
     // Restore the alpenglow port override to the default, so that the nodes can communicate again.
     alpenglow_port_override.clear();
 

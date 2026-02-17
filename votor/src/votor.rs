@@ -17,7 +17,7 @@
 //!   │        │         │                              │ │                        │ │Voting Service│
 //!   │        │         │                              │ │                        │ └──────────────┘
 //!   │        │         │                              │ │                        │
-//!   │   ┌────┼─────────┼───────────────┐              │ │                        │
+//!   │   ┌────┼─────────┼───────────────┐              │ │    Switch Bank         │
 //!   │   │                              │              │ │      Block             │ ┌────────────────────┐
 //!   │   │   Certificate Pool Service   │              │ │  ┌─────────────────────│─┼ Replay / Broadcast │
 //!   │   │                              │              │ │  │                     │ └────────────────────┘
@@ -29,8 +29,10 @@
 //!   │   │ │ └────────────────────┘   │ ◄─────────┼  Event Handler  ┼─────────────│─►  Block creation loop │
 //!   │   │ └──────────────────────────┘ │         │                 │             │ └──────────────────────┘
 //!   │   │                              │         └─▲───────────┬───┘             │
-//!   │   └──────────────────────────────┘           │           │                 │
-//!   │                                     Timeout  │           │                 │
+//!   │   └──────────────────────────────┘           │           │ \               │
+//!   │                                     Timeout  │           │  \  RepairEvent │ ┌───────────────────────┐
+//!   │                                              │           │   \─────────────│─► BlockID Repair Service│
+//!   │                                              │           │                 │ └───────────────────────┘
 //!   │                                              │           │ Set Timeouts    │
 //!   │                                              │           │                 │
 //!   │                          ┌───────────────────┴┐     ┌────▼───────────────┐ │
@@ -48,7 +50,10 @@ use {
         },
         consensus_pool_service::{ConsensusPoolContext, ConsensusPoolService},
         consensus_rewards::ConsensusRewardsService,
-        event::{LeaderWindowInfo, VotorEventReceiver, VotorEventSender},
+        event::{
+            LeaderWindowInfo, RepairEventSender, SwitchBankEventSender, VotorEventReceiver,
+            VotorEventSender,
+        },
         event_handler::{EventHandler, EventHandlerContext},
         root_utils::RootContext,
         timer_manager::TimerManager,
@@ -72,9 +77,10 @@ use {
     solana_runtime::{
         bank_forks::BankForks, installed_scheduler_pool::BankWithScheduler,
         snapshot_controller::SnapshotController,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
     },
     solana_votor_messages::{
-        consensus_message::{ConsensusMessage, HighestFinalizedSlotCert},
+        consensus_message::ConsensusMessage,
         migration::MigrationStatus,
         reward_certificate::{AddVoteMessage, BuildRewardCertsRequest, BuildRewardCertsResponse},
     },
@@ -92,7 +98,6 @@ pub struct VotorConfig {
     // Validator config
     pub vote_account: Pubkey,
     pub wait_to_vote_slot: Option<Slot>,
-    pub wait_for_vote_to_start_leader: bool,
     pub vote_history: VoteHistory,
     pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
 
@@ -105,7 +110,7 @@ pub struct VotorConfig {
     pub rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
     pub consensus_metrics_sender: ConsensusMetricsEventSender,
     pub migration_status: Arc<MigrationStatus>,
-    pub highest_finalized: Arc<RwLock<Option<HighestFinalizedSlotCert>>>,
+    pub highest_finalized: Arc<RwLock<Option<ValidatedBlockFinalizationCert>>>,
 
     // Senders / Notifiers
     pub snapshot_controller: Option<Arc<SnapshotController>>,
@@ -116,12 +121,14 @@ pub struct VotorConfig {
     pub leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub event_sender: VotorEventSender,
-    pub own_vote_sender: Sender<ConsensusMessage>,
+    pub own_vote_sender: Sender<Vec<ConsensusMessage>>,
     pub reward_certs_sender: Sender<BuildRewardCertsResponse>,
+    pub repair_event_sender: RepairEventSender,
+    pub switch_bank_sender: SwitchBankEventSender,
 
     // Receivers
     pub event_receiver: VotorEventReceiver,
-    pub consensus_message_receiver: Receiver<ConsensusMessage>,
+    pub consensus_message_receiver: Receiver<Vec<ConsensusMessage>>,
     pub consensus_metrics_receiver: ConsensusMetricsEventReceiver,
     pub reward_votes_receiver: Receiver<AddVoteMessage>,
     pub build_reward_certs_receiver: Receiver<BuildRewardCertsRequest>,
@@ -136,6 +143,8 @@ pub(crate) struct SharedContext {
     pub(crate) leader_window_info_sender: Sender<LeaderWindowInfo>,
     pub(crate) highest_parent_ready: Arc<RwLock<(Slot, (Slot, Hash))>>,
     pub(crate) vote_history_storage: Arc<dyn VoteHistoryStorage>,
+    pub(crate) repair_event_sender: RepairEventSender,
+    pub(crate) switch_bank_sender: SwitchBankEventSender,
 }
 
 pub struct Votor {
@@ -152,7 +161,6 @@ impl Votor {
             exit,
             vote_account,
             wait_to_vote_slot,
-            wait_for_vote_to_start_leader,
             vote_history,
             vote_history_storage,
             authorized_voter_keypairs,
@@ -172,8 +180,10 @@ impl Votor {
             highest_parent_ready,
             event_sender,
             own_vote_sender,
+            repair_event_sender,
+            switch_bank_sender,
             event_receiver,
-            consensus_message_receiver: bls_receiver,
+            consensus_message_receiver,
             consensus_metrics_sender,
             consensus_metrics_receiver,
             reward_votes_receiver,
@@ -182,7 +192,6 @@ impl Votor {
         } = config;
 
         let identity_keypair = cluster_info.keypair().clone();
-        let has_new_vote_been_rooted = !wait_for_vote_to_start_leader;
 
         // Get the sharable root bank
         let sharable_banks = bank_forks.read().unwrap().sharable_banks();
@@ -195,6 +204,8 @@ impl Votor {
             highest_parent_ready,
             leader_window_info_sender,
             vote_history_storage,
+            repair_event_sender: repair_event_sender.clone(),
+            switch_bank_sender,
         };
 
         let voting_context = VotingContext {
@@ -203,7 +214,6 @@ impl Votor {
             identity_keypair: identity_keypair.clone(),
             authorized_voter_keypairs,
             derived_bls_keypairs: HashMap::new(),
-            has_new_vote_been_rooted,
             own_vote_sender,
             bls_sender: bls_sender.clone(),
             commitment_sender: commitment_sender.clone(),
@@ -235,7 +245,7 @@ impl Votor {
             root_context,
         };
 
-        let root_epoch = sharable_banks.root().epoch();
+        let epoch_schedule = sharable_banks.root().epoch_schedule().clone();
 
         let consensus_pool_context = ConsensusPoolContext {
             exit: exit.clone(),
@@ -245,15 +255,16 @@ impl Votor {
             blockstore,
             sharable_banks: sharable_banks.clone(),
             leader_schedule_cache: leader_schedule_cache.clone(),
-            consensus_message_receiver: bls_receiver,
+            consensus_message_receiver,
             bls_sender,
             event_sender,
             commitment_sender,
+            repair_event_sender,
             highest_finalized,
         };
 
         let metrics = ConsensusMetrics::start_metrics_loop(
-            root_epoch,
+            epoch_schedule,
             consensus_metrics_receiver,
             exit.clone(),
         );

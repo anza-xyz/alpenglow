@@ -1,12 +1,10 @@
-//! This crate implements the Alpenglow certificate verification logic.
+//! This crate implements the certificate verification logic for Alpenglow.
 //!
-//! It is shared between at least:
-//! - The BLS Sigverifier
-//! - The Verification for Certs in Block Markers (from runtime)
+//! This logic is shared across multiple components, including:
+//! - The BLS Sigverifier in `solana-core`
+//! - The verification for certs in block markers in `solana-runtime`
 //!
-//! It can verify votor-messages signed with BLS keys, or just pure bitmaps
-//! conforming to create solana-signer-store format.
-//! It also checks the aggregate stake if a given threshold is given.
-//! To make the dependencies lighter, stake distribution should be passed in.
+//! The main entry point for this crate is the [`cert_verify::verify_certificate`]
+//! function.
 
 pub mod cert_verify;

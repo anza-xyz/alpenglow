@@ -603,7 +603,7 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
 pub mod test {
     use {
         super::*,
-        crossbeam_channel::unbounded,
+        crossbeam_channel::{bounded, unbounded},
         rand::Rng,
         solana_entry::{entry::create_ticks, entry_marker::EntryMarker},
         solana_gossip::{cluster_info::ClusterInfo, node::Node},
@@ -776,7 +776,8 @@ pub mod test {
         let bank_forks = BankForks::new_rw_arc(bank);
         let bank = bank_forks.read().unwrap().root_bank();
 
-        let (votor_event_sender, _) = unbounded();
+        // Create votor event channel for test
+        let (votor_event_sender, _votor_event_receiver) = bounded(100);
 
         // Start up the broadcast stage
         let broadcast_service = BroadcastStage::new(

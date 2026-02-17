@@ -67,7 +67,7 @@ const DEFER_REPAIR_THRESHOLD_TICKS: u64 = DEFER_REPAIR_THRESHOLD.as_millis() as 
 // This is the amount of time we will wait for a repair request to be fulfilled
 // before making another request. Value is based on reasonable upper bound of
 // expected network delays in requesting repairs and receiving shreds.
-const REPAIR_REQUEST_TIMEOUT_MS: u64 = 150;
+pub(crate) const REPAIR_REQUEST_TIMEOUT_MS: u64 = 150;
 
 // When requesting repair for a specific shred through the admin RPC, we will
 // request up to NUM_PEERS_TO_SAMPLE_FOR_REPAIRS in the event a specific, valid
@@ -453,13 +453,11 @@ impl RepairService {
         repair_info: RepairInfo,
         outstanding_requests: Arc<RwLock<OutstandingShredRepairs>>,
         repair_service_channels: RepairServiceChannels,
-        migration_status: Arc<MigrationStatus>,
     ) -> Self {
         let t_repair = {
             let blockstore = blockstore.clone();
             let exit = exit.clone();
             let repair_info = repair_info.clone();
-            let migration_status = migration_status.clone();
             Builder::new()
                 .name("solRepairSvc".to_string())
                 .spawn(move || {
@@ -470,12 +468,12 @@ impl RepairService {
                         repair_service_channels.repair_channels,
                         repair_info,
                         &outstanding_requests,
-                        migration_status,
                     )
                 })
                 .unwrap()
         };
 
+        let migration_status = repair_info.bank_forks.read().unwrap().migration_status();
         let ancestor_hashes_service = AncestorHashesService::new(
             exit,
             blockstore,
@@ -766,9 +764,14 @@ impl RepairService {
         repair_channels: RepairChannels,
         repair_info: RepairInfo,
         outstanding_requests: &RwLock<OutstandingShredRepairs>,
-        migration_status: Arc<MigrationStatus>,
     ) {
-        let sharable_banks = repair_info.bank_forks.read().unwrap().sharable_banks();
+        let (sharable_banks, migration_status) = {
+            let bank_forks_r = repair_info.bank_forks.read().unwrap();
+            (
+                bank_forks_r.sharable_banks(),
+                bank_forks_r.migration_status(),
+            )
+        };
         let root_bank_slot = sharable_banks.root().slot();
         let mut repair_tracker = RepairTracker {
             sharable_banks,

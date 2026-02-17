@@ -154,11 +154,13 @@ impl ConsensusRewards {
     /// Adds received [`VoteMessage`] from other validators.
     fn add_vote(&mut self, root_bank: &Bank, vote: &VoteMessage) {
         let slot = vote.vote.slot();
-        let Some(epoch_stakes) = root_bank.epoch_stakes_from_slot(slot) else {
-            warn!("failed to look up max_validators for slot {slot}");
+        let Some(rank_map) = root_bank.get_rank_map(slot) else {
+            warn!(
+                "failed to look up rank_map for slot {slot} using bank for slot {}",
+                root_bank.slot()
+            );
             return;
         };
-        let rank_map = epoch_stakes.bls_pubkey_to_rank_map();
         let max_validators = rank_map.len();
         let root_slot = root_bank.slot();
         // drop state that is too old based on how the root slot has progressed

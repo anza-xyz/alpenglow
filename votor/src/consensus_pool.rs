@@ -2,8 +2,8 @@ use {
     crate::{
         commitment::CommitmentError,
         common::{
-            certificate_limits_and_vote_types, conflicting_types, vote_to_cert_types, Stake,
-            MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE, MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
+            conflicting_types, Stake, MAX_ENTRIES_PER_PUBKEY_FOR_NOTARIZE_LITE,
+            MAX_ENTRIES_PER_PUBKEY_FOR_OTHER_TYPES,
         },
         consensus_pool::{
             parent_ready_tracker::ParentReadyTracker,
@@ -19,11 +19,10 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_hash::Hash,
     solana_pubkey::Pubkey,
-    solana_runtime::bank::Bank,
+    solana_runtime::{bank::Bank, validated_block_finalization::ValidatedBlockFinalizationCert},
     solana_votor_messages::{
         consensus_message::{
-            Block, Certificate, CertificateType, ConsensusMessage, HighestFinalizedSlotCert,
-            VoteMessage,
+            vote_to_cert_types, Block, Certificate, CertificateType, ConsensusMessage, VoteMessage,
         },
         fraction::Fraction,
         migration::MigrationStatus,
@@ -107,13 +106,18 @@ pub struct ConsensusPool {
     pub parent_ready_tracker: ParentReadyTracker,
     /// Highest finalization certificate (Finalize+Notarize or FinalizeFast)
     /// Used for block footer inclusion and standstill certificate filtering
-    highest_finalized_slot_cert: Option<HighestFinalizedSlotCert>,
+    highest_finalized_slot_cert: Option<ValidatedBlockFinalizationCert>,
     /// Stats for the certificate pool
     stats: ConsensusPoolStats,
     /// Slot stake counters, used to calculate safe_to_notar and safe_to_skip
     slot_stake_counters_map: BTreeMap<Slot, SlotStakeCounters>,
     /// Stores details about the genesis vote during the migration
     migration_status: Option<Arc<MigrationStatus>>,
+    /// Pending safe-to-notar blocks for intrawindow slots that need parent verification.
+    /// These are blocks that have reached the safe-to-notar threshold but are not the
+    /// first block in their leader window. They need to be verified that their parent
+    /// has a NotarizeFallback certificate before the SafeToNotar event can be emitted.
+    pending_safe_to_notar: Vec<Block>,
 }
 
 impl ConsensusPool {
@@ -142,6 +146,7 @@ impl ConsensusPool {
             stats: ConsensusPoolStats::new(),
             slot_stake_counters_map: BTreeMap::new(),
             migration_status: None,
+            pending_safe_to_notar: Vec::new(),
         }
     }
 
@@ -200,7 +205,7 @@ impl ConsensusPool {
                 continue;
             }
             // Otherwise check whether the certificate is complete
-            let (limit, vote_types) = certificate_limits_and_vote_types(&cert_type);
+            let (limit, vote_types) = cert_type.limits_and_vote_types();
             let accumulated_stake = vote_types
                 .iter()
                 .filter_map(|vote_type| {
@@ -292,6 +297,7 @@ impl ConsensusPool {
         self.completed_certificates.insert(cert_type, cert.clone());
         match cert_type {
             CertificateType::NotarizeFallback(slot, block_id) => {
+                events.push(VotorEvent::BlockNotarizeFallback((slot, block_id)));
                 self.parent_ready_tracker
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
             }
@@ -307,10 +313,10 @@ impl ConsensusPool {
                     events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self.highest_finalized_slot().is_none_or(|s| s < slot) {
                         self.highest_finalized_slot_cert =
-                            Some(HighestFinalizedSlotCert::Finalize {
-                                finalize_cert: finalize_cert.clone(),
-                                notarize_cert: cert.clone(),
-                            });
+                            Some(ValidatedBlockFinalizationCert::from_validated_slow(
+                                (**finalize_cert).clone(),
+                                (*cert).clone(),
+                            ));
                     }
                 }
             }
@@ -320,10 +326,10 @@ impl ConsensusPool {
                     events.push(VotorEvent::Finalized((slot, block_id), false));
                     if self.highest_finalized_slot().is_none_or(|s| s < slot) {
                         self.highest_finalized_slot_cert =
-                            Some(HighestFinalizedSlotCert::Finalize {
-                                finalize_cert: cert.clone(),
-                                notarize_cert,
-                            });
+                            Some(ValidatedBlockFinalizationCert::from_validated_slow(
+                                (*cert).clone(),
+                                (*notarize_cert).clone(),
+                            ));
                     }
                 }
             }
@@ -333,8 +339,9 @@ impl ConsensusPool {
                     .add_new_notar_fallback_or_stronger((slot, block_id), events);
                 // Use <= for FastFinalize since it supersedes standard finalization at the same slot
                 if self.highest_finalized_slot().is_none_or(|s| s <= slot) {
-                    self.highest_finalized_slot_cert =
-                        Some(HighestFinalizedSlotCert::FastFinalize(cert.clone()));
+                    self.highest_finalized_slot_cert = Some(
+                        ValidatedBlockFinalizationCert::from_validated_fast((*cert).clone()),
+                    );
                 }
             }
             CertificateType::Genesis(slot, block_id) => {
@@ -442,6 +449,7 @@ impl ConsensusPool {
                     entry_stake,
                     my_vote_pubkey == &validator_vote_key,
                     events,
+                    &mut self.pending_safe_to_notar,
                     &mut self.stats,
                 );
             }
@@ -556,6 +564,26 @@ impl ConsensusPool {
             .contains_key(&CertificateType::Skip(slot))
     }
 
+    /// Checks if a specific block has a NotarizeFallback certificate (or stronger).
+    /// This is used for verifying that an intrawindow block's parent has been certified.
+    pub fn block_has_notar_fallback_or_stronger(&self, block: Block) -> bool {
+        let (slot, block_id) = block;
+        self.completed_certificates
+            .contains_key(&CertificateType::NotarizeFallback(slot, block_id))
+            || self
+                .completed_certificates
+                .contains_key(&CertificateType::Notarize(slot, block_id))
+            || self
+                .completed_certificates
+                .contains_key(&CertificateType::FinalizeFast(slot, block_id))
+    }
+
+    /// Takes the pending safe-to-notar blocks that need parent verification.
+    /// The caller is responsible for processing these blocks.
+    pub fn take_pending_safe_to_notar(&mut self) -> Vec<Block> {
+        std::mem::take(&mut self.pending_safe_to_notar)
+    }
+
     #[cfg(test)]
     fn make_start_leader_decision(
         &self,
@@ -611,6 +639,9 @@ impl ConsensusPool {
         self.vote_pools = self.vote_pools.split_off(&(root_slot, VoteType::Finalize));
         self.slot_stake_counters_map = self.slot_stake_counters_map.split_off(&root_slot);
         self.parent_ready_tracker.set_root(root_slot);
+        // Also prune pending_safe_to_notar for old slots
+        self.pending_safe_to_notar
+            .retain(|(slot, _)| *slot >= root_slot);
     }
 
     pub fn maybe_report(&mut self) {
@@ -621,12 +652,7 @@ impl ConsensusPool {
         let (highest_slot, has_fast_finalize) = self
             .highest_finalized_slot_cert
             .as_ref()
-            .map(|certs| match certs {
-                HighestFinalizedSlotCert::Finalize { finalize_cert, .. } => {
-                    (finalize_cert.cert_type.slot(), false)
-                }
-                HighestFinalizedSlotCert::FastFinalize(cert) => (cert.cert_type.slot(), true),
-            })
+            .map(|certs| (certs.slot(), certs.is_fast()))
             .unwrap_or((0, false));
         self.completed_certificates
             .iter()
@@ -664,7 +690,7 @@ impl ConsensusPool {
 
     /// Returns the highest finalization certificates (slow w/ notarize or fast)
     /// This is used to populate the `final_cert` field in block footers.
-    pub fn get_highest_finalization_certs(&self) -> Option<HighestFinalizedSlotCert> {
+    pub fn get_highest_finalization_certs(&self) -> Option<ValidatedBlockFinalizationCert> {
         self.highest_finalized_slot_cert.clone()
     }
 }
@@ -1594,12 +1620,12 @@ mod tests {
         let bank = bank_forks.read().unwrap().root_bank();
         let (my_vote_key, _, _) = get_key_and_stakes(&bank, 0, 0).unwrap();
 
-        // Create bank 2
-        let slot = 2;
+        // Use slot 0 (first in leader window: 0 % 4 == 0) so SafeToNotar goes directly to events
+        let slot = 0;
         let block_id = Hash::new_unique();
 
         // Add a skip from myself.
-        let vote = Vote::new_skip_vote(2);
+        let vote = Vote::new_skip_vote(slot);
         let mut new_events = vec![];
         assert!(pool
             .add_message(
@@ -1613,7 +1639,7 @@ mod tests {
 
         // 40% notarized, should succeed
         for rank in 1..5 {
-            let vote = Vote::new_notarization_vote(2, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
             assert!(pool
                 .add_message(
                     &bank,
@@ -1632,13 +1658,13 @@ mod tests {
         }
         new_events.clear();
 
-        // Create bank 3
-        let slot = 3;
+        // Use slot 4 (first in leader window: 4 % 4 == 0) for the second part
+        let slot = 4;
         let block_id = Hash::new_unique();
 
         // Add 20% notarize, but no vote from myself, should fail
         for rank in 1..3 {
-            let vote = Vote::new_notarization_vote(3, block_id);
+            let vote = Vote::new_notarization_vote(slot, block_id);
             assert!(pool
                 .add_message(
                     &bank,
@@ -1651,7 +1677,7 @@ mod tests {
         assert!(new_events.is_empty());
 
         // Add a notarize from myself for some other block, but still not enough notar or skip, should fail.
-        let vote = Vote::new_notarization_vote(3, Hash::new_unique());
+        let vote = Vote::new_notarization_vote(slot, Hash::new_unique());
         assert!(pool
             .add_message(
                 &bank,
@@ -1663,9 +1689,9 @@ mod tests {
         assert!(new_events.is_empty());
 
         // Now add 40% skip, should succeed
-        // Funny thing is in this case we will also get SafeToSkip(3)
+        // Funny thing is in this case we will also get SafeToSkip(slot)
         for rank in 3..7 {
-            let vote = Vote::new_skip_vote(3);
+            let vote = Vote::new_skip_vote(slot);
             assert!(pool
                 .add_message(
                     &bank,
@@ -1693,7 +1719,7 @@ mod tests {
         // but not on the same block_id because we already sent the event
         let duplicate_block_id = Hash::new_unique();
         for rank in 7..9 {
-            let vote = Vote::new_notarization_vote(3, duplicate_block_id);
+            let vote = Vote::new_notarization_vote(slot, duplicate_block_id);
             assert!(pool
                 .add_message(
                     &bank,
@@ -2238,7 +2264,7 @@ mod tests {
         let bls_keypair =
             BLSKeypair::derive_from_signer(validator_vote_keypair, BLS_KEYPAIR_DERIVE_SEED)
                 .unwrap();
-        let bls_pubkey: BLSPubkey = bls_keypair.public;
+        let bls_pubkey: BLSPubkey = bls_keypair.public.into();
 
         let signed_message = bincode::serialize(&vote).unwrap();
 

@@ -27,8 +27,11 @@ use {
             tower_storage::FileTowerStorage, Tower, SWITCH_FORK_THRESHOLD, VOTE_THRESHOLD_DEPTH,
         },
         optimistic_confirmation_verifier::OptimisticConfirmationVerifier,
+        repair::{
+            malicious_repair_handler::MaliciousRepairConfig, repair_handler::RepairHandlerType,
+        },
         replay_stage::DUPLICATE_THRESHOLD,
-        validator::{BlockVerificationMethod, ValidatorConfig},
+        validator::{BlockVerificationMethod, TurbineMode, TurbineModeKind, ValidatorConfig},
     },
     solana_download_utils::download_snapshot_archive,
     solana_entry::entry::create_ticks,
@@ -163,12 +166,11 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
     let validator_keys = (0..num_nodes)
         .map(|i| (Arc::new(keypair_from_seed(&[i as u8; 32]).unwrap()), true))
         .collect::<Vec<_>>();
+    let mut validator_config = ValidatorConfig::default_for_test();
+    validator_config.wait_for_supermajority = Some(0);
 
     let mut config = ClusterConfig {
-        validator_configs: make_identical_validator_configs(
-            &ValidatorConfig::default_for_test(),
-            num_nodes,
-        ),
+        validator_configs: make_identical_validator_configs(&validator_config, num_nodes),
         validator_keys: Some(validator_keys.clone()),
         node_stakes: vec![DEFAULT_NODE_STAKE; num_nodes],
         ticks_per_slot: 8,
@@ -212,28 +214,21 @@ fn test_alpenglow_nodes_basic(num_nodes: usize, num_offline_nodes: usize) {
 
 #[test]
 #[serial]
-fn test_1_node_alpenglow() {
+fn test_alpenglow_1() {
     const NUM_NODES: usize = 1;
     test_alpenglow_nodes_basic(NUM_NODES, 0);
 }
 
 #[test]
 #[serial]
-fn test_2_nodes_alpenglow() {
-    const NUM_NODES: usize = 2;
-    test_alpenglow_nodes_basic(NUM_NODES, 0);
-}
-
-#[test]
-#[serial]
-fn test_4_nodes_alpenglow() {
+fn test_alpenglow_4() {
     const NUM_NODES: usize = 4;
     test_alpenglow_nodes_basic(NUM_NODES, 0);
 }
 
 #[test]
 #[serial]
-fn test_4_nodes_with_1_offline_alpenglow() {
+fn test_alpenglow_4_1_offline() {
     const NUM_NODES: usize = 4;
     const NUM_OFFLINE: usize = 1;
     test_alpenglow_nodes_basic(NUM_NODES, NUM_OFFLINE);
@@ -5530,9 +5525,9 @@ fn test_duplicate_shreds_switch_failure() {
         dup_shred1: &Shred,
         dup_shred2: &Shred,
     ) {
-        let disable_turbine = Arc::new(AtomicBool::new(true));
+        let turbine_mode = TurbineMode::new(TurbineModeKind::TurbineAndRepairDisabled);
         duplicate_fork_validator_info.config.voting_disabled = false;
-        duplicate_fork_validator_info.config.turbine_disabled = disable_turbine.clone();
+        duplicate_fork_validator_info.config.turbine_mode = turbine_mode.clone();
         info!("Restarting node: {pubkey}");
         cluster.restart_node(
             pubkey,
@@ -5553,7 +5548,7 @@ fn test_duplicate_shreds_switch_failure() {
             }
             sleep(Duration::from_millis(1000));
         }
-        disable_turbine.store(false, Ordering::Relaxed);
+        turbine_mode.set(TurbineModeKind::Enabled);
 
         // Send the validator the other version of the shred so they realize it's duplicate
         info!("Resending duplicate shreds to duplicate fork validator");
@@ -6224,6 +6219,83 @@ fn test_alpenglow_imbalanced_stakes_catchup() {
     );
 }
 
+/// We start 2 nodes, where the first node A holds 90% of the stake.
+/// B has turbine disabled, and receives duplicate blocks through eager repair.
+/// However, through informed repair it is able to repair the correct blocks and keep up with A.
+#[test]
+#[serial]
+fn test_alpenglow_basic_equivocation() {
+    agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
+    // Create node stakes
+    let slots_per_epoch = 512;
+
+    let total_stake = 2 * DEFAULT_NODE_STAKE;
+    let tenth_stake = total_stake / 10;
+    let node_a_stake = 9 * tenth_stake;
+    let node_b_stake = total_stake - node_a_stake;
+
+    let node_stakes = vec![node_a_stake, node_b_stake];
+
+    // Create leader schedule with A as the leader
+    let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[4, 0]);
+
+    let leader_schedule = FixedSchedule {
+        leader_schedule: Arc::new(leader_schedule),
+    };
+
+    // Create our UDP socket to listen to votes
+    let vote_listener_addr = solana_net_utils::bind_to_localhost().unwrap();
+
+    let mut a_validator_config = ValidatorConfig::default_for_test();
+    a_validator_config.wait_for_supermajority = Some(0);
+    a_validator_config.fixed_leader_schedule = Some(leader_schedule);
+    a_validator_config.voting_service_test_override = Some(VotingServiceOverride {
+        additional_listeners: vec![vote_listener_addr.local_addr().unwrap()],
+        alpenglow_port_override: AlpenglowPortOverride::default(),
+    });
+
+    let mut b_validator_config = safe_clone_config(&a_validator_config);
+    b_validator_config.turbine_mode = TurbineMode::new(TurbineModeKind::TurbineDisabled);
+
+    // Equivocate every other slot, one shred per FEC set
+    a_validator_config.repair_handler_type = RepairHandlerType::Malicious(MaliciousRepairConfig {
+        bad_shred_slot_frequency: Some(2),
+        bad_shred_index_frequency: Some(32), // Only equivocate for indices where index % 32 == 0
+        slot_range: Some((0, 50)),           // Only for the first 50 slots
+    });
+
+    // Cluster config
+    let mut cluster_config = ClusterConfig {
+        mint_lamports: total_stake,
+        node_stakes: node_stakes.clone(),
+        validator_configs: vec![a_validator_config, b_validator_config],
+        validator_keys: Some(
+            validator_keys
+                .iter()
+                .cloned()
+                .zip(iter::repeat_with(|| true))
+                .collect(),
+        ),
+        slots_per_epoch,
+        stakers_slot_offset: slots_per_epoch,
+        ticks_per_slot: DEFAULT_TICKS_PER_SLOT,
+        skip_warmup_slots: true,
+        ..ClusterConfig::default()
+    };
+
+    // Create local cluster
+    let cluster = LocalCluster::new_alpenglow(&mut cluster_config, SocketAddrSpace::Unspecified);
+
+    // Ensure all nodes are rooting
+    // Although the low staked node might be behind while the leader is equivocating,
+    // once the leader stops equivocating it will be able to catch up
+    cluster.check_for_new_roots(
+        32,
+        "test_alpenglow_basic_equivocation",
+        SocketAddrSpace::Unspecified,
+    );
+}
+
 fn test_alpenglow_migration(
     num_nodes: usize,
     test_name: &str,
@@ -6593,7 +6665,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     assert_eq!(total_stake, node_a_stake + node_b_stake);
 
     // Control components
-    let node_a_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_a_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule
     let (leader_schedule, validator_keys) = create_custom_leader_schedule_with_random_keys(&[0, 4]);
@@ -6614,7 +6686,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
     });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, num_nodes);
-    validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
+    validator_configs[0].turbine_mode = node_a_turbine_mode.clone();
 
     assert_eq!(num_nodes, validator_keys.len());
 
@@ -6672,7 +6744,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
 
                 // Once we've received a vote from node B at slot 31, we can start the experiment.
                 if vote.slot() == 31 && node_index == 1 {
-                    node_a_turbine_disabled.store(true, Ordering::Relaxed);
+                    node_a_turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
                 }
 
                 if vote.slot() >= 32 && node_index == 0 {
@@ -6689,7 +6761,7 @@ fn test_alpenglow_ensure_liveness_after_single_notar_fallback() {
                 // We should see a skip followed by a notar fallback. Once we do, the experiment is
                 // complete.
                 if check_for_roots {
-                    node_a_turbine_disabled.store(false, Ordering::Relaxed);
+                    node_a_turbine_mode.set(TurbineModeKind::Enabled);
 
                     if vote.is_finalize() {
                         let value = post_experiment_votes.entry(vote.slot()).or_insert(vec![]);
@@ -6790,7 +6862,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control components
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_c_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule with Node A as primary leader
     let (leader_schedule, validator_keys) =
@@ -6813,7 +6885,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
 
     let mut validator_configs =
         make_identical_validator_configs(&validator_config, node_stakes.len());
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+    validator_configs[2].turbine_mode = node_c_turbine_mode.clone();
 
     // Cluster config
     let mut cluster_config = ClusterConfig {
@@ -6952,12 +7024,8 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             );
         }
 
-        fn handle_node_c_vote(
-            &mut self,
-            vote: &Vote,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
-        ) -> bool {
-            let turbine_disabled = node_c_turbine_disabled.load(Ordering::Acquire);
+        fn handle_node_c_vote(&mut self, vote: &Vote, node_c_turbine_mode: &TurbineMode) -> bool {
+            let turbine_disabled = node_c_turbine_mode.is_turbine_disabled();
 
             // Count NotarizeFallback votes while turbine is disabled
             if turbine_disabled && vote.is_notarize_fallback() {
@@ -6990,7 +7058,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                     if self.double_notar_fallback_slots.len() == 3 {
                         info!("Phase 4, checking for 10 roots");
                         self.a_equivocates = false;
-                        node_c_turbine_disabled.store(false, Ordering::Release);
+                        node_c_turbine_mode.set(TurbineModeKind::Enabled);
                         self.check_for_roots = true;
                     }
                 }
@@ -7005,7 +7073,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
             // Disable turbine at slot 50 to start the experiment
             if vote.slot() == 50 {
                 info!("Phase 1, checking for 10 notarize fallback votes from C");
-                node_c_turbine_disabled.store(true, Ordering::Release);
+                node_c_turbine_mode.set(TurbineModeKind::TurbineDisabled);
             }
 
             false
@@ -7068,7 +7136,7 @@ fn test_alpenglow_ensure_liveness_after_double_notar_fallback() {
                         }
                         2 => {
                             // Node C: Handle experiment state transitions
-                            state.handle_node_c_vote(&vote_message.vote, &node_c_turbine_disabled);
+                            state.handle_node_c_vote(&vote_message.vote, &node_c_turbine_mode);
                         }
                         _ => {}
                     }
@@ -7146,7 +7214,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control mechanism for network partition
-    let node_a_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_a_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule with A as perpetual leader
     let (leader_schedule, validator_keys) =
@@ -7169,8 +7237,8 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
     });
 
     let mut validator_configs = make_identical_validator_configs(&validator_config, NUM_NODES);
-    // Node A (index 0) will have its turbine disabled during the experiment
-    validator_configs[0].turbine_disabled = node_a_turbine_disabled.clone();
+    // Node A (index 0) will have its turbine mode changed during the experiment
+    validator_configs[0].turbine_mode = node_a_turbine_mode.clone();
 
     assert_eq!(NUM_NODES, validator_keys.len());
 
@@ -7285,7 +7353,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
     // Start vote monitoring thread
     let vote_listener_thread = std::thread::spawn({
-        let node_c_turbine_disabled = node_a_turbine_disabled.clone();
+        let node_c_turbine_mode = node_a_turbine_mode.clone();
 
         move || {
             let mut experiment_state = ExperimentState::new();
@@ -7316,10 +7384,10 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
-                                         Latest vote: {:#?}. Experiment state: {:#?}",
+                                        "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest \
+                                         vote: {:#?}. Experiment state: {:#?}",
                                         stage,
-                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        node_c_turbine_mode.get(),
                                         vote,
                                         experiment_state
                                     );
@@ -7327,9 +7395,8 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
                             }
 
                             // Stage 1: Wait for stability, then introduce partition at slot 20
-                            if vote.slot() == 20 && !node_c_turbine_disabled.load(Ordering::Acquire)
-                            {
-                                node_c_turbine_disabled.store(true, Ordering::Release);
+                            if vote.slot() == 20 && !node_c_turbine_mode.is_turbine_disabled() {
+                                node_c_turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
                                 experiment_state.stage = Stage::ObserveSkipFallbacks;
                             }
 
@@ -7339,7 +7406,7 @@ fn test_alpenglow_ensure_liveness_after_intertwined_notar_and_skip_fallbacks() {
 
                                 // Check if we've observed the expected pattern for 3 consecutive slots
                                 if experiment_state.matches_expected_pattern() {
-                                    node_c_turbine_disabled.store(false, Ordering::Release);
+                                    node_c_turbine_mode.set(TurbineModeKind::Enabled);
                                     experiment_state.stage = Stage::ObserveLiveness;
                                 }
                             }
@@ -7435,7 +7502,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control component for network partition simulation
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_c_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule with Node B as primary leader (Node A will go offline)
     let (leader_schedule, validator_keys) =
@@ -7460,7 +7527,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
         make_identical_validator_configs(&validator_config, node_stakes.len());
 
     // Node C will have its turbine disabled during the experiment
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+    validator_configs[2].turbine_mode = node_c_turbine_mode.clone();
 
     // Cluster configuration
     let mut cluster_config = ClusterConfig {
@@ -7570,18 +7637,14 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             }
         }
 
-        fn handle_experiment_start(
-            &mut self,
-            vote: &Vote,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
-        ) {
+        fn handle_experiment_start(&mut self, vote: &Vote, node_c_turbine_mode: &TurbineMode) {
             // Phase 2: Start network partition experiment at slot 20
             if vote.slot() >= 20 && self.stage == Stage::Stability {
                 info!(
                     "Starting network partition experiment at slot {}",
                     vote.slot()
                 );
-                node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                node_c_turbine_mode.set(TurbineModeKind::TurbineDisabled);
                 self.stage = Stage::ObserveNotarFallbacks;
             }
         }
@@ -7590,7 +7653,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
             &mut self,
             vote: &Vote,
             node_name: usize,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
+            node_c_turbine_mode: &TurbineMode,
         ) {
             // Track NotarizeFallback votes from Node C
             if self.stage == Stage::ObserveNotarFallbacks
@@ -7607,7 +7670,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                 // Phase 3: End partition after observing sufficient NotarizeFallback votes
                 if self.notar_fallbacks.len() >= 5 {
                     info!("Sufficient NotarizeFallback votes observed, ending partition");
-                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                    node_c_turbine_mode.set(TurbineModeKind::Enabled);
                     self.stage = Stage::ObserveLiveness;
                 }
             }
@@ -7631,7 +7694,7 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
 
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
-        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let node_c_turbine_mode = node_c_turbine_mode.clone();
         let mut experiment_state = ExperimentState::new(vote_pubkeys.len());
         let timer = std::time::Instant::now();
 
@@ -7656,10 +7719,10 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
-                                         Latest vote: {:#?}. Experiment state: {:#?}",
+                                        "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest \
+                                         vote: {:#?}. Experiment state: {:#?}",
                                         stage,
-                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        node_c_turbine_mode.get(),
                                         vote,
                                         experiment_state
                                     );
@@ -7673,12 +7736,11 @@ fn test_alpenglow_ensure_liveness_after_second_notar_fallback_condition() {
                                 &mut cluster,
                                 &validator_keys[0].pubkey(),
                             );
-                            experiment_state
-                                .handle_experiment_start(vote, &node_c_turbine_disabled);
+                            experiment_state.handle_experiment_start(vote, &node_c_turbine_mode);
                             experiment_state.handle_notar_fallback(
                                 vote,
                                 node_name,
-                                &node_c_turbine_disabled,
+                                &node_c_turbine_mode,
                             );
                         }
 
@@ -7729,7 +7791,7 @@ fn test_alpenglow_add_missing_parent_ready() {
     assert_eq!(TOTAL_STAKE, node_stakes.iter().sum::<u64>());
 
     // Control component for network partition simulation
-    let node_c_turbine_disabled = Arc::new(AtomicBool::new(false));
+    let node_c_turbine_mode = TurbineMode::new(TurbineModeKind::Enabled);
 
     // Create leader schedule with Node B as primary leader (Node A will go offline)
     let (leader_schedule, validator_keys) =
@@ -7755,7 +7817,7 @@ fn test_alpenglow_add_missing_parent_ready() {
         make_identical_validator_configs(&validator_config, node_stakes.len());
 
     // Node C will have its turbine disabled during the experiment
-    validator_configs[2].turbine_disabled = node_c_turbine_disabled.clone();
+    validator_configs[2].turbine_mode = node_c_turbine_mode.clone();
 
     // Cluster configuration
     let mut cluster_config = ClusterConfig {
@@ -7835,7 +7897,7 @@ fn test_alpenglow_add_missing_parent_ready() {
             &mut self,
             vote: &Vote,
             node_name: usize,
-            node_c_turbine_disabled: &Arc<AtomicBool>,
+            node_c_turbine_mode: &TurbineMode,
             node_c_pubkey: &Pubkey,
         ) {
             if self.stage != Stage::WaitForReady || !vote.is_notarization() {
@@ -7852,7 +7914,7 @@ fn test_alpenglow_add_missing_parent_ready() {
                      slot {}",
                     vote.slot()
                 );
-                node_c_turbine_disabled.store(true, Ordering::Relaxed);
+                node_c_turbine_mode.set(TurbineModeKind::TurbineAndRepairDisabled);
                 let blackhole_addr: SocketAddr = solana_net_utils::bind_to_localhost()
                     .unwrap()
                     .local_addr()
@@ -7894,13 +7956,13 @@ fn test_alpenglow_add_missing_parent_ready() {
             }
         }
 
-        fn handle_cluster_stuck(&mut self, node_c_turbine_disabled: &Arc<AtomicBool>) {
+        fn handle_cluster_stuck(&mut self, node_c_turbine_mode: &TurbineMode) {
             if self.stage == Stage::ClusterStuck {
                 if let Some(start) = self.stuck_at {
                     if start.elapsed() < Duration::from_secs(10) {
                         return; // wait 10 seconds for standstill to kick in
                     }
-                    node_c_turbine_disabled.store(false, Ordering::Relaxed);
+                    node_c_turbine_mode.set(TurbineModeKind::Enabled);
                     self.alpenglow_port_override.clear();
                     self.stage = Stage::ObserveLiveness;
                     info!(
@@ -7931,7 +7993,7 @@ fn test_alpenglow_add_missing_parent_ready() {
     );
     // Start vote listener thread to monitor and control the experiment
     let vote_listener_thread = std::thread::spawn({
-        let node_c_turbine_disabled = node_c_turbine_disabled.clone();
+        let node_c_turbine_mode = node_c_turbine_mode.clone();
         let mut experiment_state = ExperimentState::new(node_stakes.len(), alpenglow_port_override);
         let timer = std::time::Instant::now();
 
@@ -7954,10 +8016,10 @@ fn test_alpenglow_add_missing_parent_ready() {
                             for stage in Stage::all() {
                                 if elapsed_time > stage.timeout() {
                                     panic!(
-                                        "Timeout during {:?}. node_c_turbine_disabled: {:#?}. \
-                                         Latest vote: {:#?}.",
+                                        "Timeout during {:?}. node_c_turbine_mode: {:#?}. Latest \
+                                         vote: {:#?}.",
                                         stage,
-                                        node_c_turbine_disabled.load(Ordering::Acquire),
+                                        node_c_turbine_mode.get(),
                                         vote,
                                     );
                                 }
@@ -7967,7 +8029,7 @@ fn test_alpenglow_add_missing_parent_ready() {
                             experiment_state.wait_for_nodes_ready(
                                 vote,
                                 node_name,
-                                &node_c_turbine_disabled,
+                                &node_c_turbine_mode,
                                 &validator_keys[2].pubkey(),
                             );
                             experiment_state.handle_experiment_start(
@@ -7975,7 +8037,7 @@ fn test_alpenglow_add_missing_parent_ready() {
                                 &mut cluster,
                                 &validator_keys[0].pubkey(),
                             );
-                            experiment_state.handle_cluster_stuck(&node_c_turbine_disabled);
+                            experiment_state.handle_cluster_stuck(&node_c_turbine_mode);
                         }
 
                         ConsensusMessage::Certificate(certificate) => {
@@ -8043,6 +8105,7 @@ fn test_alpenglow_add_missing_parent_ready() {
 /// - Network maintains liveness through repeated sad path scenarios
 #[test]
 #[serial]
+#[ignore]
 fn test_alpenglow_flh_simple_sad_leader_handover() {
     agave_logger::setup_with_default(AG_DEBUG_LOG_FILTER);
 

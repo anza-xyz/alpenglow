@@ -259,6 +259,10 @@ impl BankForks {
         self.get(slot).map(|bank| bank.hash())
     }
 
+    pub fn block_id(&self, slot: Slot) -> Option<Hash> {
+        self.get(slot).and_then(|bank| bank.block_id())
+    }
+
     pub fn is_frozen(&self, slot: Slot) -> bool {
         self.get(slot).map(|bank| bank.is_frozen()).unwrap_or(false)
     }
@@ -437,7 +441,7 @@ impl BankForks {
             .unzip()
     }
 
-    /// Clears a bank from bank forks.
+    /// Clears a bank from bank forks. Panics if the bank is not present in bank forks
     pub fn clear_bank(&mut self, slot: Slot, write_bank_hash_details: bool) {
         let (slots_to_purge, removed_banks) =
             self.dump_slots(std::iter::once(&slot), write_bank_hash_details);

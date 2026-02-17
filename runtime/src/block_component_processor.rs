@@ -1,9 +1,10 @@
 use {
     crate::{
         bank::Bank,
+        validated_block_finalization::ValidatedBlockFinalizationCert,
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
-    agave_bls_cert_verify::cert_verify::verify_cert_get_total_stake,
+    crossbeam_channel::Sender,
     log::*,
     solana_clock::{Slot, DEFAULT_MS_PER_SLOT},
     solana_entry::block_component::{
@@ -12,13 +13,16 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_votor_messages::{
-        consensus_message::Certificate,
+        consensus_message::{Certificate, ConsensusMessage},
         fraction::Fraction,
         migration::{MigrationStatus, GENESIS_VOTE_THRESHOLD},
     },
     std::{num::NonZeroU64, sync::Arc},
     thiserror::Error,
+    vote_reward::calculate_and_pay_voting_reward,
 };
+
+pub(crate) mod vote_reward;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BlockComponentProcessorError {
@@ -32,6 +36,8 @@ pub enum BlockComponentProcessorError {
     GenesisCertificateOnNonChild,
     #[error("GenesisCertificate was invalid and failed to verify")]
     GenesisCertificateFailedVerification,
+    #[error("FinalizationCertificate was invalid or failed to verify")]
+    InvalidFinalizationCertificate,
     #[error("Missing block footer")]
     MissingBlockFooter,
     #[error("Missing parent marker (neither a header nor an update parent was present)")]
@@ -119,6 +125,7 @@ impl BlockComponentProcessor {
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
         marker: VersionedBlockMarker,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
         migration_status: &MigrationStatus,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
@@ -141,7 +148,12 @@ impl BlockComponentProcessor {
             }
 
             // Everything else is only valid once migration is complete
-            BlockMarkerV1::BlockFooter(footer) => self.on_footer(bank, parent_bank, footer.inner()),
+            BlockMarkerV1::BlockFooter(footer) => self.on_footer(
+                bank,
+                parent_bank,
+                footer.into_inner(),
+                finalization_cert_sender,
+            ),
 
             BlockMarkerV1::UpdateParent(update_parent) => {
                 self.on_update_parent(update_parent.inner())
@@ -210,21 +222,12 @@ impl BlockComponentProcessor {
         bank: &Bank,
         cert: &Certificate,
     ) -> Result<(), BlockComponentProcessorError> {
-        let slot = cert.cert_type.slot();
-        let epoch_stakes = bank
-            .epoch_stakes_from_slot(slot)
-            .ok_or(BlockComponentProcessorError::GenesisCertificateFailedVerification)?;
-        let key_to_rank_map = epoch_stakes.bls_pubkey_to_rank_map();
-        let total_stake = epoch_stakes.total_stake();
+        debug_assert!(cert.cert_type.is_genesis());
 
-        let genesis_stake = verify_cert_get_total_stake(cert, key_to_rank_map.len(), |rank| {
-            key_to_rank_map
-                .get_pubkey_and_stake(rank)
-                .map(|(_, bls_pubkey, stake)| (*stake, *bls_pubkey))
-        })
-        .map_err(|_| {
+        let cert_slot = cert.cert_type.slot();
+        let (genesis_stake, total_stake) = bank.verify_certificate(cert).map_err(|_| {
             warn!(
-                "Failed to verify genesis certificate for {slot} in bank slot {}",
+                "Failed to verify genesis certificate for slot {cert_slot} in bank slot {}",
                 bank.slot()
             );
             BlockComponentProcessorError::GenesisCertificateFailedVerification
@@ -233,7 +236,7 @@ impl BlockComponentProcessor {
         let genesis_percent = Fraction::new(genesis_stake, NonZeroU64::new(total_stake).unwrap());
         if genesis_percent < GENESIS_VOTE_THRESHOLD {
             warn!(
-                "Recieived a genesis certificate for {slot} in bank slot {} with \
+                "Received a genesis certificate for slot {cert_slot} in bank slot {} with \
                  {genesis_percent} stake < {GENESIS_VOTE_THRESHOLD}",
                 bank.slot()
             );
@@ -247,7 +250,8 @@ impl BlockComponentProcessor {
         &mut self,
         bank: Arc<Bank>,
         parent_bank: Arc<Bank>,
-        footer: &VersionedBlockFooter,
+        footer: VersionedBlockFooter,
+        finalization_cert_sender: Option<&Sender<Vec<ConsensusMessage>>>,
     ) -> Result<(), BlockComponentProcessorError> {
         if !self.has_header && self.update_parent.is_none() {
             return Err(BlockComponentProcessorError::MissingParentMarker);
@@ -259,7 +263,7 @@ impl BlockComponentProcessor {
 
         let VersionedBlockFooter::V1(footer) = footer;
 
-        Self::enforce_nanosecond_clock_bounds(bank.clone(), parent_bank.clone(), footer)?;
+        Self::enforce_nanosecond_clock_bounds(&bank, &parent_bank, &footer)?;
 
         let reward_slot_and_validators = match ValidatedRewardCert::try_new(
             &bank,
@@ -270,7 +274,28 @@ impl BlockComponentProcessor {
             Err(ValidatedRewardCertError::Empty) => None,
             Err(e) => return Err(e.into()),
         };
-        Self::update_bank_with_footer(bank, footer, reward_slot_and_validators);
+        Self::update_bank_with_footer(&bank, &footer, reward_slot_and_validators);
+
+        // Verify finalization certificate and send to consensus pool
+        if let Some(final_cert) = footer.final_cert {
+            let validated = ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank)
+                .map_err(|e| {
+                    warn!("Failed to validate finalization certificate: {e}");
+                    BlockComponentProcessorError::InvalidFinalizationCertificate
+                })?;
+
+            if let Some(sender) = finalization_cert_sender {
+                let (finalize_cert, notarize_cert) = validated.into_certificates();
+                if let Some(notarize_cert) = notarize_cert {
+                    let _ = sender
+                        .send(vec![ConsensusMessage::from(notarize_cert)])
+                        .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
+                }
+                let _ = sender
+                    .send(vec![ConsensusMessage::from(finalize_cert)])
+                    .inspect_err(|_| info!("ConsensusMessage sender disconnected"));
+            }
+        }
 
         self.has_footer = true;
         Ok(())
@@ -312,8 +337,8 @@ impl BlockComponentProcessor {
     }
 
     fn enforce_nanosecond_clock_bounds(
-        bank: Arc<Bank>,
-        parent_bank: Arc<Bank>,
+        bank: &Bank,
+        parent_bank: &Bank,
         footer: &BlockFooterV1,
     ) -> Result<(), BlockComponentProcessorError> {
         // Get parent time from nanosecond clock account
@@ -362,17 +387,16 @@ impl BlockComponentProcessor {
     }
 
     pub fn update_bank_with_footer(
-        bank: Arc<Bank>,
+        bank: &Bank,
         footer: &BlockFooterV1,
-        _reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
+        reward_slot_and_validators: Option<(Slot, Vec<Pubkey>)>,
     ) {
         // Update clock sysvar
         bank.update_clock_from_footer(footer.block_producer_time_nanos as i64);
 
+        calculate_and_pay_voting_reward(bank, reward_slot_and_validators).unwrap();
         // Record expected bank hash from footer for later verification when the bank is frozen.
         bank.set_expected_bank_hash(footer.bank_hash);
-
-        // TODO: rewards
     }
 }
 
@@ -382,7 +406,7 @@ mod tests {
         super::*,
         crate::{bank::Bank, genesis_utils::create_genesis_config},
         solana_entry::block_component::{
-            BlockFooterV1, BlockHeaderV1, FinalCertificate, UpdateParentV1, VersionedUpdateParent,
+            BlockFooterV1, BlockHeaderV1, UpdateParentV1, VersionedUpdateParent,
         },
         solana_program::{hash::Hash, pubkey::Pubkey},
         std::sync::Arc,
@@ -467,18 +491,18 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         // First footer should succeed
         assert!(processor
-            .on_footer(bank.clone(), parent.clone(), &footer)
+            .on_footer(bank.clone(), parent.clone(), footer.clone(), None)
             .is_ok());
 
         // Second footer should fail
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MultipleBlockFooters)
@@ -504,12 +528,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        processor.on_footer(bank.clone(), parent, &footer).unwrap();
+        processor
+            .on_footer(bank.clone(), parent, footer, None)
+            .unwrap();
 
         assert!(processor.has_footer);
 
@@ -542,7 +568,7 @@ mod tests {
         let bank = create_child_bank(&parent, 1);
 
         processor
-            .on_marker(bank, parent, marker, &migration_status)
+            .on_marker(bank, parent, marker, None, &migration_status)
             .unwrap();
         assert!(processor.has_header);
     }
@@ -567,13 +593,13 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         processor
-            .on_marker(bank.clone(), parent, marker, &migration_status)
+            .on_marker(bank.clone(), parent, marker, None, &migration_status)
             .unwrap();
         assert!(processor.has_footer);
 
@@ -608,12 +634,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
         processor
-            .on_footer(bank.clone(), parent.clone(), &footer)
+            .on_footer(bank.clone(), parent.clone(), footer, None)
             .unwrap();
 
         // Verify clock sysvar was updated
@@ -637,7 +663,7 @@ mod tests {
             parent_block_id: Hash::default(),
         });
 
-        let result = processor.on_marker(bank, parent, marker, &migration_status);
+        let result = processor.on_marker(bank, parent, marker, None, &migration_status);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::BlockComponentPreMigration)
@@ -675,6 +701,7 @@ mod tests {
                 bank.clone(),
                 parent.clone(),
                 header_marker,
+                None,
                 &migration_status,
             )
             .unwrap();
@@ -692,12 +719,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
         processor
-            .on_marker(bank.clone(), parent, footer_marker, &migration_status)
+            .on_marker(bank.clone(), parent, footer_marker, None, &migration_status)
             .unwrap();
 
         // Verify clock sysvar was updated
@@ -724,7 +751,7 @@ mod tests {
         });
 
         // Try to process footer without header - should fail
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         assert_eq!(
             result,
             Err(BlockComponentProcessorError::MissingParentMarker)
@@ -751,13 +778,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
         // Should succeed - footer is processed
-        let result = processor.on_marker(bank.clone(), parent, footer_marker, &migration_status);
+        let result =
+            processor.on_marker(bank.clone(), parent, footer_marker, None, &migration_status);
         assert!(result.is_ok());
         assert!(processor.has_footer);
 
@@ -823,12 +851,14 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        processor.on_footer(bank.clone(), parent, &footer).unwrap();
+        processor
+            .on_footer(bank.clone(), parent, footer, None)
+            .unwrap();
 
         // Verify clock sysvar was updated
         assert_eq!(bank.clock().unix_timestamp, expected_time_secs);
@@ -865,12 +895,12 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: footer_time_nanos as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
 
-        let result = processor.on_footer(bank, parent, &footer);
+        let result = processor.on_footer(bank, parent, footer, None);
         if should_pass {
             assert!(result.is_ok());
         } else {
@@ -1060,11 +1090,11 @@ mod tests {
             bank_hash: Hash::new_unique(),
             block_producer_time_nanos: (parent_time_nanos + 100_000_000) as u64,
             block_user_agent: vec![],
-            final_cert: Some(FinalCertificate::new_for_tests()),
+            final_cert: None,
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-        processor.on_footer(bank, parent, &footer).unwrap();
+        processor.on_footer(bank, parent, footer, None).unwrap();
 
         assert!(processor.on_final(&migration_status, 1).is_ok());
     }
