@@ -58,6 +58,14 @@ impl WelfordStats {
 
     /// Merges two sets of stats together.
     pub fn merge(&mut self, other: Self) {
+        if other.count == 0 {
+            return;
+        }
+        if self.count == 0 {
+            *self = other;
+            return;
+        }
+
         // Merge variances together using
         // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
         let new_count = self.count.checked_add(other.count).unwrap();
@@ -191,5 +199,23 @@ mod tests {
         );
         assert_eq!(total.count(), first.count());
         assert_eq!(total.maximum::<u64>(), first.maximum::<u64>());
+    }
+
+    #[test]
+    fn test_merging_empty() {
+        let mut a = WelfordStats::default();
+        a.merge(WelfordStats::default());
+        assert_eq!(a.count(), 0);
+        assert_eq!(a.mean::<f64>(), None);
+
+        // should not be corrupted by the empty merge
+        a.add_sample(42);
+        assert_eq!(a.mean::<u64>(), Some(42));
+
+        let mut b = make_stats(&[10, 20, 30]);
+        let expected = b.mean::<f64>().unwrap();
+        b.merge(WelfordStats::default());
+        assert_eq!(b.count(), 3);
+        assert_eq!(b.mean::<f64>().unwrap(), expected);
     }
 }
