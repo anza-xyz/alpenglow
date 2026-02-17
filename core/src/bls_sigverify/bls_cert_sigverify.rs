@@ -37,20 +37,22 @@ enum CertVerifyError {
 }
 
 pub(super) fn verify_and_send_certificates(
-    certs_buffer: Vec<Certificate>,
+    mut certs: Vec<Certificate>,
     bank: &Bank,
     verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
 ) -> Result<(), Error> {
-    if certs_buffer.is_empty() {
+    dedupe_certificates(&mut certs, verified_certs, stats);
+
+    if certs.is_empty() {
         return Ok(());
     }
 
     stats.certs_batch_count.fetch_add(1, Ordering::Relaxed);
     let mut certs_batch_verify_time = Measure::start("certs_batch_verify");
 
-    let messages: Vec<ConsensusMessage> = certs_buffer
+    let messages: Vec<ConsensusMessage> = certs
         .into_par_iter()
         .filter_map(
             |cert| match verify_bls_certificate(&cert, bank, verified_certs, stats) {
@@ -87,6 +89,27 @@ pub(super) fn verify_and_send_certificates(
     send_to_consensus_pool(messages, channel_to_pool, stats)
 }
 
+fn dedupe_certificates(
+    certs: &mut Vec<Certificate>,
+    verified_certs: &RwLock<HashSet<CertificateType>>,
+    stats: &BLSSigVerifierStats,
+) {
+    if certs.is_empty() {
+        return;
+    }
+
+    let already_verified = verified_certs.read().unwrap();
+
+    certs.retain(|cert| {
+        // check global cache
+        if already_verified.contains(&cert.cert_type) {
+            stats.received_verified.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    });
+}
+
 fn send_to_consensus_pool(
     messages: Vec<ConsensusMessage>,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
@@ -121,18 +144,11 @@ fn verify_bls_certificate(
     verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
 ) -> Result<(), CertVerifyError> {
-    if verified_certs.read().unwrap().contains(&cert.cert_type) {
-        stats.received_verified.fetch_add(1, Ordering::Relaxed);
-        return Ok(());
-    }
-
     // Does the signature verify?
     let (aggregate_stake, total_stake) = verify_certificate_signature(cert, bank)?;
 
     // Does cert represent enough stake?
     verify_stake(cert, aggregate_stake, total_stake)?;
-
-    verified_certs.write().unwrap().insert(cert.cert_type);
 
     Ok(())
 }
