@@ -49,10 +49,10 @@ pub(super) enum Error {
 #[derive(Default)]
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(super) struct Stats {
-    /// Number of votes [`verify_and_send_votes`] was requested to verify.
-    votes_to_verify: u64,
-    /// Number of votes [`verify_and_send_votes`] successfully verified.
-    verified_votes: u64,
+    /// Number of votes [`verify_and_send_votes`] was requested to verify the signature of.
+    votes_to_sig_verify: u64,
+    /// Number of votes [`verify_and_send_votes`] successfully verified the signature of.
+    sig_verified_votes: u64,
 
     /// Number of votes sent successfully over the channel to metrics.
     metrics_sent: u64,
@@ -85,8 +85,8 @@ pub(super) struct Stats {
 impl Stats {
     pub(super) fn merge(&mut self, other: Self) {
         let Self {
-            votes_to_verify,
-            verified_votes,
+            votes_to_sig_verify: votes_to_verify,
+            sig_verified_votes: verified_votes,
             metrics_sent,
             metrics_channel_full,
             rewards_sent,
@@ -100,8 +100,8 @@ impl Stats {
             fn_verify_individual_votes_stats: fn_verify_individual_votes,
             distinct_votes_stats,
         } = other;
-        self.votes_to_verify += votes_to_verify;
-        self.verified_votes += verified_votes;
+        self.votes_to_sig_verify += votes_to_verify;
+        self.sig_verified_votes += verified_votes;
         self.metrics_sent += metrics_sent;
         self.metrics_channel_full += metrics_channel_full;
         self.rewards_sent += rewards_sent;
@@ -121,8 +121,8 @@ impl Stats {
 
     pub(super) fn report(&self) {
         let Self {
-            votes_to_verify,
-            verified_votes,
+            votes_to_sig_verify,
+            sig_verified_votes,
             metrics_sent,
             metrics_channel_full,
             rewards_sent,
@@ -138,8 +138,8 @@ impl Stats {
         } = self;
         datapoint_info!(
             "bls_vote_sigverify_stats",
-            ("votes_to_verify", *votes_to_verify, i64),
-            ("verified_votes", *verified_votes, i64),
+            ("votes_to_sig_verify", *votes_to_sig_verify, i64),
+            ("sig_verified_votes", *sig_verified_votes, i64),
             ("metrics_sent", *metrics_sent, i64),
             ("metrics_channel_full", *metrics_channel_full, i64),
             ("rewards_sent", *rewards_sent, i64),
@@ -229,9 +229,9 @@ pub(super) fn verify_and_send_votes(
     if votes_to_verify.is_empty() {
         return Ok((votes_to_verify, stats));
     }
-    stats.votes_to_verify += votes_to_verify.len() as u64;
+    stats.votes_to_sig_verify += votes_to_verify.len() as u64;
     let verified_votes = verify_votes(votes_to_verify, &mut stats);
-    stats.verified_votes += verified_votes.len() as u64;
+    stats.sig_verified_votes += verified_votes.len() as u64;
 
     let (votes_for_pool, msgs_for_repair, msg_for_reward, msg_for_metrics) = process_verified_votes(
         &verified_votes,
