@@ -122,6 +122,7 @@ impl BLSSigVerifier {
             .fetch_add(preprocess_time.as_us(), Ordering::Relaxed);
 
         let votes_buffer = std::mem::take(&mut self.votes_buffer);
+        let cert_buffer = std::mem::take(&mut self.cert_buffer);
 
         // Perform signature verification
         let (votes_result, certs_result) = rayon::join(
@@ -141,7 +142,7 @@ impl BLSSigVerifier {
             },
             || {
                 verify_and_send_certificates(
-                    &mut self.cert_buffer,
+                    cert_buffer,
                     &root_bank,
                     &self.verified_certs,
                     &self.stats,
