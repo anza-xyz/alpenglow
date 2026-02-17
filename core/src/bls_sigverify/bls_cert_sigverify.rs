@@ -54,39 +54,37 @@ pub(super) fn verify_and_send_certificates(
 
     let messages: Vec<ConsensusMessage> = certs
         .into_par_iter()
-        .filter_map(
-            |cert| match verify_bls_certificate(&cert, bank, verified_certs, stats) {
-                Ok(()) => {
-                    stats.total_valid_packets.fetch_add(1, Ordering::Relaxed);
-                    Some(ConsensusMessage::Certificate(cert))
-                }
-                Err(e) => {
-                    trace!(
-                        "Failed to verify BLS certificate: {:?}, error: {e}",
-                        cert.cert_type
-                    );
-
-                    if let CertVerifyError::NotEnoughStake(..) = e {
-                        stats
-                            .received_not_enough_stake
-                            .fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        stats
-                            .received_bad_signature_certs
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    None
-                }
-            },
-        )
+        .filter_map(|cert| match verify_bls_certificate(&cert, bank, stats) {
+            Ok(()) => Some(ConsensusMessage::Certificate(cert)),
+            Err(e) => {
+                trace!(
+                    "Failed to verify BLS certificate: {:?}, error: {e}",
+                    cert.cert_type
+                );
+                None
+            }
+        })
         .collect();
+
+    if !messages.is_empty() {
+        let mut cache_guard = verified_certs.write().unwrap();
+        for msg in &messages {
+            if let ConsensusMessage::Certificate(cert) = msg {
+                cache_guard.insert(cert.cert_type);
+            }
+        }
+    }
+
+    stats
+        .total_valid_packets
+        .fetch_add(messages.len() as u64, Ordering::Relaxed);
 
     certs_batch_verify_time.stop();
     stats
         .certs_batch_elapsed_us
         .fetch_add(certs_batch_verify_time.as_us(), Ordering::Relaxed);
 
-    send_to_consensus_pool(messages, channel_to_pool, stats)
+    send_certs_to_pool(messages, channel_to_pool, stats)
 }
 
 fn dedupe_certificates(
@@ -110,7 +108,7 @@ fn dedupe_certificates(
     });
 }
 
-fn send_to_consensus_pool(
+fn send_certs_to_pool(
     messages: Vec<ConsensusMessage>,
     channel_to_pool: &Sender<Vec<ConsensusMessage>>,
     stats: &BLSSigVerifierStats,
@@ -141,27 +139,31 @@ fn send_to_consensus_pool(
 fn verify_bls_certificate(
     cert: &Certificate,
     bank: &Bank,
-    verified_certs: &RwLock<HashSet<CertificateType>>,
     stats: &BLSSigVerifierStats,
 ) -> Result<(), CertVerifyError> {
-    // Does the signature verify?
-    let (aggregate_stake, total_stake) = verify_certificate_signature(cert, bank)?;
-
-    // Does cert represent enough stake?
-    verify_stake(cert, aggregate_stake, total_stake)?;
-
+    let (aggregate_stake, total_stake) = verify_certificate_signature(cert, bank, stats)?;
+    verify_stake(cert, aggregate_stake, total_stake, stats)?;
     Ok(())
 }
 
 fn verify_certificate_signature(
     cert: &Certificate,
     bank: &Bank,
+    stats: &BLSSigVerifierStats,
 ) -> Result<(u64, u64), CertVerifyError> {
-    bank.verify_certificate(cert).map_err(|e| match e {
-        BlsCertVerifyError::MissingRankMap => {
-            CertVerifyError::KeyToRankMapNotFound(cert.cert_type.slot())
+    bank.verify_certificate(cert).map_err(|e| {
+        if !matches!(e, BlsCertVerifyError::MissingRankMap) {
+            stats
+                .received_bad_signature_certs
+                .fetch_add(1, Ordering::Relaxed);
         }
-        _ => e.into(),
+
+        match e {
+            BlsCertVerifyError::MissingRankMap => {
+                CertVerifyError::KeyToRankMapNotFound(cert.cert_type.slot())
+            }
+            _ => e.into(),
+        }
     })
 }
 
@@ -169,15 +171,21 @@ fn verify_stake(
     cert: &Certificate,
     aggregate_stake: u64,
     total_stake: u64,
+    stats: &BLSSigVerifierStats,
 ) -> Result<(), CertVerifyError> {
     let (required_stake_fraction, _) = cert.cert_type.limits_and_vote_types();
     let total_stake = NonZeroU64::new(total_stake).expect("Total stake cannot be zero");
     let cert_stake_fraction = Fraction::new(aggregate_stake, total_stake);
-    (cert_stake_fraction >= required_stake_fraction)
-        .then_some(())
-        .ok_or(CertVerifyError::NotEnoughStake(
+    if cert_stake_fraction >= required_stake_fraction {
+        Ok(())
+    } else {
+        stats
+            .received_not_enough_stake
+            .fetch_add(1, Ordering::Relaxed);
+        Err(CertVerifyError::NotEnoughStake(
             aggregate_stake,
             cert_stake_fraction,
             required_stake_fraction,
         ))
+    }
 }
