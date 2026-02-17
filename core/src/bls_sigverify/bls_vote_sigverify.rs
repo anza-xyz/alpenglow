@@ -45,7 +45,7 @@ pub(super) enum Error {
 
 /// Struct to capture and report on stats for this module.
 //
-// Some fields are are `pub` to facilitate testing.
+// Some fields are `pub` to facilitate testing.
 #[derive(Default)]
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(super) struct Stats {

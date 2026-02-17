@@ -24,14 +24,6 @@ impl WelfordStats {
         self.max = self.max.max(value);
     }
 
-    /// Merges two sets of stats together.
-    pub fn merge(&mut self, other: Self) {
-        self.merge_mean(&other);
-        self.merge_m2(&other);
-        self.max = self.max.max(other.max);
-        self.count = self.count.checked_add(other.count).unwrap();
-    }
-
     /// Returns the number of samples added.
     pub fn count(&self) -> u64 {
         self.count
@@ -64,28 +56,33 @@ impl WelfordStats {
         }
     }
 
-    /// Merges two sets of means together.
-    fn merge_mean(&mut self, other: &Self) {
-        let count = self.count.checked_add(other.count).unwrap();
-        self.mean =
-            (self.count as f64 * self.mean + other.count as f64 * other.mean) / count as f64;
-    }
-
-    /// Merges two sets of variances together.
-    /// link: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-    fn merge_m2(&mut self, other: &Self) {
-        let count = self.count.checked_add(other.count).unwrap();
+    /// Merges two sets of stats together.
+    pub fn merge(&mut self, other: Self) {
+        // Merge variances together using
+        // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+        let new_count = self.count.checked_add(other.count).unwrap();
         let delta = other.mean - self.mean;
         let sum_sq_diff = self.m2
             + other.m2
-            + (delta * delta) * self.count as f64 * other.count as f64 / count as f64;
+            + (delta * delta) * self.count as f64 * other.count as f64 / new_count as f64;
         self.m2 = sum_sq_diff;
+
+        // A more stable version of computing the mean.  A less stable but easier to understand
+        // formula would be: new_mean = (n1*mean1 + n2*mean2) / (n1 + n2)
+        self.mean = self.mean + (other.count as f64 / new_count as f64) * (other.mean - self.mean);
+
+        self.max = self.max.max(other.max);
+        self.count = new_count;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, test_case::test_matrix};
+    use {
+        super::*,
+        rand::{rngs::StdRng, Rng, SeedableRng},
+        test_case::test_matrix,
+    };
 
     const EPSILON: f64 = 1e-10;
 
@@ -157,5 +154,42 @@ mod tests {
         assert_eq!(stats.mean::<i64>(), Some((base + 2) as i64));
         assert!((stats.stddev::<f64>().unwrap() - expected_sequential_stddev(5)).abs() < EPSILON);
         assert_eq!(stats.maximum::<u64>(), Some(base + 4));
+    }
+
+    #[test]
+    fn test_merging() {
+        let seed = rand::random::<u64>();
+        let mut rng = StdRng::seed_from_u64(seed);
+        let first_data = (0..1000).map(|_| rng.gen()).collect::<Vec<_>>();
+
+        let mut total = WelfordStats::default();
+        let mut first = WelfordStats::default();
+        for d in first_data {
+            first.add_sample(d);
+            total.add_sample(d);
+        }
+        let second_data = (0..1000).map(|_| rng.gen()).collect::<Vec<_>>();
+        let mut second = WelfordStats::default();
+        for d in second_data {
+            second.add_sample(d);
+            total.add_sample(d);
+        }
+        first.merge(second);
+        let total_mean = total.mean::<f64>().unwrap();
+        let first_mean = first.mean::<f64>().unwrap();
+        let diff = (total_mean - first_mean).abs();
+        assert!(
+            diff / first_mean < EPSILON,
+            "seed={seed}, total_mean={total_mean}, first_mean={first_mean}, diff={diff}"
+        );
+        let total_stddev = total.stddev::<f64>().unwrap();
+        let first_stddev = first.stddev::<f64>().unwrap();
+        let diff = (total_stddev - first_stddev).abs();
+        assert!(
+            diff / first_stddev < EPSILON,
+            "seed={seed}, total_stddev={total_stddev}, first_stddev={first_stddev}, diff={diff}"
+        );
+        assert_eq!(total.count(), first.count());
+        assert_eq!(total.maximum::<u64>(), first.maximum::<u64>());
     }
 }
