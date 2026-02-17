@@ -241,7 +241,7 @@ impl BLSSigVerifierStats {
                 i64
             ),
             (
-                "verity_certs_consensus_channel_full",
+                "verify_certs_consensus_channel_full",
                 self.verify_certs_consensus_channel_full
                     .load(Ordering::Relaxed) as i64,
                 i64

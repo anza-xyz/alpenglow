@@ -66,7 +66,7 @@ pub(super) struct Stats {
     pub(super) pool_sent: u64,
     /// Number of times the channel to consensus pool was full.
     pub(super) pool_channel_full: u64,
-    /// Number of votes sent successully over the channel to repair.
+    /// Number of votes sent successfully over the channel to repair.
     repair_sent: u64,
     /// Number of times the channel to repair was full.
     repair_channel_full: u64,
