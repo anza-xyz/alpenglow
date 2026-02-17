@@ -10,6 +10,9 @@ use {
     },
 };
 
+/// Max timeout of 1 hour
+const MAX_TIMEOUT_SECS: f64 = 3600.0;
+
 /// Calculate the timeout multiplier based on standstill state.
 /// Returns 1.0 if not in standstill, or 1.05^n where n is the number of
 /// leader windows since standstill started.
@@ -65,11 +68,13 @@ impl TimerState {
     ) -> (Self, Instant) {
         let window = (slot..=last_of_consecutive_leader_slots(slot)).collect::<VecDeque<_>>();
         assert!(!window.is_empty());
-        // Scale the timeouts by the multiplier
-        let scaled_delta_timeout =
-            Duration::from_secs_f64(delta_timeout.as_secs_f64() * timeout_multiplier);
-        let scaled_delta_block =
-            Duration::from_secs_f64(delta_block.as_secs_f64() * timeout_multiplier);
+        // Scale the timeouts by the multiplier, capping at 1 hour.
+        let scaled_delta_timeout = Duration::from_secs_f64(
+            (delta_timeout.as_secs_f64() * timeout_multiplier).min(MAX_TIMEOUT_SECS),
+        );
+        let scaled_delta_block = Duration::from_secs_f64(
+            (delta_block.as_secs_f64() * timeout_multiplier).min(MAX_TIMEOUT_SECS),
+        );
         let timeout = now.checked_add(scaled_delta_timeout).unwrap();
         (
             Self::WaitDeltaTimeout {
@@ -239,7 +244,11 @@ impl Timers {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crossbeam_channel::unbounded};
+    use {
+        super::*,
+        crate::common::{DELTA_BLOCK, DELTA_TIMEOUT},
+        crossbeam_channel::unbounded,
+    };
 
     #[test]
     fn timer_state_machine() {
@@ -375,5 +384,30 @@ mod tests {
         // Standstill at slot 20, current slot 28 (2 leader windows)
         let multiplier = calculate_timeout_multiplier(28, Some(20));
         assert!((multiplier - 1.1025).abs() < 0.001);
+    }
+
+    #[test]
+    fn timer_state_caps_at_max_timeout() {
+        let now = Instant::now();
+        // Use a large multiplier that would exceed MAX_TIMEOUT
+        let multiplier = 1000000.0;
+
+        let (mut timer_state, next_fire) =
+            TimerState::new(100, DELTA_TIMEOUT, DELTA_BLOCK, now, multiplier);
+
+        // The first timeout should be capped at MAX_TIMEOUT
+        let expected_first_fire = now + Duration::from_secs(MAX_TIMEOUT_SECS as u64);
+        assert_eq!(next_fire, expected_first_fire);
+
+        // Progress the timer to get TimeoutCrashedLeader
+        assert!(matches!(
+            timer_state.progress(next_fire).unwrap(),
+            VotorEvent::TimeoutCrashedLeader(100)
+        ));
+
+        // The delta_block timeout should also be capped at MAX_TIMEOUT
+        let next = timer_state.next_fire().unwrap();
+        let actual_delta = next - next_fire;
+        assert_eq!(actual_delta, Duration::from_secs(MAX_TIMEOUT_SECS as u64));
     }
 }
