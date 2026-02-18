@@ -61,15 +61,15 @@ pub enum CertificateType {
     /// Finalize certificate
     Finalize(Slot),
     /// Fast finalize certificate
-    FinalizeFast(Slot, Hash),
+    FinalizeFast(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Notarize certificate
-    Notarize(Slot, Hash),
+    Notarize(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Notarize fallback certificate
-    NotarizeFallback(Slot, Hash),
+    NotarizeFallback(Slot, #[wincode(with = "Pod<Hash>")] Hash),
     /// Skip certificate
     Skip(Slot),
     /// Genesis certificate
-    Genesis(Slot, Hash),
+    Genesis(Slot, #[wincode(with = "Pod<Hash>")] Hash),
 }
 
 impl CertificateType {
