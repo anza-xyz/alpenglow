@@ -59,7 +59,7 @@ impl VoteRewardAccountState {
                 let state = Self {
                     current_epoch: bank.epoch(),
                     current_epoch_state: epoch_state.clone(),
-                    prev_epoch: bank.epoch() - 1,
+                    prev_epoch: bank.epoch().checked_sub(1).unwrap(),
                     prev_epoch_state: epoch_state,
                 };
                 state.set_state(bank);
@@ -207,7 +207,8 @@ pub(super) fn calculate_and_pay_voting_reward(
         )
     };
 
-    // XXX: Is this an issue?  The problematic scenario is when the reward slot is in a different epoch and the epoch schedule has also changed.  If we assume that the current epoch schedule will always return the correct values for past epochs before it came into affect, this should be fine.
+    // This assumes that if the epoch_schedule ever changes, the new schedule will maintain correct
+    // info about older slots as well.
     let reward_epoch = bank.epoch_schedule.get_epoch(reward_slot);
     let epoch_state = VoteRewardAccountState::new_from_bank(bank)
         .get_epoch_state(reward_epoch)
@@ -258,17 +259,20 @@ pub(super) fn calculate_and_pay_voting_reward(
             );
         }
     }
-    let Some((_, leader_account)) = current_slot_accounts.get(&current_slot_leader) else {
-        // XXX: should I return an error here or panic?
-        panic!("account for current_slot's {current_slot} leader {current_slot_leader} not found");
-    };
-    pay_reward(
-        current_epoch,
-        current_slot_leader,
-        leader_account,
-        total_leader_reward,
-        &mut accounts_to_store,
-    );
+    match current_slot_accounts.get(&current_slot_leader) {
+        Some((_, leader_account)) => {
+            pay_reward(
+                current_epoch,
+                current_slot_leader,
+                leader_account,
+                total_leader_reward,
+                &mut accounts_to_store,
+            );
+        }
+        None => {
+            info!("Current slot {current_slot}'s leader's account {current_slot_leader} not found")
+        }
+    }
     bank.store_accounts((current_slot, accounts_to_store.as_slice()));
     Ok(())
 }
@@ -295,7 +299,7 @@ fn calculate_reward(
     // As per the Alpenglow SIMD, the rewards are split equally between the validators and the leader.
     let validator_reward_lamports = reward_lamports / 2;
     let leader_reward_lamports = reward_lamports - validator_reward_lamports;
-    (validator_stake_lamports, leader_reward_lamports)
+    (validator_reward_lamports, leader_reward_lamports)
 }
 
 fn pay_reward(
@@ -306,6 +310,7 @@ fn pay_reward(
     accounts_to_store: &mut Vec<(Pubkey, AccountSharedData)>,
 ) {
     let data = account.account().data_clone();
+    // TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
     let mut vote_state: VoteStateV4 = bincode::deserialize(&data).unwrap();
     increment_credits(&mut vote_state, epoch, reward);
     accounts_to_store.push((
@@ -314,7 +319,7 @@ fn pay_reward(
     ));
 }
 
-// XXX: https://github.com/anza-xyz/solana-sdk/pull/316/changes#diff-4f3aead2514cd759f36d62d7567c3d34001f0b39decd57324239ed64bd4e6205L273.  This function used to be publicly available but it seems to only be exposed to programs in top of master in agave.  I have copied it here for now.
+// TODO (akhi): this is a stop gap till we upstream.  We want to use the `VoteStateHandler` API.
 fn increment_credits(vote_state: &mut VoteStateV4, epoch: Epoch, credits: u64) {
     // never seen a credit
     if vote_state.epoch_credits.is_empty() {
